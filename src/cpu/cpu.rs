@@ -1,5 +1,7 @@
 // src/cpu/cpu.rs
 
+use crate::memory::Memory;
+
 /// CPU registers for ARM64: X0–X30 general purpose, SP (stack pointer), PC (program counter),
 /// and PSTATE (processor state flags: Negative, Zero, Carry, Overflow).
 pub struct Registers {
@@ -20,7 +22,7 @@ pub struct CPU {
     pub regs: Registers,
     /// Linear memory buffer (e.g. DRAM). Size must match actual RAM (12 GiB),
     /// but i can start smaller for tests.
-    pub memory: Vec<u8>,
+    pub memory: Memory,
 }
 
 impl CPU {
@@ -33,7 +35,7 @@ impl CPU {
                 pc: 0,
                 pstate: 0,
             },
-            memory: vec![0; mem_size],
+            memory: Memory::new(mem_size)
         }
     }
 
@@ -50,10 +52,7 @@ impl CPU {
     /// Fetch a 32-bit instruction (opcode) from memory at the current PC.
     /// ARM64 instructions are 32 bits wide.
     pub fn fetch(&self) -> u32 {
-        let pc = self.regs.pc as usize;
-        // Read 4 bytes little-endian; panic if out-of-bounds.
-        let bytes = &self.memory[pc..pc + 4];
-        u32::from_le_bytes(bytes.try_into().unwrap())
+        self.memory.read_u32(self.regs.pc as usize)
     }
 
     /// Decode and execute a single ARM64 opcode.

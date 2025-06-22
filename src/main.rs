@@ -1,6 +1,22 @@
 use oboromi::cpu::CPU;
 use oboromi::memory::Memory;
 
+/// Simple helper to decode basic ARM64 instruction fields from a 32-bit opcode.
+/// This example just extracts some common fields by bitmask and shift.
+/// Returns a tuple (sf, opc, rn, rd).
+fn decode_arm64_fields(opcode: u32) -> (u8, u8, u8, u8) {
+    // sf: bit 31 (1 bit)
+    let sf = ((opcode >> 31) & 0x1) as u8;
+    // opc: bits 29-30 (2 bits)
+    let opc = ((opcode >> 29) & 0x3) as u8;
+    // rn: bits 5-9 (5 bits)
+    let rn = ((opcode >> 5) & 0x1F) as u8;
+    // rd: bits 0-4 (5 bits)
+    let rd = (opcode & 0x1F) as u8;
+
+    (sf, opc, rn, rd)
+}
+
 fn main() {
     // 1) Test basic Memory read/write
     let mut mem = Memory::new(64 * 1024 * 1024);             // 64 MiB RAM
@@ -31,4 +47,14 @@ fn main() {
     assert_eq!(cpu.regs.pc, 4);
 
     println!("✅ CPU–Memory integration test passed");
+
+    // 3) Decode and print the fields of the NOP instruction
+    let opcode = 0xD503201F;
+    let (sf, opc, rn, rd) = decode_arm64_fields(opcode);
+    println!("Decoded ARM64 instruction 0x{:08X}:", opcode);
+    println!("  sf  (bit 31): {}", sf);
+    println!("  opc (bits 29-30): {}", opc);
+    println!("  rn  (bits 5-9): {}", rn);
+    println!("  rd  (bits 0-4): {}", rd);
+    println!("  Note: NOP means 'No Operation', this instruction does nothing but advance the PC.");
 }

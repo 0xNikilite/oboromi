@@ -1,82 +1,117 @@
 // src/cpu/cpu.rs
 
 use crate::memory::Memory;
+use bitflags::bitflags;
 
-/// CPU registers for ARM64: X0–X30 general purpose, SP (stack pointer), PC (program counter),
-/// and PSTATE (processor state flags: Negative, Zero, Carry, Overflow).
-pub struct Registers {
-    /// General-purpose registers X0–X30
-    pub x: [u64; 31],
-    /// Stack Pointer
-    pub sp: u64,
-    /// Program Counter
-    pub pc: u64,
-    /// Processor state flags (N, Z, C, V, etc.)
-    pub pstate: u32,
+bitflags! {
+    /// Processor State Flags: Negative, Zero, Carry, Overflow
+    pub struct Flags: u32 {
+        const NEGATIVE = 1 << 31; // N
+        const ZERO     = 1 << 30; // Z
+        const CARRY    = 1 << 29; // C
+        const OVERFLOW = 1 << 28; // V
+    }
 }
 
-/// The core CPU struct, holding registers and a flat memory buffer.
-/// In a full emulator, `memory` would be replaced by a Memory trait object.
+/// CPU registers for ARM64: X0–X30, SP, PC, and Flags.
+pub struct Registers {
+    pub x: [u64; 31],
+    pub sp: u64,
+    pub pc: u64,
+    pub flags: Flags,
+}
+
 pub struct CPU {
-    /// CPU registers
     pub regs: Registers,
-    /// Linear memory buffer (e.g. DRAM). Size must match actual RAM (12 GiB),
-    /// but i can start smaller for tests.
     pub memory: Memory,
 }
 
 impl CPU {
-    /// Create a new CPU with given memory size in bytes.
+    /// Create a new CPU with given memory size.
     pub fn new(mem_size: usize) -> Self {
         CPU {
             regs: Registers {
                 x: [0; 31],
                 sp: 0,
                 pc: 0,
-                pstate: 0,
+                flags: Flags::empty(),
             },
-            memory: Memory::new(mem_size)
+            memory: Memory::new(mem_size),
         }
     }
 
-    /// Reset CPU state to initial values.
+    /// Reset state (registers, PC and flags), preserve memory.
     pub fn reset(&mut self) {
         self.regs.x = [0; 31];
         self.regs.sp = 0;
         self.regs.pc = 0;
-        self.regs.pstate = 0;
-        // Optionally clear memory or preserve it:
-        // self.memory.fill(0);
+        self.regs.flags = Flags::empty();
     }
 
-    /// Fetch a 32-bit instruction (opcode) from memory at the current PC.
-    /// ARM64 instructions are 32 bits wide.
+    /// Fetch a 32-bit opcode from memory.
     pub fn fetch(&self) -> u32 {
         self.memory.read_u32(self.regs.pc as usize)
     }
 
     /// Decode and execute a single ARM64 opcode.
-    /// For now this just handles a NOP (encoding 0xD503201F) as example.
     pub fn decode_and_execute(&mut self, opcode: u32) {
+        // 1) NOP and fake ADD cases first
         match opcode {
-            0xD5_03_20_1F => {
-                // NOP: no operation, just advance PC.
+            0xD503201F => {
+                // NOP: do nothing
+                self.regs.pc = self.regs.pc.wrapping_add(4);
+                return;
             }
             0xD2802674 => {
-                // MOV X20, #0x1337 — fake encoding for test
-                self.regs.x[20] = 0x1337
+                // Fake ADD X0, X1, X2
+                self.regs.add_with_flags(0, self.regs.x[1], self.regs.x[2]);
+                self.regs.pc = self.regs.pc.wrapping_add(4);
+                return;
             }
-            _ => {
-                println!("⚠️ Unimplemented opcode: {:08X}", opcode);
-            }
+            _ => {}
         }
-        // Advance PC by 4 bytes to next instruction
+
+        // 2) MOV alias: ORR Xd, XZR, #imm12 (dynamic)
+        const MOV_MASK: u32    = 0b1111111 << 25; // bits 31–25
+        const MOV_PATTERN: u32 = 0b1010000 << 25; // pattern for ORR immediate
+        if (opcode & MOV_MASK) == MOV_PATTERN {
+            let rd    = (opcode        & 0x1F) as usize;   // bits [4:0]
+            let imm12 = ((opcode >> 10) & 0xFFF) as u64;    // bits [21:10]
+            self.regs.x[rd] = imm12;
+            self.regs.set_nz(imm12);
+            self.regs.pc = self.regs.pc.wrapping_add(4);
+            return;
+        }
+
+        // 3) Unimplemented
+        println!("⚠️ Unimplemented opcode: {:08X}", opcode);
         self.regs.pc = self.regs.pc.wrapping_add(4);
     }
 
-    /// Perform one full CPU cycle: fetch, decode, execute.
+    /// Perform one CPU cycle.
     pub fn step(&mut self) {
         let opcode = self.fetch();
         self.decode_and_execute(opcode);
+    }
+}
+
+impl Registers {
+    pub fn set_nz(&mut self, result: u64) {
+        self.flags.set(Flags::NEGATIVE, (result as i64) < 0);
+        self.flags.set(Flags::ZERO, result == 0);
+    }
+
+    pub fn set_cv_add(&mut self, a: u64, b: u64) {
+        let (res, carry) = a.overflowing_add(b);
+        let overflow = ((a ^ !b) & (a ^ res)) >> 63 != 0;
+        self.flags.set(Flags::CARRY, carry);
+        self.flags.set(Flags::OVERFLOW, overflow);
+    }
+
+    pub fn add_with_flags(&mut self, dst: usize, src1: u64, src2: u64) {
+        self.set_cv_add(src1, src2);
+        let result = src1.wrapping_add(src2);
+        self.set_nz(result);
+        self.x[dst] = result;
     }
 }

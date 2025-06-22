@@ -1,6 +1,5 @@
 use oboromi::cpu::CPU;
 use oboromi::memory::Memory;
-use oboromi::cpu::Flags;
 
 /// Simple helper to decode basic ARM64 instruction fields from a 32-bit opcode.
 /// Returns a tuple (sf, opc, rn, rd).
@@ -35,20 +34,6 @@ fn main() {
     assert_eq!(cpu.regs.pc, 4);
     println!("✅ NOP executed correctly, PC = {}", cpu.regs.pc);
 
-    // 3) Test ADD with flags: fake opcode 0xD2802674 implements ADD X0, X1, X2
-    cpu.regs.x[1] = 5;
-    cpu.regs.x[2] = 7;
-    cpu.regs.pc = 0;
-    let add = 0xD2802674_u32.to_le_bytes();
-    for i in 0..4 {
-        cpu.memory.write_byte(i, add[i]);
-    }
-    cpu.step();
-    // After ADD, X0 = 5 + 7 = 12, Zero flag should be false
-    assert_eq!(cpu.regs.x[0], 12);
-    assert!(!cpu.regs.flags.contains(Flags::ZERO));
-    println!("✅ ADD executed: X0 = {}, Flags = {:?}", cpu.regs.x[0], cpu.regs.flags);
-
     // 4) Test dynamic MOV Xd, #imm decoding
     // MOV X5, #0x2A  => ORR X5, XZR, #0x2A
     let mut cpu2 = CPU::new(1024);
@@ -71,4 +56,17 @@ fn main() {
         let (sf, opc, rn, rd) = decode_arm64_fields(opcode);
         println!("Decoded 0x{:08X}: sf={}, opc={}, rn={}, rd={}", opcode, sf, opc, rn, rd);
     }
+
+    // 5) Test istruzione reale: ADD X1, X1, X2 (opcode: 0x8B020021)
+    let add_real = 0x8B020021_u32.to_le_bytes();
+    for i in 0..4 {
+        cpu.memory.write_byte(i, add_real[i]);
+    }
+    cpu.regs.x[1] = 10;
+    cpu.regs.x[2] = 32;
+    cpu.regs.pc = 0;
+    cpu.step();
+    assert_eq!(cpu.regs.x[1], 42);
+    println!("✅ Real ADD executed correctly: X1 = {}", cpu.regs.x[1]);
 }
+

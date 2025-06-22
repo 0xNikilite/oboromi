@@ -55,35 +55,52 @@ impl CPU {
 
     /// Decode and execute a single ARM64 opcode.
     pub fn decode_and_execute(&mut self, opcode: u32) {
-        // 1) NOP and fake ADD cases first
-        match opcode {
-            0xD503201F => {
-                // NOP: do nothing
-                self.regs.pc = self.regs.pc.wrapping_add(4);
-                return;
-            }
-            0xD2802674 => {
-                // Fake ADD X0, X1, X2
-                self.regs.add_with_flags(0, self.regs.x[1], self.regs.x[2]);
-                self.regs.pc = self.regs.pc.wrapping_add(4);
-                return;
-            }
-            _ => {}
+        // 1) NOP
+        if opcode == 0xD503201F {
+            self.regs.pc = self.regs.pc.wrapping_add(4);
+            return;
         }
 
-        // 2) MOV alias: ORR Xd, XZR, #imm12 (dynamic)
-        const MOV_MASK: u32    = 0b1111111 << 25; // bits 31–25
-        const MOV_PATTERN: u32 = 0b1010000 << 25; // pattern for ORR immediate
+        // 2) MOV (ORR Xd, XZR, #imm12)
+        const MOV_MASK: u32    = 0b1111111 << 25;
+        const MOV_PATTERN: u32 = 0b1010000 << 25;
         if (opcode & MOV_MASK) == MOV_PATTERN {
-            let rd    = (opcode        & 0x1F) as usize;   // bits [4:0]
-            let imm12 = ((opcode >> 10) & 0xFFF) as u64;    // bits [21:10]
+            let rd = (opcode & 0x1F) as usize;
+            let imm12 = ((opcode >> 10) & 0xFFF) as u64;
             self.regs.x[rd] = imm12;
             self.regs.set_nz(imm12);
             self.regs.pc = self.regs.pc.wrapping_add(4);
             return;
         }
 
-        // 3) Unimplemented
+        // 3) ADD/SUB (register-register)
+        // Pattern bits [31:21] = 10001011000 (ADD), 11001011000 (SUB)
+        const ARITH_MASK: u32  = 0xFFE00000; // mask bits 31..21
+        const ADD_OPCODE: u32  = 0x8B000000; // ADD Xd, Xn, Xm
+        const SUB_OPCODE: u32  = 0xCB000000; // SUB Xd, Xn, Xm
+        if (opcode & ARITH_MASK) == ADD_OPCODE || (opcode & ARITH_MASK) == SUB_OPCODE {
+            let rd = (opcode & 0x1F) as usize;
+            let rn = ((opcode >> 5) & 0x1F) as usize;
+            let rm = ((opcode >> 16) & 0x1F) as usize;
+
+            let src1 = self.regs.x[rn];
+            let src2 = self.regs.x[rm];
+
+            let result = if (opcode & ARITH_MASK) == ADD_OPCODE {
+                self.regs.set_cv_add(src1, src2);
+                src1.wrapping_add(src2)
+            } else {
+                self.regs.set_cv_add(src1, !src2 + 1);
+                src1.wrapping_sub(src2)
+            };
+
+            self.regs.x[rd] = result;
+            self.regs.set_nz(result);
+            self.regs.pc = self.regs.pc.wrapping_add(4);
+            return;
+        }
+
+        // 4) Fallback
         println!("⚠️ Unimplemented opcode: {:08X}", opcode);
         self.regs.pc = self.regs.pc.wrapping_add(4);
     }

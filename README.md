@@ -80,7 +80,7 @@ You should see:
 ---
 
 > \[!NOTE]
-> Only the comments are “vibe-written” — the code itself is handcrafted in Rust.
+> Only the comments are “vibe-written” — the code itself is fucking handcrafted in Rust.
 
 > \[!WARNING]
 > This project **does not** include any proprietary firmware, keys, or dumps. Everything is clean-room.

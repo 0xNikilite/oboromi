@@ -20,10 +20,10 @@ Its goal is to simulate the new hardware step-by-step, following real architectu
 ## Features (so far)
 
 - ✅ **Memory subsystem**: Read/write with bounds checks, 64 MiB placeholder DRAM  
-- ✅ **CPU core**: ARM64 registers, memory-mapped, NOP decoding implemented  
-- ✅ **Integration tests**: Runs CPU–Memory interaction validation  
-- 🧪 **Main test harness** in `main.rs` to verify setup consistency  
-- 🧱 **Modular architecture** ready for multi-component scaling  
+- ✅ **CPU core**: ARM64 registers, memory-mapped, supports NOP, MOV immediate, ADD and SUB instructions with flag updates  
+- ✅ **Integration tests**: Validates CPU–Memory interaction and instruction execution correctness  
+- 🧪 **Main test harness** in `main.rs` for step-by-step opcode decoding and execution verification  
+- 🧱 **Modular architecture**: Designed for scalable addition of CPU components and instruction sets  
 
 ## 🧪 Try It
 

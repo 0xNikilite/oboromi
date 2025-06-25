@@ -19,11 +19,25 @@ Its goal is to simulate the new hardware step-by-step, following real architectu
 
 ## Features (so far)
 
-- ✅ **Memory subsystem**: Read/write with bounds checks, 64 MiB placeholder DRAM  
-- ✅ **CPU core**: ARM64 registers, memory-mapped, supports NOP, MOV immediate, ADD and SUB instructions with flag updates  
-- ✅ **Integration tests**: Validates CPU–Memory interaction and instruction execution correctness  
-- 🧪 **Main test harness** in `main.rs` for step-by-step opcode decoding and execution verification  
-- 🧱 **Modular architecture**: Designed for scalable addition of CPU components and instruction sets  
+- ✅ **Memory subsystem**  
+  • Bounds-checked byte and word reads  
+  • 32-bit and 64-bit little-endian access (`read_u32`/`write_u32`, `read_u64`/`write_u64`)  
+- ✅ **CPU core**  
+  • Full ARM64 register file (X0–X30 + SP, PC)  
+  • NZCV flag support (Negative, Zero, Carry, Overflow)  
+- ✅ **Implemented instructions**  
+  - **NOP**  
+  - **MOV Xd, #imm** (ORR Xd, XZR, #imm)  
+  - **ADDI / SUBI**: immediate arithmetic with flags  
+  - **ADD / SUB**: register-form arithmetic with flags  
+  - **AND / ORR / EOR**: logical register-form  
+  - **CMP (SUBS XZR, Xn, Xm)** and **TST (ANDS XZR, Xn, Xm)**  
+  - **LDR / STR** immediate 64-bit loads/stores  
+  - **B** (unconditional branch) and **RET** (return)  
+- ✅ **Integration tests**  
+  • Extensive `main.rs` harness exercises each instruction path  
+- 🧱 **Modular architecture**  
+  • Ready for rapid addition of more instructions, subsystems, and peripherals  
 
 ## 🧪 Try It
 
@@ -31,35 +45,44 @@ Its goal is to simulate the new hardware step-by-step, following real architectu
 git clone https://github.com/nikilites/oboromi
 cd oboromi
 cargo run
-```
+````
 
-If everything is set up right, you should see:
+You should see:
 
 ```
-✅ Memory tests passed  
-✅ CPU–Memory integration test passed
+✅ Memory OK  
+✅ NOP OK  
+✅ ADDI OK  
+✅ SUBI OK  
+✅ ADDR OK  
+✅ SUBR OK  
+✅ AND OK  
+✅ CMP OK  
+✅ LDR/STR OK  
+✅ B OK  
+✅ RET OK  
 ```
 
 ## 🔍 Current Target Hardware (Known)
 
-| Component       | Details                                   |
-|----------------|-------------------------------------------|
-| **SoC**         | NVIDIA GMLX30-A1                          |
-| **RAM**         | 12 GB LPDDR5X (2 × 6 GB SKhynix)          |
-| **Storage**     | UFS 3.1 (Kioxia or SKhynix)               |
-| **WiFi/BT**     | MediaTek MT3681AEN                        |
-| **Audio**       | Realtek ALC5658                           |
-| **Voice**       | Intelligo IG2200                          |
-| **Power**       | MAX77851 (PMIC) + DA9092 (Sub-PMIC)       |
-| **USB**         | Genesys GL852G + Cypress CYPD6228         |
-| **GC ASIC**     | B2349 GCBRG HAC STD T2010423              |
+| Component   | Details                           |
+| ----------- | --------------------------------- |
+| **SoC**     | NVIDIA GMLX30-A1                  |
+| **RAM**     | 12 GB LPDDR5X (2 × 6 GB SK hynix) |
+| **Storage** | UFS 3.1 (Kioxia or SK hynix)      |
+| **WiFi/BT** | MediaTek MT3681AEN                |
+| **Audio**   | Realtek ALC5658                   |
+| **Voice**   | Intelligo IG2200                  |
+| **Power**   | MAX77851 + DA9092                 |
+| **USB**     | Genesys GL852G + Cypress CYPD6228 |
+| **GC ASIC** | B2349 GCBRG HAC STD T2010423      |
 
 ---
 
-> [!NOTE]  
-> Only the comments are “vibe-written” — the code itself is fucking written with my hands.
+> \[!NOTE]
+> Only the comments are “vibe-written” — the code itself is handcrafted in Rust.
 
-> [!WARNING]  
+> \[!WARNING]
 > This project **does not** include any proprietary firmware, keys, or dumps. Everything is clean-room.
 
 ---

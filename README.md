@@ -3,14 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/0xNikilite/oboromi/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-MPL%202.0-blue.svg" alt="License" />
-  </a>
-  <a href="https://discord.gg/g9sehj8bPz">
-    <img src="https://img.shields.io/discord/1387476383663390732?style=flat&label=Discord&color=5865F2&logo=discord&logoColor=white" alt="Discord" />
-  </a>
+  <a href="https://github.com/0xNikilite/oboromi/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MPL%202.0-blue.svg?style=flat"></a>
+  <a href="https://discord.gg/oboromi"><img alt="Discord" src="https://img.shields.io/discord/1387476383663390732?style=flat&label=Discord&color=5865F2&logo=discord&logoColor=white"></a>
 </p>
-
 
 <h1 align="center">oboromi</h1>
 <h3 align="center">A proof-of-concept Nintendo Switch 2 emulator written in Rust</h3>

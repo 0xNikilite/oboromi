@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nikilites/oboromi/blob/main/LICENSE">
+  <a href="https://github.com/0xNikilite/oboromi/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/license-MPL%202.0-blue.svg" alt="License" />
   </a>
 </p>
@@ -42,7 +42,7 @@ Its goal is to simulate the new hardware step-by-step, following real architectu
 ## 🧪 Try It
 
 ```bash
-git clone https://github.com/nikilites/oboromi
+git clone https://github.com/0xNikilite/oboromi
 cd oboromi
 cargo run
 ````
@@ -89,4 +89,4 @@ You should see:
 
 ## 📜 License
 
-This project is licensed under **MPL-2.0** — see [`LICENSE`](https://github.com/nikilites/oboromi/blob/main/LICENSE) for details.
+This project is licensed under **MPL-2.0** — see [`LICENSE`](https://github.com/0xNikilite/oboromi/blob/main/LICENSE) for details.

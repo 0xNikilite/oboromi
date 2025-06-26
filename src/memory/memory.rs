@@ -1,5 +1,8 @@
 // src/memory/memory.rs
 
+#![allow(clippy::module_inception)]
+
+#[derive(Debug)]
 /// System RAM abstraction with bounds-checked reads/writes.
 pub struct Memory {
     ram: Vec<u8>,
@@ -28,6 +31,10 @@ impl Memory {
         let mut bytes = [0u8; 4];
         for i in 0..4 {
             bytes[i] = self.read_byte(addr + i);
+        }
+        let mut bytes = [0u8; 4];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = self.read_byte(addr + i);
         }
         u32::from_le_bytes(bytes)
     }

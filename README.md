@@ -7,6 +7,8 @@
   <a href="https://discord.gg/g9sehj8bPz"><img alt="Discord" src="https://img.shields.io/discord/1387476383663390732?style=flat&label=Discord&color=5865F2&logo=discord&logoColor=white"></a>
 </p>
 
+<h4 align="center">(◕‿◕)&nbsp&nbspjoin the discord server 🢰</h4>
+
 <h1 align="center">oboromi</h1>
 <h3 align="center">A proof-of-concept Nintendo Switch 2 emulator written in Rust</h3>
 <h4 align="center"><em>Very WIP — nothing works yet, don’t expect miracles.</em></h4>

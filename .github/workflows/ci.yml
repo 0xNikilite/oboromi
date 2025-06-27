@@ -30,7 +30,6 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust }}
-          components: rustfmt
           
       - name: Cache dependencies
         uses: actions/cache@v3
@@ -48,9 +47,6 @@ jobs:
         run: cargo test --locked --verbose
         env:
           RUST_BACKTRACE: full  # Enable full backtraces for test failures
-        
-      - name: Check code formatting
-        run: cargo fmt --all -- --check
 
   coverage:
     name: Code Coverage

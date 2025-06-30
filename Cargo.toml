@@ -8,4 +8,4 @@ license = "MPL-2.0"
 repository = "https://github.com/0xNikilite/oboromi"
 
 [dependencies]
-bitflags = "1.3"
+bitflags = "2.9"

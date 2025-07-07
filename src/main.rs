@@ -1,5 +1,3 @@
-// src/main.rs
-
 use oboromi::cpu::{CPU, Flags};
 use oboromi::memory::Memory;
 
@@ -14,7 +12,11 @@ fn decode_arm64_fields(opcode: u32) -> (u8, u8, u8, u8) {
 }
 
 fn main() {
-    // 1) Memory
+    // Notify when tracing is enabled
+    #[cfg(feature = "trace")]
+    println!("-- TRACING ENABLED --");
+    
+    // 1) Memory subsystem test
     let mut mem = Memory::new(64 * 1024 * 1024);
     mem.write_byte(10, 0xAB);
     assert_eq!(mem.read_byte(10), 0xAB);
@@ -25,7 +27,7 @@ fn main() {
     assert_eq!(mem.read_u32(100), 0x4433_2211);
     println!("✅ Memory OK");
 
-    // 2) NOP
+    // 2) NOP instruction test
     let mut cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     let nop = 0xD503201F_u32.to_le_bytes();
@@ -34,7 +36,7 @@ fn main() {
     assert_eq!(cpu.regs.pc, 4);
     println!("✅ NOP OK");
 
-    // 3) ADD immediate
+    // 3) ADD immediate test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[1] = 5;
@@ -44,7 +46,7 @@ fn main() {
     assert_eq!(cpu.regs.x[1], 7);
     println!("✅ ADDI OK");
 
-    // 4) SUB immediate
+    // 4) SUB immediate test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[2] = 10;
@@ -54,7 +56,7 @@ fn main() {
     assert_eq!(cpu.regs.x[2], 9);
     println!("✅ SUBI OK");
 
-    // 5) ADD register
+    // 5) ADD register test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[0] = 7;
@@ -65,7 +67,7 @@ fn main() {
     assert_eq!(cpu.regs.x[0], 10);
     println!("✅ ADDR OK");
 
-    // 6) SUB register
+    // 6) SUB register test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[3] = 8;
@@ -76,7 +78,7 @@ fn main() {
     assert_eq!(cpu.regs.x[3], 6);
     println!("✅ SUBR OK");
 
-    // 7) AND register
+    // 7) AND register test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[5] = 0b1010;
@@ -87,7 +89,7 @@ fn main() {
     assert_eq!(cpu.regs.x[5], 0b1000);
     println!("✅ AND OK");
 
-    // 8) CMP (SUBS XZR, X7, X8)
+    // 8) CMP (SUBS XZR, X7, X8) test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[7] = 3;
@@ -98,7 +100,7 @@ fn main() {
     assert!(cpu.regs.flags.contains(Flags::ZERO));
     println!("✅ CMP OK");
 
-    // 9) LDR/STR immediate (64-bit)
+    // 9) LDR/STR immediate (64-bit) test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[9] = 100;
@@ -117,7 +119,7 @@ fn main() {
     assert_eq!(cpu.regs.x[11], 0x1234_5678);
     println!("✅ LDR/STR OK");
 
-    // 10) Branch
+    // 10) Branch test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     let b = 0x1400_0002_u32.to_le_bytes(); // B +2
@@ -126,7 +128,7 @@ fn main() {
     assert_eq!(cpu.regs.pc, 8);
     println!("✅ B OK");
 
-    // RET
+    // 11) RET test
     cpu = CPU::new(1024);
     cpu.regs.pc = 0;
     cpu.regs.x[30] = 16;

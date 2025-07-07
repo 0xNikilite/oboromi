@@ -9,3 +9,6 @@ repository = "https://github.com/0xNikilite/oboromi"
 
 [dependencies]
 bitflags = "2.9"
+
+[features]
+trace = []

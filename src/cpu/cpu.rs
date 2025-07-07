@@ -59,6 +59,7 @@ impl CPU {
         // Capture PC before instruction execution for accurate tracing
         #[cfg(feature = "trace")]
         let pc_before = self.regs.pc;
+        
         let instr = self.fetch();
         
         // Conditionally log instruction execution when trace feature is enabled
@@ -95,13 +96,17 @@ impl CPU {
         
         // Register-to-register operations (ADD/SUB/AND/ORR/EOR)
         const REG_MASK: u32 = 0xFFE00000;
-        match instr & REG_MASK {
-            0x8B000000 => self.disasm_reg_op("ADD", instr),
-            0xCB000000 => self.disasm_reg_op("SUB", instr),
-            0x8A000000 => self.disasm_reg_op("AND", instr),
-            0xAA000000 => self.disasm_reg_op("ORR", instr),
-            0xCA000000 => self.disasm_reg_op("EOR", instr),
-            _ => {}
+        let opcode_part = instr & REG_MASK;
+        if opcode_part == 0x8B000000 {
+            return self.disasm_reg_op("ADD", instr);
+        } else if opcode_part == 0xCB000000 {
+            return self.disasm_reg_op("SUB", instr);
+        } else if opcode_part == 0x8A000000 {
+            return self.disasm_reg_op("AND", instr);
+        } else if opcode_part == 0xAA000000 {
+            return self.disasm_reg_op("ORR", instr);
+        } else if opcode_part == 0xCA000000 {
+            return self.disasm_reg_op("EOR", instr);
         }
         
         // Comparison and test instructions

@@ -43,10 +43,22 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           
       - name: Build project
-        run: cargo build --locked --verbose --features ${{ matrix.features }}
+        # Handle empty feature set by omitting --features flag
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo build --locked --verbose
+          else
+            cargo build --locked --verbose --features ${{ matrix.features }}
+          fi
         
       - name: Run test suite
-        run: cargo test --locked --verbose --features ${{ matrix.features }}
+        # Handle empty feature set by omitting --features flag
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test --locked --verbose
+          else
+            cargo test --locked --verbose --features ${{ matrix.features }}
+          fi
         env:
           RUST_BACKTRACE: full  # Enable full backtraces for test failures
 

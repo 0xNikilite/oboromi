@@ -21,6 +21,8 @@ jobs:
         # Test on all major OS platforms
         os: [ubuntu-latest, windows-latest, macos-latest]
         rust: [stable]
+        # Test both with and without the trace feature
+        features: ["", "trace"]
     
     steps:
       - name: Checkout repository
@@ -41,10 +43,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           
       - name: Build project
-        run: cargo build --locked --verbose
+        run: cargo build --locked --verbose --features ${{ matrix.features }}
         
       - name: Run test suite
-        run: cargo test --locked --verbose
+        run: cargo test --locked --verbose --features ${{ matrix.features }}
         env:
           RUST_BACKTRACE: full  # Enable full backtraces for test failures
 

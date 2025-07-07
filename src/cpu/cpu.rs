@@ -1,5 +1,3 @@
-// src/main.rs
-
 use crate::memory::Memory;
 use bitflags::bitflags;
 
@@ -56,27 +54,119 @@ impl CPU {
         self.memory.read_u32(self.regs.pc as usize)
     }
 
+    /// One fetch–decode–execute cycle.
+    pub fn step(&mut self) {
+        // Capture PC before instruction execution for accurate tracing
+        #[cfg(feature = "trace")]
+        let pc_before = self.regs.pc;
+        let instr = self.fetch();
+        
+        // Conditionally log instruction execution when trace feature is enabled
+        #[cfg(feature = "trace")]
+        self.trace_instruction(pc_before, instr);
+        
+        self.decode_and_execute(instr);
+    }
+
+    /// Log instruction execution (only compiled with trace feature)
+    #[cfg(feature = "trace")]
+    fn trace_instruction(&self, address: u64, instr: u32) {
+        let disasm = self.disassemble(instr);
+        println!("[0x{:08x}] Executed {}", address, disasm);
+    }
+
+    /// Disassemble instruction to human-readable format
+    #[cfg(feature = "trace")]
+    fn disassemble(&self, instr: u32) -> String {
+        // Handle NOP instruction
+        if instr == 0xD503201F {
+            return "NOP".to_string();
+        }
+        
+        // ADDI/SUBI instructions
+        const IMM_MASK: u32 = 0xFF000000;
+        if (instr & IMM_MASK) == 0x91000000 || (instr & IMM_MASK) == 0xD1000000 {
+            let rd = (instr & 0x1F) as usize;
+            let rn = ((instr >> 5) & 0x1F) as usize;
+            let imm = ((instr >> 10) & 0xFFF) as u64;
+            let op = if (instr & IMM_MASK) == 0x91000000 { "ADDI" } else { "SUBI" };
+            return format!("{} X{}, X{}, #{:#x}", op, rd, rn, imm);
+        }
+        
+        // Register-to-register operations (ADD/SUB/AND/ORR/EOR)
+        const REG_MASK: u32 = 0xFFE00000;
+        match instr & REG_MASK {
+            0x8B000000 => self.disasm_reg_op("ADD", instr),
+            0xCB000000 => self.disasm_reg_op("SUB", instr),
+            0x8A000000 => self.disasm_reg_op("AND", instr),
+            0xAA000000 => self.disasm_reg_op("ORR", instr),
+            0xCA000000 => self.disasm_reg_op("EOR", instr),
+            _ => {}
+        }
+        
+        // Comparison and test instructions
+        if (instr & 0xFF000000) == 0xEB000000 && (instr & 0x1F) == 31 {
+            let rn = ((instr >> 5) & 0x1F) as usize;
+            let rm = ((instr >> 16) & 0x1F) as usize;
+            return format!("CMP X{}, X{}", rn, rm);
+        } else if (instr & 0xFF000000) == 0xEA000000 && (instr & 0x1F) == 31 {
+            let rn = ((instr >> 5) & 0x1F) as usize;
+            let rm = ((instr >> 16) & 0x1F) as usize;
+            return format!("TST X{}, X{}", rn, rm);
+        }
+        
+        // Load/store instructions (64-bit)
+        const LS_MASK: u32 = 0xFFC00000;
+        if (instr & LS_MASK) == 0xF9400000 || (instr & LS_MASK) == 0xF9000000 {
+            let rt = (instr & 0x1F) as usize;
+            let rn = ((instr >> 5) & 0x1F) as usize;
+            let imm = ((instr & 0x3FFC00) >> 10) as usize * 8;
+            let op = if (instr & LS_MASK) == 0xF9400000 { "LDR" } else { "STR" };
+            return format!("{} X{}, [X{}, #{:#x}]", op, rt, rn, imm);
+        }
+        
+        // Branch instructions
+        const B_MASK: u32 = 0x7C000000;
+        if (instr & B_MASK) == 0x14000000 {
+            let imm = (instr & 0x03FFFFFF) as i32;
+            let offset = (imm as i64 * 4) as u64;
+            return format!("B {:#x}", offset);
+        } 
+        // Return instruction
+        else if instr == 0xD65F03C0 {
+            return "RET".to_string();
+        }
+        
+        // Fallback for unknown instructions
+        format!(".WORD {:#010x}", instr)
+    }
+
+    /// Format register-to-register operations
+    #[cfg(feature = "trace")]
+    fn disasm_reg_op(&self, opcode: &str, instr: u32) -> String {
+        let rd = (instr & 0x1F) as usize;
+        let rn = ((instr >> 5) & 0x1F) as usize;
+        let rm = ((instr >> 16) & 0x1F) as usize;
+        format!("{} X{}, X{}, X{}", opcode, rd, rn, rm)
+    }
+
     /// Decode and execute one instruction.
     pub fn decode_and_execute(&mut self, opcode: u32) {
+        // Special case for NOP
         if opcode == 0xD503201F {
             self.regs.pc = self.regs.pc.wrapping_add(4);
             return;
         }
+        // Try instruction categories in order
         if self.exec_addi_subi(opcode) { return; }
         if self.exec_reg_ops(opcode)  { return; }
         if self.exec_cmp_tst(opcode)  { return; }
         if self.exec_ldr_str(opcode)  { return; }
         if self.exec_branch_ret(opcode){ return; }
 
-        // Fallback
+        // Fallback for unimplemented instructions
         println!("⚠️ Unimplemented opcode: {:08X}", opcode);
         self.regs.pc = self.regs.pc.wrapping_add(4);
-    }
-
-    /// One fetch–decode–execute cycle.
-    pub fn step(&mut self) {
-        let op = self.fetch();
-        self.decode_and_execute(op);
     }
 
     fn exec_addi_subi(&mut self, opcode: u32) -> bool {

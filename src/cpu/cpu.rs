@@ -3,7 +3,6 @@ use bitflags::bitflags;
 
 bitflags! {
     /// Processor State Flags: Negative, Zero, Carry, Overflow
-    /// (bitflags! already impls Debug/Clone/Copy)
     pub struct Flags: u32 {
         const NEGATIVE = 1 << 31; // N flag: result is negative
         const ZERO     = 1 << 30; // Z flag: result is zero
@@ -20,8 +19,7 @@ pub struct Registers {
     pub flags: Flags,
 }
 
-/// The CPU core, with registers and a flat memory interface.
-// Remove any `#[derive(Debug)]` here if you had it.
+/// The CPU core, with registers and memory interface.
 pub struct CPU {
     pub regs: Registers,
     pub memory: Memory,
@@ -50,11 +48,11 @@ impl CPU {
     }
 
     /// Fetch the 32-bit opcode at current PC.
-    pub fn fetch(&self) -> u32 {
+    pub fn fetch(&mut self) -> u32 {
         self.memory.read_u32(self.regs.pc as usize)
     }
 
-    /// One fetch–decode–execute cycle.
+    /// One fetch-decode-execute cycle.
     pub fn step(&mut self) {
         // Capture PC before instruction execution for accurate tracing
         #[cfg(feature = "trace")]

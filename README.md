@@ -7,87 +7,70 @@
   <a href="https://discord.gg/g9sehj8bPz"><img alt="Discord" src="https://img.shields.io/discord/1387476383663390732?style=flat&label=Discord&color=5865F2&logo=discord&logoColor=white"></a>
 </p>
 
-<h4 align="center">(◕‿◕)&nbsp&nbspjoin the discord server 🢰</h4>
+<h4 align="center">(◕‿◕)&nbsp;&nbsp;Join our Discord here 🢰</h4>
 
 <h1 align="center">oboromi</h1>
-<h3 align="center">A proof-of-concept Nintendo Switch 2 emulator written in Rust</h3>
-<h4 align="center"><em>Very WIP — nothing works yet, don’t expect miracles.</em></h4>
+<h4 align="center">a proof-of-concept Nintendo Switch 2 emulator written in Rust</h4>
 
-## Overview
+> \[!WARNING]
+> oboromi is **not** yet a playable emulator. Right now it’s a skeleton of CPU+MMU cores and a test harness, designed to grow into a full emulator as hardware/software details (and reverse‑engineering) become available.
 
-**oboromi** is a clean and modular emulator framework targeting the **Nintendo Switch 2**, written in Rust for maximum maintainability and performance.  
-Its goal is to simulate the new hardware step-by-step, following real architectural assumptions (when available) and clean software design.
+## 🚀 What’s in the box today
 
-## Features (so far)
+- **CPU Core**  
+  - Implements a subset of ARM64/AArch64 (15+ instructions: NOP, ADDI/SUBI, ADD/SUB, AND/ORR/EOR, CMP/TST, LDR/STR, B, RET)  
+  - Full NZCV flag handling  
+  - Optional `trace` feature for disassembly and PC‐tagged logs
 
-- ✅ **Memory subsystem**  
-  • Bounds-checked byte and word reads  
-  • 32-bit and 64-bit little-endian access (`read_u32`/`write_u32`, `read_u64`/`write_u64`)  
-- ✅ **CPU core**  
-  • Full ARM64 register file (X0–X30 + SP, PC)  
-  • NZCV flag support (Negative, Zero, Carry, Overflow)  
-- ✅ **Implemented instructions**  
-  - **NOP**  
-  - **MOV Xd, #imm** (ORR Xd, XZR, #imm)  
-  - **ADDI / SUBI**: immediate arithmetic with flags  
-  - **ADD / SUB**: register-form arithmetic with flags  
-  - **AND / ORR / EOR**: logical register-form  
-  - **CMP (SUBS XZR, Xn, Xm)** and **TST (ANDS XZR, Xn, Xm)**  
-  - **LDR / STR** immediate 64-bit loads/stores  
-  - **B** (unconditional branch) and **RET** (return)  
-- ✅ **Integration tests**  
-  • Extensive `main.rs` harness exercises each instruction path  
-- 🧱 **Modular architecture**  
-  • Ready for rapid addition of more instructions, subsystems, and peripherals  
+- **Virtual Memory + MMU**  
+  - 4 KiB pages with identity mapping  
+  - Simple page table + TLB (64 entries)  
+  - All memory reads/writes go through the MMU
 
-## 🧪 Try It
+- **Memory Subsystem**  
+  - Bounds‐checked reads/writes  
+  - 32‑bit and 64‑bit little‑endian helpers  
+
+- **Test Harness**  
+  - `main.rs` runs 12 quick integration tests (CPU instructions + MMU)  
+  - `cargo test` covers unit tests for CPU + Memory  
+
+## 🧪 Try it
 
 ```bash
 git clone https://github.com/0xNikilite/oboromi
 cd oboromi
+cargo run --features trace   # see each instruction disassembled
+# or simply:
 cargo run
 ````
 
-You should see:
+## 🤝 Contributing
 
-```
-✅ Memory OK  
-✅ NOP OK  
-✅ ADDI OK  
-✅ SUBI OK  
-✅ ADDR OK  
-✅ SUBR OK  
-✅ AND OK  
-✅ CMP OK  
-✅ LDR/STR OK  
-✅ B OK  
-✅ RET OK  
-```
+We’re actively looking for collaborators in these areas:
 
-## 🔍 Current Target Hardware (Known)
-
-| Component   | Details                           |
-| ----------- | --------------------------------- |
-| **SoC**     | NVIDIA GMLX30-A1                  |
-| **RAM**     | 12 GB LPDDR5X (2 × 6 GB SK hynix) |
-| **Storage** | UFS 3.1 (Kioxia or SK hynix)      |
-| **WiFi/BT** | MediaTek MT3681AEN                |
-| **Audio**   | Realtek ALC5658                   |
-| **Voice**   | Intelligo IG2200                  |
-| **Power**   | MAX77851 + DA9092                 |
-| **USB**     | Genesys GL852G + Cypress CYPD6228 |
-| **GC ASIC** | B2349 GCBRG HAC STD T2010423      |
-
----
-
-> \[!NOTE]
-> Only the comments are “vibe-written” — the code itself is fucking handcrafted in Rust.
-
-> \[!WARNING]
-> This project **does not** include any proprietary firmware, keys, or dumps. Everything is clean-room.
-
----
+<ul>
+  <li>
+    <strong>ARM64/AArch64 Architecture &amp; CPU Implementation</strong>
+  </li>
+  <li>
+    <strong>Memory Management &amp; Virtualization</strong>
+  </li>
+  <li>
+    <strong>Graphics &amp; GPU Backends</strong><br>
+    Experience with low‑level graphics APIs (Vulkan, Metal, DirectX) and shader pipeline emulation.
+  </li>
+  <li>
+    <strong>Firmware &amp; Hardware Reverse Engineering</strong><br>
+    Skills in extracting, analyzing, and documenting proprietary firmware, SoC internals, and board‑level schematics.
+  </li>
+  <li>
+    <strong>Rust Systems Programming</strong><br>
+    Passion for zero‑unsafe, high‑performance Rust code.
+  </li>
+</ul>
 
 ## 📜 License
 
-This project is licensed under **MPL-2.0** — see [`LICENSE`](https://github.com/0xNikilite/oboromi/blob/main/LICENSE) for details.
+This project is licensed under **MPL‑2.0**.
+See [LICENSE](https://github.com/0xNikilite/oboromi/blob/main/LICENSE).

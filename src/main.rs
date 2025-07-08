@@ -2,7 +2,6 @@ use oboromi::cpu::{CPU, Flags};
 use oboromi::memory::Memory;
 
 #[allow(dead_code)]
-/// Helper to extract basic fields from an ARM64 opcode.
 fn decode_arm64_fields(opcode: u32) -> (u8, u8, u8, u8) {
     let sf  = ((opcode >> 31) & 1) as u8;
     let opc = ((opcode >> 29) & 0x3) as u8;
@@ -12,7 +11,6 @@ fn decode_arm64_fields(opcode: u32) -> (u8, u8, u8, u8) {
 }
 
 fn main() {
-    // Notify when tracing is enabled
     #[cfg(feature = "trace")]
     println!("-- TRACING ENABLED --");
     
@@ -137,4 +135,27 @@ fn main() {
     cpu.step();
     assert_eq!(cpu.regs.pc, 16);
     println!("✅ RET OK");
+
+    // 12) MMU Basic Functionality Test
+    println!("\nTesting MMU Basic Functionality...");
+    let mut cpu = CPU::new(4096); // 4KB memory for MMU test
+
+    let vaddr = 0x10;
+    let paddr = cpu.memory.mmu.translate(vaddr).expect("Translation failed");
+    println!("MMU: 0x{:x} → 0x{:x}", vaddr, paddr);
+    assert_eq!(vaddr, paddr);
+
+    // Test: write through MMU
+    cpu.memory.write_byte(vaddr as usize, 0xAB);
+    let value = cpu.memory.ram[paddr as usize];
+    println!("Wrote 0xAB to vaddr 0x{:x} (paddr 0x{:x}), read back: 0x{:x}", 
+        vaddr, paddr, value);
+    assert_eq!(value, 0xAB);
+
+    // Test: read through MMU
+    let read_value = cpu.memory.read_byte(vaddr as usize);
+    println!("Read from vaddr 0x{:x}: 0x{:x}", vaddr, read_value);
+    assert_eq!(read_value, 0xAB);
+
+    println!("✅ MMU Basic Functionality OK");
 }

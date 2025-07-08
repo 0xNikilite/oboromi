@@ -13,26 +13,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build and Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        # Test on all major OS platforms
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable]
-        # Test both with and without the trace feature
-        features: ["", "trace"]
-    
+  check-readme-only:
+    name: Detect README-only commits
+    runs-on: ubuntu-latest
+    outputs:
+      only_readme: ${{ steps.check.outputs.only_readme }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
+
+      - name: Check changed files
+        id: check
+        run: |
+          git fetch origin ${{ github.event.before }}
+          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
+
+          echo "Changed files:"
+          cat changed.txt
+
+          if [ "$(wc -l < changed.txt)" -eq 1 ] && grep -qE '^README\.md$' changed.txt; then
+            echo "only_readme=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "only_readme=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build and Test
+    runs-on: ${{ matrix.os }}
+    needs: check-readme-only
+    if: needs.check-readme-only.outputs.only_readme == 'false'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable]
+        features: ["", "trace"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust }}
-          
+
       - name: Cache dependencies
         uses: actions/cache@v3
         with:
@@ -41,9 +65,8 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          
+
       - name: Build project
-        # Windows-compatible feature handling
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
             cargo build --locked --verbose
@@ -51,9 +74,8 @@ jobs:
             cargo build --locked --verbose --features "${{ matrix.features }}"
           fi
         shell: bash
-        
+
       - name: Run test suite
-        # Windows-compatible feature handling
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
             cargo test --locked --verbose
@@ -62,26 +84,25 @@ jobs:
           fi
         shell: bash
         env:
-          RUST_BACKTRACE: full  # Enable full backtraces for test failures
+          RUST_BACKTRACE: full
 
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
-    needs: build
+    needs: [check-readme-only, build]
+    if: needs.check-readme-only.outputs.only_readme == 'false'
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install nightly Rust
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: nightly
-          
+
       - name: Generate coverage report
         run: |
-          # Install coverage tool
           cargo install cargo-tarpaulin
-          # Generate XML coverage report
           cargo tarpaulin --out Xml --output-dir target/coverage
-          
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3

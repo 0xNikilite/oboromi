@@ -1,5 +1,5 @@
 use eframe::egui::{ScrollArea, CentralPanel};
-use crate::gui::run_tests;
+use crate::tests::run::run_tests;
 
 /// GUI with a button to run tests and display results
 pub struct GUI {

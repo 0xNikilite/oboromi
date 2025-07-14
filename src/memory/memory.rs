@@ -28,9 +28,9 @@ impl Memory {
     pub fn read_byte(&mut self, vaddr: usize) -> u8 {
         match self.mmu.translate(vaddr as u64) {
             Some(paddr) => {
-                let paddr_usize = paddr as usize;
-                if paddr_usize < self.ram.len() {
-                    self.ram[paddr_usize]
+                let paddr = paddr as usize;
+                if paddr < self.ram.len() {
+                    self.ram[paddr]
                 } else {
                     0
                 }
@@ -46,9 +46,9 @@ impl Memory {
     pub fn write_byte(&mut self, vaddr: usize, val: u8) {
         match self.mmu.translate(vaddr as u64) {
             Some(paddr) => {
-                let paddr_usize = paddr as usize;
-                if paddr_usize < self.ram.len() {
-                    self.ram[paddr_usize] = val;
+                let paddr = paddr as usize;
+                if paddr < self.ram.len() {
+                    self.ram[paddr] = val;
                 }
             }
             None => println!("⚠️ Page fault writing at {:#x}", vaddr),

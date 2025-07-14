@@ -35,10 +35,7 @@ impl MMU {
     /// Set identity mapping for a memory range
     pub fn set_identity_mapping(&mut self, start_page: usize, end_page: usize) {
         for i in start_page..end_page {
-            if i < self.page_table.len() {
-                // Mappa la pagina virtuale i alla stessa pagina fisica
-                self.page_table.set_entry(i, (i * 4096) as u64);
-            }
+            self.page_table.set_entry(i, (i * 4096) as u64);
         }
     }
 }

@@ -3,12 +3,29 @@ use bitflags::bitflags;
 
 bitflags! {
     /// Processor State Flags: Negative, Zero, Carry, Overflow
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Flags: u32 {
         const NEGATIVE = 1 << 31; // N flag: result is negative
         const ZERO     = 1 << 30; // Z flag: result is zero
         const CARRY    = 1 << 29; // C flag: carry/borrow
         const OVERFLOW = 1 << 28; // V flag: signed overflow
+        // ARMv8.3-A Pointer Authentication
+        const PAC_FAIL = 1 << 27; // Pointer authentication failed
     }
+}
+
+/// ARM Processor State
+#[derive(Debug, Clone)]
+pub struct ProcessorState {
+    pub el: u8,        // Exception Level (0-3)
+    pub spsel: bool,   // Stack Pointer Selection
+    pub nzcv: Flags,   // Condition flags
+    pub daif: u8,      // Debug, SError, IRQ, FIQ masks
+    pub pan: bool,     // Privileged Access Never
+    pub uao: bool,     // User Access Override
+    pub dit: bool,     // Data Independent Timing
+    pub tco: bool,     // Tag Check Override
+    pub pstate: u32,   // Complete PSTATE
 }
 
 /// ARM64 registers X0–X30, SP, PC and processor flags.
@@ -263,9 +280,9 @@ impl CPU {
         if (opcode & LS_MASK) == LDR || (opcode & LS_MASK) == STR {
             let rt  = (opcode & 0x1F) as usize;
             let rn  = ((opcode >> 5) & 0x1F) as usize;
-            let imm = ((opcode & 0x3FFC00) >> 10) as usize * 8;
+            let imm = ((opcode & 0x3FFC00) >> 10) as usize; // Immediate is in units of 8 bytes
             let base= self.regs.x.get(rn).copied().unwrap_or(0) as usize;
-            let addr= base.wrapping_add(imm);
+            let addr= base.wrapping_add(imm * 8); // Scale by 8
             if (opcode & LS_MASK) == LDR {
                 let v = self.memory.read_u64(addr);
                 if rt < 31 { 

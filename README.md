@@ -82,7 +82,7 @@ See [LICENSE](LICENSE) for details.
 #### Useful Links
 
 * [Rust Lang](https://www.rust-lang.org/)
-* [AArch64 ISA Reference](https://developer.arm.com/documentation/ddi0596/latest)
+* [AArch64 ISA Reference](https://developer.arm.com/documentation/ddi0602/latest/)
 * [egui](https://github.com/emilk/egui)
 
 ---

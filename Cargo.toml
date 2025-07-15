@@ -13,10 +13,9 @@ log = "0.4"
 fern = { version = "0.6", features = ["colored"] }
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
-egui = { version = "0.32", optional = true }
-eframe = { version = "0.32", optional = true }
+egui = "0.32"
+eframe = "0.32"
 
 [features]
+default = []
 trace = []
-default = ["gui"]
-gui = ["dep:egui", "dep:eframe"]

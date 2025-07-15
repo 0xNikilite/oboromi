@@ -1,4 +1,3 @@
-#[cfg(feature = "gui")]
 use oboromi::gui::GUI;
 
 #[allow(dead_code)]
@@ -27,7 +26,6 @@ fn setup_logger() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-#[cfg(feature = "gui")]
 fn run_gui() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -50,7 +48,7 @@ fn main() {
     #[cfg(feature = "trace")]
     log::info!("-- TRACING ENABLED --");
 
-    #[cfg(feature = "gui")] {
+     {
         run_gui();
     }
 }

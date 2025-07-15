@@ -1,7 +1,7 @@
 permissions:
   contents: write
 
-name: Create Release
+name: Build & Release
 
 on:
   workflow_dispatch:
@@ -11,99 +11,157 @@ on:
         required: true
 
 jobs:
-  build-release:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-14, macos-13]
+  build_macos:
+    name: Build macOS Universal
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Normalize version and check format
-        if: matrix.os == 'ubuntu-latest'
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Configure minimum macOS version
+        run: |
+          mkdir -p .cargo
+          cat <<EOF > .cargo/config.toml
+          [target.x86_64-apple-darwin]
+          rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
+          
+          [target.aarch64-apple-darwin]
+          rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
+          EOF
+
+      - name: Build for Intel
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Build for Apple Silicon
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          mkdir -p target/universal/release
+          lipo -create \
+            target/x86_64-apple-darwin/release/oboromi \
+            target/aarch64-apple-darwin/release/oboromi \
+            -output target/universal/release/oboromi
+          chmod +x target/universal/release/oboromi
+
+      - name: Prepare macOS bundle
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          [[ $VERSION =~ ^v ]] || VERSION="v$VERSION"
-          echo "Normalized version: $VERSION"
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid version format! Use vX.Y.Z"
-            exit 1
-          fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          # Crea directory con tutti i file necessari
+          mkdir -p "oboromi-$VERSION-macos"
+          cp target/universal/release/oboromi "oboromi-$VERSION-macos/"
+          cp LICENSE "oboromi-$VERSION-macos/"
+          cp README.md "oboromi-$VERSION-macos/"
+          
+          # Copia eventuali assets (se esistono)
+          [ -d assets ] && cp -R assets "oboromi-$VERSION-macos/"
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
-
-      - name: Build binary
-        run: cargo build --release
-
-      - name: Prepare artifact
-        shell: bash
+      - name: Create DMG package
         run: |
-          mkdir -p dist
-          LABEL="${{ matrix.os }}"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp target/release/oboromi.exe dist/oboromi-${{ env.VERSION }}-${LABEL}.exe
-            7z a oboromi-${{ env.VERSION }}-${LABEL}.zip dist/*.exe
-          else
-            cp target/release/oboromi dist/oboromi-${{ env.VERSION }}-${LABEL}
-            zip -r oboromi-${{ env.VERSION }}-${LABEL}.zip dist/
-          fi
+          VERSION="${{ github.event.inputs.version }}"
+          hdiutil create -volname "Oboromi" -srcfolder "oboromi-$VERSION-macos" -ov -format UDZO "oboromi-$VERSION-macos-universal.dmg"
 
-      - name: Upload artifact
+      - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oboromi-${{ env.VERSION }}-${{ matrix.os }}
-          path: oboromi-${{ env.VERSION }}-${{ matrix.os }}.zip
+          name: macos-artifact
+          path: "oboromi-${{ github.event.inputs.version }}-macos-universal.dmg"
 
-  release:
-    name: Create GitHub Release
+  build_linux:
+    name: Build Linux
     runs-on: ubuntu-latest
-    needs: build-release
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
 
-      - name: Create Tag via GitHub API
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Prepare Linux bundle
         run: |
-          API_URL="https://api.github.com/repos/${{ github.repository }}/git/refs"
-          curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -d "{\"ref\": \"refs/tags/${{ env.VERSION }}\", \"sha\": \"${{ github.sha }}\"}" \
-            $API_URL
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION="${{ github.event.inputs.version }}"
+          # Crea directory con tutti i file
+          mkdir -p "oboromi-$VERSION-linux"
+          cp target/release/oboromi "oboromi-$VERSION-linux/"
+          cp LICENSE "oboromi-$VERSION-linux/"
+          cp README.md "oboromi-$VERSION-linux/"
+          
+          # Copia eventuali assets
+          [ -d assets ] && cp -R assets "oboromi-$VERSION-linux/"
 
-      - name: Download all artifacts
+      - name: Create tarball
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          tar -czf "oboromi-$VERSION-linux-x64.tar.gz" "oboromi-$VERSION-linux"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifact
+          path: "oboromi-${{ github.event.inputs.version }}-linux-x64.tar.gz"
+
+  build_windows:
+    name: Build Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Prepare Windows bundle
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          $dirName = "oboromi-$version-windows"
+          New-Item -Name $dirName -ItemType Directory
+          Copy-Item target\release\oboromi.exe "$dirName\oboromi.exe"
+          Copy-Item LICENSE "$dirName\"
+          Copy-Item README.md "$dirName\"
+          
+          # Copia cartella assets se esiste
+          if (Test-Path "assets") {
+              Copy-Item -Recurse assets "$dirName\"
+          }
+
+      - name: Create zip package
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          7z a "oboromi-$version-windows-x64.zip" "oboromi-$version-windows\*"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifact
+          path: "oboromi-${{ github.event.inputs.version }}-windows-x64.zip"
+
+  release:
+    name: Create Release
+    needs: [build_macos, build_linux, build_windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: '*artifact'
+          merge-multiple: true
 
-      - name: List downloaded files
-        run: ls -R artifacts
-
-      - name: Create GitHub Release
-        id: create_release
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ env.VERSION }}
-          name: Release ${{ env.VERSION }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload assets
-        uses: softprops/action-gh-release@v1
-        with:
-          files: artifacts/**/*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          files: |
+            artifacts/oboromi-*-macos-universal.dmg
+            artifacts/oboromi-*-linux-x64.tar.gz
+            artifacts/oboromi-*-windows-x64.zip

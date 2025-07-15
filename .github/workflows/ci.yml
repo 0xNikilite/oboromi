@@ -38,7 +38,7 @@ jobs:
     if: needs.check-readme-only.outputs.only_readme == 'false'
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-14, macos-13]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
         rust: [stable]
         features: ["", "trace"]
 
@@ -110,8 +110,7 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          cargo tarpaulin --out Xml --output-dir target/coverage \
-            --skip-doc-tests --release
+          cargo tarpaulin --out Xml --output-dir target/coverage --release -- --skip-doc-tests
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3

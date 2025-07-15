@@ -12,65 +12,81 @@
 <h1 align="center">oboromi</h1>
 <h4 align="center">a proof-of-concept Nintendo Switch 2 emulator written in Rust</h4>
 
-> \[!WARNING]
-> oboromi is **not** yet a playable emulator. Right now it’s a skeleton of CPU+MMU cores and a test harness, designed to grow into a full emulator as hardware/software details (and reverse‑engineering) become available.
+## Overview
 
-## 🚀 What’s in the box today
+**oboromi** is a modular and work-in-progress emulator for the upcoming Nintendo Switch 2. It's built in Rust and focuses on correctness, clarity, and traceability rather than performance at this stage. The current implementation includes a functioning CPU core, a memory management unit (MMU) with basic paging, and a custom memory subsystem.
 
-- **CPU Core**  
-  - Implements a subset of ARM64/AArch64 (15+ instructions: NOP, ADDI/SUBI, ADD/SUB, AND/ORR/EOR, CMP/TST, LDR/STR, B, RET)  
-  - Full NZCV flag handling  
-  - Optional `trace` feature for disassembly and PC‐tagged logs
+> [!IMPORTANT]  
+> oboromi is **not** yet playable and does not emulate any commercial firmware or games.
 
-- **Virtual Memory + MMU**  
-  - 4 KiB pages with identity mapping  
-  - Simple page table + TLB (64 entries)  
-  - All memory reads/writes go through the MMU
+## Features
 
-- **Memory Subsystem**  
-  - Bounds‐checked reads/writes  
-  - 32‑bit and 64‑bit little‑endian helpers  
+### AArch64 CPU Core
+- Clean interpreter with structured instruction decoding
+- Implemented instructions:
+  - Arithmetic: `ADD`, `SUB`, `ADDI`, `SUBI`
+  - Bitwise: `AND`, `ORR`, `EOR`, `MVN`
+  - Comparison & logic: `CMP`, `TST`
+  - Branching: `B`, `RET`
+  - Memory: `LDR`, `STR`
+  - Others: `NOP`, `MOV`
+- Fully handles NZCV flags (condition codes)
+- Optional instruction tracing with feature flag `trace`
 
-- **Test Harness**  
-  - `main.rs` runs 12 quick integration tests (CPU instructions + MMU)  
-  - `cargo test` covers unit tests for CPU + Memory  
+### Memory Management Unit (MMU)
+- Virtual to physical address translation via simple page table
+- 4 KiB paging with TLB support (64 entries)
+- Page faults and access violations are logged
+- Mapping utility functions for identity and custom regions
 
-## 🧪 Try it
+### Memory Subsystem
+- Custom memory backend with:
+  - Region registration
+  - Bounds-checked access
+  - Load/store abstraction for 32-bit and 64-bit values
+  - Endianness-aware access
 
-```bash
+### Testing & Examples
+- Functional testing via `main.rs`, gated behind a button in the GUI
+- Unit tests for CPU & MMU behavior using `cargo test`
+- Examples to demonstrate step-by-step usage (`examples/` coming soon)
+
+## GUI (via `eframe`)
+- Built-in GUI based on `egui`
+- Always included and launched by default
+- Provides:
+  - Partial memory viewer
+  - Manual test runner (button-controlled)
+
+## How to Run
+
+```shell
 git clone https://github.com/0xNikilite/oboromi
 cd oboromi
-cargo run --features trace   # see each instruction disassembled
-# or simply:
+
 cargo run
 ````
 
-## 🤝 Contributing
+## Contributing
 
-We’re actively looking for collaborators in these areas:
-
-<ul>
-  <li>
-    <strong>ARM64/AArch64 Architecture &amp; CPU Implementation</strong>
-  </li>
-  <li>
-    <strong>Memory Management &amp; Virtualization</strong>
-  </li>
-  <li>
-    <strong>Graphics &amp; GPU Backends</strong><br>
-    Experience with low‑level graphics APIs (Vulkan, Metal, DirectX) and shader pipeline emulation.
-  </li>
-  <li>
-    <strong>Firmware &amp; Hardware Reverse Engineering</strong><br>
-    Skills in extracting, analyzing, and documenting proprietary firmware, SoC internals, and board‑level schematics.
-  </li>
-  <li>
-    <strong>Rust Systems Programming</strong><br>
-    Passion for zero‑unsafe, high‑performance Rust code.
-  </li>
-</ul>
+Pull requests are welcome! Feel free to fork the repo, open issues, or suggest improvements.
 
 ## 📜 License
 
-This project is licensed under **MPL‑2.0**.
-See [LICENSE](https://github.com/0xNikilite/oboromi/blob/main/LICENSE).
+This project is licensed under the **Mozilla Public License 2.0**.
+
+See [LICENSE](LICENSE) for details.
+
+---
+
+#### Useful Links
+
+* [Rust Lang](https://www.rust-lang.org/)
+* [AArch64 ISA Reference](https://developer.arm.com/documentation/ddi0596/latest)
+* [egui](https://github.com/emilk/egui)
+
+---
+
+> [!WARNING]  
+> oboromi is **not affiliated with Nintendo**. This project does not contain or support any copyrighted firmware,
+BIOS, or ROMs.

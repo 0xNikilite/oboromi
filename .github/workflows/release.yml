@@ -1,3 +1,6 @@
+permissions:
+  contents: write
+
 name: Create Release
 
 on:
@@ -23,17 +26,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          # Add leading 'v' if missing
           [[ $VERSION =~ ^v ]] || VERSION="v$VERSION"
           echo "Normalized version: $VERSION"
-
-          # Validate semver format vX.Y.Z
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version format! Use vX.Y.Z"
             exit 1
           fi
-
-          # Export normalized version for subsequent steps
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Set up Rust
@@ -75,10 +73,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Create git tag
+      - name: Create Tag via GitHub API
         run: |
-          git tag ${{ env.VERSION }}
-          git push origin ${{ env.VERSION }}
+          API_URL="https://api.github.com/repos/${{ github.repository }}/git/refs"
+          curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -d "{\"ref\": \"refs/tags/${{ env.VERSION }}\", \"sha\": \"${{ github.sha }}\"}" \
+            $API_URL
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

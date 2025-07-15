@@ -48,20 +48,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          # Use matrix.os for artifact names to avoid conflicts
+          LABEL="${{ matrix.os }}"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp target/release/oboromi.exe dist/oboromi-${{ env.VERSION }}-${{ runner.os }}.exe
-            7z a oboromi-${{ env.VERSION }}-${{ runner.os }}.zip dist/*.exe
+            cp target/release/oboromi.exe dist/oboromi-${{ env.VERSION }}-${LABEL}.exe
+            7z a oboromi-${{ env.VERSION }}-${LABEL}.zip dist/*.exe
           else
-            cp target/release/oboromi dist/oboromi-${{ env.VERSION }}-${{ runner.os }}
-            zip -r oboromi-${{ env.VERSION }}-${{ runner.os }}.zip dist/
+            cp target/release/oboromi dist/oboromi-${{ env.VERSION }}-${LABEL}
+            zip -r oboromi-${{ env.VERSION }}-${LABEL}.zip dist/
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oboromi-${{ env.VERSION }}-${{ runner.os }}
-          path: |
-            oboromi-${{ env.VERSION }}-${{ runner.os }}.zip
+          name: oboromi-${{ env.VERSION }}-${{ matrix.os }}
+          path: oboromi-${{ env.VERSION }}-${{ matrix.os }}.zip
 
   release:
     name: Create GitHub Release

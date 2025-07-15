@@ -19,13 +19,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify version format
+      - name: Normalize version and check format
         if: matrix.os == 'ubuntu-latest'
         run: |
-          if [[ ! "${{ github.event.inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          VERSION="${{ github.event.inputs.version }}"
+          # Add leading 'v' if missing
+          [[ $VERSION =~ ^v ]] || VERSION="v$VERSION"
+          echo "Normalized version: $VERSION"
+
+          # Validate semver format vX.Y.Z
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version format! Use vX.Y.Z"
             exit 1
           fi
+
+          # Export normalized version for subsequent steps
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@v1
@@ -36,22 +45,23 @@ jobs:
         run: cargo build --release
 
       - name: Prepare artifact
+        shell: bash
         run: |
           mkdir -p dist
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp target/release/oboromi.exe dist/oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.exe
-            7z a oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.zip dist/*.exe
+            cp target/release/oboromi.exe dist/oboromi-${{ env.VERSION }}-${{ runner.os }}.exe
+            7z a oboromi-${{ env.VERSION }}-${{ runner.os }}.zip dist/*.exe
           else
-            cp target/release/oboromi dist/oboromi-${{ github.event.inputs.version }}-${{ runner.os }}
-            zip -r oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.zip dist/
+            cp target/release/oboromi dist/oboromi-${{ env.VERSION }}-${{ runner.os }}
+            zip -r oboromi-${{ env.VERSION }}-${{ runner.os }}.zip dist/
           fi
-        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oboromi-${{ github.event.inputs.version }}-${{ runner.os }}
-          path: oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.zip
+          name: oboromi-${{ env.VERSION }}-${{ runner.os }}
+          path: |
+            oboromi-${{ env.VERSION }}-${{ runner.os }}.zip
 
   release:
     name: Create GitHub Release
@@ -71,8 +81,8 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Release ${{ github.event.inputs.version }}
+          tag_name: ${{ env.VERSION }}
+          name: Release ${{ env.VERSION }}
           draft: false
           prerelease: false
         env:

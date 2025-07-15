@@ -8,19 +8,79 @@ on:
         required: true
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build-release:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-14, macos-13]
+
     steps:
-      - uses: actions/checkout@v4
-      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Verify version format
+        if: matrix.os == 'ubuntu-latest'
         run: |
-          if [[ ! ${{ github.event.inputs.version }} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid version format!"
+          if [[ ! "${{ github.event.inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format! Use vX.Y.Z"
             exit 1
           fi
-          
-      - name: Create version tag
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build binary
+        run: cargo build --release
+
+      - name: Prepare artifact
         run: |
-          git tag ${{ github.event.inputs.version }}
-          git push origin ${{ github.event.inputs.version }}
+          mkdir -p dist
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp target/release/oboromi.exe dist/oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.exe
+            7z a oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.zip dist/*.exe
+          else
+            cp target/release/oboromi dist/oboromi-${{ github.event.inputs.version }}-${{ runner.os }}
+            zip -r oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.zip dist/
+          fi
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oboromi-${{ github.event.inputs.version }}-${{ runner.os }}
+          path: oboromi-${{ github.event.inputs.version }}-${{ runner.os }}.zip
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-release
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded files
+        run: ls -R artifacts
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -48,7 +48,6 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          # Use matrix.os for artifact names to avoid conflicts
           LABEL="${{ matrix.os }}"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cp target/release/oboromi.exe dist/oboromi-${{ env.VERSION }}-${LABEL}.exe
@@ -70,6 +69,19 @@ jobs:
     needs: build-release
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Create git tag
+        run: |
+          git tag ${{ env.VERSION }}
+          git push origin ${{ env.VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:

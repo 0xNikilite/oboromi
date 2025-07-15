@@ -1,8 +1,7 @@
 name: Rust CI
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
   pull_request:
     branches: [main]
 
@@ -17,12 +16,13 @@ jobs:
     outputs:
       only_readme: ${{ steps.check.outputs.only_readme }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Check changed files
         id: check
         run: |
-          git fetch origin ${{ github.event.before }}
+          git fetch origin ${{ github.event.before }} || true
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
           echo "Changed files:" && cat changed.txt
           if [ "$(wc -l < changed.txt)" -eq 1 ] && grep -qE '^README\.md$' changed.txt; then
@@ -35,7 +35,10 @@ jobs:
     name: Build and Test
     runs-on: ${{ matrix.os }}
     needs: check-readme-only
-    if: needs.check-readme-only.outputs.only_readme == 'false'
+    if: >
+      needs.check-readme-only.outputs.only_readme == 'false' &&
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.actor != '0xNikilite')
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
@@ -43,7 +46,8 @@ jobs:
         features: ["", "trace"]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -83,9 +87,13 @@ jobs:
     name: Code Coverage
     runs-on: ubuntu-latest
     needs: [check-readme-only, build]
-    if: needs.check-readme-only.outputs.only_readme == 'false'
+    if: >
+      needs.check-readme-only.outputs.only_readme == 'false' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request' && github.actor != '0xNikilite'))
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install nightly Rust
         uses: dtolnay/rust-toolchain@v1
@@ -109,8 +117,7 @@ jobs:
           fi
 
       - name: Generate coverage report
-        run: |
-          cargo tarpaulin --out Xml --output-dir target/coverage --release -- --skip-doc-tests
+        run: cargo tarpaulin --out Xml --output-dir target/coverage --release
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3

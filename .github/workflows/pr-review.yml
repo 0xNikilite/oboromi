@@ -1,6 +1,5 @@
 name: PR Safety Check
 
-# Trigger on PR events
 on:
   pull_request_target:
     types: [opened, reopened, synchronize]
@@ -13,19 +12,18 @@ jobs:
         uses: actions/github-script@v6
         id: check-maintainer
         with:
-          # List of trusted maintainers
           script: |
             const maintainers = [
-              '0xNikilite',  
+              '0xNikilite',
             ];
-            
+
             const isMaintainer = maintainers.includes(context.actor);
             core.setOutput('is_maintainer', isMaintainer);
-            
+
             if (!isMaintainer) {
-              core.notice(`External contributor: ${context.actor}`);
+              core.notice(`External contributor detected: ${context.actor}`);
             }
-            
+
       - name: Require manual review for external contributors
         if: ${{ steps.check-maintainer.outputs.is_maintainer == 'false' }}
         uses: actions/github-script@v6
@@ -38,7 +36,7 @@ jobs:
               issue_number: context.issue.number,
               labels: ['needs-review']
             });
-            
+
             // Request review from maintainers
             await github.rest.pulls.createReviewRequest({
               owner: context.repo.owner,

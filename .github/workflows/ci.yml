@@ -1,13 +1,11 @@
 name: Rust CI
 
-# Trigger on pushes to main and PRs targeting main
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-# Cancel previous runs for the same ref
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -19,18 +17,14 @@ jobs:
     outputs:
       only_readme: ${{ steps.check.outputs.only_readme }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Check changed files
         id: check
         run: |
           git fetch origin ${{ github.event.before }}
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
-
-          echo "Changed files:"
-          cat changed.txt
-
+          echo "Changed files:" && cat changed.txt
           if [ "$(wc -l < changed.txt)" -eq 1 ] && grep -qE '^README\.md$' changed.txt; then
             echo "only_readme=true" >> "$GITHUB_OUTPUT"
           else
@@ -44,13 +38,12 @@ jobs:
     if: needs.check-readme-only.outputs.only_readme == 'false'
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-14, macos-13]
         rust: [stable]
         features: ["", "trace"]
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -67,24 +60,24 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build project
+        shell: bash
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
             cargo build --locked --verbose
           else
             cargo build --locked --verbose --features "${{ matrix.features }}"
           fi
-        shell: bash
 
       - name: Run test suite
+        shell: bash
+        env:
+          RUST_BACKTRACE: full
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
             cargo test --locked --verbose
           else
             cargo test --locked --verbose --features "${{ matrix.features }}"
           fi
-        shell: bash
-        env:
-          RUST_BACKTRACE: full
 
   coverage:
     name: Code Coverage
@@ -99,10 +92,26 @@ jobs:
         with:
           toolchain: nightly
 
+      - name: Cache cargo binaries
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-bin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bin-
+
+      - name: Install tarpaulin if missing
+        run: |
+          if ! command -v cargo-tarpaulin &> /dev/null; then
+            cargo install cargo-tarpaulin
+          fi
+
       - name: Generate coverage report
         run: |
-          cargo install cargo-tarpaulin
-          cargo tarpaulin --out Xml --output-dir target/coverage
+          cargo tarpaulin --out Xml --output-dir target/coverage \
+            --skip-doc-tests --release
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3

@@ -1,6 +1,5 @@
 name: Security Audit
 
-# Weekly schedule + PR triggers
 on:
   schedule:
     - cron: '0 0 * * 1' # Every Monday at 00:00 UTC
@@ -12,25 +11,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-          
+
       - name: Audit dependencies for vulnerabilities
         uses: actions-rs/audit-check@v1
+
+      - name: Cache cargo bin directory
+        uses: actions/cache@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}  # Required for vulnerability database access
-          
-      - name: Check for outdated dependencies
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-bin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bin-
+
+      - name: Install cargo-outdated if needed
         run: |
-          # Install outdated dependency checker
-          cargo install cargo-outdated
-          # Fail if outdated dependencies found
-          cargo outdated --exit-code 1
-          
+          if ! command -v cargo-outdated &> /dev/null; then
+            cargo install cargo-outdated --locked
+          fi
+
+      - name: Check for outdated dependencies
+        run: cargo outdated --exit-code 1
+
       - name: Scan for exposed secrets
         uses: gitleaks/gitleaks-action@v2
-        with:
-          config-path: .gitleaks.toml  # Optional custom config

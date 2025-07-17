@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="https://dummyimage.com/400x100/000/fff&text=oboromi" alt="oboromi logo" width="50%" />
+  <img width="30%" height="30%" alt="logotext-black" src="https://github.com/user-attachments/assets/b9671290-25c3-4f1c-afdb-f30eb3e66388" alt="oboromi logo"/>
 </p>
-
 <p align="center">
   <a href="https://github.com/0xNikilite/oboromi/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MPL%202.0-blue.svg?style=flat"></a>
   <a href="https://discord.gg/g9sehj8bPz"><img alt="Discord" src="https://img.shields.io/discord/1387476383663390732?style=flat&label=Discord&color=5865F2&logo=discord&logoColor=white"></a>
 </p>
+
 
 <h4 align="center">(◕‿◕)&nbsp;&nbsp;Join our Discord here 🢰</h4>
 

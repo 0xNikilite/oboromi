@@ -47,7 +47,6 @@
 
 ### Testing & Examples
 - Functional testing via `main.rs`, gated behind a button in the GUI
-- Unit tests for CPU & MMU behavior using `cargo test`
 - Examples to demonstrate step-by-step usage (`examples/` coming soon)
 
 ## GUI (via `eframe`)

@@ -1,4 +1,4 @@
-use oboromi::gui::GUI;
+use oboromi_gui::gui::GUI;
 
 #[allow(dead_code)]
 fn decode_arm64_fields(opcode: u32) -> (u8, u8, u8, u8) {

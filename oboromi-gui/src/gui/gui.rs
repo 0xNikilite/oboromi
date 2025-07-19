@@ -1,5 +1,5 @@
 use eframe::egui::{ScrollArea, CentralPanel};
-use crate::tests::run::run_tests;
+use oboromi_core::tests::run::run_tests;
 
 /// GUI with a button to run tests and display results
 pub struct GUI {

@@ -1,13 +1,11 @@
-[package]
-name = "oboromi"
-version = "0.1.0"
-authors = ["Nikilite"]
-edition = "2024"
-description = "Proof-of-concept Nintendo Switch 2 emulator in Rust"
-license = "MPL-2.0"
-repository = "https://github.com/0xNikilite/oboromi"
+[workspace]
+resolver = "3"
+members = [
+  "oboromi-core",
+  "oboromi-gui",
+]
 
-[dependencies]
+[workspace.dependencies]
 bitflags = "2.9"
 log = "0.4"
 fern = { version = "0.6", features = ["colored"] }
@@ -15,7 +13,6 @@ parking_lot = "0.12"
 crossbeam-channel = "0.5"
 egui = "0.32"
 eframe = "0.32"
-
-[features]
-default = []
-trace = []
+serde = "1.0"
+thiserror = "1.0"
+oboromi-core = { path = "oboromi-core" }

@@ -1,0 +1,19 @@
+[package]
+name = "oboromi-core"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nikilite"]
+license = "MPL-2.0"
+description = "Core emulator library for oboromi"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = { workspace = true }
+log = { workspace = true }
+parking_lot = { workspace = true }
+
+[features]
+default = []
+trace = []

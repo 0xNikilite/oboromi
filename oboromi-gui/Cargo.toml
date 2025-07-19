@@ -1,0 +1,22 @@
+[package]
+name = "oboromi-gui"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nikilite"]
+license = "MPL-2.0"
+description = "oboromi emulator GUI frontend"
+
+[dependencies]
+oboromi-core = { path = "../oboromi-core", default-features = false }
+egui = { workspace = true }
+eframe = { workspace = true }
+fern = { workspace = true }
+log = { workspace = true }
+
+[features]
+default = []
+trace = ["oboromi-core/trace"]
+
+[[bin]]
+name = "oboromi"
+path = "src/main.rs"

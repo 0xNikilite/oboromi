@@ -59,7 +59,7 @@
 ## How to Run
 
 ```shell
-git clone https://github.com/0xNikilite/oboromi
+git clone https://github.com/0xNikilite/oboromi.git
 cd oboromi
 
 cargo run

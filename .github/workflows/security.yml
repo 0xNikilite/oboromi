@@ -19,6 +19,14 @@ jobs:
 
       - name: Audit dependencies for vulnerabilities
         uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-outdated if needed
+        run: |
+          if ! command -v cargo-outdated &> /dev/null; then
+            cargo install cargo-outdated --locked
+          fi
 
       - name: Cache cargo bin directory
         uses: actions/cache@v3
@@ -27,12 +35,6 @@ jobs:
           key: ${{ runner.os }}-cargo-bin-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-bin-
-
-      - name: Install cargo-outdated if needed
-        run: |
-          if ! command -v cargo-outdated &> /dev/null; then
-            cargo install cargo-outdated --locked
-          fi
 
       - name: Check for outdated dependencies
         run: cargo outdated --exit-code 1

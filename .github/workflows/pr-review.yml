@@ -7,6 +7,9 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write 
+      pull-requests: write  
     steps:
       - name: Check contributor authorization
         uses: actions/github-script@v6
@@ -16,10 +19,8 @@ jobs:
             const maintainers = [
               '0xNikilite',
             ];
-
             const isMaintainer = maintainers.includes(context.actor);
             core.setOutput('is_maintainer', isMaintainer);
-
             if (!isMaintainer) {
               core.notice(`External contributor detected: ${context.actor}`);
             }
@@ -29,18 +30,21 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            // Add 'needs-review' label
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: ['needs-review']
-            });
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['needs-review']
+              });
 
-            // Request review from maintainers
-            await github.rest.pulls.createReviewRequest({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              reviewers: ['0xNikilite']
-            });
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                reviewers: ['0xNikilite']
+              });
+            } catch (error) {
+              core.error("Failed to update PR: " + error.message);
+              core.setFailed(error.message);
+            }

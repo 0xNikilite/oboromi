@@ -1,24 +1,22 @@
 name: PR Safety Check
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, reopened, synchronize]
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     permissions:
-      issues: write 
-      pull-requests: write  
+      issues: write
+      pull-requests: write
     steps:
       - name: Check contributor authorization
         uses: actions/github-script@v6
         id: check-maintainer
         with:
           script: |
-            const maintainers = [
-              '0xNikilite',
-            ];
+            const maintainers = ['0xNikilite'];
             const isMaintainer = maintainers.includes(context.actor);
             core.setOutput('is_maintainer', isMaintainer);
             if (!isMaintainer) {
@@ -37,14 +35,23 @@ jobs:
                 issue_number: context.issue.number,
                 labels: ['needs-review']
               });
-
-              await github.rest.pulls.requestReviewers({
+            } catch (error) {
+              core.warning('GITHUB_TOKEN failed, trying with PAT');
+              
+              const { Octokit } = require("@octokit/rest");
+              const patOctokit = new Octokit({ auth: core.getInput('pat-token') });
+              
+              await patOctokit.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: context.issue.number,
-                reviewers: ['0xNikilite']
+                issue_number: context.issue.number,
+                labels: ['needs-review']
               });
-            } catch (error) {
-              core.error("Failed to update PR: " + error.message);
-              core.setFailed(error.message);
             }
+
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              reviewers: ['0xNikilite']
+            });

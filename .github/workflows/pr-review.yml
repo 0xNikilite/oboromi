@@ -10,48 +10,50 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
+      contents: read
+
     steps:
-      - name: Check contributor authorization
+      - name: Validate contributor
         uses: actions/github-script@v6
-        id: check-maintainer
+        id: check_contributor
         with:
           script: |
             const maintainers = ['0xNikilite'];
-            const isMaintainer = maintainers.includes(context.actor);
+            const actor = context.actor;
+            const isMaintainer = maintainers.includes(actor);
             core.setOutput('is_maintainer', isMaintainer);
-            if (!isMaintainer) {
-              core.notice(`External contributor detected: ${context.actor}`);
+            if (!isMaintainer && !actor.endsWith('[bot]')) {
+              core.notice(`External PR from: ${actor}`);
             }
 
-      - name: Require manual review for external contributors
-        if: ${{ steps.check-maintainer.outputs.is_maintainer == 'false' }}
+      - name: Enforce review workflow
+        if: steps.check_contributor.outputs.is_maintainer == 'false'
         uses: actions/github-script@v6
         with:
           script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.issue.number;
+
             try {
               await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
+                owner,
+                repo,
+                issue_number: prNumber,
                 labels: ['needs-review']
+              });
+
+              await github.rest.pulls.requestReviewers({
+                owner,
+                repo,
+                pull_number: prNumber,
+                reviewers: ['0xNikilite']
               });
             } catch (error) {
-              core.warning('GITHUB_TOKEN failed, trying with PAT');
-              
-              const { Octokit } = require("@octokit/rest");
-              const patOctokit = new Octokit({ auth: core.getInput('pat-token') });
-              
-              await patOctokit.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                labels: ['needs-review']
+              core.warning(`Label/reviewer update failed: ${error.message}`);
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body: `@0xNikilite Action required: couldn't auto-tag this PR.`
               });
             }
-
-            await github.rest.pulls.requestReviewers({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              reviewers: ['0xNikilite']
-            });

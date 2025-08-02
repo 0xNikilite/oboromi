@@ -1,10 +1,11 @@
 [package]
 name = "oboromi-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Nikilite"]
 license = "MPL-2.0"
 description = "Core emulator library for oboromi"
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"
@@ -12,8 +13,17 @@ path = "src/lib.rs"
 [dependencies]
 bitflags = { workspace = true }
 log = { workspace = true }
-parking_lot = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+cc = "1.0"
+cmake = "0.1"
+
+[dev-dependencies]
+criterion = "0.5"
 
 [features]
 default = []
 trace = []
+debug-asserts = []
+jupyter = []

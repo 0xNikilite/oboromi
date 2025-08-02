@@ -1,4 +1,5 @@
 #![allow(clippy::module_inception)]
 
-pub mod cpu;
-pub use cpu::{CPU, Flags};
+pub mod dynarmic_interface;
+
+pub use dynarmic_interface::DynarmicCPU;

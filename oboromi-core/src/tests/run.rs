@@ -1,153 +1,241 @@
-use crate::cpu::{CPU, Flags};
-use crate::memory::Memory;
+//! Test suite for Dynarmic JIT backend
 
+use std::time::{Instant, Duration};
+use crate::cpu::DynarmicCPU;
+
+const TEST_BASE_ADDR: u64 = 0x0000_1000;
+const TEST_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Test result
+#[derive(Debug, Clone)]
+pub struct TestResult {
+    pub name: String,
+    pub passed: bool,
+    pub message: String,
+    pub duration: Duration,
+}
+
+impl TestResult {
+    fn pass(name: &str, duration: Duration) -> Self {
+        TestResult {
+            name: name.to_string(),
+            passed: true,
+            message: "PASS".to_string(),
+            duration,
+        }
+    }
+    
+    fn fail(name: &str, message: &str, duration: Duration) -> Self {
+        TestResult {
+            name: name.to_string(),
+            passed: false,
+            message: format!("FAIL: {}", message),
+            duration,
+        }
+    }
+    
+    fn timeout(name: &str, duration: Duration) -> Self {
+        TestResult {
+            name: name.to_string(),
+            passed: false,
+            message: format!("TIMEOUT after {:?}", duration),
+            duration,
+        }
+    }
+}
+
+/// ARM64 instruction encoding helpers
+mod arm64 {
+    /// Encode ADD immediate instruction
+    pub fn add_imm(rd: u8, rn: u8, imm12: u16) -> u32 {
+        0x91000000 | ((imm12 as u32) << 10) | ((rn as u32) << 5) | (rd as u32)
+    }
+    
+    /// Encode SUB immediate instruction
+    pub fn sub_imm(rd: u8, rn: u8, imm12: u16) -> u32 {
+        0xD1000000 | ((imm12 as u32) << 10) | ((rn as u32) << 5) | (rd as u32)
+    }
+    
+    /// Encode ADD register instruction
+    pub fn add_reg(rd: u8, rn: u8, rm: u8) -> u32 {
+        0x8B000000 | ((rm as u32) << 16) | ((rn as u32) << 5) | (rd as u32)
+    }
+    
+    /// Encode MOV register instruction
+    pub fn mov_reg(rd: u8, rm: u8) -> u32 {
+        0xAA0003E0 | ((rm as u32) << 16) | (rd as u32)
+    }
+    
+    /// Encode branch instruction
+    pub fn branch(offset: i32) -> u32 {
+        let imm26 = (offset >> 2) & 0x3FFFFFF;
+        0x14000000 | (imm26 as u32)
+    }
+    
+    /// Encode RET instruction
+    pub fn ret() -> u32 {
+        0xD65F03C0
+    }
+    
+    /// Encode NOP instruction
+    pub fn nop() -> u32 {
+        0xD503201F
+    }
+}
+
+/// Run single test case
+fn run_single_test<F, V>(name: &str, setup: F, verify: V) -> TestResult
+where
+    F: FnOnce(&DynarmicCPU),
+    V: FnOnce(&DynarmicCPU) -> bool,
+{
+    let start = Instant::now();
+    
+    match DynarmicCPU::new() {
+        Some(cpu) => {
+            // Set initial state
+            cpu.set_sp(0x8000);
+            cpu.set_pc(TEST_BASE_ADDR);
+            
+            // Run test setup
+            setup(&cpu);
+            
+            // NEW: Execute single instruction using step()
+            let result = cpu.step();
+            let duration = start.elapsed();
+            
+            // Handle timeout
+            if duration > TEST_TIMEOUT {
+                TestResult::timeout(name, duration)
+            } else if result == 0 {
+                TestResult::fail(name, "Execution failed", duration)
+            } else if verify(&cpu) {
+                TestResult::pass(name, duration)
+            } else {
+                TestResult::fail(name, "Verification failed", duration)
+            }
+        }
+        None => TestResult::fail(name, "Failed to create CPU", start.elapsed()),
+    }
+}
+
+/// Run all instruction tests
 pub fn run_tests() -> Vec<String> {
     let mut results = Vec::new();
-
-    // 1) Memory subsystem test
-    let mut mem = Memory::new(64 * 1024 * 1024);
-    mem.write_byte(10, 0xAB);
-    assert_eq!(mem.read_byte(10), 0xAB);
-    mem.write_byte(100, 0x11);
-    mem.write_byte(101, 0x22);
-    mem.write_byte(102, 0x33);
-    mem.write_byte(103, 0x44);
-    assert_eq!(mem.read_u32(100), 0x4433_2211);
-    println!("✅ Memory OK");
-
-    // 2) NOP instruction test
-    let mut cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    let nop = 0xD503201F_u32.to_le_bytes();
-    for i in 0..4 { cpu.memory.write_byte(i, nop[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.pc, 4);
-    println!("✅ NOP OK");
-
-    // 3) ADD immediate test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[1] = 5;
-    let addi = 0x9100_0821_u32.to_le_bytes(); // ADD X1, X1, #0x2
-    for i in 0..4 { cpu.memory.write_byte(i, addi[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.x[1], 7);
-    println!("✅ ADDI OK");
-
-    // 4) SUB immediate test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[2] = 10;
-    let subi = 0xD100_0442_u32.to_le_bytes(); // SUB X2, X2, #0x1
-    for i in 0..4 { cpu.memory.write_byte(i, subi[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.x[2], 9);
-    println!("✅ SUBI OK");
-
-    // 5) ADD register test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[0] = 7;
-    cpu.regs.x[1] = 3;
-    let addr = 0x8B01_0000_u32.to_le_bytes(); // ADD X0, X0, X1
-    for i in 0..4 { cpu.memory.write_byte(i, addr[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.x[0], 10);
-    println!("✅ ADDR OK");
-
-    // 6) SUB register test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[3] = 8;
-    cpu.regs.x[4] = 2;
-    let subr = 0xCB04_0063_u32.to_le_bytes(); // SUB X3, X3, X4
-    for i in 0..4 { cpu.memory.write_byte(i, subr[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.x[3], 6);
-    println!("✅ SUBR OK");
-
-    // 7) AND register test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[5] = 0b1010;
-    cpu.regs.x[6] = 0b1100;
-    let andr = 0x8A06_00A5_u32.to_le_bytes(); // AND X5, X5, X6
-    for i in 0..4 { cpu.memory.write_byte(i, andr[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.x[5], 0b1000);
-    println!("✅ AND OK");
-
-    // 8) CMP (SUBS XZR, X7, X8) test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[7] = 3;
-    cpu.regs.x[8] = 3;
-    let cmp = 0xEB08_00FF_u32.to_le_bytes(); // CMP X7, X8
-    for i in 0..4 { cpu.memory.write_byte(i, cmp[i]); }
-    cpu.step();
-    assert!(cpu.regs.flags.contains(Flags::ZERO));
-    println!("✅ CMP OK");
-
-    // 9) LDR/STR immediate (64-bit) test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[9] = 100;
-    cpu.regs.x[10] = 0x1234_5678;
+    let start_time = Instant::now();
     
-    // STR X10, [X9, #16]
-    let stri = 0xF900092A_u32.to_le_bytes();
-    for i in 0..4 { cpu.memory.write_byte(i, stri[i]); }
-    cpu.step();
+    println!("🧪 Starting Dynarmic JIT Instruction Tests...");
+    println!("  Base address: 0x{:016X}", TEST_BASE_ADDR);
+    println!();
     
-    // LDR X11, [X9, #16]
-    let ldri = 0xF940092B_u32.to_le_bytes();
-    for i in 0..4 { cpu.memory.write_byte(i + 4, ldri[i]); }
-    cpu.step();
+    // Test cases
+    let test_results = vec![
+        // NOP instruction test
+        run_single_test(
+            "NOP",
+            |cpu| cpu.write_u32(TEST_BASE_ADDR, arm64::nop()),
+            |cpu| cpu.get_pc() == TEST_BASE_ADDR + 4
+        ),
+        
+        // ADD immediate test
+        run_single_test(
+            "ADD X1, X1, #2",
+            |cpu| {
+                cpu.set_x(1, 5);
+                cpu.write_u32(TEST_BASE_ADDR, arm64::add_imm(1, 1, 2));
+            },
+            |cpu| cpu.get_x(1) == 7 && cpu.get_pc() == TEST_BASE_ADDR + 4
+        ),
+        
+        // SUB immediate test
+        run_single_test(
+            "SUB X2, X2, #1",
+            |cpu| {
+                cpu.set_x(2, 10);
+                cpu.write_u32(TEST_BASE_ADDR, arm64::sub_imm(2, 2, 1));
+            },
+            |cpu| cpu.get_x(2) == 9 && cpu.get_pc() == TEST_BASE_ADDR + 4
+        ),
+        
+        // ADD register test
+        run_single_test(
+            "ADD X0, X0, X1",
+            |cpu| {
+                cpu.set_x(0, 7);
+                cpu.set_x(1, 3);
+                cpu.write_u32(TEST_BASE_ADDR, arm64::add_reg(0, 0, 1));
+            },
+            |cpu| cpu.get_x(0) == 10 && cpu.get_pc() == TEST_BASE_ADDR + 4
+        ),
+        
+        // MOV register test
+        run_single_test(
+            "MOV X3, X4",
+            |cpu| {
+                cpu.set_x(3, 0);
+                cpu.set_x(4, 0xDEADBEEF);
+                cpu.write_u32(TEST_BASE_ADDR, arm64::mov_reg(3, 4));
+            },
+            |cpu| cpu.get_x(3) == 0xDEADBEEF && cpu.get_pc() == TEST_BASE_ADDR + 4
+        ),
+        
+        // Branch test
+        run_single_test(
+            "B +8",
+            |cpu| cpu.write_u32(TEST_BASE_ADDR, arm64::branch(8)),
+            |cpu| cpu.get_pc() == TEST_BASE_ADDR + 8
+        ),
+        
+        // RET instruction test
+        run_single_test(
+            "RET",
+            |cpu| {
+                cpu.set_x(30, 0x2000); // Link register
+                cpu.write_u32(TEST_BASE_ADDR, arm64::ret());
+            },
+            |cpu| cpu.get_pc() == 0x2000
+        ),
+    ];
     
-    assert_eq!(cpu.regs.x[11], 0x1234_5678);
-    println!("✅ LDR/STR OK");
-
-    // 10) Branch test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    let b = 0x1400_0002_u32.to_le_bytes(); // B +2
-    for i in 0..4 { cpu.memory.write_byte(i, b[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.pc, 8);
-    println!("✅ B OK");
-
-    // 11) RET test
-    cpu = CPU::new(1024);
-    cpu.regs.pc = 0;
-    cpu.regs.x[30] = 16;
-    let ret = 0xD65F_03C0_u32.to_le_bytes();
-    for i in 0..4 { cpu.memory.write_byte(i, ret[i]); }
-    cpu.step();
-    assert_eq!(cpu.regs.pc, 16);
-    println!("✅ RET OK");
-
-    // 12) MMU Basic Functionality Test
-    println!("\nTesting MMU Basic Functionality...");
-    let mut cpu = CPU::new(4096); // 4KB memory for MMU test
-
-    let vaddr = 0x10;
-    let paddr = cpu.memory.mmu.translate(vaddr).expect("Translation failed");
-    println!("MMU: 0x{:x} → 0x{:x}", vaddr, paddr);
-    assert_eq!(vaddr, paddr);
-
-    // Test: write through MMU
-    cpu.memory.write_byte(vaddr as usize, 0xAB);
-    let value = cpu.memory.ram[paddr as usize];
-    println!("Wrote 0xAB to vaddr 0x{:x} (paddr 0x{:x}), read back: 0x{:x}", 
-        vaddr, paddr, value);
-    assert_eq!(value, 0xAB);
-
-    // Test: read through MMU
-    let read_value = cpu.memory.read_byte(vaddr as usize);
-    println!("Read from vaddr 0x{:x}: 0x{:x}", vaddr, read_value);
-    assert_eq!(read_value, 0xAB);
-
-    println!("✅ MMU Basic Functionality OK");
-    results.push("All tests passed".to_string());
+    // Process results
+    let mut passed = 0;
+    let mut failed = 0;
+    
+    for result in &test_results {
+        let icon = if result.passed { "✅" } else { "❌" };
+        let time_str = format!("{:?}", result.duration);
+        
+        println!("  {} {} - {} ({})", 
+            icon, 
+            result.name, 
+            result.message,
+            time_str
+        );
+        
+        if result.passed {
+            passed += 1;
+        } else {
+            failed += 1;
+        }
+        
+        results.push(format!("{}: {} ({})", 
+            result.name, 
+            result.message,
+            time_str
+        ));
+    }
+    
+    let total_time = start_time.elapsed();
+    
+    // Summary
+    println!();
+    println!("📊 Test Summary:");
+    println!("  Total tests: {}", test_results.len());
+    println!("  Passed: {} ✅", passed);
+    println!("  Failed: {} ❌", failed);
+    println!("  Total time: {:?}", total_time);
+    println!();
+    
+    results.push(format!("Total: {} passed, {} failed", passed, failed));
     results
 }

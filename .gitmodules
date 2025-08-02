@@ -1,6 +1,6 @@
 [submodule "third_party/dynarmic"]
     path = third_party/dynarmic
-    url = https://github.com/yuzu-mirror/dynarmic.git
+    url = https://github.com/0xNikilite/dynarmic.git
 [submodule "third_party/ext-boost"]
     path = third_party/ext-boost
-    url = https://github.com/yuzu-mirror/ext-boost.git
+    url = https://github.com/0xNikilite/ext-boost.git

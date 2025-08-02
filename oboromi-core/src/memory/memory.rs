@@ -15,7 +15,7 @@ impl Memory {
         let mut mmu = MMU::new();
         
         // Setup identity mapping for the entire RAM
-        let pages = (size + 4095) / 4096; // Arrotonda per eccesso
+        let pages = (size + 4095) / 4096;
         mmu.set_identity_mapping(0, pages);
 
         Memory {
@@ -24,10 +24,26 @@ impl Memory {
         }
     }
 
+    /// Map a memory range with permissions
+    pub fn map_range(&mut self, vaddr: usize, size: usize, readable: bool, writable: bool) {
+        let start_page = vaddr / 4096;
+        let end_page = (vaddr + size + 4095) / 4096;
+        
+        for page in start_page..end_page {
+            let vaddr = page * 4096;
+            self.mmu.map_page(
+                vaddr as u64, 
+                vaddr as u64, 
+                readable, 
+                writable
+            );
+        }
+    }
+
     /// Read one byte through MMU
     pub fn read_byte(&mut self, vaddr: usize) -> u8 {
         match self.mmu.translate(vaddr as u64) {
-            Some(paddr) => {
+            Some((paddr, _, _)) => {
                 let paddr = paddr as usize;
                 if paddr < self.ram.len() {
                     self.ram[paddr]
@@ -45,7 +61,7 @@ impl Memory {
     /// Write one byte through MMU
     pub fn write_byte(&mut self, vaddr: usize, val: u8) {
         match self.mmu.translate(vaddr as u64) {
-            Some(paddr) => {
+            Some((paddr, _, _)) => {
                 let paddr = paddr as usize;
                 if paddr < self.ram.len() {
                     self.ram[paddr] = val;
@@ -55,20 +71,55 @@ impl Memory {
         }
     }
 
-    /// Read 32-bit little-endian word through MMU
+    /// Read 32-bit little-endian word through MMU (atomic if cross-page)
     pub fn read_u32(&mut self, addr: usize) -> u32 {
-        let mut bytes = [0u8; 4];
-        for i in 0..4 {
-            bytes[i] = self.read_byte(addr + i);
+        let start_page = addr / 4096;
+        let end_page = (addr + 3) / 4096;
+        
+        // Atomic access if cross-page
+        if start_page != end_page {
+            let mut bytes = [0u8; 4];
+            for i in 0..4 {
+                bytes[i] = self.read_byte(addr + i);
+            }
+            return u32::from_le_bytes(bytes);
         }
-        u32::from_le_bytes(bytes)
+        
+        // Direct access for single page
+        if let Some((paddr, _, _)) = self.mmu.translate(addr as u64) {
+            let paddr = paddr as usize;
+            if paddr + 3 < self.ram.len() {
+                return u32::from_le_bytes([
+                    self.ram[paddr],
+                    self.ram[paddr + 1],
+                    self.ram[paddr + 2],
+                    self.ram[paddr + 3]
+                ]);
+            }
+        }
+        0
     }
 
-    /// Write 32-bit little-endian word through MMU
+    /// Write 32-bit little-endian word through MMU (atomic if cross-page)
     pub fn write_u32(&mut self, addr: usize, value: u32) {
         let bytes = value.to_le_bytes();
-        for (i, &b) in bytes.iter().enumerate() {
-            self.write_byte(addr + i, b);
+        let start_page = addr / 4096;
+        let end_page = (addr + 3) / 4096;
+        
+        // Atomic write if cross-page
+        if start_page != end_page {
+            for (i, &b) in bytes.iter().enumerate() {
+                self.write_byte(addr + i, b);
+            }
+            return;
+        }
+        
+        // Direct write for single page
+        if let Some((paddr, _, _)) = self.mmu.translate(addr as u64) {
+            let paddr = paddr as usize;
+            if paddr + 3 < self.ram.len() {
+                self.ram[paddr..paddr + 4].copy_from_slice(&bytes);
+            }
         }
     }
 

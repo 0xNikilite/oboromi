@@ -20,17 +20,10 @@
 
 ## Features
 
-### AArch64 CPU Core
-- Clean interpreter with structured instruction decoding
-- Implemented instructions:
-  - Arithmetic: `ADD`, `SUB`, `ADDI`, `SUBI`
-  - Bitwise: `AND`, `ORR`, `EOR`, `MVN`
-  - Comparison & logic: `CMP`, `TST`
-  - Branching: `B`, `RET`
-  - Memory: `LDR`, `STR`
-  - Others: `NOP`, `MOV`
-- Fully handles NZCV flags (condition codes)
-- Optional instruction tracing with feature flag `trace`
+### JIT Backend (Dynarmic)
+
+oboromi uses [Dynarmic](https://github.com/0xNikilite/dynarmic) as a JIT backend for AArch64 instruction translation.  
+The included version is a **fork with custom modifications** designed to integrate directly with `DynarmicCPU` in oboromi.  
 
 ### Memory Management Unit (MMU)
 - Virtual to physical address translation via simple page table
@@ -46,20 +39,37 @@
   - Endianness-aware access
 
 ### Testing & Examples
-- Functional testing via `main.rs`, gated behind a button in the GUI
-- Examples to demonstrate step-by-step usage (`examples/` coming soon)
+- Instruction-level test framework embedded in the project
+- Tests cover:
+  - NOP
+  - ADD (immediate and register)
+  - SUB
+  - MOV
+  - Branching
+  - RET (using X30 as LR)
+- Each test is run via `DynarmicCPU::step()` and results are shown in the GUI (and in the terminal)
+- Example:
+
+```
+✅ NOP - PASS (65.4881ms)
+❌ ADD X1, X1, #2 - FAIL: Verification failed (12.6993ms) 
+...
+````
+> [!NOTE]  
+> if it fails it's probably your problem, since it should work
 
 ## GUI (via `eframe`)
 - Built-in GUI based on `egui`
 - Always included and launched by default
 - Provides:
   - Partial memory viewer
-  - Manual test runner (button-controlled)
+  - **Manual test runner** (via GUI button)
+  - Live output of instruction test results and stats
 
 ## How to Run
 
 ```shell
-git clone https://github.com/0xNikilite/oboromi
+git clone --recurse-submodules https://github.com/0xNikilite/oboromi
 cd oboromi
 
 cargo run
@@ -82,9 +92,10 @@ See [LICENSE](LICENSE) for details.
 * [Rust Lang](https://www.rust-lang.org/)
 * [AArch64 ISA Reference](https://developer.arm.com/documentation/ddi0602/latest/)
 * [egui](https://github.com/emilk/egui)
+* [Dynarmic (my fork)](https://github.com/0xNikilite/dynarmic)
 
 ---
 
-> [!WARNING]  
-> oboromi is **not affiliated with Nintendo**. This project does not contain or support any copyrighted firmware,
-BIOS, or ROMs.
+> \[!WARNING]
+> oboromi is **not affiliated with Nintendo**. This project does not contain any copyrighted firmware
+> or ROMs.

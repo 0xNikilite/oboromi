@@ -20,7 +20,7 @@ cc = "1.0"
 cmake = "0.1"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.7"
 
 [features]
 default = []

@@ -25,6 +25,8 @@
 oboromi uses [Dynarmic](https://github.com/0xNikilite/dynarmic) as a JIT backend for AArch64 instruction translation.  
 The included version is a **fork with custom modifications** designed to integrate directly with `DynarmicCPU` in oboromi.  
 
+###### these core features below are not used, wait for next updates
+
 ### Memory Management Unit (MMU)
 - Virtual to physical address translation via simple page table
 - 4 KiB paging with TLB support (64 entries)
@@ -37,6 +39,8 @@ The included version is a **fork with custom modifications** designed to integra
   - Bounds-checked access
   - Load/store abstraction for 32-bit and 64-bit values
   - Endianness-aware access
+
+###### end of features not used
 
 ### Testing & Examples
 - Instruction-level test framework embedded in the project

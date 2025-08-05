@@ -14,6 +14,10 @@ path = "src/lib.rs"
 bitflags = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+fern = { version = "0.6", features = ["colored"] }
+crossbeam-channel = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+env_logger = "0.11"
 
 [build-dependencies]
 cc = "1.2"

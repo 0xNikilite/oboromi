@@ -1,6 +1,40 @@
 use std::env;
 use std::path::Path;
 use std::process::Command;
+use std::fs;
+
+fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
+    // This patch is specifically for macOS to fix the Boost hash issue
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    let file_path = "../third_party/ext-boost/boost/container_hash/hash.hpp";
+    let path = Path::new(file_path);
+    
+    if !path.exists() {
+        println!("cargo:warning=Boost hash.hpp not found at {}, skipping patch", file_path);
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(path)?;
+    
+    let target = "struct hash_base : std::unary_function<T, std::size_t> {};";
+    let replacement = "struct hash_base : boost::unary_function<T, std::size_t> {};";
+
+    if content.contains(target) {
+        let patched_content = content.replace(target, replacement);
+        fs::write(path, patched_content)?;
+        println!("cargo:warning=Successfully patched Boost for macOS compatibility");
+        println!("cargo:warning=Replaced 'std::unary_function' with 'boost::unary_function'");
+    } else if content.contains(replacement) {
+        println!("cargo:warning=Boost already patched, skipping");
+    } else {
+        println!("cargo:warning=Could not find target string in Boost file, patch may not be needed");
+    }
+
+    Ok(())
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -43,6 +77,15 @@ fn main() {
         
         if !status.success() {
             panic!("Git submodule update failed with exit code: {}", status);
+        }
+        
+        // Apply macOS patch after submodule initialization
+        if is_apple {
+            println!("cargo:warning=Applying macOS compatibility patches...");
+            if let Err(e) = patch_boost_for_macos() {
+                println!("cargo:warning=Failed to patch Boost: {}", e);
+                panic!("Failed to patch Boost for macOS: {}", e);
+            }
         }
     }
     
@@ -352,6 +395,5 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=dylib=stdc++");
     }
-
     println!("cargo:warning=== BUILD COMPLETED SUCCESSFULLY ===");
 }

@@ -8,7 +8,7 @@ members = [
 [workspace.dependencies]
 bitflags = "2.9"
 log = "0.4"
-fern = { version = "0.6", features = ["colored"] }
+fern = { version = "0.7", features = ["colored"] }
 crossbeam-channel = "0.5"
 egui = "0.32"
 eframe = "0.32"

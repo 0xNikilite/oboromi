@@ -48,12 +48,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
-      - name: Install Xcode Command Line Tools
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-14'
-        run: |
-          sudo xcode-select --switch /Applications/Xcode_15.4.app/Contents/Developer
-          sudo xcodebuild -runFirstLaunch
+
+
+      - name: Setup Xcode on macOS
+        if: startsWith(matrix.os, 'macos')
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1

@@ -69,13 +69,20 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Limit parallel jobs on macOS
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          export CARGO_BUILD_JOBS=2
+          export RUSTFLAGS="-C link-arg=-Wl,-no_pie"
+          echo "Limiting parallelism to reduce memory usage"
+
       - name: Build project
         shell: bash
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
-            cargo build --locked --verbose
+            cargo build --locked --jobs ${CARGO_BUILD_JOBS:-4}
           else
-            cargo build --locked --verbose --features "${{ matrix.features }}"
+            cargo build --locked --jobs ${CARGO_BUILD_JOBS:-4} --features "${{ matrix.features }}"
           fi
 
       - name: Run test suite

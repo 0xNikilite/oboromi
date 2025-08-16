@@ -60,7 +60,9 @@ The included version is a **fork with custom modifications** designed to integra
 ...
 ````
 > [!NOTE]  
-> if it fails it's probably your problem, since it should work
+> If a test fails, it’s likely due to changes in the code or an unusual environment.  
+> The test framework is designed to work reliably: if you run the program without modifying the code, you should see the ✅ marks for passing tests.  
+> Any failures should prompt you to double-check recent changes or system configuration that might affect execution.
 
 ## GUI (via `eframe`)
 - Built-in GUI based on `egui`

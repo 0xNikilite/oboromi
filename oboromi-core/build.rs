@@ -84,7 +84,7 @@ fn main() {
         println!("cargo:warning=Initializing Dynarmic submodules...");
         let status = Command::new("git")
             .args(&["submodule", "update", "--init", "--recursive"])
-            .current_dir(&dynarmic_dir)
+            .current_dir(project_root)
             .status()
             .expect("Failed to run git submodule");
         
@@ -394,6 +394,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=dynarmic");
     println!("cargo:rustc-link-lib=static=fmt");
     println!("cargo:rustc-link-lib=static=zydis");
+    println!("cargo:rustc-link-lib=static=zycore");
     
     if is_windows {
         println!("cargo:rustc-link-lib=dylib=msvcrt");

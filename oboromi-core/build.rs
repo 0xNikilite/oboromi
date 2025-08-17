@@ -167,12 +167,18 @@ fn main() {
         let mut cmake_args = vec![
             "-S", &dynarmic_dir_str,
             "-B", &dynarmic_build_dir_str,
-            "-DDYNARMIC_BUNDLES=ON",
+            "-DDYNARMIC_USE_BUNDLED_EXTERNALS=ON",
             "-DDYNARMIC_TESTS=OFF",
             "-DDYNARMIC_ENABLE_ASM_SUPPORT=OFF",
             "-DDYNARMIC_EXAMPLES=OFF",
             "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+            "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
+            "-DZYDIS_BUILD_SHARED_LIB=OFF",
+            "-DZYDIS_BUILD_EXAMPLES=OFF",
+            "-DZYDIS_BUILD_TOOLS=OFF",
+            "-DZYAN_SYSTEM_ZYCORE=OFF",
+            "-DZYDIS_STATIC_DEFINE=ON",
+            "-DZYDIS_DEV_MODE=OFF",
         ];
         
         // Add platform-specific flags
@@ -208,8 +214,8 @@ fn main() {
             }
         }
         
-        // Build Dynarmic
-        println!("cargo:warning=Building Dynarmic...");
+        // Build Dynarmic and all its dependencies
+        println!("cargo:warning=Building Dynarmic and dependencies...");
         let mut build_cmd = Command::new("cmake");
         build_cmd
             .arg("--build")
@@ -217,7 +223,7 @@ fn main() {
             .arg("--config")
             .arg("Release")
             .arg("--target")
-            .arg("dynarmic")
+            .arg("all")  // Build all targets, not just dynarmic
             .arg("--parallel")
             .arg("4");
         

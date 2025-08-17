@@ -82,11 +82,24 @@ fn main() {
     
     if !fmt_path.exists() || !zydis_path.exists() || !mcl_path.exists() {
         println!("cargo:warning=Initializing Dynarmic submodules...");
+
+        // Initialize main submodules
         let status = Command::new("git")
-            .args(&["submodule", "update", "--init", "--recursive"])
+            .args(&["submodule", "update", "--init"])
             .current_dir(project_root)
             .status()
             .expect("Failed to run git submodule");
+            
+        if !status.success() {
+            panic!("Failed to initialize main submodules");
+        }
+
+        // Initialize zydis submodules
+        let status = Command::new("git")
+            .args(&["submodule", "update", "--init", "--recursive"])
+            .current_dir(&zydis_path)
+            .status()
+            .expect("Failed to run git submodule for zydis");
         
         if !status.success() {
             panic!("Git submodule update failed with exit code: {}", status);
@@ -366,12 +379,14 @@ fn main() {
             dynarmic_build_dir.join("externals/fmt/Release"),
             dynarmic_build_dir.join("externals/zydis/Release"),
             dynarmic_build_dir.join("externals/mcl/src/Release"),
+            dynarmic_build_dir.join("externals/zydis/zycore/Release"),
         ]
     } else {
         vec![
             dynarmic_build_dir.join("externals/fmt"),
             dynarmic_build_dir.join("externals/zydis"),
             dynarmic_build_dir.join("externals/mcl/src"),
+            dynarmic_build_dir.join("externals/zydis/zycore"),
         ]
     };
     

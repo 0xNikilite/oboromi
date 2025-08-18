@@ -191,6 +191,8 @@ fn main() {
             cmake_args.push("-DCMAKE_C_COMPILER=/usr/bin/clang");
             cmake_args.push("-DCMAKE_CXX_COMPILER=/usr/bin/clang++");
             cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
+            cmake_args.push("-DCMAKE_POLICY_VERSION_MINIMUM=3.10");
+
         } else {
             cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
         }
@@ -414,8 +416,6 @@ fn main() {
     println!("cargo:rustc-link-lib=static=mcl");
     println!("cargo:rustc-link-lib=static=dynarmic");
     println!("cargo:rustc-link-lib=static=fmt");
-    println!("cargo:rustc-link-lib=static=zydis");
-    println!("cargo:rustc-link-lib=static=zycore");
     
     if is_windows {
         println!("cargo:rustc-link-lib=dylib=msvcrt");

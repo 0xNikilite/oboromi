@@ -72,7 +72,7 @@ The included version is a **fork with custom modifications** designed to integra
   - **Manual test runner** (via GUI button)
   - Live output of instruction test results and stats
 
-## How to Run
+## How to Run (On Windows and Linux)
 
 ```shell
 git clone --recurse-submodules https://github.com/0xNikilite/oboromi

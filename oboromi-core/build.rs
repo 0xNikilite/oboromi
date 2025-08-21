@@ -9,35 +9,28 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
     if target_os != "macos" {
         return Ok(());
     }
-
     let file_path = "../third_party/ext-boost/boost/container_hash/hash.hpp";
     let path = Path::new(file_path);
-
     if !path.exists() {
         println!("cargo:warning=Boost hash.hpp not found at {}, skipping patch", file_path);
         return Ok(());
     }
-
     let content = fs::read_to_string(path)?;
-
     // Multiple possible patterns to replace
     let patterns = [
         "struct hash_base : std::unary_function<T, std::size_t> {};",
         "struct hash_base : boost::unary_function<T, std::size_t> {};",
         "struct hash_base : ::std::unary_function<T, std::size_t> {};",
     ];
-
     let replacement = "struct hash_base { typedef T argument_type; typedef std::size_t result_type; };";
     let mut patched = false;
     let mut patched_content = content.clone();
-
     for pattern in patterns {
         if patched_content.contains(pattern) {
             patched_content = patched_content.replace(pattern, replacement);
             patched = true;
         }
     }
-
     if patched {
         fs::write(path, patched_content)?;
         println!("cargo:warning=Successfully patched Boost hash.hpp for macOS compatibility");
@@ -46,7 +39,6 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("cargo:warning=Could not find pattern to patch in Boost hash.hpp");
     }
-
     Ok(())
 }
 
@@ -83,7 +75,6 @@ fn main() {
     
     if !fmt_path.exists() || !zydis_path.exists() || !mcl_path.exists() {
         println!("cargo:warning=Initializing Dynarmic submodules...");
-
         // Initialize main submodules
         let status = Command::new("git")
             .args(&["submodule", "update", "--init"])
@@ -94,7 +85,6 @@ fn main() {
         if !status.success() {
             panic!("Failed to initialize main submodules");
         }
-
         // Initialize zydis submodules
         let status = Command::new("git")
             .args(&["submodule", "update", "--init", "--recursive"])
@@ -164,7 +154,7 @@ fn main() {
         let dynarmic_dir_str = dynarmic_dir.to_string_lossy().into_owned();
         let dynarmic_build_dir_str = dynarmic_build_dir.to_string_lossy().into_owned();
         
-        // Prepare CMake arguments
+        // Prepare CMake arguments (combined from both files)
         let mut cmake_args = vec![
             "-S", &dynarmic_dir_str,
             "-B", &dynarmic_build_dir_str,
@@ -172,28 +162,38 @@ fn main() {
             "-DDYNARMIC_TESTS=OFF",
             "-DDYNARMIC_ENABLE_ASM_SUPPORT=OFF",
             "-DDYNARMIC_EXAMPLES=OFF",
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",  // From first file
             "-DCMAKE_BUILD_TYPE=Release",
             "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
+            // Build static libs, not shared (from first file)
+            "-DBUILD_SHARED_LIBS=OFF",
             "-DZYDIS_BUILD_SHARED_LIB=OFF",
+            "-DZYCORE_BUILD_SHARED_LIB=OFF",
             "-DZYDIS_BUILD_EXAMPLES=OFF",
             "-DZYDIS_BUILD_TOOLS=OFF",
             "-DZYAN_SYSTEM_ZYCORE=OFF",
             "-DZYDIS_STATIC_DEFINE=ON",
             "-DZYDIS_DEV_MODE=OFF",
+            // Static libs must be PIC on Unix (from first file)
+            "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
         ];
         
         // Add platform-specific flags
         if is_msvc {
             cmake_args.push("-DCMAKE_CXX_FLAGS=/wd4100 /wd4189");
         } else if is_apple {
-            // Use Xcode toolchain explicitly
+            let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
             cmake_args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
-            cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=arm64");
+            if arch == "arm64" {
+                cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=arm64");
+            } else {
+                cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=x86_64");
+            }
+            cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
+            // From second file
             cmake_args.push("-DCMAKE_C_COMPILER=/usr/bin/clang");
             cmake_args.push("-DCMAKE_CXX_COMPILER=/usr/bin/clang++");
-            cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
             cmake_args.push("-DCMAKE_POLICY_VERSION_MINIMUM=3.10");
-
         } else {
             cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
         }
@@ -225,10 +225,11 @@ fn main() {
             .arg(&dynarmic_build_dir)
             .arg("--config")
             .arg("Release")
-            .arg("--target")
-            .arg("all")  // Build all targets, not just dynarmic
+            .arg("--target").arg("Zycore")  // From first file
+            .arg("--target").arg("Zydis")   // From first file
+            .arg("--target").arg("dynarmic")
             .arg("--parallel")
-            .arg("4");
+            .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "4".into()));  // From first file
         
         if is_apple {
             build_cmd.env("MACOSX_DEPLOYMENT_TARGET", "11.0");
@@ -294,9 +295,9 @@ fn main() {
             .flag("-fexceptions");
         
         if is_apple {
+            let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
             build
-                .flag("-arch")
-                .flag("arm64")
+                .flag("-arch").flag(arch)
                 .define("__APPLE__", None);
         }
     }
@@ -344,9 +345,9 @@ fn main() {
                     .flag("-fexceptions");
                 
                 if is_apple {
+                    let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
                     build2
-                        .flag("-arch")
-                        .flag("arm64")
+                        .flag("-arch").flag(arch)
                         .define("__APPLE__", None);
                 }
             }
@@ -402,6 +403,13 @@ fn main() {
     // Combine all paths
     let mut all_paths = lib_paths.clone();
     all_paths.extend(dep_paths);
+    // Additional paths from first file
+    all_paths.extend(vec![
+        dynarmic_build_dir.join("build"),
+        dynarmic_build_dir.join("build").join("Release"),
+        dynarmic_build_dir.join("build").join("RelWithDebInfo"),
+        dynarmic_build_dir.join("externals").join("zydis").join("dependencies").join("zycore"),
+    ]);
     
     // Add all library paths to linker search
     for lib_path in &all_paths {
@@ -413,7 +421,7 @@ fn main() {
         }
     }
     
-    // Link required libraries
+    // Link required libraries (order from second file)
     println!("cargo:rustc-link-lib=static=mcl");
     println!("cargo:rustc-link-lib=static=dynarmic");
     println!("cargo:rustc-link-lib=static=fmt");
@@ -421,17 +429,28 @@ fn main() {
     println!("cargo:rustc-link-lib=static=zycore");
     
     if is_windows {
-        println!("cargo:rustc-link-lib=dylib=msvcrt");
-        // Windows specific libraries
-        println!("cargo:rustc-link-lib=shell32");
-        println!("cargo:rustc-link-lib=advapi32");
-        println!("cargo:rustc-link-lib=user32");
-        println!("cargo:rustc-link-lib=gdi32");
+        if is_msvc {
+            // MSVC CRT is linked automatically; do NOT link msvcrt explicitly.
+            println!("cargo:rustc-link-lib=shell32");
+            println!("cargo:rustc-link-lib=advapi32");
+            println!("cargo:rustc-link-lib=user32");
+            println!("cargo:rustc-link-lib=gdi32");
+        } else {
+            // MinGW
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+            println!("cargo:rustc-link-lib=shell32");
+            println!("cargo:rustc-link-lib=advapi32");
+            println!("cargo:rustc-link-lib=user32");
+            println!("cargo:rustc-link-lib=gdi32");
+        }
     } else if is_apple {
         println!("cargo:rustc-link-lib=dylib=c++");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
     } else {
+        // Linux and other Unix
         println!("cargo:rustc-link-lib=dylib=stdc++");
+        println!("cargo:rustc-link-lib=dylib=dl");
+        println!("cargo:rustc-link-lib=dylib=pthread");
     }
     println!("cargo:warning=== BUILD COMPLETED SUCCESSFULLY ===");
 }

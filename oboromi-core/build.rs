@@ -7,44 +7,43 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
     // This patch is specifically for macOS to fix the Boost hash issue
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "macos" {
-    return Ok(());
-}
+        return Ok(());
+    }
 
     let file_path = "../third_party/ext-boost/boost/container_hash/hash.hpp";
     let path = Path::new(file_path);
-    
+
     if !path.exists() {
         println!("cargo:warning=Boost hash.hpp not found at {}, skipping patch", file_path);
         return Ok(());
     }
 
     let content = fs::read_to_string(path)?;
-    
-    let target = "struct hash_base : std::unary_function<T, std::size_t> {};";
-    
-    if content.contains(target) {
-        let patched_content = content.replace(
-            target,
-            "struct hash_base { typedef T argument_type; typedef std::size_t result_type; };"
-        );
+
+    // Target strings to replace
+    let targets = vec![
+        "struct hash_base : std::unary_function<T, std::size_t> {};",
+        "struct hash_base : boost::unary_function<T, std::size_t> {};",
+    ];
+
+    let replacement = "struct hash_base { typedef T argument_type; typedef std::size_t result_type; };";
+    let mut patched = false;
+    let mut patched_content = content.clone();
+
+    for target in targets {
+        if patched_content.contains(target) {
+            patched_content = patched_content.replace(target, replacement);
+            patched = true;
+        }
+    }
+
+    if patched {
         fs::write(path, patched_content)?;
         println!("cargo:warning=Successfully patched Boost for macOS compatibility");
-        println!("cargo:warning=Replaced unary_function inheritance with typedefs");
+    } else if content.contains("typedef T argument_type;") {
+        println!("cargo:warning=Boost already properly patched, skipping");
     } else {
-        let previous_target = "struct hash_base : boost::unary_function<T, std::size_t> {};";
-        if content.contains(previous_target) {
-            let patched_content = content.replace(
-                previous_target,
-                "struct hash_base { typedef T argument_type; typedef std::size_t result_type; };"
-            );
-            fs::write(path, patched_content)?;
-            println!("cargo:warning=Updated Boost patch for macOS compatibility");
-            println!("cargo:warning=Replaced boost::unary_function with typedefs");
-        } else if content.contains("typedef T argument_type;") {
-            println!("cargo:warning=Boost already properly patched, skipping");
-        } else {
-            println!("cargo:warning=Could not find target string in Boost file, patch may not be needed");
-        }
+        println!("cargo:warning=Could not find target string in Boost file, patch may not be needed");
     }
 
     Ok(())

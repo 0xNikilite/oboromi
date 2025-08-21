@@ -5,9 +5,10 @@ use std::fs;
 
 fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
     // This patch is specifically for macOS to fix the Boost hash issue
-    if !cfg!(target_os = "macos") {
-        return Ok(());
-    }
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "macos" {
+    return Ok(());
+}
 
     let file_path = "../third_party/ext-boost/boost/container_hash/hash.hpp";
     let path = Path::new(file_path);
@@ -164,34 +165,43 @@ fn main() {
         let dynarmic_build_dir_str = dynarmic_build_dir.to_string_lossy().into_owned();
         
         // Prepare CMake arguments
-        let mut cmake_args = vec![
-            "-S", &dynarmic_dir_str,
-            "-B", &dynarmic_build_dir_str,
-            "-DDYNARMIC_USE_BUNDLED_EXTERNALS=ON",
-            "-DDYNARMIC_TESTS=OFF",
-            "-DDYNARMIC_ENABLE_ASM_SUPPORT=OFF",
-            "-DDYNARMIC_EXAMPLES=OFF",
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
-            "-DZYDIS_BUILD_SHARED_LIB=OFF",
-            "-DZYDIS_BUILD_EXAMPLES=OFF",
-            "-DZYDIS_BUILD_TOOLS=OFF",
-            "-DZYAN_SYSTEM_ZYCORE=OFF",
-            "-DZYDIS_STATIC_DEFINE=ON",
-            "-DZYDIS_DEV_MODE=OFF",
-        ];
+    let mut cmake_args = vec![
+    "-S", &dynarmic_dir_str,
+    "-B", &dynarmic_build_dir_str,
+    "-DDYNARMIC_USE_BUNDLED_EXTERNALS=ON",
+    "-DDYNARMIC_TESTS=OFF",
+    "-DDYNARMIC_ENABLE_ASM_SUPPORT=OFF",
+    "-DDYNARMIC_EXAMPLES=OFF",
+    "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
+
+    // Build static libs, not shared
+    "-DBUILD_SHARED_LIBS=OFF",
+    "-DZYDIS_BUILD_SHARED_LIB=OFF",
+    "-DZYCORE_BUILD_SHARED_LIB=OFF",
+    "-DZYDIS_BUILD_EXAMPLES=OFF",
+    "-DZYDIS_BUILD_TOOLS=OFF",
+    "-DZYAN_SYSTEM_ZYCORE=OFF",
+    "-DZYDIS_STATIC_DEFINE=ON",
+    "-DZYDIS_DEV_MODE=OFF",
+
+    // Static libs must be PIC on Unix
+    "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+];
         
         // Add platform-specific flags
         if is_msvc {
             cmake_args.push("-DCMAKE_CXX_FLAGS=/wd4100 /wd4189");
         } else if is_apple {
-            // Use Xcode toolchain explicitly
-            cmake_args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
-            cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=arm64");
-            cmake_args.push("-DCMAKE_C_COMPILER=/usr/bin/clang");
-            cmake_args.push("-DCMAKE_CXX_COMPILER=/usr/bin/clang++");
-            cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
-            cmake_args.push("-DCMAKE_POLICY_VERSION_MINIMUM=3.10");
+        let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
+        cmake_args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
+        if arch == "arm64" {
+    cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=arm64");
+} else {
+    cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=x86_64");
+}
+        cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
 
         } else {
             cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
@@ -224,10 +234,11 @@ fn main() {
             .arg(&dynarmic_build_dir)
             .arg("--config")
             .arg("Release")
-            .arg("--target")
-            .arg("all")  // Build all targets, not just dynarmic
+            .arg("--target").arg("Zycore")
+            .arg("--target").arg("Zydis")
+            .arg("--target").arg("dynarmic")
             .arg("--parallel")
-            .arg("4");
+            .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "4".into()));
         
         if is_apple {
             build_cmd.env("MACOSX_DEPLOYMENT_TARGET", "11.0");
@@ -259,111 +270,109 @@ fn main() {
     
     // Compile our C++ interface
     println!("cargo:warning=== COMPILING OUR C++ INTERFACE ===");
-    
-    let include_paths = vec![
-        dynarmic_src_dir.join("dynarmic"),
-        dynarmic_dir.join("src"),
-        dynarmic_dir.join("externals/fmt/include"),
-        dynarmic_dir.join("externals/mcl/include"),
-    ];
-    
-    let mut build = cc::Build::new();
+
+let include_paths = vec![
+    dynarmic_src_dir.join("dynarmic"),
+    dynarmic_dir.join("src"),
+    dynarmic_dir.join("externals/fmt/include"),
+    dynarmic_dir.join("externals/mcl/include"),
+];
+
+let mut build = cc::Build::new();
+build
+    .file(&cpp_file)
+    .cpp(true)
+    .warnings(false)
+    .warnings_into_errors(false);
+
+// Platform-specific flags
+if is_msvc {
     build
-        .file(&cpp_file)
-        .cpp(true)
-        .warnings(false)
-        .warnings_into_errors(false);
-    
-    // Platform-specific flags
-    if is_msvc {
+        .flag("/std:c++20")
+        .flag("/EHsc")
+        .flag("/MD")
+        .flag("/DWIN32_LEAN_AND_MEAN")
+        .flag("/DNOMINMAX")
+        .flag("/wd4100")
+        .flag("/wd4189")
+        .flag("/wd4458");
+} else {
+    build
+        .flag("-std=c++20")
+        .flag("-Wno-unused-parameter")
+        .flag("-Wno-unused-variable")
+        .flag("-fexceptions");
+
+    if is_apple {
+        let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
         build
-            .flag("/std:c++20")
-            .flag("/EHsc")
-            .flag("/MD")
-            .flag("/DWIN32_LEAN_AND_MEAN")
-            .flag("/DNOMINMAX")
-            .flag("/wd4100")    // unreferenced formal parameter
-            .flag("/wd4189")    // local variable initialized but not referenced
-            .flag("/wd4458");   // declaration hides class member
-    } else {
-        build
-            .flag("-std=c++20")
-            .flag("-Wno-unused-parameter")
-            .flag("-Wno-unused-variable")
-            .flag("-fexceptions");
-        
-        if is_apple {
-            build
-                .flag("-arch")
-                .flag("arm64")
-                .define("__APPLE__", None);
-        }
+            .flag("-arch").flag(arch)
+            .define("__APPLE__", None);
     }
-    
-    // Add include paths that exist
-    let mut valid_paths = Vec::new();
-    for path in &include_paths {
-        if path.exists() {
-            build.include(path);
-            valid_paths.push(path);
-            println!("cargo:warning=Added include path: {}", path.display());
-        }
+}
+
+// Add include paths that exist
+let mut valid_paths = Vec::new();
+for path in &include_paths {
+    if path.exists() {
+        build.include(path);
+        valid_paths.push(path);
+        println!("cargo:warning=Added include path: {}", path.display());
     }
-    
-    match build.try_compile("dynarmic_interface") {
-        Ok(_) => {
-            println!("cargo:warning=✓ Our C++ interface compiled successfully!");
-        }
-        Err(e) => {
-            println!("cargo:warning=✗ C++ interface compilation failed: {}", e);
-            
-            // Try with C++14 if C++20 fails
-            let mut build2 = cc::Build::new();
+}
+
+match build.try_compile("dynarmic_interface") {
+    Ok(_) => {
+        println!("cargo:warning=✓ Our C++ interface compiled successfully!");
+    }
+    Err(e) => {
+        println!("cargo:warning=✗ C++ interface compilation failed: {}", e);
+        let mut build2 = cc::Build::new();
+        build2
+            .file(&cpp_file)
+            .cpp(true)
+            .warnings(false)
+            .warnings_into_errors(false);
+
+        if is_msvc {
             build2
-                .file(&cpp_file)
-                .cpp(true)
-                .warnings(false)
-                .warnings_into_errors(false);
-            
-            if is_msvc {
+                .flag("/std:c++14")
+                .flag("/EHsc")
+                .flag("/MD")
+                .flag("/DWIN32_LEAN_AND_MEAN")
+                .flag("/DNOMINMAX")
+                .flag("/wd4100")
+                .flag("/wd4189")
+                .flag("/wd4458");
+        } else {
+            build2
+                .flag("-std=c++14")
+                .flag("-Wno-unused-parameter")
+                .flag("-Wno-unused-variable")
+                .flag("-fexceptions");
+
+            if is_apple {
+                let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
                 build2
-                    .flag("/std:c++14")
-                    .flag("/EHsc")
-                    .flag("/MD")
-                    .flag("/DWIN32_LEAN_AND_MEAN")
-                    .flag("/DNOMINMAX")
-                    .flag("/wd4100")
-                    .flag("/wd4189")
-                    .flag("/wd4458");
-            } else {
-                build2
-                    .flag("-std=c++14")
-                    .flag("-Wno-unused-parameter")
-                    .flag("-Wno-unused-variable")
-                    .flag("-fexceptions");
-                
-                if is_apple {
-                    build2
-                        .flag("-arch")
-                        .flag("arm64")
-                        .define("__APPLE__", None);
-                }
+                    .flag("-arch").flag(arch)
+                    .define("__APPLE__", None);
             }
-            
-            for path in &valid_paths {
-                build2.include(path);
+        }
+
+        for path in &valid_paths {
+            build2.include(path);
+        }
+
+        match build2.try_compile("dynarmic_interface") {
+            Ok(_) => {
+                println!("cargo:warning=✓ C++ interface compiled successfully with C++14!");
             }
-            
-            match build2.try_compile("dynarmic_interface") {
-                Ok(_) => {
-                    println!("cargo:warning=✓ C++ interface compiled successfully with C++14!");
-                }
-                Err(e2) => {
-                    panic!("Failed to compile C++ interface with both C++20 and C++14. Last error: {}", e2);
-                }
+            Err(e2) => {
+                panic!("Failed to compile C++ interface with both C++20 and C++14. Last error: {}", e2);
             }
         }
     }
+}
     
     // Link libraries
     println!("cargo:warning=== LINKING LIBRARIES ===");
@@ -401,6 +410,22 @@ fn main() {
     // Combine all paths
     let mut all_paths = lib_paths.clone();
     all_paths.extend(dep_paths);
+
+    all_paths.extend(vec![
+    dynarmic_build_dir.join("build"),
+    dynarmic_build_dir.join("build").join("Release"),
+    dynarmic_build_dir.join("build").join("RelWithDebInfo"),
+    dynarmic_build_dir.join("externals").join("zydis").join("dependencies").join("zycore"),
+]);
+
+// Add all library paths to linker search
+for lib_path in &all_paths {
+    if lib_path.exists() {
+        let absolute_path = std::fs::canonicalize(lib_path).expect("Failed to get absolute path");
+        println!("cargo:rustc-link-search=native={}", absolute_path.display());
+        println!("cargo:warning=Added library path: {}", absolute_path.display());
+    }
+}
     
     // Add all library paths to linker search
     for lib_path in &all_paths {
@@ -413,22 +438,34 @@ fn main() {
     }
     
     // Link required libraries
-    println!("cargo:rustc-link-lib=static=mcl");
     println!("cargo:rustc-link-lib=static=dynarmic");
+    println!("cargo:rustc-link-lib=static=Zydis");
+    println!("cargo:rustc-link-lib=static=Zycore");
     println!("cargo:rustc-link-lib=static=fmt");
+    println!("cargo:rustc-link-lib=static=mcl");
     
     if is_windows {
-        println!("cargo:rustc-link-lib=dylib=msvcrt");
-        // Windows specific libraries
+    if is_msvc {
+        // MSVC CRT is linked automatically; do NOT link msvcrt explicitly.
         println!("cargo:rustc-link-lib=shell32");
         println!("cargo:rustc-link-lib=advapi32");
         println!("cargo:rustc-link-lib=user32");
         println!("cargo:rustc-link-lib=gdi32");
-    } else if is_apple {
-        println!("cargo:rustc-link-lib=dylib=c++");
-        println!("cargo:rustc-link-lib=framework=CoreFoundation");
     } else {
+        // MinGW
         println!("cargo:rustc-link-lib=dylib=stdc++");
+        println!("cargo:rustc-link-lib=shell32");
+        println!("cargo:rustc-link-lib=advapi32");
+        println!("cargo:rustc-link-lib=user32");
+        println!("cargo:rustc-link-lib=gdi32");
     }
-    println!("cargo:warning=== BUILD COMPLETED SUCCESSFULLY ===");
-}
+    } else if is_apple {
+    println!("cargo:rustc-link-lib=dylib=c++");
+    println!("cargo:rustc-link-lib=framework=CoreFoundation");
+    } else {
+        // Linux and other Unix
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+        println!("cargo:rustc-link-lib=dylib=dl");
+        println!("cargo:rustc-link-lib=dylib=pthread");
+    }
+} 

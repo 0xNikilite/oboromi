@@ -16,7 +16,7 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let content = fs::read_to_string(path)?;
-    // Multiple possible patterns to replace (from second file)
+    // Multiple possible patterns to replace
     let patterns = [
         "struct hash_base : std::unary_function<T, std::size_t> {};",
         "struct hash_base : boost::unary_function<T, std::size_t> {};",

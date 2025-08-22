@@ -5,7 +5,7 @@ use std::fs;
 
 fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
     // This patch is specifically for macOS to fix the Boost hash issue
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "macos" {
         return Ok(());
     }
@@ -162,10 +162,10 @@ fn main() {
             "-DDYNARMIC_TESTS=OFF",
             "-DDYNARMIC_ENABLE_ASM_SUPPORT=OFF",
             "-DDYNARMIC_EXAMPLES=OFF",
-            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",  // From first file
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
-            // Build static libs, not shared (from first file)
+            // Build static libs, not shared
             "-DBUILD_SHARED_LIBS=OFF",
             "-DZYDIS_BUILD_SHARED_LIB=OFF",
             "-DZYCORE_BUILD_SHARED_LIB=OFF",
@@ -174,7 +174,7 @@ fn main() {
             "-DZYAN_SYSTEM_ZYCORE=OFF",
             "-DZYDIS_STATIC_DEFINE=ON",
             "-DZYDIS_DEV_MODE=OFF",
-            // Static libs must be PIC on Unix (from first file)
+            // Static libs must be PIC on Unix
             "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
         ];
         
@@ -225,11 +225,11 @@ fn main() {
             .arg(&dynarmic_build_dir)
             .arg("--config")
             .arg("Release")
-            .arg("--target").arg("Zycore")  // From first file
-            .arg("--target").arg("Zydis")   // From first file
+            .arg("--target").arg("Zycore")
+            .arg("--target").arg("Zydis")
             .arg("--target").arg("dynarmic")
             .arg("--parallel")
-            .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "4".into()));  // From first file
+            .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "4".into()));
         
         if is_apple {
             build_cmd.env("MACOSX_DEPLOYMENT_TARGET", "11.0");
@@ -403,7 +403,6 @@ fn main() {
     // Combine all paths
     let mut all_paths = lib_paths.clone();
     all_paths.extend(dep_paths);
-    // Additional paths from first file
     all_paths.extend(vec![
         dynarmic_build_dir.join("build"),
         dynarmic_build_dir.join("build").join("Release"),
@@ -421,7 +420,7 @@ fn main() {
         }
     }
     
-    // Link required libraries (order from second file)
+    // Link required libraries
     println!("cargo:rustc-link-lib=static=mcl");
     println!("cargo:rustc-link-lib=static=dynarmic");
     println!("cargo:rustc-link-lib=static=fmt");

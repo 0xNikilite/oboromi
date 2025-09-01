@@ -42,6 +42,59 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// Add this function to create a wrapper header that fixes the circular dependency
+fn create_terminal_wrapper() -> Result<(), Box<dyn std::error::Error>> {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "windows" {
+        return Ok(()); // No need for this on Windows
+    }
+    
+    let terminal_h_path = "../third_party/dynarmic/src/dynarmic/ir/terminal.h";
+    let wrapper_path = "../third_party/dynarmic/src/dynarmic/ir/terminal_wrapper.h";
+    
+    // Check if wrapper already exists
+    if Path::new(wrapper_path).exists() {
+        println!("cargo:warning=Terminal wrapper already exists, skipping creation");
+        return Ok(());
+    }
+    
+    // Read the original terminal.h
+    let terminal_content = fs::read_to_string(terminal_h_path)?;
+    
+    // Create wrapper content that fixes the circular dependency
+    let wrapper_content = r#"// Wrapper for terminal.h to fix circular dependency issues on Linux/Mac
+#pragma once
+
+// First define the forward declarations
+namespace Dynarmic::IR::Term {
+struct Invalid;
+struct Interpret;
+struct ReturnToDispatch;
+struct LinkBlock;
+struct LinkBlockFast;
+struct PopRSBHint;
+struct FastDispatchHint;
+struct If;
+struct CheckBit;
+struct CheckHalt;
+}
+
+// Include boost headers
+#include <boost/variant/variant.hpp>
+#include <boost/recursive_wrapper.hpp>
+
+// Now include the original header but with our fixes
+#define BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES
+#include "dynarmic/ir/terminal.h"
+#undef BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES
+"#;
+    
+    fs::write(wrapper_path, wrapper_content)?;
+    println!("cargo:warning=Created terminal wrapper to fix circular dependency");
+    
+    Ok(())
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../third_party/dynarmic/src/dynarmic/dynarmic_interface.cpp");
@@ -67,6 +120,13 @@ fn main() {
     println!("cargo:warning=Target: {}", target);
     println!("cargo:warning=Host OS: {}", target_os);
     println!("cargo:warning=Our C++ interface file exists: {}", cpp_file.exists());
+    
+    // Create terminal wrapper for Linux/Mac
+    if !is_windows {
+        if let Err(e) = create_terminal_wrapper() {
+            println!("cargo:warning=Failed to create terminal wrapper: {}", e);
+        }
+    }
     
     // Ensure submodules are initialized
     let fmt_path = dynarmic_dir.join("externals/fmt");
@@ -175,7 +235,7 @@ fn main() {
             "-DZYDIS_DEV_MODE=OFF",
             // Static libs must be PIC on Unix
             "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
-            // Boost configuration for consistency across platforms
+            // Use your custom ext-boost
             "-DBoost_NO_BOOST_CMAKE=ON",
             "-DBoost_NO_SYSTEM_PATHS=ON",
             "-DBOOST_ROOT=../third_party/ext-boost",
@@ -192,8 +252,8 @@ fn main() {
         } else if is_apple {
             let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
             cmake_args.extend(&[
-                "-DCMAKE_CXX_STANDARD=17",  // Mac often works better with C++17
-                "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter",
+                "-DCMAKE_CXX_STANDARD=17",
+                "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter -Wno-incomplete-types",
                 "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
                 "-DCMAKE_C_COMPILER=/usr/bin/clang",
                 "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
@@ -207,10 +267,12 @@ fn main() {
         } else {
             // Linux and other Unix-like systems
             cmake_args.extend(&[
-                "-DCMAKE_CXX_STANDARD=17",  // Try C++17 instead of 20 for Linux
-                "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter",
+                "-DCMAKE_CXX_STANDARD=17",
+                "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter -Wno-incomplete-types",
                 "-DBOOST_DISABLE_THREADS=OFF",
                 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+                // Disable precompiled headers which might be causing issues
+                "-DDYNARMIC_ENABLE_PRECOMPILED_HEADERS=OFF",
             ]);
         }
         
@@ -305,15 +367,19 @@ fn main() {
             .flag("/wd4458");   // declaration hides class member
     } else {
         build
-            .flag("-std=c++17")  // Use C++17 for Linux/Mac consistency
-            .flag("-fno-strict-aliasing")  // Key fix for circular dependencies
+            .flag("-std=c++17")
+            .flag("-fno-strict-aliasing")
             .flag("-Wno-unused-parameter")
             .flag("-Wno-unused-variable")
+            .flag("-Wno-incomplete-types")
             .flag("-fexceptions");
         
         // Platform-specific flags for GCC/Clang
         if target_os == "linux" || target_os == "macos" {
             build.flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
+            build.flag("-ftemplate-depth=1024");
+            build.flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS");
+            build.flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30");
         }
         
         if is_apple {
@@ -362,14 +428,18 @@ fn main() {
             } else {
                 build2
                     .flag("-std=c++14")
-                    .flag("-fno-strict-aliasing")  // Keep this flag for fallback
+                    .flag("-fno-strict-aliasing")
                     .flag("-Wno-unused-parameter")
                     .flag("-Wno-unused-variable")
+                    .flag("-Wno-incomplete-types")
                     .flag("-fexceptions");
                 
                 // Platform-specific flags for GCC/Clang
                 if target_os == "linux" || target_os == "macos" {
                     build2.flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
+                    build2.flag("-ftemplate-depth=1024");
+                    build2.flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS");
+                    build2.flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30");
                 }
                 
                 if is_apple {

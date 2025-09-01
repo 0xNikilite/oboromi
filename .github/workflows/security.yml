@@ -2,7 +2,7 @@ name: Security Audit
 
 on:
   schedule:
-    - cron: '0 0 * * 1' # Every Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
   push:
     branches: [main]
   workflow_dispatch: {}
@@ -21,8 +21,15 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Audit dependencies for vulnerabilities
-        uses: actions-rs/audit-check@v1
+      - name: Install cargo-audit if needed
+        run: |
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --locked
+          fi
+
+      - name: Run cargo-audit
+        run: |
+          cargo audit
 
       - name: Cache cargo bin directory
         uses: actions/cache@v3

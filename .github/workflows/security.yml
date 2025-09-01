@@ -57,8 +57,6 @@ jobs:
           fi
       - name: Check for outdated dependencies
         run: cargo outdated --exit-code 1 || echo "Outdated dependencies found - not failing workflow"
-      - name: Fetch full git history
-        run: git fetch --prune --unshallow
       - name: Scan for exposed secrets
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -111,4 +109,3 @@ jobs:
               });
               core.info('Created new security issue.');
             }
-            

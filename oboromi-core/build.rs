@@ -154,7 +154,7 @@ fn main() {
         let dynarmic_dir_str = dynarmic_dir.to_string_lossy().into_owned();
         let dynarmic_build_dir_str = dynarmic_build_dir.to_string_lossy().into_owned();
         
-        // Prepare CMake arguments (combined from both files)
+        // Prepare base CMake arguments
         let mut cmake_args = vec![
             "-S", &dynarmic_dir_str,
             "-B", &dynarmic_build_dir_str,
@@ -162,7 +162,6 @@ fn main() {
             "-DDYNARMIC_TESTS=OFF",
             "-DDYNARMIC_ENABLE_ASM_SUPPORT=OFF",
             "-DDYNARMIC_EXAMPLES=OFF",
-            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
             // Build static libs, not shared
@@ -176,26 +175,43 @@ fn main() {
             "-DZYDIS_DEV_MODE=OFF",
             // Static libs must be PIC on Unix
             "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+            // Boost configuration for consistency across platforms
+            "-DBoost_NO_BOOST_CMAKE=ON",
+            "-DBoost_NO_SYSTEM_PATHS=ON",
+            "-DBOOST_ROOT=../third_party/ext-boost",
+            "-DBoost_USE_STATIC_LIBS=ON",
         ];
         
-        // Add platform-specific flags
+        // Platform-specific CMake arguments
         if is_msvc {
-            cmake_args.push("-DCMAKE_CXX_FLAGS=/wd4100 /wd4189");
+            cmake_args.extend(&[
+                "-DCMAKE_CXX_STANDARD=20",
+                "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+                "-DCMAKE_CXX_FLAGS=/wd4100 /wd4189",
+            ]);
         } else if is_apple {
             let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
-            cmake_args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
+            cmake_args.extend(&[
+                "-DCMAKE_CXX_STANDARD=17",  // Mac often works better with C++17
+                "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter",
+                "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
+                "-DCMAKE_C_COMPILER=/usr/bin/clang",
+                "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+                "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
+            ]);
             if arch == "arm64" {
                 cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=arm64");
             } else {
                 cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=x86_64");
             }
-            cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
-            // From second file
-            cmake_args.push("-DCMAKE_C_COMPILER=/usr/bin/clang");
-            cmake_args.push("-DCMAKE_CXX_COMPILER=/usr/bin/clang++");
-            cmake_args.push("-DCMAKE_POLICY_VERSION_MINIMUM=3.10");
         } else {
-            cmake_args.push("-DCMAKE_CXX_FLAGS=-Wno-unused-parameter -Wno-unused-variable");
+            // Linux and other Unix-like systems
+            cmake_args.extend(&[
+                "-DCMAKE_CXX_STANDARD=17",  // Try C++17 instead of 20 for Linux
+                "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter",
+                "-DBOOST_DISABLE_THREADS=OFF",
+                "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+            ]);
         }
         
         // Run CMake configure
@@ -289,10 +305,16 @@ fn main() {
             .flag("/wd4458");   // declaration hides class member
     } else {
         build
-            .flag("-std=c++20")
+            .flag("-std=c++17")  // Use C++17 for Linux/Mac consistency
+            .flag("-fno-strict-aliasing")  // Key fix for circular dependencies
             .flag("-Wno-unused-parameter")
             .flag("-Wno-unused-variable")
             .flag("-fexceptions");
+        
+        // Platform-specific flags for GCC/Clang
+        if target_os == "linux" || target_os == "macos" {
+            build.flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
+        }
         
         if is_apple {
             let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
@@ -319,7 +341,7 @@ fn main() {
         Err(e) => {
             println!("cargo:warning=✗ C++ interface compilation failed: {}", e);
             
-            // Try with C++14 if C++20 fails
+            // Try with C++14 if C++17 fails
             let mut build2 = cc::Build::new();
             build2
                 .file(&cpp_file)
@@ -340,9 +362,15 @@ fn main() {
             } else {
                 build2
                     .flag("-std=c++14")
+                    .flag("-fno-strict-aliasing")  // Keep this flag for fallback
                     .flag("-Wno-unused-parameter")
                     .flag("-Wno-unused-variable")
                     .flag("-fexceptions");
+                
+                // Platform-specific flags for GCC/Clang
+                if target_os == "linux" || target_os == "macos" {
+                    build2.flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
+                }
                 
                 if is_apple {
                     let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
@@ -361,7 +389,7 @@ fn main() {
                     println!("cargo:warning=✓ C++ interface compiled successfully with C++14!");
                 }
                 Err(e2) => {
-                    panic!("Failed to compile C++ interface with both C++20 and C++14. Last error: {}", e2);
+                    panic!("Failed to compile C++ interface with both C++17 and C++14. Last error: {}", e2);
                 }
             }
         }

@@ -1,34 +1,30 @@
 name: Security Audit
-
 on:
   schedule:
     - cron: '0 0 * * 1'
   push:
     branches: [main]
   workflow_dispatch: {}
-
 permissions:
   contents: read
   issues: write
-
 jobs:
   security:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-
       - name: Ensure cargo-audit installed
         run: |
           if ! command -v cargo-audit &> /dev/null; then
             cargo install cargo-audit --locked
           fi
-
       - name: Run cargo-audit and save JSON
         run: |
           cargo audit --json > audit.json || true
@@ -42,13 +38,11 @@ jobs:
               "No vulnerabilities found"
             end
           ' audit.json || true
-
       - name: Upload cargo-audit report
         uses: actions/upload-artifact@v4
         with:
           name: cargo-audit-report
           path: audit.json
-
       - name: Cache cargo bin directory
         uses: actions/cache@v3
         with:
@@ -56,21 +50,19 @@ jobs:
           key: ${{ runner.os }}-cargo-bin-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-bin-
-
       - name: Ensure cargo-outdated installed
         run: |
           if ! command -v cargo-outdated &> /dev/null; then
             cargo install cargo-outdated --locked
           fi
-
       - name: Check for outdated dependencies
         run: cargo outdated --exit-code 1 || echo "Outdated dependencies found - not failing workflow"
-
+      - name: Fetch full git history
+        run: git fetch --prune --unshallow
       - name: Scan for exposed secrets
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create or update issue if vulnerabilities found
         uses: actions/github-script@v6
         with:
@@ -83,12 +75,10 @@ jobs:
               core.info('No vulnerabilities found by cargo-audit. Exiting issue step.');
               return;
             }
-
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const label = 'security';
             const fixedTitle = 'Security: cargo-audit vulnerabilities detected';
-
             let body = `cargo-audit found **${vulns.length}** vulnerability(ies).\n\n`;
             body += 'Summary (first 25 entries):\n\n';
             for (let i=0;i<Math.min(25,vulns.length);i++){
@@ -98,16 +88,13 @@ jobs:
               body += `- **${adv.id || 'N/A'}** - ${adv.title || ''}\n  - crate: ${pkg.name || '?'} ${pkg.version || '?'}\n  - date: ${adv.date || 'N/A'}\n  - url: ${adv.url || 'N/A'}\n\n`;
             }
             body += '\nFull JSON report is attached as an artifact `cargo-audit-report`.\n\nSuggested action: run `cargo tree -i <crate>` locally and `cargo update -p <crate> --precise <version>` if possible, then commit the updated Cargo.lock.';
-
             const issues = await github.rest.issues.listForRepo({
               owner, repo,
               state: 'open',
               labels: label,
               per_page: 100
             });
-
             const existing = issues.data.find(i => (i.title || '').toLowerCase() === fixedTitle.toLowerCase());
-
             if (existing) {
               await github.rest.issues.createComment({
                 owner, repo,
@@ -124,3 +111,4 @@ jobs:
               });
               core.info('Created new security issue.');
             }
+            

@@ -44,7 +44,7 @@ jobs:
           ' audit.json || true
 
       - name: Upload cargo-audit report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: cargo-audit-report
           path: audit.json
@@ -89,7 +89,6 @@ jobs:
             const label = 'security';
             const fixedTitle = 'Security: cargo-audit vulnerabilities detected';
 
-            // Build issue body
             let body = `cargo-audit found **${vulns.length}** vulnerability(ies).\n\n`;
             body += 'Summary (first 25 entries):\n\n';
             for (let i=0;i<Math.min(25,vulns.length);i++){
@@ -100,7 +99,6 @@ jobs:
             }
             body += '\nFull JSON report is attached as an artifact `cargo-audit-report`.\n\nSuggested action: run `cargo tree -i <crate>` locally and `cargo update -p <crate> --precise <version>` if possible, then commit the updated Cargo.lock.';
 
-            // Check for existing open security issue with same title
             const issues = await github.rest.issues.listForRepo({
               owner, repo,
               state: 'open',
@@ -111,7 +109,6 @@ jobs:
             const existing = issues.data.find(i => (i.title || '').toLowerCase() === fixedTitle.toLowerCase());
 
             if (existing) {
-              // Add comment to existing issue
               await github.rest.issues.createComment({
                 owner, repo,
                 issue_number: existing.number,
@@ -119,7 +116,6 @@ jobs:
               });
               core.info(`Appended comment to existing issue #${existing.number}`);
             } else {
-              // Create new issue
               await github.rest.issues.create({
                 owner, repo,
                 title: fixedTitle,

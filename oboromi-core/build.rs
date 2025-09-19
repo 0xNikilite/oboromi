@@ -59,7 +59,7 @@ fn create_terminal_wrapper() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Read the original terminal.h
-    let terminal_content = fs::read_to_string(terminal_h_path)?;
+    let _terminal_content = fs::read_to_string(terminal_h_path)?;
     
     // Create wrapper content that fixes the circular dependency
     let wrapper_content = r#"// Wrapper for terminal.h to fix circular dependency issues on Linux/Mac

@@ -42,7 +42,6 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// Add this function to create a wrapper header that fixes the circular dependency
 fn create_terminal_wrapper() -> Result<(), Box<dyn std::error::Error>> {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "windows" {
@@ -95,9 +94,41 @@ struct CheckHalt;
     Ok(())
 }
 
+fn patch_dynarmic_sources() -> Result<(), Box<dyn std::error::Error>> {
+    let terminal_h_path = "../third_party/dynarmic/src/dynarmic/ir/terminal.h";
+    let path = Path::new(terminal_h_path);
+    
+    if !path.exists() {
+        return Ok(());
+    }
+    
+    let content = fs::read_to_string(path)?;
+    
+    if content.contains("BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES") {
+        return Ok(());
+    }
+    
+    let patched_content = format!(
+        "#define BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES\n\
+         #define BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS\n\
+         #define BOOST_MPL_LIMIT_LIST_SIZE=30\n\n\
+         {}",
+        content
+    );
+    
+    fs::write(path, patched_content)?;
+    println!("cargo:warning=Successfully patched terminal.h");
+    
+    Ok(())
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../third_party/dynarmic/src/dynarmic/dynarmic_interface.cpp");
+    
+    if let Err(e) = patch_dynarmic_sources() {
+        println!("cargo:warning=Failed to patch Dynarmic sources: {}", e);
+    }
     
     // Get the target triple and host OS
     let target = env::var("TARGET").unwrap();
@@ -372,14 +403,14 @@ fn main() {
             .flag("-Wno-unused-parameter")
             .flag("-Wno-unused-variable")
             .flag("-Wno-incomplete-types")
-            .flag("-fexceptions");
+            .flag("-fexceptions")
+            .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
+            .flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS")
+            .flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30")
+            .flag("-ftemplate-depth=1024");
         
         // Platform-specific flags for GCC/Clang
         if target_os == "linux" || target_os == "macos" {
-            build.flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
-            build.flag("-ftemplate-depth=1024");
-            build.flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS");
-            build.flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30");
         }
         
         if is_apple {
@@ -432,14 +463,14 @@ fn main() {
                     .flag("-Wno-unused-parameter")
                     .flag("-Wno-unused-variable")
                     .flag("-Wno-incomplete-types")
-                    .flag("-fexceptions");
+                    .flag("-fexceptions")
+                    .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
+                    .flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS")
+                    .flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30")
+                    .flag("-ftemplate-depth=1024");
                 
                 // Platform-specific flags for GCC/Clang
-                if target_os == "linux" || target_os == "macos" {
-                    build2.flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
-                    build2.flag("-ftemplate-depth=1024");
-                    build2.flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS");
-                    build2.flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30");
+                if target_os == "linux" || target_os == "macos" {          
                 }
                 
                 if is_apple {

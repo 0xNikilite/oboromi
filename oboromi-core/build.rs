@@ -94,7 +94,7 @@ struct CheckHalt;
     Ok(())
 }
 
-fn patch_dynarmic_sources() -> Result<(), Box<dyn std::error::Error>> {
+fn patch_terminal_h() -> Result<(), Box<dyn std::error::Error>> {
     let terminal_h_path = "../third_party/dynarmic/src/dynarmic/ir/terminal.h";
     let path = Path::new(terminal_h_path);
     
@@ -104,17 +104,24 @@ fn patch_dynarmic_sources() -> Result<(), Box<dyn std::error::Error>> {
     
     let content = fs::read_to_string(path)?;
     
+    // check if already patched
     if content.contains("BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES") {
         return Ok(());
     }
     
-    let patched_content = format!(
-        "#define BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES\n\
-         #define BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS\n\n\
-         {}",
-        content
-    );
+    let mut lines: Vec<&str> = content.lines().collect();
     
+    let mut insert_pos = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if line.starts_with("#include <boost/variant/variant.hpp>") {
+            insert_pos = i + 1;
+            break;
+        }
+    }
+    nt
+    lines.insert(insert_pos, "#define BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
+    
+    let patched_content = lines.join("\n");
     fs::write(path, patched_content)?;
     println!("cargo:warning=Successfully patched terminal.h");
     
@@ -124,9 +131,9 @@ fn patch_dynarmic_sources() -> Result<(), Box<dyn std::error::Error>> {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../third_party/dynarmic/src/dynarmic/dynarmic_interface.cpp");
-
-    if let Err(e) = patch_dynarmic_sources() {
-        println!("cargo:warning=Failed to patch Dynarmic sources: {}", e);
+    
+    if let Err(e) = patch_terminal_h() {
+        println!("cargo:warning=Failed to patch terminal.h: {}", e);
     }
     
     // Get the target triple and host OS
@@ -404,7 +411,6 @@ fn main() {
             .flag("-Wno-incomplete-types")
             .flag("-fexceptions")
             .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
-            .flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS")
             .flag("-ftemplate-depth=1024");
         
         // Platform-specific flags for GCC/Clang
@@ -463,7 +469,6 @@ fn main() {
                     .flag("-Wno-incomplete-types")
                     .flag("-fexceptions")
                     .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
-                    .flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS")
                     .flag("-ftemplate-depth=1024");
                 
                 // Platform-specific flags for GCC/Clang

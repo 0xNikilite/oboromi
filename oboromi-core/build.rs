@@ -104,7 +104,6 @@ fn patch_terminal_h() -> Result<(), Box<dyn std::error::Error>> {
     
     let content = fs::read_to_string(path)?;
     
-    // check if already patched
     if content.contains("BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES") {
         return Ok(());
     }
@@ -118,7 +117,7 @@ fn patch_terminal_h() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
     }
-    nt
+    
     lines.insert(insert_pos, "#define BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES");
     
     let patched_content = lines.join("\n");

@@ -110,8 +110,7 @@ fn patch_dynarmic_sources() -> Result<(), Box<dyn std::error::Error>> {
     
     let patched_content = format!(
         "#define BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES\n\
-         #define BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS\n\
-         #define BOOST_MPL_LIMIT_LIST_SIZE=30\n\n\
+         #define BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS\n\n\
          {}",
         content
     );
@@ -125,7 +124,7 @@ fn patch_dynarmic_sources() -> Result<(), Box<dyn std::error::Error>> {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../third_party/dynarmic/src/dynarmic/dynarmic_interface.cpp");
-    
+
     if let Err(e) = patch_dynarmic_sources() {
         println!("cargo:warning=Failed to patch Dynarmic sources: {}", e);
     }
@@ -406,7 +405,6 @@ fn main() {
             .flag("-fexceptions")
             .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
             .flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS")
-            .flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30")
             .flag("-ftemplate-depth=1024");
         
         // Platform-specific flags for GCC/Clang
@@ -466,11 +464,10 @@ fn main() {
                     .flag("-fexceptions")
                     .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
                     .flag("-DBOOST_MPL_CFG_NO_PREPROCESSED_HEADERS")
-                    .flag("-DBOOST_MPL_LIMIT_LIST_SIZE=30")
                     .flag("-ftemplate-depth=1024");
                 
                 // Platform-specific flags for GCC/Clang
-                if target_os == "linux" || target_os == "macos" {          
+                if target_os == "linux" || target_os == "macos" {
                 }
                 
                 if is_apple {

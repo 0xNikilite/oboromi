@@ -338,9 +338,17 @@ fn main() {
             .arg("--build")
             .arg(&dynarmic_build_dir)
             .arg("--config")
-            .arg("Release")
-            .arg("--target").arg("Zycore")
-            .arg("--target").arg("Zydis")
+            .arg("Release");
+        
+        if target.contains("x86_64") {
+            build_cmd.arg("--target").arg("Zycore");
+            build_cmd.arg("--target").arg("Zydis");
+            "x86_64"
+        } else {
+            "arm64"
+        };
+        
+        build_cmd
             .arg("--target").arg("dynarmic")
             .arg("--parallel")
             .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "4".into()));
@@ -554,8 +562,14 @@ fn main() {
     println!("cargo:rustc-link-lib=static=mcl");
     println!("cargo:rustc-link-lib=static=dynarmic");
     println!("cargo:rustc-link-lib=static=fmt");
-    println!("cargo:rustc-link-lib=static=Zydis");
-    println!("cargo:rustc-link-lib=static=Zycore");
+    
+    if target.contains("x86_64") {
+        println!("cargo:rustc-link-lib=static=Zydis");
+        println!("cargo:rustc-link-lib=static=Zycore");
+        println!("cargo:warning=Linking x86_64-specific libraries: Zydis, Zycore");
+    } else {
+        println!("cargo:warning=Skipping x86_64-specific libraries on ARM64");
+    }
     
     if is_windows {
         if is_msvc {

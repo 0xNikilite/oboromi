@@ -554,8 +554,8 @@ fn main() {
     println!("cargo:rustc-link-lib=static=mcl");
     println!("cargo:rustc-link-lib=static=dynarmic");
     println!("cargo:rustc-link-lib=static=fmt");
-    println!("cargo:rustc-link-lib=static=zydis");
-    println!("cargo:rustc-link-lib=static=zycore");
+    println!("cargo:rustc-link-lib=static=Zydis");
+    println!("cargo:rustc-link-lib=static=Zycore");
     
     if is_windows {
         if is_msvc {

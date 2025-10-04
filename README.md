@@ -13,7 +13,7 @@
 
 ## Overview
 
-**oboromi** is a modular and work-in-progress emulator for the upcoming Nintendo Switch 2. It's built in Rust and focuses on correctness, clarity, and traceability rather than performance at this stage. The current implementation includes a functioning CPU core, a memory management unit (MMU) with basic paging, and a custom memory subsystem.
+**oboromi** is a modular and work-in-progress emulator for the Nintendo Switch 2. It's built in Rust and focuses on correctness, clarity, and traceability rather than performance at this stage. The current implementation includes a functioning CPU core, a memory management unit (MMU) with basic paging, and a custom memory subsystem.
 
 > [!IMPORTANT]  
 > oboromi is **not** yet playable and does not emulate any commercial firmware or games.

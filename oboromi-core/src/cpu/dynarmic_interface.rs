@@ -14,7 +14,7 @@ impl DynarmicCPU {
     /// Create a new Dynarmic instance linked to your Rust Memory
     pub fn new() -> Option<Self> {
         // Allocate memory and put it in a Box for a stable address
-        let memory = Box::new(Memory::new(8 * 1024 * 1024)); // 8MB di memoria
+        let memory = Box::new(Memory::new(8 * 1024 * 1024)); // 8 MB memory
         
         // Generic C pointer to Memory
         let mem_ptr: *mut c_void = &*memory as *const _ as *mut c_void;

@@ -294,16 +294,28 @@ fn main() {
                 "-DCMAKE_CXX_FLAGS=/wd4100 /wd4189",
             ]);
         } else if is_apple {
-            // Force ARM64 architecture for ARM64 targets
-            cmake_args.extend(&[
-                "-DCMAKE_CXX_STANDARD=17",
-                "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter -Wno-incomplete-types",
-                "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
-                "-DCMAKE_C_COMPILER=/usr/bin/clang",
-                "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
-                "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
-                "-DCMAKE_OSX_ARCHITECTURES=arm64", // Force ARM64 for aarch64 targets
-            ]);
+            // Force the correct architecture based on target
+            if target.starts_with("aarch64-") {
+                cmake_args.extend(&[
+                    "-DCMAKE_OSX_ARCHITECTURES=arm64",
+                    "-DCMAKE_CXX_STANDARD=17",
+                    "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter -Wno-incomplete-types",
+                    "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
+                    "-DCMAKE_C_COMPILER=/usr/bin/clang",
+                    "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+                    "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
+                ]);
+            } else {
+                cmake_args.extend(&[
+                    "-DCMAKE_OSX_ARCHITECTURES=x86_64",
+                    "-DCMAKE_CXX_STANDARD=17",
+                    "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter -Wno-incomplete-types",
+                    "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
+                    "-DCMAKE_C_COMPILER=/usr/bin/clang",
+                    "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+                    "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
+                ]);
+            }
         } else {
             cmake_args.extend(&[
                 "-DCMAKE_CXX_STANDARD=17",
@@ -322,6 +334,9 @@ fn main() {
         // Set environment variables for ARM64 builds
         if target_os == "macos" && target_arch == "aarch64" {
             cmake_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
+            cmake_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
+        } else if target_os == "macos" && target_arch == "x86_64" {
+            cmake_cmd.env("CMAKE_OSX_ARCHITECTURES", "x86_64");
             cmake_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
         }
         
@@ -364,6 +379,8 @@ fn main() {
             build_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
             if target_arch == "aarch64" {
                 build_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
+            } else if target_arch == "x86_64" {
+                build_cmd.env("CMAKE_OSX_ARCHITECTURES", "x86_64");
             }
         }
         

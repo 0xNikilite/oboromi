@@ -37,11 +37,9 @@ jobs:
           rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
           EOF
 
-      - name: Install dependencies for ARM64 build
+      - name: Install dependencies
         run: |
           brew install cmake
-          echo "CMAKE_OSX_ARCHITECTURES=arm64" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
 
       - name: Clean previous builds
         run: |
@@ -51,6 +49,7 @@ jobs:
       - name: Build for Intel
         run: |
           export CMAKE_OSX_ARCHITECTURES=x86_64
+          export MACOSX_DEPLOYMENT_TARGET=13.0
           cargo build --release --target x86_64-apple-darwin
 
       - name: Build for Apple Silicon
@@ -61,7 +60,7 @@ jobs:
           export CMAKE_OSX_ARCHITECTURES=arm64
           export MACOSX_DEPLOYMENT_TARGET=13.0
           
-          cargo build --release --target aarch64-apple-darwin --verbose
+          cargo build --release --target aarch64-apple-darwin
 
       - name: Check if binaries exist
         run: |
@@ -97,7 +96,7 @@ jobs:
         if: success()
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          hdiutil create -volname "oboromi" -srcfolder "oboromi-$VERSION-macos" -ov -format UDZO "oboromi-$VERSION-macos-universal.dmg"
+          hdiutil create -volname "Oboromi" -srcfolder "oboromi-$VERSION-macos" -ov -format UDZO "oboromi-$VERSION-macos-universal.dmg"
 
       - name: Upload macOS artifact
         if: success()

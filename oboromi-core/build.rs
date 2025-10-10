@@ -321,10 +321,8 @@ fn main() {
         
         // Set environment variables for ARM64 builds
         if target_os == "macos" && target_arch == "aarch64" {
-            unsafe {
-                cmake_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
-                cmake_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
-            }
+            cmake_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
+            cmake_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
         }
         
         let cmake_status = cmake_cmd.status();
@@ -351,6 +349,7 @@ fn main() {
             .arg("--config")
             .arg("Release");
         
+        // Only add Zycore and Zydis targets for x86_64
         if target.contains("x86_64") {
             build_cmd.arg("--target").arg("Zycore");
             build_cmd.arg("--target").arg("Zydis");
@@ -364,9 +363,7 @@ fn main() {
         if is_apple {
             build_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
             if target_arch == "aarch64" {
-                unsafe {
-                    build_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
-                }
+                build_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
             }
         }
         
@@ -438,7 +435,6 @@ fn main() {
         }
         
         if is_apple {
-            let _arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
             build
                 .flag("-arch").flag(if target.starts_with("aarch64-") { "arm64" } else { "x86_64" })
                 .define("__APPLE__", None);
@@ -501,7 +497,6 @@ fn main() {
                 }
                 
                 if is_apple {
-                    let _arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
                     build2
                         .flag("-arch").flag(if target.starts_with("aarch64-") { "arm64" } else { "x86_64" })
                         .define("__APPLE__", None);

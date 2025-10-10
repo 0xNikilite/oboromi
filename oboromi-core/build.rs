@@ -4,7 +4,6 @@ use std::process::Command;
 use std::fs;
 
 fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
-    // This patch is specifically for macOS to fix the Boost hash issue
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "macos" {
         return Ok(());
@@ -16,7 +15,6 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let content = fs::read_to_string(path)?;
-    // Multiple possible patterns to replace
     let patterns = [
         "struct hash_base : std::unary_function<T, std::size_t> {};",
         "struct hash_base : boost::unary_function<T, std::size_t> {};",
@@ -45,22 +43,19 @@ fn patch_boost_for_macos() -> Result<(), Box<dyn std::error::Error>> {
 fn create_terminal_wrapper() -> Result<(), Box<dyn std::error::Error>> {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "windows" {
-        return Ok(()); // No need for this on Windows
+        return Ok(());
     }
     
     let terminal_h_path = "../third_party/dynarmic/src/dynarmic/ir/terminal.h";
     let wrapper_path = "../third_party/dynarmic/src/dynarmic/ir/terminal_wrapper.h";
     
-    // Check if wrapper already exists
     if Path::new(wrapper_path).exists() {
         println!("cargo:warning=Terminal wrapper already exists, skipping creation");
         return Ok(());
     }
     
-    // Read the original terminal.h
     let _terminal_content = fs::read_to_string(terminal_h_path)?;
     
-    // Create wrapper content that fixes the circular dependency
     let wrapper_content = r#"// Wrapper for terminal.h to fix circular dependency issues on Linux/Mac
 #pragma once
 
@@ -131,16 +126,30 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../third_party/dynarmic/src/dynarmic/dynarmic_interface.cpp");
     
-    if let Err(e) = patch_terminal_h() {
-        println!("cargo:warning=Failed to patch terminal.h: {}", e);
-    }
-    
-    // Get the target triple and host OS
+    // Get target information
     let target = env::var("TARGET").unwrap();
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let is_msvc = target.contains("msvc");
     let is_apple = target_os == "macos" || target_os == "ios";
     let is_windows = target_os == "windows";
+    
+    // Print target information for debugging
+    println!("cargo:warning=Building for target: {}", target);
+    println!("cargo:warning=Target arch: {}", target_arch);
+    
+    // Configure environment for ARM64 on macOS
+    if target_os == "macos" && target_arch == "aarch64" {
+        println!("cargo:warning=Configuring build for ARM64 on macOS");
+        unsafe {
+            env::set_var("CMAKE_OSX_ARCHITECTURES", "arm64");
+            env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.0");
+        }
+    }
+    
+    if let Err(e) = patch_terminal_h() {
+        println!("cargo:warning=Failed to patch terminal.h: {}", e);
+    }
     
     // Get the correct paths
     let project_root = Path::new("..");
@@ -171,7 +180,6 @@ fn main() {
     
     if !fmt_path.exists() || !zydis_path.exists() || !mcl_path.exists() {
         println!("cargo:warning=Initializing Dynarmic submodules...");
-        // Initialize main submodules
         let status = Command::new("git")
             .args(&["submodule", "update", "--init"])
             .current_dir(project_root)
@@ -181,7 +189,7 @@ fn main() {
         if !status.success() {
             panic!("Failed to initialize main submodules");
         }
-        // Initialize zydis submodules
+        
         let status = Command::new("git")
             .args(&["submodule", "update", "--init", "--recursive"])
             .current_dir(&zydis_path)
@@ -192,7 +200,6 @@ fn main() {
             panic!("Git submodule update failed with exit code: {}", status);
         }
         
-        // Apply macOS patch after submodule initialization
         if is_apple {
             println!("cargo:warning=Applying macOS compatibility patches...");
             if let Err(e) = patch_boost_for_macos() {
@@ -202,8 +209,15 @@ fn main() {
         }
     }
     
-    // Check if we need to clean the build directory
-    if dynarmic_build_dir.exists() {
+    // Clean build directory completely for ARM64 builds
+    if target_os == "macos" && target_arch == "aarch64" {
+        if dynarmic_build_dir.exists() {
+            println!("cargo:warning=Removing entire build directory for clean ARM64 build...");
+            if let Err(e) = std::fs::remove_dir_all(&dynarmic_build_dir) {
+                println!("cargo:warning=Failed to remove build directory: {}", e);
+            }
+        }
+    } else if dynarmic_build_dir.exists() {
         let cmake_cache = dynarmic_build_dir.join("CMakeCache.txt");
         if cmake_cache.exists() {
             println!("cargo:warning=Cleaning existing CMake cache to avoid conflicts...");
@@ -231,7 +245,6 @@ fn main() {
     if !dynarmic_lib_path.exists() {
         println!("cargo:warning=== BUILDING DYNARMIC ===");
         
-        // Check if dynarmic source exists
         if !dynarmic_dir.exists() {
             panic!("Dynarmic source directory not found: {}", dynarmic_dir.display());
         }
@@ -241,12 +254,10 @@ fn main() {
             panic!("CMakeLists.txt not found in: {}", cmake_lists.display());
         }
         
-        // Create build directory
         if let Err(e) = std::fs::create_dir_all(&dynarmic_build_dir) {
             panic!("Failed to create build directory: {}", e);
         }
         
-        // Create owned strings for CMake arguments
         let dynarmic_dir_str = dynarmic_dir.to_string_lossy().into_owned();
         let dynarmic_build_dir_str = dynarmic_build_dir.to_string_lossy().into_owned();
         
@@ -260,7 +271,6 @@ fn main() {
             "-DDYNARMIC_EXAMPLES=OFF",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DDYNARMIC_WARNINGS_AS_ERRORS=OFF",
-            // Build static libs, not shared
             "-DBUILD_SHARED_LIBS=OFF",
             "-DZYDIS_BUILD_SHARED_LIB=OFF",
             "-DZYCORE_BUILD_SHARED_LIB=OFF",
@@ -269,9 +279,7 @@ fn main() {
             "-DZYAN_SYSTEM_ZYCORE=OFF",
             "-DZYDIS_STATIC_DEFINE=ON",
             "-DZYDIS_DEV_MODE=OFF",
-            // Static libs must be PIC on Unix
             "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
-            // Use your custom ext-boost
             "-DBoost_NO_BOOST_CMAKE=ON",
             "-DBoost_NO_SYSTEM_PATHS=ON",
             "-DBOOST_ROOT=../third_party/ext-boost",
@@ -286,37 +294,40 @@ fn main() {
                 "-DCMAKE_CXX_FLAGS=/wd4100 /wd4189",
             ]);
         } else if is_apple {
-            let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
+            // Force ARM64 architecture for ARM64 targets
             cmake_args.extend(&[
                 "-DCMAKE_CXX_STANDARD=17",
                 "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter -Wno-incomplete-types",
-                "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
+                "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
                 "-DCMAKE_C_COMPILER=/usr/bin/clang",
                 "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
                 "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
+                "-DCMAKE_OSX_ARCHITECTURES=arm64", // Force ARM64 for aarch64 targets
             ]);
-            if arch == "arm64" {
-                cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=arm64");
-            } else {
-                cmake_args.push("-DCMAKE_OSX_ARCHITECTURES=x86_64");
-            }
         } else {
-            // Linux and other Unix-like systems
             cmake_args.extend(&[
                 "-DCMAKE_CXX_STANDARD=17",
                 "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing -Wno-unused-parameter -Wno-incomplete-types",
                 "-DBOOST_DISABLE_THREADS=OFF",
                 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
-                // Disable precompiled headers which might be causing issues
                 "-DDYNARMIC_ENABLE_PRECOMPILED_HEADERS=OFF",
             ]);
         }
         
         // Run CMake configure
         println!("cargo:warning=Running CMake configure...");
-        let cmake_status = Command::new("cmake")
-            .args(&cmake_args)
-            .status();
+        let mut cmake_cmd = Command::new("cmake");
+        cmake_cmd.args(&cmake_args);
+        
+        // Set environment variables for ARM64 builds
+        if target_os == "macos" && target_arch == "aarch64" {
+            unsafe {
+                cmake_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
+                cmake_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
+            }
+        }
+        
+        let cmake_status = cmake_cmd.status();
         
         match cmake_status {
             Ok(status) => {
@@ -343,10 +354,7 @@ fn main() {
         if target.contains("x86_64") {
             build_cmd.arg("--target").arg("Zycore");
             build_cmd.arg("--target").arg("Zydis");
-            "x86_64"
-        } else {
-            "arm64"
-        };
+        }
         
         build_cmd
             .arg("--target").arg("dynarmic")
@@ -354,7 +362,12 @@ fn main() {
             .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "4".into()));
         
         if is_apple {
-            build_cmd.env("MACOSX_DEPLOYMENT_TARGET", "11.0");
+            build_cmd.env("MACOSX_DEPLOYMENT_TARGET", "13.0");
+            if target_arch == "aarch64" {
+                unsafe {
+                    build_cmd.env("CMAKE_OSX_ARCHITECTURES", "arm64");
+                }
+            }
         }
         
         let build_status = build_cmd.status();
@@ -406,9 +419,9 @@ fn main() {
             .flag("/MD")
             .flag("/DWIN32_LEAN_AND_MEAN")
             .flag("/DNOMINMAX")
-            .flag("/wd4100")    // unreferenced formal parameter
-            .flag("/wd4189")    // local variable initialized but not referenced
-            .flag("/wd4458");   // declaration hides class member
+            .flag("/wd4100")
+            .flag("/wd4189")
+            .flag("/wd4458");
     } else {
         build
             .flag("-std=c++17")
@@ -420,15 +433,20 @@ fn main() {
             .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
             .flag("-ftemplate-depth=1024");
         
-        // Platform-specific flags for GCC/Clang
         if target_os == "linux" || target_os == "macos" {
+            // Additional flags for Unix-like systems
         }
         
         if is_apple {
-            let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
+            let _arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
             build
-                .flag("-arch").flag(arch)
+                .flag("-arch").flag(if target.starts_with("aarch64-") { "arm64" } else { "x86_64" })
                 .define("__APPLE__", None);
+                
+            // Additional flags for ARM64 on macOS
+            if target_arch == "aarch64" {
+                build.flag("-mmacosx-version-min=13.0");
+            }
         }
     }
     
@@ -478,15 +496,20 @@ fn main() {
                     .flag("-DBOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES")
                     .flag("-ftemplate-depth=1024");
                 
-                // Platform-specific flags for GCC/Clang
                 if target_os == "linux" || target_os == "macos" {
+                    // Additional flags for Unix-like systems
                 }
                 
                 if is_apple {
-                    let arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
+                    let _arch = if target.starts_with("aarch64-") { "arm64" } else { "x86_64" };
                     build2
-                        .flag("-arch").flag(arch)
+                        .flag("-arch").flag(if target.starts_with("aarch64-") { "arm64" } else { "x86_64" })
                         .define("__APPLE__", None);
+                        
+                    // Additional flags for ARM64 on macOS
+                    if target_arch == "aarch64" {
+                        build2.flag("-mmacosx-version-min=13.0");
+                    }
                 }
             }
             
@@ -573,13 +596,11 @@ fn main() {
     
     if is_windows {
         if is_msvc {
-            // MSVC CRT is linked automatically; do NOT link msvcrt explicitly.
             println!("cargo:rustc-link-lib=shell32");
             println!("cargo:rustc-link-lib=advapi32");
             println!("cargo:rustc-link-lib=user32");
             println!("cargo:rustc-link-lib=gdi32");
         } else {
-            // MinGW
             println!("cargo:rustc-link-lib=dylib=stdc++");
             println!("cargo:rustc-link-lib=shell32");
             println!("cargo:rustc-link-lib=advapi32");
@@ -589,8 +610,12 @@ fn main() {
     } else if is_apple {
         println!("cargo:rustc-link-lib=dylib=c++");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        
+        // Additional linking for ARM64 on macOS
+        if target_arch == "aarch64" {
+            println!("cargo:rustc-link-arg=-mmacosx-version-min=13.0");
+        }
     } else {
-        // Linux and other Unix
         println!("cargo:rustc-link-lib=dylib=stdc++");
         println!("cargo:rustc-link-lib=dylib=dl");
         println!("cargo:rustc-link-lib=dylib=pthread");

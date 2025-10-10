@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -35,13 +37,41 @@ jobs:
           rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
           EOF
 
+      - name: Install dependencies for ARM64 build
+        run: |
+          brew install cmake
+          echo "CMAKE_OSX_ARCHITECTURES=arm64" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
+
+      - name: Clean previous builds
+        run: |
+          rm -rf target/
+          rm -rf third_party/dynarmic/build/
+
       - name: Build for Intel
-        run: cargo build --release --target x86_64-apple-darwin
+        run: |
+          export CMAKE_OSX_ARCHITECTURES=x86_64
+          cargo build --release --target x86_64-apple-darwin
 
       - name: Build for Apple Silicon
-        run: cargo build --release --target aarch64-apple-darwin
+        run: |
+          rm -rf target/aarch64-apple-darwin/
+          rm -rf third_party/dynarmic/build/
+          
+          export CMAKE_OSX_ARCHITECTURES=arm64
+          export MACOSX_DEPLOYMENT_TARGET=13.0
+          
+          cargo build --release --target aarch64-apple-darwin --verbose
+
+      - name: Check if binaries exist
+        run: |
+          echo "Checking Intel binary..."
+          ls -la target/x86_64-apple-darwin/release/oboromi || echo "Intel binary not found"
+          echo "Checking ARM64 binary..."
+          ls -la target/aarch64-apple-darwin/release/oboromi || echo "ARM64 binary not found"
 
       - name: Create universal binary
+        if: success()
         run: |
           mkdir -p target/universal/release
           lipo -create \
@@ -49,29 +79,41 @@ jobs:
             target/aarch64-apple-darwin/release/oboromi \
             -output target/universal/release/oboromi
           chmod +x target/universal/release/oboromi
+          
+          lipo -info target/universal/release/oboromi
 
       - name: Prepare macOS bundle
+        if: success()
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          # Crea directory con tutti i file necessari
           mkdir -p "oboromi-$VERSION-macos"
           cp target/universal/release/oboromi "oboromi-$VERSION-macos/"
           cp LICENSE "oboromi-$VERSION-macos/"
           cp README.md "oboromi-$VERSION-macos/"
           
-          # Copia eventuali assets (se esistono)
           [ -d assets ] && cp -R assets "oboromi-$VERSION-macos/"
 
       - name: Create DMG package
+        if: success()
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          hdiutil create -volname "Oboromi" -srcfolder "oboromi-$VERSION-macos" -ov -format UDZO "oboromi-$VERSION-macos-universal.dmg"
+          hdiutil create -volname "oboromi" -srcfolder "oboromi-$VERSION-macos" -ov -format UDZO "oboromi-$VERSION-macos-universal.dmg"
 
       - name: Upload macOS artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifact
           path: "oboromi-${{ github.event.inputs.version }}-macos-universal.dmg"
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-logs
+          path: |
+            target/
+            third_party/dynarmic/build/
 
   build_linux:
     name: Build Linux
@@ -80,6 +122,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
 
       - name: Build Release
         run: cargo build --release
@@ -87,13 +136,11 @@ jobs:
       - name: Prepare Linux bundle
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          # Crea directory con tutti i file
           mkdir -p "oboromi-$VERSION-linux"
           cp target/release/oboromi "oboromi-$VERSION-linux/"
           cp LICENSE "oboromi-$VERSION-linux/"
           cp README.md "oboromi-$VERSION-linux/"
           
-          # Copia eventuali assets
           [ -d assets ] && cp -R assets "oboromi-$VERSION-linux/"
 
       - name: Create tarball
@@ -114,6 +161,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
 
       - name: Build Release
         run: cargo build --release
@@ -127,7 +176,6 @@ jobs:
           Copy-Item LICENSE "$dirName\"
           Copy-Item README.md "$dirName\"
           
-          # Copia cartella assets se esiste
           if (Test-Path "assets") {
               Copy-Item -Recurse assets "$dirName\"
           }
@@ -147,6 +195,7 @@ jobs:
     name: Create Release
     needs: [build_macos, build_linux, build_windows]
     runs-on: ubuntu-latest
+    if: success()
 
     steps:
       - name: Download artifacts
@@ -165,3 +214,4 @@ jobs:
             artifacts/oboromi-*-macos-universal.dmg
             artifacts/oboromi-*-linux-x64.tar.gz
             artifacts/oboromi-*-windows-x64.zip
+            

@@ -1,6 +1,6 @@
 [package]
 name = "oboromi-gui"
-version = "0.2.0"
+version = "0.0.1"
 edition = "2024"
 authors = ["Nikilite"]
 license = "MPL-2.0"

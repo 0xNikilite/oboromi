@@ -5,7 +5,8 @@ use crate::cpu::DynarmicCPU;
 const TEST_BASE_ADDR: u64 = 0x0000_1000;
 const BREAKPOINT_ADDR: u64 = 0x0000_2000;
 
-// Dynamic timeout for macOS JIT cold start
+/// Get platform-specific timeout for test execution
+/// macOS requires longer timeout due to JIT cold start overhead
 fn get_test_timeout() -> Duration {
     if cfg!(target_os = "macos") {
         Duration::from_millis(500)
@@ -83,6 +84,54 @@ mod arm64 {
     
     pub fn brk(imm16: u16) -> u32 {
         0xD4200000 | ((imm16 as u32) << 5)
+    }
+}
+
+/// Warm up the JIT compiler by pre-compiling basic instructions
+/// This prevents timeout issues on slower hardware during actual tests
+/// No timeout is enforced here as initial compilation can take variable time
+fn warmup_jit() {
+    println!("🔥 Warming up JIT compiler...");
+    
+    let cpu = match DynarmicCPU::new() {
+        Some(cpu) => cpu,
+        None => {
+            println!("⚠️  Failed to create CPU for warmup");
+            return;
+        }
+    };
+    
+    cpu.set_sp(0x8000);
+    cpu.set_pc(TEST_BASE_ADDR);
+    
+    let warmup_instructions = vec![
+        arm64::nop(),
+        arm64::add_imm(0, 0, 1),
+        arm64::add_reg(1, 1, 2),
+        arm64::mov_reg(3, 4),
+        arm64::brk(0),
+    ];
+    
+    let mut addr = TEST_BASE_ADDR;
+    for instr in warmup_instructions {
+        cpu.write_u32(addr, instr);
+        addr += 4;
+    }
+    
+    cpu.set_x(0, 10);
+    cpu.set_x(1, 20);
+    cpu.set_x(2, 30);
+    cpu.set_x(4, 0xCAFE);
+    
+    println!("  Compiling warmup code...");
+    let start = Instant::now();
+    let _ = cpu.run();
+    let elapsed = start.elapsed();
+    
+    println!("  ✓ JIT warmup completed in {:?}", elapsed);
+    
+    if elapsed.as_millis() > 200 {
+        println!("  ℹ️  First compilation took {:?} - this is normal on slower hardware", elapsed);
     }
 }
 
@@ -340,11 +389,15 @@ pub fn run_tests() -> Vec<String> {
     println!("🧪 Starting Dynarmic JIT Instruction Tests...");
     println!("  Base address: 0x{:016X}", TEST_BASE_ADDR);
     println!("  Breakpoint address: 0x{:016X}", BREAKPOINT_ADDR);
-    println!("  Using run() instead of step() for reliable execution");
+    println!();
+    
+    warmup_jit();
+    println!();
     
     if cfg!(target_os = "macos") {
-        println!("  macOS dynamic timeout: {:?}", get_test_timeout());
+        println!("  macOS test timeout: {:?}", get_test_timeout());
     }
+    println!("  Using run() for reliable execution");
     println!();
     
     let test_results = vec![

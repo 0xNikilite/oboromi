@@ -1,7 +1,7 @@
 use eframe::egui::{ScrollArea, CentralPanel};
 use oboromi_core::tests::run::run_tests;
 
-/// GUI with button to run tests and display results
+/// Main GUI application with test execution capabilities
 pub struct GUI {
     pub logs: Vec<String>,
     pub test_thread: Option<std::thread::JoinHandle<Vec<String>>>,
@@ -25,18 +25,20 @@ impl eframe::App for GUI {
                 self.logs = handle.join().unwrap();
             }
             
-            // Run tests button (disabled while tests are running)
             if self.test_thread.is_none() {
                 if ui.button("🧪 Run Dynarmic Tests").clicked() {
                     let ctx = ctx.clone();
                     self.test_thread = Some(std::thread::spawn(move || {
-                        ctx.request_repaint(); // Force UI update
+                        ctx.request_repaint();
                         run_tests()
                     }));
-                    self.logs = vec!["Running tests...".to_string()];
+                    self.logs = vec![
+                        "Warming up JIT compiler (no timeout)...".to_string(),
+                        "Running tests...".to_string()
+                    ];
                 }
             } else {
-                ui.label("⏳ Tests running...");
+                ui.label("⏳ Compiling and testing...");
             }
 
             ui.separator();

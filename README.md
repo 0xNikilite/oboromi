@@ -129,6 +129,7 @@ See [LICENSE](LICENSE) for details.
 * [AArch64 ISA Reference](https://developer.arm.com/documentation/ddi0602/latest/)
 * [egui](https://github.com/emilk/egui)
 * [Dynarmic (my fork)](https://github.com/0xNikilite/dynarmic)
+* [official mirror](https://git.eden-emu.dev/Nikilite/oboromi)
 
 ---
 

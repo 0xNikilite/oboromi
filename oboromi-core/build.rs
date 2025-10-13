@@ -593,6 +593,10 @@ fn main() {
         }
     }
     
+    if target_os == "freebsd" {
+        println!("cargo:rustc-link-search=native=/usr/local/lib/gcc13");
+    }
+
     // Link required libraries
     println!("cargo:rustc-link-lib=static=mcl");
     println!("cargo:rustc-link-lib=static=dynarmic");

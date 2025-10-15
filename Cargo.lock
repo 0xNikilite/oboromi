@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "oboromi-core"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "bitflags 2.9.4",
  "cc",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "oboromi-gui"
-version = "0.2.0"
+version = "0.0.1"
 dependencies = [
  "eframe",
  "egui",

@@ -397,8 +397,6 @@ pub fn run_tests() -> Vec<String> {
     if cfg!(target_os = "macos") {
         println!("  macOS test timeout: {:?}", get_test_timeout());
     }
-    println!("  Using run() for reliable execution");
-    println!();
     
     let test_results = vec![
         run_instruction_test(

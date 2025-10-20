@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate contributor
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         id: check_contributor
         with:
           script: |
@@ -28,7 +28,7 @@ jobs:
 
       - name: Enforce review workflow
         if: steps.check_contributor.outputs.is_maintainer == 'false'
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -52,6 +52,6 @@ jobs:
                 owner,
                 repo,
                 issue_number: prNumber,
-                body: `@0xNikilite Action required: couldn’t auto-tag this PR.`
+                body: `@0xNikilite Action required: couldn't auto-tag this PR.`
               });
             }

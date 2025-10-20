@@ -4,5 +4,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    reviewers:
+    assignees:
       - "0xNikilite"
+    labels:
+      - "dependencies"
+      - "rust"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "cargo"

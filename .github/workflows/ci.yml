@@ -5,6 +5,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -19,14 +22,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: 'recursive'
 
       - name: Check changed files
         id: check
         run: |
-          git fetch origin ${{ github.event.before }} || true
+          # Handle new branches or missing before commit
+          if [ -z "${{ github.event.before }}" ] || ! git cat-file -e ${{ github.event.before }} 2>/dev/null; then
+            echo "No valid before commit, assuming code changes"
+            echo "only_readme=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
           echo "Changed files:" && cat changed.txt
+          
           if [ "$(wc -l < changed.txt)" -eq 1 ] && grep -qE '^README\.md$' changed.txt; then
             echo "only_readme=true" >> "$GITHUB_OUTPUT"
           else
@@ -39,8 +50,8 @@ jobs:
     needs: check-readme-only
     if: >
       needs.check-readme-only.outputs.only_readme == 'false' &&
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.actor != '0xNikilite')
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request' && github.actor != '0xNikilite'))
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
@@ -65,7 +76,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -120,7 +131,7 @@ jobs:
           toolchain: nightly
 
       - name: Cache cargo binaries
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin
@@ -139,4 +150,7 @@ jobs:
         run: cargo tarpaulin --out Xml --output-dir target/coverage --release
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./target/coverage/cobertura.xml
+          fail_ci_if_error: false

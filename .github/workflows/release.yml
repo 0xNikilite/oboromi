@@ -1,6 +1,3 @@
-permissions:
-  contents: write
-
 name: Build & Release
 
 on:
@@ -9,6 +6,9 @@ on:
       version:
         description: 'Version number (vX.Y.Z)'
         required: true
+
+permissions:
+  contents: write
 
 jobs:
   build_macos:
@@ -201,11 +201,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: '*artifact'
+          pattern: '*-artifact'
           merge-multiple: true
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version }}
           name: Release ${{ github.event.inputs.version }}
@@ -213,4 +213,3 @@ jobs:
             artifacts/oboromi-*-macos-universal.dmg
             artifacts/oboromi-*-linux-x64.tar.gz
             artifacts/oboromi-*-windows-x64.zip
-            

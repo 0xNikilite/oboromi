@@ -11,7 +11,7 @@ bitflags = "2.9"
 log = "0.4"
 fern = { version = "0.7", features = ["colored"] }
 crossbeam-channel = "0.5"
-egui = "0.32"
+egui = "0.33"
 eframe = "0.32"
 serde = "1.0"
 thiserror = "2.0"

@@ -91,12 +91,12 @@ mod arm64 {
 /// This prevents timeout issues on slower hardware during actual tests
 /// No timeout is enforced here as initial compilation can take variable time
 fn warmup_jit() {
-    println!("🔥 Warming up JIT compiler...");
+    println!("Warming up JIT compiler...");
     
     let cpu = match DynarmicCPU::new() {
         Some(cpu) => cpu,
         None => {
-            println!("⚠️  Failed to create CPU for warmup");
+            println!("Failed to create CPU for warmup");
             return;
         }
     };
@@ -128,10 +128,10 @@ fn warmup_jit() {
     let _ = cpu.run();
     let elapsed = start.elapsed();
     
-    println!("  ✓ JIT warmup completed in {:?}", elapsed);
+    println!("JIT warmup completed in {:?}", elapsed);
     
     if elapsed.as_millis() > 200 {
-        println!("  ℹ️  First compilation took {:?} - this is normal on slower hardware", elapsed);
+        println!("First compilation took {:?} - this is normal on slower hardware", elapsed);
     }
 }
 
@@ -147,16 +147,16 @@ where
     
     let cpu = match DynarmicCPU::new() {
         Some(cpu) => {
-            println!("    CPU created successfully");
+            println!("CPU created successfully");
             cpu
         }
         None => {
-            println!("    FAILED to create CPU!");
+            println!("FAILED to create CPU!");
             return TestResult::fail(name, "Failed to create CPU", start.elapsed());
         }
     };
     
-    println!("    Setting initial state...");
+    println!("Setting initial state...");
     cpu.set_sp(0x8000);
     cpu.set_pc(TEST_BASE_ADDR);
     
@@ -168,15 +168,15 @@ where
     }
     
     cpu.write_u32(current_addr, arm64::brk(0));
-    println!("    Added breakpoint at 0x{:016X}", current_addr);
+    println!("Added breakpoint at 0x{:016X}", current_addr);
     
-    println!("    Running test setup...");
+    println!("Running test setup...");
     setup(&cpu);
     
-    println!("    Executing instructions with run()...");
+    println!("Executing instructions with run()...");
     let result = cpu.run();
     let final_pc = cpu.get_pc();
-    println!("    Execution completed, PC: 0x{:016X}, result: {}", final_pc, result);
+    println!("Execution completed, PC: 0x{:016X}, result: {}", final_pc, result);
     
     let duration = start.elapsed();
     
@@ -185,7 +185,7 @@ where
     } else if result == 0 {
         TestResult::fail(name, &format!("Execution failed (PC = 0x{:016X})", final_pc), duration)
     } else {
-        println!("    Running verification...");
+        println!("Running verification...");
         let verification_result = verify(&cpu);
         
         if verification_result {
@@ -204,41 +204,41 @@ where
     let start = Instant::now();
     let timeout = get_test_timeout();
     
-    println!("  Running test: {}", name);
+    println!("Running test: {}", name);
     
     let cpu = match DynarmicCPU::new() {
         Some(cpu) => {
-            println!("    CPU created successfully");
+            println!("CPU created successfully");
             cpu
         }
         None => {
-            println!("    FAILED to create CPU!");
+            println!("FAILED to create CPU!");
             return TestResult::fail(name, "Failed to create CPU", start.elapsed());
         }
     };
     
-    println!("    Setting initial state...");
+    println!("Setting initial state...");
     cpu.set_sp(0x8000);
     cpu.set_pc(TEST_BASE_ADDR);
     
     let mut current_addr = TEST_BASE_ADDR;
     for (i, &instr) in instructions.iter().enumerate() {
         cpu.write_u32(current_addr, instr);
-        println!("    Wrote instruction {}: 0x{:08X} at 0x{:016X}", i + 1, instr, current_addr);
+        println!("Wrote instruction {}: 0x{:08X} at 0x{:016X}", i + 1, instr, current_addr);
         current_addr += 4;
     }
     
     cpu.write_u32(target_addr, arm64::brk(0));
     cpu.write_u32(target_addr + 4, arm64::nop());
-    println!("    Added breakpoint at target address 0x{:016X}", target_addr);
+    println!("Added breakpoint at target address 0x{:016X}", target_addr);
     
-    println!("    Running test setup...");
+    println!("Running test setup...");
     setup(&cpu);
     
-    println!("    Executing instructions with run()...");
+    println!("Executing instructions with run()...");
     let result = cpu.run();
     let final_pc = cpu.get_pc();
-    println!("    Execution completed, PC: 0x{:016X}, result: {}", final_pc, result);
+    println!("Execution completed, PC: 0x{:016X}, result: {}", final_pc, result);
     
     let duration = start.elapsed();
     
@@ -247,7 +247,7 @@ where
     } else if result == 0 {
         TestResult::fail(name, &format!("Execution failed (PC = 0x{:016X})", final_pc), duration)
     } else {
-        println!("    Running verification...");
+        println!("Running verification...");
         let verification_result = verify(&cpu);
         
         if verification_result {

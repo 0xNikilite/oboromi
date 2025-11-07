@@ -386,7 +386,7 @@ pub fn run_tests() -> Vec<String> {
     let mut results = Vec::new();
     let start_time = Instant::now();
     
-    println!("🧪 Starting Dynarmic JIT Instruction Tests...");
+    println!("Starting Unicorn Instruction Tests...");
     println!("  Base address: 0x{:016X}", TEST_BASE_ADDR);
     println!("  Breakpoint address: 0x{:016X}", BREAKPOINT_ADDR);
     println!();

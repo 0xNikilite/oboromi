@@ -1,5 +1,3 @@
-#![allow(clippy::module_inception)]
+pub mod unicorn_interface;
 
-pub mod dynarmic_interface;
-
-pub use dynarmic_interface::DynarmicCPU;
+pub use unicorn_interface::UnicornCPU;

@@ -1,6 +1,6 @@
 //! Test suite for Dynarmic JIT backend
 use std::time::{Instant, Duration};
-use crate::cpu::DynarmicCPU;
+use crate::cpu::UnicornCPU;
 
 const TEST_BASE_ADDR: u64 = 0x0000_1000;
 const BREAKPOINT_ADDR: u64 = 0x0000_2000;
@@ -87,13 +87,13 @@ mod arm64 {
     }
 }
 
-/// Warm up the JIT compiler by pre-compiling basic instructions
 /// This prevents timeout issues on slower hardware during actual tests
 /// No timeout is enforced here as initial compilation can take variable time
 fn warmup_jit() {
-    println!("Warming up JIT compiler...");
+    println!("Warming up Unicorn emulator...");
+    let _start = Instant::now();
     
-    let cpu = match DynarmicCPU::new() {
+    let cpu = match UnicornCPU::new() {
         Some(cpu) => cpu,
         None => {
             println!("Failed to create CPU for warmup");
@@ -137,15 +137,15 @@ fn warmup_jit() {
 
 fn run_instruction_test<F, V>(name: &str, instructions: &[u32], setup: F, verify: V) -> TestResult
 where
-    F: FnOnce(&DynarmicCPU),
-    V: FnOnce(&DynarmicCPU) -> bool,
+    F: FnOnce(&UnicornCPU),
+    V: FnOnce(&UnicornCPU) -> bool,
 {
     let start = Instant::now();
     let timeout = get_test_timeout();
     
     println!("  Running test: {}", name);
     
-    let cpu = match DynarmicCPU::new() {
+    let cpu = match UnicornCPU::new() {
         Some(cpu) => {
             println!("CPU created successfully");
             cpu
@@ -198,15 +198,15 @@ where
 
 fn run_control_flow_test<F, V>(name: &str, instructions: &[u32], target_addr: u64, setup: F, verify: V) -> TestResult
 where
-    F: FnOnce(&DynarmicCPU),
-    V: FnOnce(&DynarmicCPU) -> bool,
+    F: FnOnce(&UnicornCPU),
+    V: FnOnce(&UnicornCPU) -> bool,
 {
     let start = Instant::now();
     let timeout = get_test_timeout();
     
     println!("Running test: {}", name);
     
-    let cpu = match DynarmicCPU::new() {
+    let cpu = match UnicornCPU::new() {
         Some(cpu) => {
             println!("CPU created successfully");
             cpu
@@ -260,15 +260,15 @@ where
 
 fn run_ret_test<F, V>(name: &str, instructions: &[u32], setup: F, verify: V) -> TestResult
 where
-    F: FnOnce(&DynarmicCPU),
-    V: FnOnce(&DynarmicCPU) -> bool,
+    F: FnOnce(&UnicornCPU),
+    V: FnOnce(&UnicornCPU) -> bool,
 {
     let start = Instant::now();
     let timeout = get_test_timeout();
     
     println!("  Running test: {}", name);
     
-    let cpu = match DynarmicCPU::new() {
+    let cpu = match UnicornCPU::new() {
         Some(cpu) => {
             println!("    CPU created successfully");
             cpu
@@ -323,15 +323,15 @@ where
 
 fn run_multi_instruction_test<F, V>(name: &str, instructions: &[u32], setup: F, verify: V) -> TestResult
 where
-    F: FnOnce(&DynarmicCPU),
-    V: FnOnce(&DynarmicCPU) -> bool,
+    F: FnOnce(&UnicornCPU),
+    V: FnOnce(&UnicornCPU) -> bool,
 {
     let start = Instant::now();
     let timeout = get_test_timeout();
     
     println!("  Running test: {} ({} instructions)", name, instructions.len());
     
-    let cpu = match DynarmicCPU::new() {
+    let cpu = match UnicornCPU::new() {
         Some(cpu) => {
             println!("    CPU created successfully");
             cpu
@@ -476,7 +476,7 @@ pub fn run_tests() -> Vec<String> {
             |cpu| {
                 cpu.set_x(30, 0x2000);
             },
-            |cpu| cpu.get_pc() == 0x2004
+            |cpu| cpu.get_pc() == 0x2000
         ),
         
         run_instruction_test(

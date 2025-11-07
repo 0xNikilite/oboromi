@@ -1,5 +1,4 @@
 pub mod cpu;
-pub mod dynarmic_sys;
 pub mod fs;
 pub mod gpu;
 pub mod input;

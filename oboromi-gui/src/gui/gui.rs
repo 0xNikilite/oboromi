@@ -47,7 +47,12 @@ impl eframe::App for GUI {
             ui.label("Results:");
             ScrollArea::vertical().show(ui, |ui| {
                 for line in &self.logs {
-                    ui.label(line);
+                    if line.contains("PASS") {
+                        ui.colored_label(egui::Color32::from_rgb(50, 255, 50), line);
+                    } else {
+                        ui.colored_label(egui::Color32::from_rgb(255, 50, 50), line);
+                    }
+
                 }
             });
         });

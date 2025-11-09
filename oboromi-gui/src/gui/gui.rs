@@ -1,4 +1,4 @@
-use eframe::egui::{ScrollArea, CentralPanel};
+use eframe::egui::{ScrollArea, CentralPanel, RichText, Color32};
 use oboromi_core::tests::run::run_tests;
 
 pub struct GUI {
@@ -44,15 +44,19 @@ impl eframe::App for GUI {
             }
 
             ui.separator();
-            ui.label("Results:");
+            ui.label(RichText::new("Results:").color(Color32::from_rgb(200, 200, 200)));
             ScrollArea::vertical().show(ui, |ui| {
                 for line in &self.logs {
                     if line.contains("PASS") {
                         ui.colored_label(egui::Color32::from_rgb(50, 255, 50), line);
                     } else {
-                        ui.colored_label(egui::Color32::from_rgb(255, 50, 50), line);
+                        if line.contains("FAIL") {
+                            ui.colored_label(egui::Color32::from_rgb(255, 50, 50), line);
+                        }
+                        else {
+                            ui.colored_label(egui::Color32::from_rgb(200, 200, 200), line);
+                        }
                     }
-
                 }
             });
         });

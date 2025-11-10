@@ -38,9 +38,9 @@ impl eframe::App for GUI {
 
         let now = Instant::now();
         let elapsed = now.duration_since(self.splash_start);
-        let fade_in = Duration::from_millis(700);
-        let hold = Duration::from_millis(1200);
-        let fade_out = Duration::from_millis(700);
+        let fade_in = Duration::from_millis(400);
+        let hold = Duration::from_millis(800);
+        let fade_out = Duration::from_millis(400);
         let total = fade_in + hold + fade_out;
 
         let (phase, progress) = if elapsed < fade_in {
@@ -69,7 +69,7 @@ impl eframe::App for GUI {
                 let Some(tex) = &self.logo else { return; };
                 let center = rect.center();
                 let logo_size = tex.size_vec2() * 0.3;
-                let logo_rect = Rect::from_center_size(center + Vec2::new(0.0, -20.0), logo_size);
+                let logo_rect = Rect::from_center_size(center + Vec2::new(0.0, -60.0), logo_size);
 
                 painter.image(
                     tex.id(),
@@ -101,12 +101,41 @@ impl eframe::App for GUI {
 
                 let text_color = Color32::from_rgba_premultiplied(120, 180, 255, (progress * 255.0) as u8);
                 painter.text(
-                    center + Vec2::new(0.0, logo_size.y / 2.0 + 24.0),
+                    center + Vec2::new(0.0, logo_size.y / 2.0 - 16.0),
                     Align2::CENTER_TOP,
                     "oboromi",
                     egui::TextStyle::Heading.resolve(ui.style()),
                     text_color,
                 );
+
+                // Pre-release warning text
+                let warning_color = Color32::from_rgba_premultiplied(255, 200, 100, (progress * 200.0) as u8);
+                let info_color = Color32::from_rgba_premultiplied(180, 180, 180, (progress * 180.0) as u8);
+                
+                painter.text(
+                    center + Vec2::new(0.0, logo_size.y / 2.0 + 40.0),
+                    Align2::CENTER_TOP,
+                    "⚠ PRE-RELEASE VERSION",
+                    egui::FontId::proportional(14.0),
+                    warning_color,
+                );
+
+                // Multi-line explanation
+                let lines = vec![
+                    "This is an experimental foundation for Switch 2 emulation.",
+                    "Without a kernel exploit, running actual games is currently impossible.",
+                    "This release focuses on CPU instruction emulation only.",
+                ];
+
+                for (i, line) in lines.iter().enumerate() {
+                    painter.text(
+                        center + Vec2::new(0.0, logo_size.y / 2.0 + 70.0 + (i as f32 * 18.0)),
+                        Align2::CENTER_TOP,
+                        *line,
+                        egui::FontId::proportional(11.0),
+                        info_color,
+                    );
+                }
             });
 
             ctx.request_repaint();
@@ -115,11 +144,14 @@ impl eframe::App for GUI {
 
         CentralPanel::default().show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                ui.style_mut().visuals.button_frame = true;
+                
                 ui.menu_button("File", |ui| {
                     if ui.button("Quit").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
+                
                 ui.menu_button("About", |ui| {
                     ui.hyperlink_to("See the code", "https://git.eden-emu.dev/Nikilite/oboromi/");
                 });

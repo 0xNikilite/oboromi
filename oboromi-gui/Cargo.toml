@@ -12,6 +12,7 @@ egui = { workspace = true }
 eframe = { workspace = true }
 fern = { workspace = true }
 log = { workspace = true }
+image = "0.25.6"
 
 [features]
 default = []

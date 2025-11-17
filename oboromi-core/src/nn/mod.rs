@@ -1,0 +1,508 @@
+use crate::sys;
+use crate::nn as nn;
+
+mod acc;
+mod adraw;
+mod ahid;
+mod aoc;
+mod apm;
+mod appletAE;
+mod appletOE;
+mod arp;
+mod aud;
+mod audctl;
+mod auddebug;
+mod auddev;
+mod auddmg;
+mod audin;
+mod audout;
+mod audrec;
+mod audren;
+mod audsmx;
+mod avm;
+mod banana;
+mod batlog;
+mod bcat;
+mod bgtc;
+mod bpc;
+mod bpmpmr;
+mod bsd;
+mod bsdcfg;
+mod bt;
+mod btdrv;
+mod btm;
+mod btp;
+mod capmtp;
+mod caps;
+mod caps2;
+mod cec_mgr;
+mod chat;
+mod clkrst;
+mod codecctl;
+mod csrng;
+mod dauth;
+mod disp;
+mod dispdrv;
+mod dmnt;
+mod dns;
+mod dt;
+mod ectx;
+mod erpt;
+mod es;
+mod eth;
+mod ethc;
+mod eupld;
+mod fan;
+mod fatal;
+mod fgm;
+mod file_io;
+mod friend;
+mod fs;
+mod fsp_ldr;
+mod fsp_pr;
+mod fsp_srv;
+mod gds;
+mod gpio;
+mod gpuk;
+mod grc;
+mod gsv;
+mod hdcp;
+mod hid;
+mod hidbus;
+mod host1x;
+mod hshl;
+mod htc;
+mod htcs;
+mod hwopus;
+mod i2c;
+mod idle;
+mod ifcfg;
+mod imf;
+mod ins;
+mod irs;
+mod jit;
+mod lbl;
+mod ldn;
+mod ldr;
+mod led;
+mod lm;
+mod lp2p;
+mod lr;
+mod manu;
+mod mig;
+mod mii;
+mod miiimg;
+mod mm;
+mod mnpp;
+mod ncm;
+mod nd;
+mod ndd;
+mod ndrm;
+mod news;
+mod nfc;
+mod nfp;
+mod ngc;
+mod ngct;
+mod nifm;
+mod nim;
+mod notif;
+mod npns;
+mod ns;
+mod nsd;
+mod ntc;
+mod nvdbg;
+mod nvdrv;
+mod nvdrvdbg;
+mod nvgem;
+mod nvmemp;
+mod olsc;
+mod omm;
+mod ommdisp;
+mod ovln;
+mod pcie;
+mod pcm;
+mod pctl;
+mod pcv;
+mod pdm;
+mod pgl;
+mod pinmux;
+mod pl;
+mod pm;
+mod prepo;
+mod psc;
+mod psm;
+mod pwm;
+mod rgltr;
+mod ro;
+mod rtc;
+mod sasbus;
+mod set;
+mod sf_uds;
+mod sfdnsres;
+mod spbg;
+mod spi;
+mod spl;
+mod sprof;
+mod spsm;
+mod srepo;
+mod ssl;
+mod syncpt;
+mod tc;
+mod tcap;
+mod time;
+mod tma_log;
+mod tmagent;
+mod ts;
+mod tspm;
+mod uart;
+mod usb;
+mod vi;
+mod vi2;
+mod vic;
+mod wlan;
+mod xcd;
+
+pub trait ServiceTrait {
+    fn run(state: &mut sys::State) -> () {
+        todo!();
+    }
+}
+
+struct ServiceEntry<'a> {
+    name: &'static str,
+    run_fn: &'a dyn FnMut(&mut sys::State) -> (),
+}
+impl<'a> ServiceEntry<'a> {
+    pub fn new(name: &'static str, run_fn: &'a dyn FnMut(&mut sys::State) -> ()) -> Self {
+        Self{ name, run_fn }
+    }
+}
+
+pub struct ServiceManager {
+    acc: Option<nn::acc::State>,
+    adraw: Option<nn::adraw::State>,
+    ahid: Option<nn::ahid::State>,
+    aoc: Option<nn::aoc::State>,
+    apm: Option<nn::apm::State>,
+    appletAE: Option<nn::appletAE::State>,
+    appletOE: Option<nn::appletOE::State>,
+    arp: Option<nn::arp::State>,
+    aud: Option<nn::aud::State>,
+    audctl: Option<nn::audctl::State>,
+    auddebug: Option<nn::auddebug::State>,
+    auddev: Option<nn::auddev::State>,
+    auddmg: Option<nn::auddmg::State>,
+    audin: Option<nn::audin::State>,
+    audout: Option<nn::audout::State>,
+    audrec: Option<nn::audrec::State>,
+    audren: Option<nn::audren::State>,
+    audsmx: Option<nn::audsmx::State>,
+    avm: Option<nn::avm::State>,
+    banana: Option<nn::banana::State>,
+    batlog: Option<nn::batlog::State>,
+    bcat: Option<nn::bcat::State>,
+    bgtc: Option<nn::bgtc::State>,
+    bpc: Option<nn::bpc::State>,
+    bpmpmr: Option<nn::bpmpmr::State>,
+    bsd: Option<nn::bsd::State>,
+    bsdcfg: Option<nn::bsdcfg::State>,
+    bt: Option<nn::bt::State>,
+    btdrv: Option<nn::btdrv::State>,
+    btm: Option<nn::btm::State>,
+    btp: Option<nn::btp::State>,
+    capmtp: Option<nn::capmtp::State>,
+    caps: Option<nn::caps::State>,
+    caps2: Option<nn::caps2::State>,
+    cec_mgr: Option<nn::cec_mgr::State>,
+    chat: Option<nn::chat::State>,
+    clkrst: Option<nn::clkrst::State>,
+    codecctl: Option<nn::codecctl::State>,
+    csrng: Option<nn::csrng::State>,
+    dauth: Option<nn::dauth::State>,
+    disp: Option<nn::disp::State>,
+    dispdrv: Option<nn::dispdrv::State>,
+    dmnt: Option<nn::dmnt::State>,
+    dns: Option<nn::dns::State>,
+    dt: Option<nn::dt::State>,
+    ectx: Option<nn::ectx::State>,
+    erpt: Option<nn::erpt::State>,
+    es: Option<nn::es::State>,
+    eth: Option<nn::eth::State>,
+    ethc: Option<nn::ethc::State>,
+    eupld: Option<nn::eupld::State>,
+    fan: Option<nn::fan::State>,
+    fatal: Option<nn::fatal::State>,
+    fgm: Option<nn::fgm::State>,
+    file_io: Option<nn::file_io::State>,
+    friend: Option<nn::friend::State>,
+    fs: Option<nn::fs::State>,
+    fsp_ldr: Option<nn::fsp_ldr::State>,
+    fsp_pr: Option<nn::fsp_pr::State>,
+    fsp_srv: Option<nn::fsp_srv::State>,
+    gds: Option<nn::gds::State>,
+    gpio: Option<nn::gpio::State>,
+    gpuk: Option<nn::gpuk::State>,
+    grc: Option<nn::grc::State>,
+    gsv: Option<nn::gsv::State>,
+    hdcp: Option<nn::hdcp::State>,
+    hid: Option<nn::hid::State>,
+    hidbus: Option<nn::hidbus::State>,
+    host1x: Option<nn::host1x::State>,
+    hshl: Option<nn::hshl::State>,
+    htc: Option<nn::htc::State>,
+    htcs: Option<nn::htcs::State>,
+    hwopus: Option<nn::hwopus::State>,
+    i2c: Option<nn::i2c::State>,
+    idle: Option<nn::idle::State>,
+    ifcfg: Option<nn::ifcfg::State>,
+    imf: Option<nn::imf::State>,
+    ins: Option<nn::ins::State>,
+    irs: Option<nn::irs::State>,
+    jit: Option<nn::jit::State>,
+    lbl: Option<nn::lbl::State>,
+    ldn: Option<nn::ldn::State>,
+    ldr: Option<nn::ldr::State>,
+    led: Option<nn::led::State>,
+    lm: Option<nn::lm::State>,
+    lp2p: Option<nn::lp2p::State>,
+    lr: Option<nn::lr::State>,
+    manu: Option<nn::manu::State>,
+    mig: Option<nn::mig::State>,
+    mii: Option<nn::mii::State>,
+    miiimg: Option<nn::miiimg::State>,
+    mm: Option<nn::mm::State>,
+    mnpp: Option<nn::mnpp::State>,
+    ncm: Option<nn::ncm::State>,
+    nd: Option<nn::nd::State>,
+    ndd: Option<nn::ndd::State>,
+    ndrm: Option<nn::ndrm::State>,
+    news: Option<nn::news::State>,
+    nfc: Option<nn::nfc::State>,
+    nfp: Option<nn::nfp::State>,
+    ngc: Option<nn::ngc::State>,
+    ngct: Option<nn::ngct::State>,
+    nifm: Option<nn::nifm::State>,
+    nim: Option<nn::nim::State>,
+    notif: Option<nn::notif::State>,
+    npns: Option<nn::npns::State>,
+    ns: Option<nn::ns::State>,
+    nsd: Option<nn::nsd::State>,
+    ntc: Option<nn::ntc::State>,
+    nvdbg: Option<nn::nvdbg::State>,
+    nvdrv: Option<nn::nvdrv::State>,
+    nvdrvdbg: Option<nn::nvdrvdbg::State>,
+    nvgem: Option<nn::nvgem::State>,
+    nvmemp: Option<nn::nvmemp::State>,
+    olsc: Option<nn::olsc::State>,
+    omm: Option<nn::omm::State>,
+    ommdisp: Option<nn::ommdisp::State>,
+    ovln: Option<nn::ovln::State>,
+    pcie: Option<nn::pcie::State>,
+    pcm: Option<nn::pcm::State>,
+    pctl: Option<nn::pctl::State>,
+    pcv: Option<nn::pcv::State>,
+    pdm: Option<nn::pdm::State>,
+    pgl: Option<nn::pgl::State>,
+    pinmux: Option<nn::pinmux::State>,
+    pl: Option<nn::pl::State>,
+    pm: Option<nn::pm::State>,
+    prepo: Option<nn::prepo::State>,
+    psc: Option<nn::psc::State>,
+    psm: Option<nn::psm::State>,
+    pwm: Option<nn::pwm::State>,
+    rgltr: Option<nn::rgltr::State>,
+    ro: Option<nn::ro::State>,
+    rtc: Option<nn::rtc::State>,
+    sasbus: Option<nn::sasbus::State>,
+    set: Option<nn::set::State>,
+    sf_uds: Option<nn::sf_uds::State>,
+    sfdnsres: Option<nn::sfdnsres::State>,
+    spbg: Option<nn::spbg::State>,
+    spi: Option<nn::spi::State>,
+    spl: Option<nn::spl::State>,
+    sprof: Option<nn::sprof::State>,
+    spsm: Option<nn::spsm::State>,
+    srepo: Option<nn::srepo::State>,
+    ssl: Option<nn::ssl::State>,
+    syncpt: Option<nn::syncpt::State>,
+    tc: Option<nn::tc::State>,
+    tcap: Option<nn::tcap::State>,
+    time: Option<nn::time::State>,
+    tma_log: Option<nn::tma_log::State>,
+    tmagent: Option<nn::tmagent::State>,
+    ts: Option<nn::ts::State>,
+    tspm: Option<nn::tspm::State>,
+    uart: Option<nn::uart::State>,
+    usb: Option<nn::usb::State>,
+    vi: Option<nn::vi::State>,
+    vi2: Option<nn::vi2::State>,
+    vic: Option<nn::vic::State>,
+    wlan: Option<nn::wlan::State>,
+    xcd: Option<nn::xcd::State>,
+}
+impl ServiceManager {
+    pub fn start_host_services(state: &mut sys::State) {
+        let entries = [
+            ServiceEntry::new("acc", &nn::acc::State::run),
+            ServiceEntry::new("adraw", &nn::adraw::State::run),
+            ServiceEntry::new("ahid", &nn::ahid::State::run),
+            ServiceEntry::new("aoc", &nn::aoc::State::run),
+            ServiceEntry::new("apm", &nn::apm::State::run),
+            ServiceEntry::new("appletAE", &nn::appletAE::State::run),
+            ServiceEntry::new("appletOE", &nn::appletOE::State::run),
+            ServiceEntry::new("arp", &nn::arp::State::run),
+            ServiceEntry::new("aud", &nn::aud::State::run),
+            ServiceEntry::new("audctl", &nn::audctl::State::run),
+            ServiceEntry::new("auddebug", &nn::auddebug::State::run),
+            ServiceEntry::new("auddev", &nn::auddev::State::run),
+            ServiceEntry::new("auddmg", &nn::auddmg::State::run),
+            ServiceEntry::new("audin", &nn::audin::State::run),
+            ServiceEntry::new("audout", &nn::audout::State::run),
+            ServiceEntry::new("audrec", &nn::audrec::State::run),
+            ServiceEntry::new("audren", &nn::audren::State::run),
+            ServiceEntry::new("audsmx", &nn::audsmx::State::run),
+            ServiceEntry::new("avm", &nn::avm::State::run),
+            ServiceEntry::new("banana", &nn::banana::State::run),
+            ServiceEntry::new("batlog", &nn::batlog::State::run),
+            ServiceEntry::new("bcat", &nn::bcat::State::run),
+            ServiceEntry::new("bgtc", &nn::bgtc::State::run),
+            ServiceEntry::new("bpc", &nn::bpc::State::run),
+            ServiceEntry::new("bpmpmr", &nn::bpmpmr::State::run),
+            ServiceEntry::new("bsd", &nn::bsd::State::run),
+            ServiceEntry::new("bsdcfg", &nn::bsdcfg::State::run),
+            ServiceEntry::new("bt", &nn::bt::State::run),
+            ServiceEntry::new("btdrv", &nn::btdrv::State::run),
+            ServiceEntry::new("btm", &nn::btm::State::run),
+            ServiceEntry::new("btp", &nn::btp::State::run),
+            ServiceEntry::new("capmtp", &nn::capmtp::State::run),
+            ServiceEntry::new("caps", &nn::caps::State::run),
+            ServiceEntry::new("caps2", &nn::caps2::State::run),
+            ServiceEntry::new("cec_mgr", &nn::cec_mgr::State::run),
+            ServiceEntry::new("chat", &nn::chat::State::run),
+            ServiceEntry::new("clkrst", &nn::clkrst::State::run),
+            ServiceEntry::new("codecctl", &nn::codecctl::State::run),
+            ServiceEntry::new("csrng", &nn::csrng::State::run),
+            ServiceEntry::new("dauth", &nn::dauth::State::run),
+            ServiceEntry::new("disp", &nn::disp::State::run),
+            ServiceEntry::new("dispdrv", &nn::dispdrv::State::run),
+            ServiceEntry::new("dmnt", &nn::dmnt::State::run),
+            ServiceEntry::new("dns", &nn::dns::State::run),
+            ServiceEntry::new("dt", &nn::dt::State::run),
+            ServiceEntry::new("ectx", &nn::ectx::State::run),
+            ServiceEntry::new("erpt", &nn::erpt::State::run),
+            ServiceEntry::new("es", &nn::es::State::run),
+            ServiceEntry::new("eth", &nn::eth::State::run),
+            ServiceEntry::new("ethc", &nn::ethc::State::run),
+            ServiceEntry::new("eupld", &nn::eupld::State::run),
+            ServiceEntry::new("fan", &nn::fan::State::run),
+            ServiceEntry::new("fatal", &nn::fatal::State::run),
+            ServiceEntry::new("fgm", &nn::fgm::State::run),
+            ServiceEntry::new("file_io", &nn::file_io::State::run),
+            ServiceEntry::new("friend", &nn::friend::State::run),
+            ServiceEntry::new("fs", &nn::fs::State::run),
+            ServiceEntry::new("fsp_ldr", &nn::fsp_ldr::State::run),
+            ServiceEntry::new("fsp_pr", &nn::fsp_pr::State::run),
+            ServiceEntry::new("fsp_srv", &nn::fsp_srv::State::run),
+            ServiceEntry::new("gds", &nn::gds::State::run),
+            ServiceEntry::new("gpio", &nn::gpio::State::run),
+            ServiceEntry::new("gpuk", &nn::gpuk::State::run),
+            ServiceEntry::new("grc", &nn::grc::State::run),
+            ServiceEntry::new("gsv", &nn::gsv::State::run),
+            ServiceEntry::new("hdcp", &nn::hdcp::State::run),
+            ServiceEntry::new("hid", &nn::hid::State::run),
+            ServiceEntry::new("hidbus", &nn::hidbus::State::run),
+            ServiceEntry::new("host1x", &nn::host1x::State::run),
+            ServiceEntry::new("hshl", &nn::hshl::State::run),
+            ServiceEntry::new("htc", &nn::htc::State::run),
+            ServiceEntry::new("htcs", &nn::htcs::State::run),
+            ServiceEntry::new("hwopus", &nn::hwopus::State::run),
+            ServiceEntry::new("i2c", &nn::i2c::State::run),
+            ServiceEntry::new("idle", &nn::idle::State::run),
+            ServiceEntry::new("ifcfg", &nn::ifcfg::State::run),
+            ServiceEntry::new("imf", &nn::imf::State::run),
+            ServiceEntry::new("ins", &nn::ins::State::run),
+            ServiceEntry::new("irs", &nn::irs::State::run),
+            ServiceEntry::new("jit", &nn::jit::State::run),
+            ServiceEntry::new("lbl", &nn::lbl::State::run),
+            ServiceEntry::new("ldn", &nn::ldn::State::run),
+            ServiceEntry::new("ldr", &nn::ldr::State::run),
+            ServiceEntry::new("led", &nn::led::State::run),
+            ServiceEntry::new("lm", &nn::lm::State::run),
+            ServiceEntry::new("lp2p", &nn::lp2p::State::run),
+            ServiceEntry::new("lr", &nn::lr::State::run),
+            ServiceEntry::new("manu", &nn::manu::State::run),
+            ServiceEntry::new("mig", &nn::mig::State::run),
+            ServiceEntry::new("mii", &nn::mii::State::run),
+            ServiceEntry::new("miiimg", &nn::miiimg::State::run),
+            ServiceEntry::new("mm", &nn::mm::State::run),
+            ServiceEntry::new("mnpp", &nn::mnpp::State::run),
+            ServiceEntry::new("ncm", &nn::ncm::State::run),
+            ServiceEntry::new("nd", &nn::nd::State::run),
+            ServiceEntry::new("ndd", &nn::ndd::State::run),
+            ServiceEntry::new("ndrm", &nn::ndrm::State::run),
+            ServiceEntry::new("news", &nn::news::State::run),
+            ServiceEntry::new("nfc", &nn::nfc::State::run),
+            ServiceEntry::new("nfp", &nn::nfp::State::run),
+            ServiceEntry::new("ngc", &nn::ngc::State::run),
+            ServiceEntry::new("ngct", &nn::ngct::State::run),
+            ServiceEntry::new("nifm", &nn::nifm::State::run),
+            ServiceEntry::new("nim", &nn::nim::State::run),
+            ServiceEntry::new("notif", &nn::notif::State::run),
+            ServiceEntry::new("npns", &nn::npns::State::run),
+            ServiceEntry::new("ns", &nn::ns::State::run),
+            ServiceEntry::new("nsd", &nn::nsd::State::run),
+            ServiceEntry::new("ntc", &nn::ntc::State::run),
+            ServiceEntry::new("nvdbg", &nn::nvdbg::State::run),
+            ServiceEntry::new("nvdrv", &nn::nvdrv::State::run),
+            ServiceEntry::new("nvdrvdbg", &nn::nvdrvdbg::State::run),
+            ServiceEntry::new("nvgem", &nn::nvgem::State::run),
+            ServiceEntry::new("nvmemp", &nn::nvmemp::State::run),
+            ServiceEntry::new("olsc", &nn::olsc::State::run),
+            ServiceEntry::new("omm", &nn::omm::State::run),
+            ServiceEntry::new("ommdisp", &nn::ommdisp::State::run),
+            ServiceEntry::new("ovln", &nn::ovln::State::run),
+            ServiceEntry::new("pcie", &nn::pcie::State::run),
+            ServiceEntry::new("pcm", &nn::pcm::State::run),
+            ServiceEntry::new("pctl", &nn::pctl::State::run),
+            ServiceEntry::new("pcv", &nn::pcv::State::run),
+            ServiceEntry::new("pdm", &nn::pdm::State::run),
+            ServiceEntry::new("pgl", &nn::pgl::State::run),
+            ServiceEntry::new("pinmux", &nn::pinmux::State::run),
+            ServiceEntry::new("pl", &nn::pl::State::run),
+            ServiceEntry::new("pm", &nn::pm::State::run),
+            ServiceEntry::new("prepo", &nn::prepo::State::run),
+            ServiceEntry::new("psc", &nn::psc::State::run),
+            ServiceEntry::new("psm", &nn::psm::State::run),
+            ServiceEntry::new("pwm", &nn::pwm::State::run),
+            ServiceEntry::new("rgltr", &nn::rgltr::State::run),
+            ServiceEntry::new("ro", &nn::ro::State::run),
+            ServiceEntry::new("rtc", &nn::rtc::State::run),
+            ServiceEntry::new("sasbus", &nn::sasbus::State::run),
+            ServiceEntry::new("set", &nn::set::State::run),
+            ServiceEntry::new("sf_uds", &nn::sf_uds::State::run),
+            ServiceEntry::new("sfdnsres", &nn::sfdnsres::State::run),
+            ServiceEntry::new("spbg", &nn::spbg::State::run),
+            ServiceEntry::new("spi", &nn::spi::State::run),
+            ServiceEntry::new("spl", &nn::spl::State::run),
+            ServiceEntry::new("sprof", &nn::sprof::State::run),
+            ServiceEntry::new("spsm", &nn::spsm::State::run),
+            ServiceEntry::new("srepo", &nn::srepo::State::run),
+            ServiceEntry::new("ssl", &nn::ssl::State::run),
+            ServiceEntry::new("syncpt", &nn::syncpt::State::run),
+            ServiceEntry::new("tc", &nn::tc::State::run),
+            ServiceEntry::new("tcap", &nn::tcap::State::run),
+            ServiceEntry::new("time", &nn::time::State::run),
+            ServiceEntry::new("tma_log", &nn::tma_log::State::run),
+            ServiceEntry::new("tmagent", &nn::tmagent::State::run),
+            ServiceEntry::new("ts", &nn::ts::State::run),
+            ServiceEntry::new("tspm", &nn::tspm::State::run),
+            ServiceEntry::new("uart", &nn::uart::State::run),
+            ServiceEntry::new("usb", &nn::usb::State::run),
+            ServiceEntry::new("vi", &nn::vi::State::run),
+            ServiceEntry::new("vi2", &nn::vi2::State::run),
+            ServiceEntry::new("vic", &nn::vic::State::run),
+            ServiceEntry::new("wlan", &nn::wlan::State::run),
+            ServiceEntry::new("xcd", &nn::xcd::State::run),
+        ];
+    }
+}

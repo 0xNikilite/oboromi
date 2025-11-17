@@ -5,3 +5,5 @@ pub mod input;
 pub mod memory;
 pub mod mmu;
 pub mod tests;
+pub mod nn;
+pub mod sys;

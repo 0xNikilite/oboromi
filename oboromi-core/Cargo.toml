@@ -2,7 +2,7 @@
 name = "oboromi-core"
 version = "0.0.1"
 edition = "2024"
-authors = ["Nikilite"]
+authors = ["Nikilite", "Elizabeth"]
 license = "MPL-2.0"
 description = "Core emulator library for oboromi"
 
@@ -10,17 +10,7 @@ description = "Core emulator library for oboromi"
 path = "src/lib.rs"
 
 [dependencies]
-bitflags = { workspace = true }
-log = { workspace = true }
-thiserror = { workspace = true }
-fern = { version = "0.7", features = ["colored"] }
-crossbeam-channel = "0.5"
-serde = { version = "1.0", features = ["derive"] }
-env_logger = "0.11"
 unicorn-engine = "2.1.1"
-
-[dev-dependencies]
-criterion = "0.7"
 
 [features]
 default = []

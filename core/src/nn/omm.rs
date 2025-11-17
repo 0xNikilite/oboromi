@@ -4,7 +4,7 @@ pub struct State {
 
 }
 impl State {
-    pub fn new(state: &mut sys::State) -> Self {
+    pub fn new(_state: &mut sys::State) -> Self {
         Self{}
     }
 }

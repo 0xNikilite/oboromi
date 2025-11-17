@@ -6,8 +6,8 @@ mod adraw;
 mod ahid;
 mod aoc;
 mod apm;
-mod appletAE;
-mod appletOE;
+mod applet_ae;
+mod applet_oe;
 mod arp;
 mod aud;
 mod audctl;
@@ -184,8 +184,8 @@ pub struct ServiceManager {
     ahid: Option<nn::ahid::State>,
     aoc: Option<nn::aoc::State>,
     apm: Option<nn::apm::State>,
-    appletAE: Option<nn::appletAE::State>,
-    appletOE: Option<nn::appletOE::State>,
+    applet_ae: Option<nn::applet_ae::State>,
+    applet_oe: Option<nn::applet_oe::State>,
     arp: Option<nn::arp::State>,
     aud: Option<nn::aud::State>,
     audctl: Option<nn::audctl::State>,
@@ -348,8 +348,8 @@ impl ServiceManager {
             ServiceEntry::new("ahid", &nn::ahid::State::run),
             ServiceEntry::new("aoc", &nn::aoc::State::run),
             ServiceEntry::new("apm", &nn::apm::State::run),
-            ServiceEntry::new("appletAE", &nn::appletAE::State::run),
-            ServiceEntry::new("appletOE", &nn::appletOE::State::run),
+            ServiceEntry::new("applet_ae", &nn::applet_ae::State::run),
+            ServiceEntry::new("applet_oe", &nn::applet_oe::State::run),
             ServiceEntry::new("arp", &nn::arp::State::run),
             ServiceEntry::new("aud", &nn::aud::State::run),
             ServiceEntry::new("audctl", &nn::audctl::State::run),

@@ -7,7 +7,7 @@ license = "MPL-2.0"
 description = "oboromi emulator GUI frontend"
 
 [dependencies]
-oboromi-core = { path = "../oboromi-core", default-features = false }
+oboromi-core = { path = "../core", default-features = false }
 egui = { workspace = true }
 eframe = { workspace = true }
 fern = { workspace = true }

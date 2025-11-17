@@ -2466,8 +2466,6 @@ dependencies = [
 name = "oboromi-core"
 version = "0.0.1"
 dependencies = [
- "bitflags 2.9.4",
- "log",
  "unicorn-engine",
 ]
 

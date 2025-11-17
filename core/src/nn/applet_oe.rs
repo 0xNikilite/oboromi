@@ -10,6 +10,6 @@ impl State {
 }
 impl ServiceTrait for State {
      fn run(state: &mut sys::State) {
-        state.services.appletAE = Some(State::new(state));
+        state.services.applet_oe = Some(State::new(state));
     }
 }

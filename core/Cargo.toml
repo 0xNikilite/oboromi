@@ -3,7 +3,7 @@ name = "oboromi-core"
 version = "0.0.1"
 edition = "2024"
 authors = ["Nikilite", "Elizabeth"]
-license = "MPL-2.0"
+license = "GPL-3.0"
 description = "Core emulator library for oboromi"
 
 [lib]

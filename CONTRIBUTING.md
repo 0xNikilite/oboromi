@@ -61,4 +61,4 @@ Bugs are tracked as GitHub issues. When filing an issue, please explain the prob
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under its Mozilla Public License 2.0.
+By contributing, you agree that your contributions will be licensed under its GNU General Public License v3.

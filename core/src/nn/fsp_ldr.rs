@@ -1,11 +1,9 @@
-use crate::sys;
 use crate::nn::ServiceTrait;
-pub struct State {
-
-}
+use crate::sys;
+pub struct State {}
 impl State {
     pub fn new(_state: &mut sys::State) -> Self {
-        Self{}
+        Self {}
     }
 }
 impl ServiceTrait for State {

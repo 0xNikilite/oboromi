@@ -1,8 +1,8 @@
 use eframe::egui::{
-    self, CentralPanel, ScrollArea, RichText, Color32, Align2, Vec2, TextureHandle, Pos2, Rect,
+    self, Align2, CentralPanel, Color32, Pos2, Rect, RichText, ScrollArea, TextureHandle, Vec2,
 };
-use std::time::{Instant, Duration};
 use oboromi_core::tests::run::run_tests;
+use std::time::{Duration, Instant};
 
 pub struct GUI {
     pub logs: Vec<String>,
@@ -26,7 +26,9 @@ impl eframe::App for GUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.logo.is_none() {
             let bytes = include_bytes!("../../../assets/oboromi_logo.png");
-            let image = image::load_from_memory(bytes).expect("failed to load image").to_rgba8();
+            let image = image::load_from_memory(bytes)
+                .expect("failed to load image")
+                .to_rgba8();
             let size = [image.width() as usize, image.height() as usize];
             let tex = ctx.load_texture(
                 "logo",
@@ -48,7 +50,10 @@ impl eframe::App for GUI {
         } else if elapsed < fade_in + hold {
             ("hold", 1.0)
         } else if elapsed < total {
-            ("fade_out", 1.0 - (elapsed - fade_in - hold).as_secs_f32() / fade_out.as_secs_f32())
+            (
+                "fade_out",
+                1.0 - (elapsed - fade_in - hold).as_secs_f32() / fade_out.as_secs_f32(),
+            )
         } else {
             ("done", 0.0)
         };
@@ -66,7 +71,9 @@ impl eframe::App for GUI {
                 };
                 painter.rect_filled(rect, 0.0, bg_color);
 
-                let Some(tex) = &self.logo else { return; };
+                let Some(tex) = &self.logo else {
+                    return;
+                };
                 let center = rect.center();
                 let logo_size = tex.size_vec2() * 0.3;
                 let logo_rect = Rect::from_center_size(center + Vec2::new(0.0, -60.0), logo_size);
@@ -80,7 +87,8 @@ impl eframe::App for GUI {
 
                 let time = elapsed.as_secs_f32();
                 let _logo_middle = logo_rect.left() + logo_rect.width() * 0.5;
-                let glint_center_x = logo_rect.left() + logo_rect.width() * ((time * 0.6).sin() * 0.45 + 0.5);
+                let glint_center_x =
+                    logo_rect.left() + logo_rect.width() * ((time * 0.6).sin() * 0.45 + 0.5);
                 let glint_width = logo_rect.width() * 0.11;
                 let num_steps = 70;
 
@@ -99,7 +107,8 @@ impl eframe::App for GUI {
                     );
                 }
 
-                let text_color = Color32::from_rgba_premultiplied(120, 180, 255, (progress * 255.0) as u8);
+                let text_color =
+                    Color32::from_rgba_premultiplied(120, 180, 255, (progress * 255.0) as u8);
                 painter.text(
                     center + Vec2::new(0.0, logo_size.y / 2.0 - 16.0),
                     Align2::CENTER_TOP,
@@ -109,9 +118,11 @@ impl eframe::App for GUI {
                 );
 
                 // Pre-release warning text
-                let warning_color = Color32::from_rgba_premultiplied(255, 200, 100, (progress * 200.0) as u8);
-                let info_color = Color32::from_rgba_premultiplied(180, 180, 180, (progress * 180.0) as u8);
-                
+                let warning_color =
+                    Color32::from_rgba_premultiplied(255, 200, 100, (progress * 200.0) as u8);
+                let info_color =
+                    Color32::from_rgba_premultiplied(180, 180, 180, (progress * 180.0) as u8);
+
                 painter.text(
                     center + Vec2::new(0.0, logo_size.y / 2.0 + 40.0),
                     Align2::CENTER_TOP,
@@ -145,13 +156,13 @@ impl eframe::App for GUI {
         CentralPanel::default().show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.style_mut().visuals.button_frame = true;
-                
+
                 ui.menu_button("File", |ui| {
                     if ui.button("Quit").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                
+
                 ui.menu_button("About", |ui| {
                     ui.hyperlink_to("See the code", "https://git.eden-emu.dev/Nikilite/oboromi/");
                 });

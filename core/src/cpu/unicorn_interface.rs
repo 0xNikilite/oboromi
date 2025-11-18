@@ -1,6 +1,6 @@
+use std::sync::{Arc, Mutex};
 use unicorn_engine::{Arch, Mode, Prot};
 use unicorn_engine::{RegisterARM64, Unicorn};
-use std::sync::{Arc, Mutex};
 
 const MEMORY_SIZE: u64 = 8 * 1024 * 1024; // 8MB
 const MEMORY_BASE: u64 = 0x0;
@@ -30,7 +30,7 @@ impl UnicornCPU {
 
         // Initialize stack pointer to end of memory
         let _ = emu.reg_write(RegisterARM64::SP, MEMORY_SIZE - 0x1000);
-        
+
         Some(Self {
             emu: Arc::new(Mutex::new(emu)),
         })
@@ -40,27 +40,27 @@ impl UnicornCPU {
     pub fn run(&self) -> u64 {
         let mut emu = self.emu.lock().unwrap();
         let pc = emu.reg_read(RegisterARM64::PC).unwrap_or(0);
-    
+
         // Run until we hit a BRK instruction or error
         match emu.emu_start(pc, 0xFFFF_FFFF_FFFF_FFFF, 0, 0) {
             Ok(_) => 1, // Success - normal completion
             Err(e) => {
-            // BRK instruction causes an error, which is expected
-            if format!("{:?}", e).contains("EXCEPTION") {
-                1 // Success - terminated by BRK
-            } else {
-                eprintln!("Emulation error: {:?}", e);
-                0 // Failure - actual emulation error
+                // BRK instruction causes an error, which is expected
+                if format!("{:?}", e).contains("EXCEPTION") {
+                    1 // Success - terminated by BRK
+                } else {
+                    eprintln!("Emulation error: {:?}", e);
+                    0 // Failure - actual emulation error
+                }
             }
         }
     }
-}
 
     /// Execute a single step
     pub fn step(&self) -> u64 {
         let mut emu = self.emu.lock().unwrap();
         let pc = emu.reg_read(RegisterARM64::PC).unwrap_or(0);
-        
+
         match emu.emu_start(pc, pc + 4, 0, 1) {
             Ok(_) => 0,
             Err(_) => 1,
@@ -79,7 +79,7 @@ impl UnicornCPU {
         if reg_index > 30 {
             return 0;
         }
-        
+
         let reg = match reg_index {
             0 => RegisterARM64::X0,
             1 => RegisterARM64::X1,
@@ -114,7 +114,7 @@ impl UnicornCPU {
             30 => RegisterARM64::X30,
             _ => return 0,
         };
-        
+
         emu.reg_read(reg).unwrap_or(0)
     }
 
@@ -124,7 +124,7 @@ impl UnicornCPU {
         if reg_index > 30 {
             return;
         }
-        
+
         let reg = match reg_index {
             0 => RegisterARM64::X0,
             1 => RegisterARM64::X1,
@@ -159,7 +159,7 @@ impl UnicornCPU {
             30 => RegisterARM64::X30,
             _ => return,
         };
-        
+
         let _ = emu.reg_write(reg, value);
     }
 

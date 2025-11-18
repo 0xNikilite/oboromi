@@ -3,7 +3,7 @@
 use crate::gpu::spirv;
 
 pub struct Decoder<'a> {
-    pub ir: &'a mut spirv::Emitter
+    pub ir: &'a mut spirv::Emitter,
 }
 impl<'a> Decoder<'a> {
     pub fn al2p(&mut self, inst: u128) {
@@ -2179,7 +2179,9 @@ impl<'a> Decoder<'a> {
         let _up = (((inst >> 67) & 0x1) << 0);
         let _pr = (((inst >> 68) & 0x7) << 0);
         let _memdesc = (((inst >> 71) & 0x1) << 0);
-        let _lop = (((inst >> 72) & 0x1f) << 11) | (((inst >> 64) & 0x7) << 8) | (((inst >> 16) & 0xff) << 0);
+        let _lop = (((inst >> 72) & 0x1f) << 11)
+            | (((inst >> 64) & 0x7) << 8)
+            | (((inst >> 16) & 0xff) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
@@ -2241,7 +2243,9 @@ impl<'a> Decoder<'a> {
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _up = (((inst >> 67) & 0x1) << 0);
         let _pr = (((inst >> 68) & 0x7) << 0);
-        let _lop = (((inst >> 72) & 0x1f) << 11) | (((inst >> 64) & 0x7) << 8) | (((inst >> 16) & 0xff) << 0);
+        let _lop = (((inst >> 72) & 0x1f) << 11)
+            | (((inst >> 64) & 0x7) << 8)
+            | (((inst >> 16) & 0xff) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
         let _cop = (((inst >> 84) & 0x7) << 0);
@@ -3263,7 +3267,9 @@ impl<'a> Decoder<'a> {
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _pr = (((inst >> 68) & 0x7) << 0);
         let _memdesc = (((inst >> 71) & 0x1) << 0);
-        let _lop = (((inst >> 72) & 0x1f) << 11) | (((inst >> 64) & 0x7) << 8) | (((inst >> 16) & 0xff) << 0);
+        let _lop = (((inst >> 72) & 0x1f) << 11)
+            | (((inst >> 64) & 0x7) << 8)
+            | (((inst >> 16) & 0xff) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
@@ -3309,7 +3315,9 @@ impl<'a> Decoder<'a> {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _pr = (((inst >> 68) & 0x7) << 0);
-        let _lop = (((inst >> 72) & 0x1f) << 11) | (((inst >> 64) & 0x7) << 8) | (((inst >> 16) & 0xff) << 0);
+        let _lop = (((inst >> 72) & 0x1f) << 11)
+            | (((inst >> 64) & 0x7) << 8)
+            | (((inst >> 16) & 0xff) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
         let _cop = (((inst >> 84) & 0x7) << 0);

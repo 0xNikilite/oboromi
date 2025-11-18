@@ -40,13 +40,13 @@ impl Tlb {
     /// Lookup virtual address in TLB with permissions
     pub fn lookup(&self, vaddr: u64) -> Option<(u64, bool, bool)> {
         let aligned_vaddr = vaddr & !0xFFF;
-        
+
         for entry in &self.entries {
             if entry.valid && entry.vaddr == aligned_vaddr {
                 return Some((
                     entry.paddr | (vaddr & 0xFFF),
                     entry.readable,
-                    entry.writable
+                    entry.writable,
                 ));
             }
         }
@@ -66,7 +66,7 @@ impl Tlb {
             aligned_vaddr,
             aligned_paddr,
             readable,
-            writable
+            writable,
         ));
     }
 

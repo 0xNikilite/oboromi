@@ -1,5 +1,5 @@
+use crate::nn;
 use crate::sys;
-use crate::nn as nn;
 
 mod acc;
 mod adraw;

@@ -2,13 +2,11 @@
 
 #[derive(Debug, Clone)]
 pub struct Emitter {
-    code: Vec<u32>
+    code: Vec<u32>,
 }
 impl Emitter {
     pub fn new() -> Self {
-        Self{
-            code: Vec::new(),
-        }
+        Self { code: Vec::new() }
     }
     pub fn emit_header(&mut self) {
         self.code.push(0x07230203);
@@ -80,7 +78,18 @@ impl Emitter {
         assert!(count >= 2);
         self.emit_generic(24, &[result, type_, count]);
     }
-    pub fn emit_type_image(&mut self, result: u32, type_: u32, dim: u32, depth: u32, arrayed: u32, ms: u32, sampled: u32, format: u32, acc_qual: &[u32]) {
+    pub fn emit_type_image(
+        &mut self,
+        result: u32,
+        type_: u32,
+        dim: u32,
+        depth: u32,
+        arrayed: u32,
+        ms: u32,
+        sampled: u32,
+        format: u32,
+        acc_qual: &[u32],
+    ) {
         assert!(depth <= 2);
         assert!(arrayed == 0 || arrayed == 1);
         assert!(ms == 0 || ms == 1);

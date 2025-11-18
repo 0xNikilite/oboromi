@@ -1,6 +1,6 @@
 use crate::mmu::MMU;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 #[derive(Debug)]
@@ -31,7 +31,8 @@ impl ExclusiveMonitor {
         if current_addr == u64::MAX {
             self.monitored_address.store(addr, Ordering::Release);
             self.monitored_size.store(size, Ordering::Release);
-            self.owner_thread_id.store(Self::get_thread_id(), Ordering::Release);
+            self.owner_thread_id
+                .store(Self::get_thread_id(), Ordering::Release);
             true
         } else {
             false
@@ -48,17 +49,15 @@ impl ExclusiveMonitor {
         let monitored_addr = self.monitored_address.load(Ordering::Acquire);
         let monitored_size = self.monitored_size.load(Ordering::Acquire);
         let owner_thread_id = self.owner_thread_id.load(Ordering::Acquire);
-        
-        monitored_addr == addr && 
-        monitored_size == size && 
-        owner_thread_id == Self::get_thread_id()
+
+        monitored_addr == addr && monitored_size == size && owner_thread_id == Self::get_thread_id()
     }
 
     fn get_thread_id() -> u64 {
         let thread_id = thread::current().id();
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
-        
+        use std::hash::{Hash, Hasher};
+
         let mut hasher = DefaultHasher::new();
         thread_id.hash(&mut hasher);
         hasher.finish()
@@ -70,7 +69,7 @@ impl Memory {
         let mut mmu = MMU::new();
         let pages = (size + 4095) / 4096;
         mmu.set_identity_mapping(0, pages);
-        
+
         Memory {
             ram: vec![0; size],
             mmu,
@@ -81,15 +80,11 @@ impl Memory {
     pub fn map_range(&mut self, vaddr: usize, size: usize, readable: bool, writable: bool) {
         let start_page = vaddr / 4096;
         let end_page = (vaddr + size + 4095) / 4096;
-        
+
         for page in start_page..end_page {
             let vaddr = page * 4096;
-            self.mmu.map_page(
-                vaddr as u64,
-                vaddr as u64,
-                readable,
-                writable
-            );
+            self.mmu
+                .map_page(vaddr as u64, vaddr as u64, readable, writable);
         }
     }
 
@@ -130,7 +125,7 @@ impl Memory {
     pub fn read_u32(&mut self, addr: usize) -> u32 {
         let start_page = addr / 4096;
         let end_page = (addr + 3) / 4096;
-        
+
         if start_page != end_page {
             let mut bytes = [0u8; 4];
             for i in 0..4 {
@@ -138,7 +133,7 @@ impl Memory {
             }
             return u32::from_le_bytes(bytes);
         }
-        
+
         if let Some((paddr, _, _)) = self.mmu.translate(addr as u64) {
             let paddr = paddr as usize;
             if paddr + 3 < self.ram.len() {
@@ -159,7 +154,7 @@ impl Memory {
     pub fn write_u32(&mut self, addr: usize, value: u32) {
         let start_page = addr / 4096;
         let end_page = (addr + 3) / 4096;
-        
+
         if start_page != end_page {
             let bytes = value.to_le_bytes();
             for i in 0..4 {
@@ -167,7 +162,7 @@ impl Memory {
             }
             return;
         }
-        
+
         if let Some((paddr, _, _)) = self.mmu.translate(addr as u64) {
             let paddr = paddr as usize;
             if paddr + 3 < self.ram.len() {
@@ -315,7 +310,11 @@ impl Memory {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn oboromi_memory_mark_exclusive(mem_ptr: *mut Memory, addr: u64, size: u64) -> bool {
+    pub extern "C" fn oboromi_memory_mark_exclusive(
+        mem_ptr: *mut Memory,
+        addr: u64,
+        size: u64,
+    ) -> bool {
         unsafe {
             if let Some(mem) = mem_ptr.as_ref() {
                 mem.mark_exclusive(addr, size)
@@ -335,7 +334,11 @@ impl Memory {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn oboromi_memory_read_exclusive_u8(mem_ptr: *mut Memory, addr: u64, value: *mut u8) -> bool {
+    pub extern "C" fn oboromi_memory_read_exclusive_u8(
+        mem_ptr: *mut Memory,
+        addr: u64,
+        value: *mut u8,
+    ) -> bool {
         unsafe {
             if let Some(mem) = mem_ptr.as_mut() {
                 if mem.mark_exclusive(addr, 1) {
@@ -351,7 +354,11 @@ impl Memory {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn oboromi_memory_write_exclusive_u8(mem_ptr: *mut Memory, addr: u64, value: u8) -> bool {
+    pub extern "C" fn oboromi_memory_write_exclusive_u8(
+        mem_ptr: *mut Memory,
+        addr: u64,
+        value: u8,
+    ) -> bool {
         unsafe {
             if let Some(mem) = mem_ptr.as_mut() {
                 mem.exclusive_write_u8(addr, value)

@@ -12,7 +12,7 @@ impl UnicornCPU {
     pub fn new() -> Option<Self> {
         let mut emu = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN)
             .map_err(|e| {
-                eprintln!("Failed to create Unicorn instance: {:?}", e);
+                eprintln!("Failed to create Unicorn instance: {e:?}");
                 e
             })
             .ok()?;
@@ -21,7 +21,7 @@ impl UnicornCPU {
         // This uses Unicorn's internal allocation
         emu.mem_map(0x0, 8 * 1024 * 1024, Prot::ALL)
             .map_err(|e| {
-                eprintln!("Failed to map memory: {:?}", e);
+                eprintln!("Failed to map memory: {e:?}");
                 e
             })
             .ok()?;
@@ -80,10 +80,10 @@ impl UnicornCPU {
             Ok(_) => 1, // Success - normal completion
             Err(e) => {
                 // BRK instruction causes an error, which is expected
-                if format!("{:?}", e).contains("EXCEPTION") {
+                if format!("{e:?}").contains("EXCEPTION") {
                     1 // Success - terminated by BRK
                 } else {
-                    eprintln!("Core {} Emulation error: {:?}", self.core_id, e);
+                    eprintln!("Emulation error: {e:?}");
                     0 // Failure - actual emulation error
                 }
             }

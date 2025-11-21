@@ -85,28 +85,6 @@ impl eframe::App for GUI {
                     Color32::from_rgba_premultiplied(255, 255, 255, (progress * 255.0) as u8),
                 );
 
-                let time = elapsed.as_secs_f32();
-                let _logo_middle = logo_rect.left() + logo_rect.width() * 0.5;
-                let glint_center_x =
-                    logo_rect.left() + logo_rect.width() * ((time * 0.6).sin() * 0.45 + 0.5);
-                let glint_width = logo_rect.width() * 0.11;
-                let num_steps = 70;
-
-                for step in 0..num_steps {
-                    let t = step as f32 / (num_steps as f32 - 1.0);
-                    let x = glint_center_x + (t - 0.5) * glint_width;
-                    let dist = x - glint_center_x;
-                    let gauss = (-dist * dist / (2.0 * (glint_width * 0.32).powi(2))).exp();
-                    let fade = gauss.powf(1.2);
-                    let alpha = (progress * 78.0 * fade).min(94.0).max(0.0) as u8;
-                    let _color = Color32::from_rgba_premultiplied(
-                        200,
-                        (220.0 - 40.0 * (1.0 - fade)).max(180.0) as u8,
-                        255,
-                        alpha,
-                    );
-                }
-
                 let text_color =
                     Color32::from_rgba_premultiplied(120, 180, 255, (progress * 255.0) as u8);
                 painter.text(

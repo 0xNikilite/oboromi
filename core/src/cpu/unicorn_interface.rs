@@ -1,17 +1,14 @@
 use std::sync::{Arc, Mutex};
-use unicorn_engine::{Arch, Mode, Prot};
-use unicorn_engine::{RegisterARM64, Unicorn};
-
-const MEMORY_SIZE: u64 = 8 * 1024 * 1024; // 8MB
-const MEMORY_BASE: u64 = 0x0;
+use unicorn_engine::{Arch, Mode, Prot, RegisterARM64, Unicorn};
 
 /// Safe wrapper for Unicorn CPU emulator
 pub struct UnicornCPU {
     emu: Arc<Mutex<Unicorn<'static, ()>>>,
+    pub core_id: u32,
 }
 
 impl UnicornCPU {
-    /// Create a new Unicorn instance with 8MB of memory
+    /// Create a new Unicorn instance with 8MB of memory (Legacy/Test mode)
     pub fn new() -> Option<Self> {
         let mut emu = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN)
             .map_err(|e| {
@@ -20,19 +17,56 @@ impl UnicornCPU {
             })
             .ok()?;
 
-        // Map 8MB of memory with full permissions
-        emu.mem_map(MEMORY_BASE, MEMORY_SIZE as u64, Prot::ALL)
+        // Map 8MB of memory with full permissions (Legacy size)
+        // This uses Unicorn's internal allocation
+        emu.mem_map(0x0, 8 * 1024 * 1024, Prot::ALL)
             .map_err(|e| {
                 eprintln!("Failed to map memory: {:?}", e);
                 e
             })
             .ok()?;
 
-        // Initialize stack pointer to end of memory
-        let _ = emu.reg_write(RegisterARM64::SP, MEMORY_SIZE - 0x1000);
+        // Initialize stack pointer
+        let _ = emu.reg_write(RegisterARM64::SP, (8 * 1024 * 1024) - 0x1000);
 
         Some(Self {
             emu: Arc::new(Mutex::new(emu)),
+            core_id: 0,
+        })
+    }
+
+    /// Create a new Unicorn instance with shared memory
+    /// 
+    /// # Safety
+    /// The caller must ensure `memory_ptr` is valid for the lifetime of this CPU
+    /// and has at least `memory_size` bytes.
+    pub unsafe fn new_with_shared_mem(core_id: u32, memory_ptr: *mut u8, memory_size: u64) -> Option<Self> {
+        let mut emu = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN)
+            .map_err(|e| {
+                eprintln!("Failed to create Unicorn instance for core {}: {:?}", core_id, e);
+                e
+            })
+            .ok()?;
+
+        // Map shared memory
+        // unsafe because we are providing a raw pointer
+        unsafe {
+            emu.mem_map_ptr(0x0, memory_size, Prot::ALL, memory_ptr as *mut std::ffi::c_void)
+                .map_err(|e| {
+                    eprintln!("Failed to map shared memory for core {}: {:?}", core_id, e);
+                    e
+                })
+                .ok()?;
+        }
+
+        // Initialize stack pointer to end of memory, offset by core ID to avoid collision
+        // Give each core 1MB of stack space at the top of memory
+        let stack_top = memory_size - (core_id as u64 * 0x100000);
+        let _ = emu.reg_write(RegisterARM64::SP, stack_top);
+
+        Some(Self {
+            emu: Arc::new(Mutex::new(emu)),
+            core_id,
         })
     }
 
@@ -49,7 +83,7 @@ impl UnicornCPU {
                 if format!("{:?}", e).contains("EXCEPTION") {
                     1 // Success - terminated by BRK
                 } else {
-                    eprintln!("Emulation error: {:?}", e);
+                    eprintln!("Core {} Emulation error: {:?}", self.core_id, e);
                     0 // Failure - actual emulation error
                 }
             }
@@ -226,8 +260,12 @@ impl UnicornCPU {
 
 impl Clone for UnicornCPU {
     fn clone(&self) -> Self {
-        // Create a new instance instead of sharing
-        Self::new().expect("Failed to clone UnicornCPU")
+        // Shallow clone of the Arc, sharing the same underlying Unicorn instance
+        // This allows multiple references to the same core
+        Self {
+            emu: self.emu.clone(),
+            core_id: self.core_id,
+        }
     }
 }
 

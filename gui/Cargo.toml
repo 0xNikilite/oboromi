@@ -16,7 +16,6 @@ image = "0.25.6"
 
 [features]
 default = []
-trace = ["oboromi-core/trace"]
 
 [[bin]]
 name = "oboromi"

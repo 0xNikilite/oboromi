@@ -104,7 +104,7 @@ impl eframe::App for GUI {
                 painter.text(
                     center + Vec2::new(0.0, logo_size.y / 2.0 + 40.0),
                     Align2::CENTER_TOP,
-                    "⚠ PRE-RELEASE VERSION",
+                    "Experimental",
                     egui::FontId::proportional(14.0),
                     warning_color,
                 );
@@ -112,7 +112,7 @@ impl eframe::App for GUI {
                 // Multi-line explanation
                 let lines = vec![
                     "This is an experimental foundation for Switch 2 emulation.",
-                    "Without a kernel exploit, running actual games is currently impossible.",
+                    "Without a kernel exploit, running retail games is currently impossible.",
                     "This release focuses on CPU instruction emulation only.",
                 ];
 

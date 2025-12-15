@@ -12,3 +12,8 @@ path = "src/lib.rs"
 [dependencies]
 unicorn-engine = "2.1.1"
 libc = "0.2.177"
+memmap2 = "0.9.9"
+
+[features]
+default = []
+trace = []

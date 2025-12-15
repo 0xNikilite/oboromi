@@ -21,27 +21,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: 'recursive'
 
-      - name: Check changed files
+      - name: Check for code changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            has_code_changes:
+              - '!README.md'
+              - '!LICENSE'
+              - '!docs/**'
+              - '!.gitignore'
+
+      - name: Set output flag
         id: check
         run: |
-          # Handle new branches or missing before commit
-          if [ -z "${{ github.event.before }}" ] || ! git cat-file -e ${{ github.event.before }} 2>/dev/null; then
-            echo "No valid before commit, assuming code changes"
+          if [ "${{ steps.filter.outputs.has_code_changes }}" == "true" ]; then
             echo "only_readme=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          
-          git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
-          echo "Changed files:" && cat changed.txt
-          
-          if [ "$(wc -l < changed.txt)" -eq 1 ] && grep -qE '^README\.md$' changed.txt; then
-            echo "only_readme=true" >> "$GITHUB_OUTPUT"
+            echo "Code changes detected. Build required."
           else
-            echo "only_readme=false" >> "$GITHUB_OUTPUT"
+            echo "only_readme=true" >> "$GITHUB_OUTPUT"
+            echo "Only documentation changed. Skipping build."
           fi
 
   build:
@@ -53,6 +53,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' && github.actor != '0xNikilite'))
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
         rust: [stable]
@@ -87,8 +88,8 @@ jobs:
       - name: Limit parallel jobs on macOS
         if: startsWith(matrix.os, 'macos')
         run: |
-          export CARGO_BUILD_JOBS=2
-          export RUSTFLAGS="-C link-arg=-Wl,-no_pie"
+          echo "CARGO_BUILD_JOBS=2" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C link-arg=-Wl,-no_pie" >> $GITHUB_ENV
           echo "Limiting parallelism to reduce memory usage"
 
       - name: Build project
@@ -154,3 +155,5 @@ jobs:
         with:
           files: ./target/coverage/cobertura.xml
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+          

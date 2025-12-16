@@ -196,6 +196,10 @@ pub struct Decoder<'a> {
     type_f16: u32,
     type_f32: u32,
     type_f64: u32,
+    // Pointers
+    type_ptr_u32: u32,
+    // State
+    regs: Vec<u32>,
 }
 impl<'a> Decoder<'a> {
     pub fn init(&mut self) {
@@ -210,6 +214,37 @@ impl<'a> Decoder<'a> {
         self.type_f16 = self.ir.emit_type_float(16);
         self.type_f32 = self.ir.emit_type_float(32);
         self.type_f64 = self.ir.emit_type_float(64);
+
+        // Define generic pointers
+        // Storage class 7 = Function
+        self.type_ptr_u32 = self.ir.emit_type_pointer(7, self.type_u32);
+
+        // Define registers
+        self.regs = Vec::new();
+        for _ in 0..=MAX_REG_COUNT {
+            let reg_var = self.ir.emit_variable(self.type_ptr_u32, 7);
+            self.regs.push(reg_var);
+        }
+    }
+
+    fn load_reg(&mut self, reg: u8) -> u32 {
+        if reg as usize == 255 {
+             // RZ (Zero Register)
+             return self.ir.emit_constant_typed(self.type_u32, 0u32);
+        }
+        assert!((reg as usize) < self.regs.len(), "Register index out of bounds");
+        let ptr = self.regs[reg as usize];
+        self.ir.emit_load(self.type_u32, ptr)
+    }
+
+    fn store_reg(&mut self, reg: u8, val: u32) {
+        if reg as usize == 255 {
+            // Write to RZ is ignored
+            return;
+        }
+        assert!((reg as usize) < self.regs.len(), "Register index out of bounds");
+        let ptr = self.regs[reg as usize];
+        self.ir.emit_store(ptr, val);
     }
     pub fn finish(&mut self) {
 
@@ -229,10 +264,12 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         // %rd := %ra + $ra_offset
-        assert!(ra <= MAX_REG_COUNT);
+        assert!(ra <= MAX_REG_COUNT || ra == 255);
         assert!(bop == BitSize::B32 as usize);
-        let ir_imm32 = self.ir.emit_constant_typed::<u32>(self.type_u32, ra_offset as u32);
-        todo!();
+        let base = self.load_reg(ra as u8);
+        let offset = self.ir.emit_constant_typed::<u32>(self.type_u32, ra_offset as u32);
+        let dst_val = self.ir.emit_iadd(self.type_u32, base, offset);
+        self.store_reg(_rd as u8, dst_val);
     }
     pub fn ald(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

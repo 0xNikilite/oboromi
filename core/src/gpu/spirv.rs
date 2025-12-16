@@ -189,6 +189,28 @@ impl Emitter {
         result
     }
 
+    pub fn emit_type_struct(&mut self, members: &[u32]) -> u32 {
+        let result = self.new_id();
+        let mut data = vec![result];
+        data.extend_from_slice(members);
+        self.emit_generic(30, &data);
+        result
+    }
+
+    pub fn emit_type_pointer(&mut self, storage_class: u32, type_: u32) -> u32 {
+        let result = self.new_id();
+        self.emit_generic(32, &[result, storage_class, type_]);
+        result
+    }
+
+    pub fn emit_type_function(&mut self, return_type: u32, params: &[u32]) -> u32 {
+        let result = self.new_id();
+        let mut data = vec![result, return_type];
+        data.extend_from_slice(params);
+        self.emit_generic(33, &data);
+        result
+    }
+
     // TODO: 29 to 42
 
     pub fn emit_constant_true(&mut self, type_: u32) -> u32 {
@@ -219,6 +241,54 @@ impl Emitter {
         data.extend(value.to_words());
         self.emit_generic(43, &data);
         result
+    }
+
+    pub fn emit_function(&mut self, return_type: u32, func_control: u32, func_type: u32) -> u32 {
+        let result = self.new_id();
+        self.emit_generic(54, &[return_type, result, func_control, func_type]);
+        result
+    }
+
+    pub fn emit_function_param(&mut self, type_: u32) -> u32 {
+        let result = self.new_id();
+        self.emit_generic(55, &[type_, result]);
+        result
+    }
+
+    pub fn emit_function_end(&mut self) {
+        self.emit_generic(56, &[]);
+    }
+
+    pub fn emit_variable(&mut self, type_: u32, storage_class: u32) -> u32 {
+        let result = self.new_id();
+        self.emit_generic(59, &[type_, result, storage_class]);
+        result
+    }
+
+    pub fn emit_load(&mut self, type_: u32, pointer: u32) -> u32 {
+        let result = self.new_id();
+        self.emit_generic(61, &[type_, result, pointer]);
+        result
+    }
+
+    pub fn emit_store(&mut self, pointer: u32, object: u32) {
+        self.emit_generic(62, &[pointer, object]);
+    }
+
+    pub fn emit_iadd(&mut self, type_: u32, op1: u32, op2: u32) -> u32 {
+        let result = self.new_id();
+        self.emit_generic(128, &[type_, result, op1, op2]);
+        result
+    }
+
+    pub fn emit_label(&mut self) -> u32 {
+        let result = self.new_id();
+        self.emit_generic(248, &[result]);
+        result
+    }
+
+    pub fn emit_return(&mut self) {
+        self.emit_generic(253, &[]);
     }
 }
 

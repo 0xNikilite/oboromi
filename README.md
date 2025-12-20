@@ -13,7 +13,7 @@
 
 ## Overview
 
-**oboromi** is a modular and work-in-progress emulator foundation for the Nintendo Switch 2. It's built in Rust and focuses on correctness, clarity, and traceability rather than performance at this stage.
+**oboromi** is a modular and work-in-progress emulator foundation for the Nintendo Switch 2. It's built in Rust and focuses on correctness, clarity, and traceability rather than performance at this stage. It currently emulates an 8-core ARM64 CPU with 12GB of shared memory.
 
 > [!IMPORTANT]  
 > oboromi is **not (yet)** a full Switch 2 emulator. It does not run any Nintendo firmware or games.
@@ -22,8 +22,9 @@
 
 ### ARM64 CPU Emulation (Unicorn Engine)
 
-oboromi uses [Unicorn Engine](https://www.unicorn-engine.org/) for ARM64 instruction emulation. The `UnicornCPU` wrapper provides:
-- Full ARM64 register access (X0-X30, SP, PC)
+oboromi uses [Unicorn Engine](https://www.unicorn-engine.org/) for ARM64 instruction emulation. The `UnicornCPU` and `CpuManager` provide:
+- **8-Core CPU Architecture**: Orchestrated via `CpuManager` with shared memory access.
+- Full ARM64 register access (X0-X30, SP, PC) per core.
 - Memory mapping with permission control
 - Breakpoint handling via `BRK` instructions
 - Safe Rust interface with proper error handling
@@ -38,9 +39,15 @@ oboromi uses [Unicorn Engine](https://www.unicorn-engine.org/) for ARM64 instruc
 
 ### Memory Management
 
-- **8MB emulated RAM** with bounds-checked access
+- **12GB Combined Emulated RAM** (Lazily allocated)
 - **32-bit and 64-bit load/store operations** with little-endian byte ordering
 - Direct memory read/write primitives for testing
+
+### GPU Emulation (Work in Progress)
+
+- **SM86 Instruction Decoding**: Implementation of NVIDIA SM86 shader instruction decoding (128-bit instructions).
+- **SPIR-V Generation**: translating decoded instructions (like `al2p`) into SPIR-V intermediate representation.
+- Foundation for future compute and graphics shader translation.
 
 ### GUI (via `eframe`)
 
@@ -49,34 +56,6 @@ oboromi uses [Unicorn Engine](https://www.unicorn-engine.org/) for ARM64 instruc
   - Real-time test result display with pass/fail indicators
   - Execution timing statistics
   - Clean, responsive interface
-
-## Testing & Verification
-
-```
-Starting Unicorn Instruction Tests...
-  Base address: 0x0000000000001000
-  Breakpoint address: 0x0000000000002000
-
-Warming up Unicorn emulator...
-  JIT warmup completed in 199.4µs
-
-  Running test: NOP
-  Running test: ADD X1, X1, #2
-  Running test: SUB X2, X2, #1
-  Running test: ADD X0, X0, X1
-  Running test: MOV X3, X4
-  Running test: B +8
-  Running test: RET
-  Running test: Atomic ADD Test
-  Running test: Memory Access Pattern (3 instructions)
-  Running test: Multiple Arithmetic Ops (3 instructions)
-
-📊 Test Summary:
-  Total tests: 10
-  Passed: 10 ✅
-  Failed: 0 ❌
-  Total time: 18.7ms
-```
 
 ## How to Run
 

@@ -8,14 +8,11 @@ pub struct File {
 }
 
 impl File {
-    pub async fn open<const W: bool, P>(path: P) -> Result<Self, Box<dyn std::error::Error>>
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error>
     where
-        P: AsRef<Path>
     {
-        let file = fs::File::open(path)?;
-        
+        let file = fs::File::open(path)?;      
         let map = unsafe { Mmap::map(&file)? };
-
         Ok(Self { map })
     }
 }

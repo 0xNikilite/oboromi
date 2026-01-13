@@ -68,10 +68,13 @@ mod arm64 {
     pub fn mov_reg(rd: u8, rm: u8) -> u32 {
         0xAA0003E0 | ((rm as u32) << 16) | (rd as u32)
     }
-
+    
+    #[allow(dead_code)] // TODO: implement proper branch tests
     pub fn branch(offset: i32) -> u32 {
-        let imm26 = (offset >> 2) & 0x3FFFFFF;
-        0x14000000 | (imm26 as u32)
+        // B imm26 - offset is in 4-byte instruction words
+        // Encoding: 0b000101 | imm26
+        let imm26 = (offset as u32) & 0x03FF_FFFF;
+        0x14000000 | imm26
     }
 
     pub fn ret() -> u32 {

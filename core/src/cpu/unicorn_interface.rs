@@ -258,16 +258,8 @@ impl UnicornCPU {
     }
 }
 
-impl Clone for UnicornCPU {
-    fn clone(&self) -> Self {
-        // Shallow clone of the Arc, sharing the same underlying Unicorn instance
-        // This allows multiple references to the same core
-        Self {
-            emu: self.emu.clone(),
-            core_id: self.core_id,
-        }
-    }
-}
+// remove Clone - sharing a CPU via clone is misleading
+// use Arc<UnicornCPU> directly if sharing is needed
 
 unsafe impl Send for UnicornCPU {}
 unsafe impl Sync for UnicornCPU {}

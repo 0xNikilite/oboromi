@@ -1,166 +1,52 @@
 use crate::nn;
 use crate::sys;
 
-mod acc;
-mod adraw;
-mod ahid;
-mod aoc;
-mod apm;
-mod applet_ae;
-mod applet_oe;
-mod arp;
-mod aud;
-mod audctl;
-mod auddebug;
-mod auddev;
-mod auddmg;
-mod audin;
-mod audout;
-mod audrec;
-mod audren;
-mod audsmx;
-mod avm;
-mod banana;
-mod batlog;
-mod bcat;
-mod bgtc;
-mod bpc;
-mod bpmpmr;
-mod bsd;
-mod bsdcfg;
-mod bt;
-mod btdrv;
-mod btm;
-mod btp;
-mod capmtp;
-mod caps;
-mod caps2;
-mod cec_mgr;
-mod chat;
-mod clkrst;
-mod codecctl;
-mod csrng;
-mod dauth;
-mod disp;
-mod dispdrv;
-mod dmnt;
-mod dns;
-mod dt;
-mod ectx;
-mod erpt;
-mod es;
-mod eth;
-mod ethc;
-mod eupld;
-mod fan;
-mod fatal;
-mod fgm;
-mod file_io;
-mod friend;
-mod fs;
-mod fsp_ldr;
-mod fsp_pr;
-mod fsp_srv;
-mod gds;
-mod gpio;
-mod gpuk;
-mod grc;
-mod gsv;
-mod hdcp;
-mod hid;
-mod hidbus;
-mod host1x;
-mod hshl;
-mod htc;
-mod htcs;
-mod hwopus;
-mod i2c;
-mod idle;
-mod ifcfg;
-mod imf;
-mod ins;
-mod irs;
-mod jit;
-mod lbl;
-mod ldn;
-mod ldr;
-mod led;
-mod lm;
-mod lp2p;
-mod lr;
-mod manu;
-mod mig;
-mod mii;
-mod miiimg;
-mod mm;
-mod mnpp;
-mod ncm;
-mod nd;
-mod ndd;
-mod ndrm;
-mod news;
-mod nfc;
-mod nfp;
-mod ngc;
-mod ngct;
-mod nifm;
-mod nim;
-mod notif;
-mod npns;
-mod ns;
-mod nsd;
-mod ntc;
-mod nvdbg;
-mod nvdrv;
-mod nvdrvdbg;
-mod nvgem;
-mod nvmemp;
-mod olsc;
-mod omm;
-mod ommdisp;
-mod ovln;
-mod pcie;
-mod pcm;
-mod pctl;
-mod pcv;
-mod pdm;
-mod pgl;
-mod pinmux;
-mod pl;
-mod pm;
-mod prepo;
-mod psc;
-mod psm;
-mod pwm;
-mod rgltr;
-mod ro;
-mod rtc;
-mod sasbus;
-mod set;
-mod sf_uds;
-mod sfdnsres;
-mod spbg;
-mod spi;
-mod spl;
-mod sprof;
-mod spsm;
-mod srepo;
-mod ssl;
-mod syncpt;
-mod tc;
-mod tcap;
-mod time;
-mod tma_log;
-mod tmagent;
-mod ts;
-mod tspm;
-mod uart;
-mod usb;
-mod vi;
-mod vi2;
-mod vic;
-mod wlan;
-mod xcd;
+macro_rules! define_service {
+    ($($name:ident),* $(,)?) => {
+        $(
+            pub mod $name {
+                use crate::nn::ServiceTrait;
+                use crate::sys;
+                
+                pub struct State {}
+                
+                impl State {
+                    pub fn new(_state: &mut sys::State) -> Self {
+                        Self {}
+                    }
+                }
+                
+                 impl ServiceTrait for State {
+                     fn run(state: &mut sys::State) {
+                         state.services.$name = Some(State::new(state));
+                     }
+                 }
+             }
+         )*
+     };
+ }
+
+define_service!(
+    acc, adraw, ahid, aoc, apm, applet_ae, applet_oe, arp,
+    aud, audctl, auddebug, auddev, auddmg, audin, audout,
+    audrec, audren, audsmx, avm, banana, batlog, bcat, bgtc,
+    bpc, bpmpmr, bsd, bsdcfg, bt, btdrv, btm, btp, capmtp,
+    caps, caps2, cec_mgr, chat, clkrst, codecctl, csrng,
+    dauth, disp, dispdrv, dmnt, dns, dt, ectx, erpt, es,
+    eth, ethc, eupld, fan, fatal, fgm, file_io, friend, fs,
+    fsp_ldr, fsp_pr, fsp_srv, gds, gpio, gpuk, grc, gsv,
+    hdcp, hid, hidbus, host1x, hshl, htc, htcs, hwopus, i2c,
+    idle, ifcfg, imf, ins, irs, jit, lbl, ldn, ldr, led, lm,
+    lp2p, lr, manu, mig, mii, miiimg, mm, mnpp, ncm, nd, ndd,
+    ndrm, news, nfc, nfp, ngc, ngct, nifm, nim, notif, npns,
+    ns, nsd, ntc, nvdbg, nvdrv, nvdrvdbg, nvgem, nvmemp,
+    olsc, omm, ommdisp, ovln, pcie, pcm, pctl, pcv, pdm,
+    pgl, pinmux, pl, pm, prepo, psc, psm, pwm, rgltr, ro,
+    rtc, sasbus, set, sf_uds, sfdnsres, spbg, spi, spl,
+    sprof, spsm, srepo, ssl, syncpt, tc, tcap, time,
+    tma_log, tmagent, ts, tspm, uart, usb, vi, vi2, vic,
+    wlan, xcd,
+);
 
 pub trait ServiceTrait {
     fn run(_state: &mut sys::State) -> () {
@@ -168,331 +54,170 @@ pub trait ServiceTrait {
     }
 }
 
-pub struct ServiceManager {
-    acc: Option<nn::acc::State>,
-    adraw: Option<nn::adraw::State>,
-    ahid: Option<nn::ahid::State>,
-    aoc: Option<nn::aoc::State>,
-    apm: Option<nn::apm::State>,
-    applet_ae: Option<nn::applet_ae::State>,
-    applet_oe: Option<nn::applet_oe::State>,
-    arp: Option<nn::arp::State>,
-    aud: Option<nn::aud::State>,
-    audctl: Option<nn::audctl::State>,
-    auddebug: Option<nn::auddebug::State>,
-    auddev: Option<nn::auddev::State>,
-    auddmg: Option<nn::auddmg::State>,
-    audin: Option<nn::audin::State>,
-    audout: Option<nn::audout::State>,
-    audrec: Option<nn::audrec::State>,
-    audren: Option<nn::audren::State>,
-    audsmx: Option<nn::audsmx::State>,
-    avm: Option<nn::avm::State>,
-    banana: Option<nn::banana::State>,
-    batlog: Option<nn::batlog::State>,
-    bcat: Option<nn::bcat::State>,
-    bgtc: Option<nn::bgtc::State>,
-    bpc: Option<nn::bpc::State>,
-    bpmpmr: Option<nn::bpmpmr::State>,
-    bsd: Option<nn::bsd::State>,
-    bsdcfg: Option<nn::bsdcfg::State>,
-    bt: Option<nn::bt::State>,
-    btdrv: Option<nn::btdrv::State>,
-    btm: Option<nn::btm::State>,
-    btp: Option<nn::btp::State>,
-    capmtp: Option<nn::capmtp::State>,
-    caps: Option<nn::caps::State>,
-    caps2: Option<nn::caps2::State>,
-    cec_mgr: Option<nn::cec_mgr::State>,
-    chat: Option<nn::chat::State>,
-    clkrst: Option<nn::clkrst::State>,
-    codecctl: Option<nn::codecctl::State>,
-    csrng: Option<nn::csrng::State>,
-    dauth: Option<nn::dauth::State>,
-    disp: Option<nn::disp::State>,
-    dispdrv: Option<nn::dispdrv::State>,
-    dmnt: Option<nn::dmnt::State>,
-    dns: Option<nn::dns::State>,
-    dt: Option<nn::dt::State>,
-    ectx: Option<nn::ectx::State>,
-    erpt: Option<nn::erpt::State>,
-    es: Option<nn::es::State>,
-    eth: Option<nn::eth::State>,
-    ethc: Option<nn::ethc::State>,
-    eupld: Option<nn::eupld::State>,
-    fan: Option<nn::fan::State>,
-    fatal: Option<nn::fatal::State>,
-    fgm: Option<nn::fgm::State>,
-    file_io: Option<nn::file_io::State>,
-    friend: Option<nn::friend::State>,
-    fs: Option<nn::fs::State>,
-    fsp_ldr: Option<nn::fsp_ldr::State>,
-    fsp_pr: Option<nn::fsp_pr::State>,
-    fsp_srv: Option<nn::fsp_srv::State>,
-    gds: Option<nn::gds::State>,
-    gpio: Option<nn::gpio::State>,
-    gpuk: Option<nn::gpuk::State>,
-    grc: Option<nn::grc::State>,
-    gsv: Option<nn::gsv::State>,
-    hdcp: Option<nn::hdcp::State>,
-    hid: Option<nn::hid::State>,
-    hidbus: Option<nn::hidbus::State>,
-    host1x: Option<nn::host1x::State>,
-    hshl: Option<nn::hshl::State>,
-    htc: Option<nn::htc::State>,
-    htcs: Option<nn::htcs::State>,
-    hwopus: Option<nn::hwopus::State>,
-    i2c: Option<nn::i2c::State>,
-    idle: Option<nn::idle::State>,
-    ifcfg: Option<nn::ifcfg::State>,
-    imf: Option<nn::imf::State>,
-    ins: Option<nn::ins::State>,
-    irs: Option<nn::irs::State>,
-    jit: Option<nn::jit::State>,
-    lbl: Option<nn::lbl::State>,
-    ldn: Option<nn::ldn::State>,
-    ldr: Option<nn::ldr::State>,
-    led: Option<nn::led::State>,
-    lm: Option<nn::lm::State>,
-    lp2p: Option<nn::lp2p::State>,
-    lr: Option<nn::lr::State>,
-    manu: Option<nn::manu::State>,
-    mig: Option<nn::mig::State>,
-    mii: Option<nn::mii::State>,
-    miiimg: Option<nn::miiimg::State>,
-    mm: Option<nn::mm::State>,
-    mnpp: Option<nn::mnpp::State>,
-    ncm: Option<nn::ncm::State>,
-    nd: Option<nn::nd::State>,
-    ndd: Option<nn::ndd::State>,
-    ndrm: Option<nn::ndrm::State>,
-    news: Option<nn::news::State>,
-    nfc: Option<nn::nfc::State>,
-    nfp: Option<nn::nfp::State>,
-    ngc: Option<nn::ngc::State>,
-    ngct: Option<nn::ngct::State>,
-    nifm: Option<nn::nifm::State>,
-    nim: Option<nn::nim::State>,
-    notif: Option<nn::notif::State>,
-    npns: Option<nn::npns::State>,
-    ns: Option<nn::ns::State>,
-    nsd: Option<nn::nsd::State>,
-    ntc: Option<nn::ntc::State>,
-    nvdbg: Option<nn::nvdbg::State>,
-    nvdrv: Option<nn::nvdrv::State>,
-    nvdrvdbg: Option<nn::nvdrvdbg::State>,
-    nvgem: Option<nn::nvgem::State>,
-    nvmemp: Option<nn::nvmemp::State>,
-    olsc: Option<nn::olsc::State>,
-    omm: Option<nn::omm::State>,
-    ommdisp: Option<nn::ommdisp::State>,
-    ovln: Option<nn::ovln::State>,
-    pcie: Option<nn::pcie::State>,
-    pcm: Option<nn::pcm::State>,
-    pctl: Option<nn::pctl::State>,
-    pcv: Option<nn::pcv::State>,
-    pdm: Option<nn::pdm::State>,
-    pgl: Option<nn::pgl::State>,
-    pinmux: Option<nn::pinmux::State>,
-    pl: Option<nn::pl::State>,
-    pm: Option<nn::pm::State>,
-    prepo: Option<nn::prepo::State>,
-    psc: Option<nn::psc::State>,
-    psm: Option<nn::psm::State>,
-    pwm: Option<nn::pwm::State>,
-    rgltr: Option<nn::rgltr::State>,
-    ro: Option<nn::ro::State>,
-    rtc: Option<nn::rtc::State>,
-    sasbus: Option<nn::sasbus::State>,
-    set: Option<nn::set::State>,
-    sf_uds: Option<nn::sf_uds::State>,
-    sfdnsres: Option<nn::sfdnsres::State>,
-    spbg: Option<nn::spbg::State>,
-    spi: Option<nn::spi::State>,
-    spl: Option<nn::spl::State>,
-    sprof: Option<nn::sprof::State>,
-    spsm: Option<nn::spsm::State>,
-    srepo: Option<nn::srepo::State>,
-    ssl: Option<nn::ssl::State>,
-    syncpt: Option<nn::syncpt::State>,
-    tc: Option<nn::tc::State>,
-    tcap: Option<nn::tcap::State>,
-    time: Option<nn::time::State>,
-    tma_log: Option<nn::tma_log::State>,
-    tmagent: Option<nn::tmagent::State>,
-    ts: Option<nn::ts::State>,
-    tspm: Option<nn::tspm::State>,
-    uart: Option<nn::uart::State>,
-    usb: Option<nn::usb::State>,
-    vi: Option<nn::vi::State>,
-    vi2: Option<nn::vi2::State>,
-    vic: Option<nn::vic::State>,
-    wlan: Option<nn::wlan::State>,
-    xcd: Option<nn::xcd::State>,
-}
-impl ServiceManager {
-    pub fn start_host_services<'a>(_state: &mut sys::State) {
-        let _entries: [(&str, &'a dyn FnMut(&mut sys::State) -> ()); 160] = [
-            ("acc", &nn::acc::State::run),
-            ("adraw", &nn::adraw::State::run),
-            ("ahid", &nn::ahid::State::run),
-            ("aoc", &nn::aoc::State::run),
-            ("apm", &nn::apm::State::run),
-            ("applet_ae", &nn::applet_ae::State::run),
-            ("applet_oe", &nn::applet_oe::State::run),
-            ("arp", &nn::arp::State::run),
-            ("aud", &nn::aud::State::run),
-            ("audctl", &nn::audctl::State::run),
-            ("auddebug", &nn::auddebug::State::run),
-            ("auddev", &nn::auddev::State::run),
-            ("auddmg", &nn::auddmg::State::run),
-            ("audin", &nn::audin::State::run),
-            ("audout", &nn::audout::State::run),
-            ("audrec", &nn::audrec::State::run),
-            ("audren", &nn::audren::State::run),
-            ("audsmx", &nn::audsmx::State::run),
-            ("avm", &nn::avm::State::run),
-            ("banana", &nn::banana::State::run),
-            ("batlog", &nn::batlog::State::run),
-            ("bcat", &nn::bcat::State::run),
-            ("bgtc", &nn::bgtc::State::run),
-            ("bpc", &nn::bpc::State::run),
-            ("bpmpmr", &nn::bpmpmr::State::run),
-            ("bsd", &nn::bsd::State::run),
-            ("bsdcfg", &nn::bsdcfg::State::run),
-            ("bt", &nn::bt::State::run),
-            ("btdrv", &nn::btdrv::State::run),
-            ("btm", &nn::btm::State::run),
-            ("btp", &nn::btp::State::run),
-            ("capmtp", &nn::capmtp::State::run),
-            ("caps", &nn::caps::State::run),
-            ("caps2", &nn::caps2::State::run),
-            ("cec_mgr", &nn::cec_mgr::State::run),
-            ("chat", &nn::chat::State::run),
-            ("clkrst", &nn::clkrst::State::run),
-            ("codecctl", &nn::codecctl::State::run),
-            ("csrng", &nn::csrng::State::run),
-            ("dauth", &nn::dauth::State::run),
-            ("disp", &nn::disp::State::run),
-            ("dispdrv", &nn::dispdrv::State::run),
-            ("dmnt", &nn::dmnt::State::run),
-            ("dns", &nn::dns::State::run),
-            ("dt", &nn::dt::State::run),
-            ("ectx", &nn::ectx::State::run),
-            ("erpt", &nn::erpt::State::run),
-            ("es", &nn::es::State::run),
-            ("eth", &nn::eth::State::run),
-            ("ethc", &nn::ethc::State::run),
-            ("eupld", &nn::eupld::State::run),
-            ("fan", &nn::fan::State::run),
-            ("fatal", &nn::fatal::State::run),
-            ("fgm", &nn::fgm::State::run),
-            ("file_io", &nn::file_io::State::run),
-            ("friend", &nn::friend::State::run),
-            ("fs", &nn::fs::State::run),
-            ("fsp_ldr", &nn::fsp_ldr::State::run),
-            ("fsp_pr", &nn::fsp_pr::State::run),
-            ("fsp_srv", &nn::fsp_srv::State::run),
-            ("gds", &nn::gds::State::run),
-            ("gpio", &nn::gpio::State::run),
-            ("gpuk", &nn::gpuk::State::run),
-            ("grc", &nn::grc::State::run),
-            ("gsv", &nn::gsv::State::run),
-            ("hdcp", &nn::hdcp::State::run),
-            ("hid", &nn::hid::State::run),
-            ("hidbus", &nn::hidbus::State::run),
-            ("host1x", &nn::host1x::State::run),
-            ("hshl", &nn::hshl::State::run),
-            ("htc", &nn::htc::State::run),
-            ("htcs", &nn::htcs::State::run),
-            ("hwopus", &nn::hwopus::State::run),
-            ("i2c", &nn::i2c::State::run),
-            ("idle", &nn::idle::State::run),
-            ("ifcfg", &nn::ifcfg::State::run),
-            ("imf", &nn::imf::State::run),
-            ("ins", &nn::ins::State::run),
-            ("irs", &nn::irs::State::run),
-            ("jit", &nn::jit::State::run),
-            ("lbl", &nn::lbl::State::run),
-            ("ldn", &nn::ldn::State::run),
-            ("ldr", &nn::ldr::State::run),
-            ("led", &nn::led::State::run),
-            ("lm", &nn::lm::State::run),
-            ("lp2p", &nn::lp2p::State::run),
-            ("lr", &nn::lr::State::run),
-            ("manu", &nn::manu::State::run),
-            ("mig", &nn::mig::State::run),
-            ("mii", &nn::mii::State::run),
-            ("miiimg", &nn::miiimg::State::run),
-            ("mm", &nn::mm::State::run),
-            ("mnpp", &nn::mnpp::State::run),
-            ("ncm", &nn::ncm::State::run),
-            ("nd", &nn::nd::State::run),
-            ("ndd", &nn::ndd::State::run),
-            ("ndrm", &nn::ndrm::State::run),
-            ("news", &nn::news::State::run),
-            ("nfc", &nn::nfc::State::run),
-            ("nfp", &nn::nfp::State::run),
-            ("ngc", &nn::ngc::State::run),
-            ("ngct", &nn::ngct::State::run),
-            ("nifm", &nn::nifm::State::run),
-            ("nim", &nn::nim::State::run),
-            ("notif", &nn::notif::State::run),
-            ("npns", &nn::npns::State::run),
-            ("ns", &nn::ns::State::run),
-            ("nsd", &nn::nsd::State::run),
-            ("ntc", &nn::ntc::State::run),
-            ("nvdbg", &nn::nvdbg::State::run),
-            ("nvdrv", &nn::nvdrv::State::run),
-            ("nvdrvdbg", &nn::nvdrvdbg::State::run),
-            ("nvgem", &nn::nvgem::State::run),
-            ("nvmemp", &nn::nvmemp::State::run),
-            ("olsc", &nn::olsc::State::run),
-            ("omm", &nn::omm::State::run),
-            ("ommdisp", &nn::ommdisp::State::run),
-            ("ovln", &nn::ovln::State::run),
-            ("pcie", &nn::pcie::State::run),
-            ("pcm", &nn::pcm::State::run),
-            ("pctl", &nn::pctl::State::run),
-            ("pcv", &nn::pcv::State::run),
-            ("pdm", &nn::pdm::State::run),
-            ("pgl", &nn::pgl::State::run),
-            ("pinmux", &nn::pinmux::State::run),
-            ("pl", &nn::pl::State::run),
-            ("pm", &nn::pm::State::run),
-            ("prepo", &nn::prepo::State::run),
-            ("psc", &nn::psc::State::run),
-            ("psm", &nn::psm::State::run),
-            ("pwm", &nn::pwm::State::run),
-            ("rgltr", &nn::rgltr::State::run),
-            ("ro", &nn::ro::State::run),
-            ("rtc", &nn::rtc::State::run),
-            ("sasbus", &nn::sasbus::State::run),
-            ("set", &nn::set::State::run),
-            ("sf_uds", &nn::sf_uds::State::run),
-            ("sfdnsres", &nn::sfdnsres::State::run),
-            ("spbg", &nn::spbg::State::run),
-            ("spi", &nn::spi::State::run),
-            ("spl", &nn::spl::State::run),
-            ("sprof", &nn::sprof::State::run),
-            ("spsm", &nn::spsm::State::run),
-            ("srepo", &nn::srepo::State::run),
-            ("ssl", &nn::ssl::State::run),
-            ("syncpt", &nn::syncpt::State::run),
-            ("tc", &nn::tc::State::run),
-            ("tcap", &nn::tcap::State::run),
-            ("time", &nn::time::State::run),
-            ("tma_log", &nn::tma_log::State::run),
-            ("tmagent", &nn::tmagent::State::run),
-            ("ts", &nn::ts::State::run),
-            ("tspm", &nn::tspm::State::run),
-            ("uart", &nn::uart::State::run),
-            ("usb", &nn::usb::State::run),
-            ("vi", &nn::vi::State::run),
-            ("vi2", &nn::vi2::State::run),
-            ("vic", &nn::vic::State::run),
-            ("wlan", &nn::wlan::State::run),
-            ("xcd", &nn::xcd::State::run),
+pub fn start_host_services(state: &mut sys::State) {
+        let entries: [(&str, fn(&mut sys::State)); 160] = [
+            ("acc", nn::acc::State::run),
+            ("adraw", nn::adraw::State::run),
+            ("ahid", nn::ahid::State::run),
+            ("aoc", nn::aoc::State::run),
+            ("apm", nn::apm::State::run),
+            ("applet_ae", nn::applet_ae::State::run),
+            ("applet_oe", nn::applet_oe::State::run),
+            ("arp", nn::arp::State::run),
+            ("aud", nn::aud::State::run),
+            ("audctl", nn::audctl::State::run),
+            ("auddebug", nn::auddebug::State::run),
+            ("auddev", nn::auddev::State::run),
+            ("auddmg", nn::auddmg::State::run),
+            ("audin", nn::audin::State::run),
+            ("audout", nn::audout::State::run),
+            ("audrec", nn::audrec::State::run),
+            ("audren", nn::audren::State::run),
+            ("audsmx", nn::audsmx::State::run),
+            ("avm", nn::avm::State::run),
+            ("banana", nn::banana::State::run),
+            ("batlog", nn::batlog::State::run),
+            ("bcat", nn::bcat::State::run),
+            ("bgtc", nn::bgtc::State::run),
+            ("bpc", nn::bpc::State::run),
+            ("bpmpmr", nn::bpmpmr::State::run),
+            ("bsd", nn::bsd::State::run),
+            ("bsdcfg", nn::bsdcfg::State::run),
+            ("bt", nn::bt::State::run),
+            ("btdrv", nn::btdrv::State::run),
+            ("btm", nn::btm::State::run),
+            ("btp", nn::btp::State::run),
+            ("capmtp", nn::capmtp::State::run),
+            ("caps", nn::caps::State::run),
+            ("caps2", nn::caps2::State::run),
+            ("cec_mgr", nn::cec_mgr::State::run),
+            ("chat", nn::chat::State::run),
+            ("clkrst", nn::clkrst::State::run),
+            ("codecctl", nn::codecctl::State::run),
+            ("csrng", nn::csrng::State::run),
+            ("dauth", nn::dauth::State::run),
+            ("disp", nn::disp::State::run),
+            ("dispdrv", nn::dispdrv::State::run),
+            ("dmnt", nn::dmnt::State::run),
+            ("dns", nn::dns::State::run),
+            ("dt", nn::dt::State::run),
+            ("ectx", nn::ectx::State::run),
+            ("erpt", nn::erpt::State::run),
+            ("es", nn::es::State::run),
+            ("eth", nn::eth::State::run),
+            ("ethc", nn::ethc::State::run),
+            ("eupld", nn::eupld::State::run),
+            ("fan", nn::fan::State::run),
+            ("fatal", nn::fatal::State::run),
+            ("fgm", nn::fgm::State::run),
+            ("file_io", nn::file_io::State::run),
+            ("friend", nn::friend::State::run),
+            ("fs", nn::fs::State::run),
+            ("fsp_ldr", nn::fsp_ldr::State::run),
+            ("fsp_pr", nn::fsp_pr::State::run),
+            ("fsp_srv", nn::fsp_srv::State::run),
+            ("gds", nn::gds::State::run),
+            ("gpio", nn::gpio::State::run),
+            ("gpuk", nn::gpuk::State::run),
+            ("grc", nn::grc::State::run),
+            ("gsv", nn::gsv::State::run),
+            ("hdcp", nn::hdcp::State::run),
+            ("hid", nn::hid::State::run),
+            ("hidbus", nn::hidbus::State::run),
+            ("host1x", nn::host1x::State::run),
+            ("hshl", nn::hshl::State::run),
+            ("htc", nn::htc::State::run),
+            ("htcs", nn::htcs::State::run),
+            ("hwopus", nn::hwopus::State::run),
+            ("i2c", nn::i2c::State::run),
+            ("idle", nn::idle::State::run),
+            ("ifcfg", nn::ifcfg::State::run),
+            ("imf", nn::imf::State::run),
+            ("ins", nn::ins::State::run),
+            ("irs", nn::irs::State::run),
+            ("jit", nn::jit::State::run),
+            ("lbl", nn::lbl::State::run),
+            ("ldn", nn::ldn::State::run),
+            ("ldr", nn::ldr::State::run),
+            ("led", nn::led::State::run),
+            ("lm", nn::lm::State::run),
+            ("lp2p", nn::lp2p::State::run),
+            ("lr", nn::lr::State::run),
+            ("manu", nn::manu::State::run),
+            ("mig", nn::mig::State::run),
+            ("mii", nn::mii::State::run),
+            ("miiimg", nn::miiimg::State::run),
+            ("mm", nn::mm::State::run),
+            ("mnpp", nn::mnpp::State::run),
+            ("ncm", nn::ncm::State::run),
+            ("nd", nn::nd::State::run),
+            ("ndd", nn::ndd::State::run),
+            ("ndrm", nn::ndrm::State::run),
+            ("news", nn::news::State::run),
+            ("nfc", nn::nfc::State::run),
+            ("nfp", nn::nfp::State::run),
+            ("ngc", nn::ngc::State::run),
+            ("ngct", nn::ngct::State::run),
+            ("nifm", nn::nifm::State::run),
+            ("nim", nn::nim::State::run),
+            ("notif", nn::notif::State::run),
+            ("npns", nn::npns::State::run),
+            ("ns", nn::ns::State::run),
+            ("nsd", nn::nsd::State::run),
+            ("ntc", nn::ntc::State::run),
+            ("nvdbg", nn::nvdbg::State::run),
+            ("nvdrv", nn::nvdrv::State::run),
+            ("nvdrvdbg", nn::nvdrvdbg::State::run),
+            ("nvgem", nn::nvgem::State::run),
+            ("nvmemp", nn::nvmemp::State::run),
+            ("olsc", nn::olsc::State::run),
+            ("omm", nn::omm::State::run),
+            ("ommdisp", nn::ommdisp::State::run),
+            ("ovln", nn::ovln::State::run),
+            ("pcie", nn::pcie::State::run),
+            ("pcm", nn::pcm::State::run),
+            ("pctl", nn::pctl::State::run),
+            ("pcv", nn::pcv::State::run),
+            ("pdm", nn::pdm::State::run),
+            ("pgl", nn::pgl::State::run),
+            ("pinmux", nn::pinmux::State::run),
+            ("pl", nn::pl::State::run),
+            ("pm", nn::pm::State::run),
+            ("prepo", nn::prepo::State::run),
+            ("psc", nn::psc::State::run),
+            ("psm", nn::psm::State::run),
+            ("pwm", nn::pwm::State::run),
+            ("rgltr", nn::rgltr::State::run),
+            ("ro", nn::ro::State::run),
+            ("rtc", nn::rtc::State::run),
+            ("sasbus", nn::sasbus::State::run),
+            ("set", nn::set::State::run),
+            ("sf_uds", nn::sf_uds::State::run),
+            ("sfdnsres", nn::sfdnsres::State::run),
+            ("spbg", nn::spbg::State::run),
+            ("spi", nn::spi::State::run),
+            ("spl", nn::spl::State::run),
+            ("sprof", nn::sprof::State::run),
+            ("spsm", nn::spsm::State::run),
+            ("srepo", nn::srepo::State::run),
+            ("ssl", nn::ssl::State::run),
+            ("syncpt", nn::syncpt::State::run),
+            ("tc", nn::tc::State::run),
+            ("tcap", nn::tcap::State::run),
+            ("time", nn::time::State::run),
+            ("tma_log", nn::tma_log::State::run),
+            ("tmagent", nn::tmagent::State::run),
+            ("ts", nn::ts::State::run),
+            ("tspm", nn::tspm::State::run),
+            ("uart", nn::uart::State::run),
+            ("usb", nn::usb::State::run),
+            ("vi", nn::vi::State::run),
+            ("vi2", nn::vi2::State::run),
+            ("vic", nn::vic::State::run),
+            ("wlan", nn::wlan::State::run),
+            ("xcd", nn::xcd::State::run),
         ];
+        for (_name, run_fn) in entries.iter() {
+            run_fn(state);
+        }
     }
-}

@@ -1,4 +1,5 @@
-use crate::cpu::unicorn_interface::UnicornCPU;
+use crate::cpu::UnicornCPU;
+use std::pin::Pin;
 
 pub const CORE_COUNT: usize = 8;
 
@@ -10,9 +11,9 @@ pub const MEMORY_BASE: u64 = 0x0;
 
 pub struct CpuManager {
     pub cores: Vec<UnicornCPU>,
-    // We keep the memory here to ensure it lives as long as the CPUs
-    // In a real implementation, this might be a separate Memory component
-    pub shared_memory: Vec<u8>,
+    // Pin prevents reallocation from invalidating pointers
+    #[allow(dead_code)]
+    shared_memory: Pin<Box<[u8]>>,
 }
 
 impl CpuManager {
@@ -20,8 +21,8 @@ impl CpuManager {
         // Allocate 12GB of zeroed memory
         // note: on modern OSs, this is lazily allocated (virtual memory)
         // and won't consume physical RAM until written to.
-        let mut shared_memory = vec![0u8; MEMORY_SIZE as usize];
-        let memory_ptr = shared_memory.as_mut_ptr();
+        let shared_memory = Pin::new(vec![0u8; MEMORY_SIZE as usize].into_boxed_slice());
+        let memory_ptr = shared_memory.as_ptr() as *mut u8;
 
         let mut cores = Vec::with_capacity(CORE_COUNT);
 

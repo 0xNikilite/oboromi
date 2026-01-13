@@ -293,7 +293,20 @@ impl Emitter {
 }
 
 impl Default for Emitter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+     fn default() -> Self {
+         Self::new()
+     }
+ }
+
+ // Add validation
+ impl Emitter {
+     pub fn validate(&self) -> Result<(), &'static str> {
+         if self.code.is_empty() {
+             return Err("Empty SPIR-V module");
+         }
+         if self.code[0] != 0x07230203 {
+             return Err("Invalid SPIR-V magic number");
+         }
+         Ok(())
+     }
+ }

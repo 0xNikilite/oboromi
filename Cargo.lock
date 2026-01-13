@@ -2467,6 +2467,7 @@ name = "oboromi-core"
 version = "0.0.1"
 dependencies = [
  "libc",
+ "log",
  "memmap2",
  "unicorn-engine",
 ]

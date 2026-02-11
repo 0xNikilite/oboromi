@@ -45,9 +45,10 @@ oboromi uses [Unicorn Engine](https://www.unicorn-engine.org/) for ARM64 instruc
 
 ### GPU Emulation (Work in Progress)
 
-- **SM86 Instruction Decoding**: Implementation of NVIDIA SM86 shader instruction decoding (128-bit instructions).
-- **SPIR-V Generation**: translating decoded instructions (like `al2p`) into SPIR-V intermediate representation.
-- Foundation for future compute and graphics shader translation.
+- **SM86 Instruction Decoding**: Full bit-field extraction for 170+ NVIDIA Ampere (SM86) shader instructions (128-bit encoding).
+- **SPIR-V Emitter**: Complete SPIR-V binary module emitter with arithmetic, logic, comparison, conversion, bitwise, control flow, image, atomic, barrier, and subgroup operations.
+- **Instruction Translation Pipeline**: SM86 binary → decoded fields → SPIR-V IR (currently implemented for `AL2P`, remaining instructions stubbed).
+- Foundation for future compute and graphics shader translation targeting Vulkan.
 
 ### GUI (via `eframe`)
 

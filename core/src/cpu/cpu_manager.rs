@@ -13,7 +13,7 @@ pub struct CpuManager {
     pub cores: Vec<UnicornCPU>,
     // Pin prevents reallocation from invalidating pointers
     #[allow(dead_code)]
-    shared_memory: Pin<Box<[u8]>>,
+    pub shared_memory: Pin<Box<[u8]>>,
 }
 
 impl CpuManager {

@@ -184,76 +184,88 @@ enum BitSize {
 
 pub struct Decoder<'a> {
     pub ir: &'a mut spirv::Emitter,
-    // Declared types for headers
-    type_u8: u32,
-    type_u16: u32,
-    type_u32: u32,
-    type_u64: u32,
-    type_s8: u32,
-    type_s16: u32,
-    type_s32: u32,
-    type_s64: u32,
-    type_f16: u32,
-    type_f32: u32,
-    type_f64: u32,
+    type_void: u32,
     // Pointers
     type_ptr_u32: u32,
-    // State
-    regs: Vec<u32>,
+    // Declared types for headers
+    type_u8: [u32; 4],
+    type_u16: [u32; 4],
+    type_u32: [u32; 4],
+    type_u64: [u32; 4],
+    type_s8: [u32; 4],
+    type_s16: [u32; 4],
+    type_s32: [u32; 4],
+    type_s64: [u32; 4],
+    type_f16: [u32; 4],
+    type_f32: [u32; 4],
+    type_f64: [u32; 4],
+    type_bool: [u32; 4],
+    // abstract state machine
+    regs: [u32; MAX_REG_COUNT],
 }
 impl<'a> Decoder<'a> {
     pub fn init(&mut self) {
-        self.type_u8 = self.ir.emit_type_int(8, 0);
-        self.type_u16 = self.ir.emit_type_int(16, 0);
-        self.type_u32 = self.ir.emit_type_int(32, 0);
-        self.type_u64 = self.ir.emit_type_int(64, 0);
-        self.type_s8 = self.ir.emit_type_int(8, 1);
-        self.type_s16 = self.ir.emit_type_int(16, 1);
-        self.type_s32 = self.ir.emit_type_int(32, 1);
-        self.type_s64 = self.ir.emit_type_int(64, 1);
-        self.type_f16 = self.ir.emit_type_float(16);
-        self.type_f32 = self.ir.emit_type_float(32);
-        self.type_f64 = self.ir.emit_type_float(64);
+        self.type_void = self.ir.emit_type_void();
+        self.type_u8[1] = self.ir.emit_type_int(8, 0);
+        self.type_u16[1] = self.ir.emit_type_int(16, 0);
+        self.type_u32[1] = self.ir.emit_type_int(32, 0);
+        self.type_u64[1] = self.ir.emit_type_int(64, 0);
+        self.type_s8[1] = self.ir.emit_type_int(8, 1);
+        self.type_s16[1] = self.ir.emit_type_int(16, 1);
+        self.type_s32[1] = self.ir.emit_type_int(32, 1);
+        self.type_s64[1] = self.ir.emit_type_int(64, 1);
+        self.type_f16[1] = self.ir.emit_type_float(16);
+        self.type_f32[1] = self.ir.emit_type_float(32);
+        self.type_f64[1] = self.ir.emit_type_float(64);
+        self.type_bool[1] = self.ir.emit_type_bool();
+        for i in 2..=4 {
+            for type_sxx in [
+                self.type_u8, self.type_u16, self.type_u32, self.type_u64,
+                self.type_s8, self.type_s16, self.type_s32, self.type_s64,
+                self.type_f16, self.type_f32, self.type_f64, self.type_bool
+            ] {
+                self.ir.emit_type_vector(type_sxx[i], i as u32);
+            }
+        }
 
         // Define generic pointers
         // Storage class 7 = Function
-        self.type_ptr_u32 = self.ir.emit_type_pointer(7, self.type_u32);
+        self.type_ptr_u32 = self.ir.emit_type_pointer(7, self.type_u32[1]);
 
         // Define registers
-        self.regs = Vec::new();
-        for _ in 0..=MAX_REG_COUNT {
-            let reg_var = self.ir.emit_variable(self.type_ptr_u32, 7);
-            self.regs.push(reg_var);
+        for r in self.regs.iter_mut() {
+            *r = self.ir.emit_variable(self.type_ptr_u32, 7);
         }
     }
 
-    fn load_reg(&mut self, reg: u8) -> u32 {
-        if reg as usize == 255 {
-             // RZ (Zero Register)
-             return self.ir.emit_constant_typed(self.type_u32, 0u32);
+    fn load_reg(&mut self, reg: usize) -> u32 {
+        if reg == 255 {
+            // RZ (Zero Register)
+            return self.ir.emit_constant_typed(self.type_u32[1], 0u32);
         }
-        assert!((reg as usize) < self.regs.len(), "Register index out of bounds");
-        let ptr = self.regs[reg as usize];
-        self.ir.emit_load(self.type_u32, ptr)
+        assert!(reg < self.regs.len(), "Register index out of bounds");
+        let ptr = self.regs[reg];
+        self.ir.emit_load(self.type_u32[1], ptr)
     }
 
-    fn store_reg(&mut self, reg: u8, val: u32) {
-        if reg as usize == 255 {
+    fn store_reg(&mut self, reg: usize, val: u32) {
+        if reg == 255 {
             // Write to RZ is ignored
             return;
         }
-        assert!((reg as usize) < self.regs.len(), "Register index out of bounds");
-        let ptr = self.regs[reg as usize];
+        assert!(reg < self.regs.len(), "Register index out of bounds");
+        let ptr = self.regs[reg];
         self.ir.emit_store(ptr, val);
     }
     pub fn finish(&mut self) {
 
     }
 
+    // %rd := %ra + $ra_offset
     pub fn al2p(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as usize;
         let ra = (((inst >> 24) & 0xff) << 0) as usize;
         let ra_offset = (((inst >> 40) & 0x7ff) << 0) as usize;
         let bop = (((inst >> 74) & 0x3) << 0) as usize;
@@ -263,13 +275,12 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        // %rd := %ra + $ra_offset
         assert!(ra <= MAX_REG_COUNT || ra == 255);
         assert!(bop == BitSize::B32 as usize);
-        let base = self.load_reg(ra as u8);
-        let offset = self.ir.emit_constant_typed::<u32>(self.type_u32, ra_offset as u32);
-        let dst_val = self.ir.emit_iadd(self.type_u32, base, offset);
-        self.store_reg(_rd as u8, dst_val);
+        let base = self.load_reg(ra);
+        let offset = self.ir.emit_constant_typed(self.type_u32[1], ra_offset as u32);
+        let dst_val = self.ir.emit_iadd(self.type_u32[1], base, offset);
+        self.store_reg(rd, dst_val);
     }
     pub fn ald(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

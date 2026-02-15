@@ -480,6 +480,16 @@ impl Emitter {
         r
     }
 
+    pub fn emit_constant_composite_typed<T: Literal + Copy>(&mut self, ty: u32, constituents: &[T]) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![ty, r];
+        for e in constituents.iter() {
+            data.extend(e.to_words());
+        }
+        self.inst(44, &data);
+        r
+    }
+
     pub fn emit_spec_constant(&mut self, ty: u32, value_words: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r];

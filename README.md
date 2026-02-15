@@ -64,9 +64,14 @@ oboromi uses [Unicorn Engine](https://www.unicorn-engine.org/) for ARM64 instruc
 git clone https://github.com/0xNikilite/oboromi
 cd oboromi
 
-# Build and run (requires CMake and Ninja)
-cargo run
-```
+# Build and run the emulator (requires CMake and Ninja)
+cargo run --bin oboromi
+
+# Run tests
+cargo test
+
+# Regenerate SM86 opcode dispatcher (only needed if sm86_opcodes.txt changes)
+cargo run -p gen-decoder
 
 The build system will automatically:
 - Compile the Unicorn Engine C++ bindings

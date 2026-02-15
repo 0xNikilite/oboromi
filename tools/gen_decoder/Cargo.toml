@@ -1,0 +1,6 @@
+[package]
+name = "gen-decoder"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+authors = ["Nikilite"]

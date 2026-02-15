@@ -2466,6 +2466,7 @@ dependencies = [
 name = "oboromi-core"
 version = "0.0.1"
 dependencies = [
+ "ash",
  "libc",
  "log",
  "memmap2",

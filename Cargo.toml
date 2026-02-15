@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "core",
   "gui",
+  "tools/gen_decoder", 
 ]
 
 [workspace.dependencies]

@@ -1,6 +1,8 @@
 use crate::nn;
 use crate::sys;
 
+pub mod hipc;
+
 macro_rules! define_service {
     ($($name:ident),* $(,)?) => {
         $(

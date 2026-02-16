@@ -9,7 +9,8 @@ static MAX_UNIFORM_REG_COUNT: usize = 63;
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
 
-enum TextureType {
+#[repr(u32)]
+pub enum TextureType {
     ONE_D = 0,
     TWO_D = 1,
     THREE_D = 2,
@@ -21,7 +22,8 @@ enum TextureType {
     CUBE_ARRAY = 8,
 }
 
-enum TicSource {
+#[repr(u32)]
+pub enum TicSource {
     ZERO = 0,
     R = 2,
     G = 3,
@@ -31,7 +33,8 @@ enum TicSource {
     ONE_FLOAT = 7,
 }
 
-enum TicType {
+#[repr(u32)]
+pub enum TicType {
     SNORM = 1,
     UNORM = 2,
     SINT = 3,
@@ -41,7 +44,72 @@ enum TicType {
     FLOAT = 7,
 }
 
-enum MaxAnisotropy {
+#[repr(u32)]
+pub enum TicComponentSize {
+    R32_G32_B32_A32 = 0x01,
+    R32_G32_B32 = 0x02,
+    R16_G16_B16_A16 = 0x03,
+    R32_G32 = 0x04,
+    R32_B24G8 = 0x05,
+    X8B8G8R8 = 0x07,
+    A8B8G8R8 = 0x08,
+    A2B10G10R10 = 0x09,
+    R16_G16 = 0x0c,
+    G8R24 = 0x0d,
+    G24R8 = 0x0e,
+    R32 = 0x0f,
+    A4B4G4R4 = 0x12,
+    A5B5G5R1 = 0x13,
+    A1B5G5R5 = 0x14,
+    B5G6R5 = 0x15,
+    B6G5R5 = 0x16,
+    G8R8 = 0x18,
+    R16 = 0x1b,
+    Y8_VIDEO = 0x1c,
+    R8 = 0x1d,
+    G4R4 = 0x1e,
+    R1 = 0x1f,
+    E5B9G9R9_SHAREDEXP = 0x20,
+    BF10GF11RF11 = 0x21,
+    G8B8G8R8 = 0x22,
+    B8G8R8G8 = 0x23,
+    DXT1 = 0x24,
+    DXT23 = 0x25,
+    DXT45 = 0x26,
+    DXN1 = 0x27,
+    DXN2 = 0x28,
+    BC6H_SF16 = 0x10,
+    BC6H_UF16 = 0x11,
+    BC7U = 0x17,
+    Z24S8 = 0x29,
+    X8Z24 = 0x2a,
+    S8Z24 = 0x2b,
+    X4V4Z24__COV4R4V = 0x2c,
+    X4V4Z24__COV8R8V = 0x2d,
+    V8Z24__COV4R12V = 0x2e,
+    ZF32 = 0x2f,
+    ZF32_X24S8 = 0x30,
+    X8Z24_X20V4S8__COV4R4V = 0x31,
+    X8Z24_X20V4S8__COV8R8V = 0x32,
+    ZF32_X20V4X8__COV4R4V = 0x33,
+    ZF32_X20V4X8__COV8R8V = 0x34,
+    ZF32_X20V4S8__COV4R4V = 0x35,
+    ZF32_X20V4S8__COV8R8V = 0x36,
+    X8Z24_X16V8S8__COV4R12V = 0x37,
+    ZF32_X16V8X8__COV4R12V = 0x38,
+    ZF32_X16V8S8__COV4R12V = 0x39,
+    Z16 = 0x3a,
+    V8Z24__COV8R24V = 0x3b,
+    X8Z24_X16V8S8__COV8R24V = 0x3c,
+    ZF32_X16V8X8__COV8R24V = 0x3d,
+    ZF32_X16V8S8__COV8R24V = 0x3e,
+    CS_BITFIELD_SIZE = 0x3f
+}
+
+pub struct TicHeaderV1 {}
+
+#[repr(u32)]
+pub enum MaxAnisotropy {
     _1_TO_1 = 0x0,
     _2_TO_1 = 0x1,
     _4_TO_1 = 0x2,
@@ -53,7 +121,7 @@ enum MaxAnisotropy {
 }
 
 #[repr(u32)]
-enum SurfaceFormat {
+pub enum SurfaceFormat {
     BITMAP = 0x001c,
     UNK1D = 0x001d,
     RGBA32_FLOAT = 0x00c0,
@@ -118,7 +186,7 @@ enum SurfaceFormat {
     Y32_UINT_UNKFF = 0x00ff,
 }
 
-enum ZetaFormat {
+pub enum ZetaFormat {
     Z32_FLOAT = 0x000a,
     Z16_UNORM = 0x0013,
     S8_Z24_UNORM = 0x0014,
@@ -132,7 +200,7 @@ enum ZetaFormat {
 }
 
 // SUTP
-enum ImageFormat {
+pub enum ImageFormat {
     RGBA32_FLOAT = 0x02,
     RGBA32_SINT = 0x03,
     RGBA32_UINT = 0x04,
@@ -175,7 +243,7 @@ enum ImageFormat {
     R8_UINT = 0x3a,
 }
 
-enum BitSize {
+pub enum BitSize {
     B32 = 0b00,
     B64 = 0b01,
     B96 = 0b10,
@@ -186,7 +254,8 @@ pub struct Decoder<'a> {
     pub ir: &'a mut spirv::Emitter,
     type_void: u32,
     // Pointers
-    type_ptr_u32: u32,
+    type_ptr_u32: [u32; 5],
+    type_ptr_u8: [u32; 5],
     // Declared types for headers
     type_u8: [u32; 5],
     type_u16: [u32; 5],
@@ -200,8 +269,10 @@ pub struct Decoder<'a> {
     type_f32: [u32; 5],
     type_f64: [u32; 5],
     type_bool: [u32; 5],
-    // abstract state machine
-    regs: [u32; MAX_REG_COUNT],
+    // abstract state
+    type_abstract_state: u32,
+    type_ptr_abstract_state_regs: u32,
+    var_abstract_state: u32,
 }
 impl<'a> Decoder<'a> {
     pub fn init(&mut self) {
@@ -228,35 +299,105 @@ impl<'a> Decoder<'a> {
             }
         }
 
+        {
+            let type_regs_array = self.ir.emit_type_array(self.type_u32[1], MAX_REG_COUNT as u32);
+            let members = &[
+                ("regs", type_regs_array),
+                ("pred", self.type_u8[1]),
+            ];
+            self.type_abstract_state = self.ir.emit_type_struct_typed(members);
+            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(7, type_regs_array);
+        }
+
         // Define generic pointers
         // Storage class 7 = Function
-        self.type_ptr_u32 = self.ir.emit_type_pointer(7, self.type_u32[1]);
+        for i in 1..=4 {
+            self.type_ptr_u8[i] = self.ir.emit_type_pointer(7, self.type_u8[i]);
+            self.type_ptr_u32[i] = self.ir.emit_type_pointer(7, self.type_u32[i]);
+        }
+        self.var_abstract_state = self.ir.emit_variable(self.type_abstract_state, 7);
+    }
 
-        // Define registers
-        for r in self.regs.iter_mut() {
-            *r = self.ir.emit_variable(self.type_ptr_u32, 7);
+    fn load_register(&mut self, reg: u32) -> u32 {
+        assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
+        if reg == 255 { // RZ (Zero Register)
+            self.ir.emit_constant_typed(self.type_u32[1], 0u32)
+        } else {
+            let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[0]);
+            let indexes = &[
+                self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
+            ];
+            let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, indexes);
+            self.ir.emit_load(self.type_u32[1], reg_ptr)
         }
     }
 
-    fn load_reg(&mut self, reg: usize) -> u32 {
-        if reg == 255 {
-            // RZ (Zero Register)
-            return self.ir.emit_constant_typed(self.type_u32[1], 0u32);
-        }
-        assert!(reg < self.regs.len(), "Register index out of bounds");
-        let ptr = self.regs[reg];
-        self.ir.emit_load(self.type_u32[1], ptr)
+    fn store_register(&mut self, reg: u32, val: u32) {
+        assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
+        // Write to RZ is ignored but for uniformity it's kept
+        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[0]);
+        let indexes = &[
+            self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
+        ];
+        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, indexes);
+        self.ir.emit_store(reg_ptr, val);
     }
 
-    fn store_reg(&mut self, reg: usize, val: u32) {
-        if reg == 255 {
-            // Write to RZ is ignored
-            return;
-        }
-        assert!(reg < self.regs.len(), "Register index out of bounds");
-        let ptr = self.regs[reg];
-        self.ir.emit_store(ptr, val);
+    /// there are 8 predicates per invocation, the plan to modify them is as follows:
+    /// %pred = load
+    /// %mask = 1 - uint(pred >> N)
+    /// <do some things>
+    fn load_predicate(&mut self) -> u32 {
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[1]);
+        let res = self.ir.emit_load(self.type_u8[1], ptr);
+        self.ir.emit_u_convert(self.type_u32[1], res)
     }
+
+    /// Produces a mask, %mask = 1 - uint(pred >> N)
+    /// use to not make non-uniform control flows (yeah fuck it constant runtime and whatever)
+    fn load_predicate_mask(&mut self, pred: u32, invert: bool) -> u32 {
+        if pred == 0x07 {
+            let one_const = self.ir.emit_constant_typed(self.type_u32[1], 0xffff_ffff as u32);
+            if invert {
+                self.ir.emit_not(self.type_u32[1], one_const)
+            } else {
+                one_const
+            }
+        } else {
+            let base = self.load_predicate();
+            let shift = self.ir.emit_constant_typed(self.type_u32[1], pred as u8);
+            let one_const = self.ir.emit_constant_typed(self.type_u32[1], 1 as u8);
+            // %result = %one - ((%pred >> %shift) & %one)
+            let srl_res = self.ir.emit_shift_right_logical(self.type_u32[1], base, shift);
+            let and_res = self.ir.emit_bitwise_and(self.type_u32[1], srl_res, one_const);
+            let res = self.ir.emit_isub(self.type_u32[1], one_const, and_res);
+            if invert {
+                self.ir.emit_not(self.type_u32[1], res)
+            } else {
+                res
+            }
+        }
+    }
+
+    fn store_predicate(&mut self, val: u32) {
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[1]);
+        self.ir.emit_store(ptr, val)
+    }
+
+    fn select_masked(&mut self, mask: u32, if_true: u32, if_false: u32) -> u32 {
+        let not_mask = self.ir.emit_not(self.type_u32[1], mask);
+        let v_true = self.ir.emit_bitwise_and(self.type_u32[1], if_true, mask);
+        let v_false = self.ir.emit_bitwise_and(self.type_u32[1], if_false, not_mask);
+        self.ir.emit_bitwise_or(self.type_u32[1], v_true, v_false)
+    }
+
+    fn store_reg_predicated(&mut self, reg: u32, pred: u32, invert: bool, value: u32) {
+        let mask = self.load_predicate_mask(pred, invert);
+        let v_orig = self.load_register(reg);
+        let v_store = self.select_masked(mask, value, v_orig);
+        self.store_register(reg, v_store);
+    }
+
     pub fn finish(&mut self) {
 
     }
@@ -265,22 +406,21 @@ impl<'a> Decoder<'a> {
     pub fn al2p(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let rd = (((inst >> 16) & 0xff) << 0) as usize;
-        let ra = (((inst >> 24) & 0xff) << 0) as usize;
-        let ra_offset = (((inst >> 40) & 0x7ff) << 0) as usize;
-        let bop = (((inst >> 74) & 0x3) << 0) as usize;
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let ra = (((inst >> 24) & 0xff) << 0) as u32;
+        let ra_offset = (((inst >> 40) & 0x7ff) << 0) as u32;
+        let bop = (((inst >> 74) & 0x3) << 0) as u32;
         let _op = (((inst >> 79) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(ra <= MAX_REG_COUNT || ra == 255);
-        assert!(bop == BitSize::B32 as usize);
-        let base = self.load_reg(ra);
+        assert!(bop == BitSize::B32 as u32);
+        let base = self.load_register(ra);
         let offset = self.ir.emit_constant_typed(self.type_u32[1], ra_offset as u32);
         let dst_val = self.ir.emit_iadd(self.type_u32[1], base, offset);
-        self.store_reg(rd, dst_val);
+        self.store_register(rd, dst_val);
     }
     pub fn ald(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -837,7 +977,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        self.ir.emit_kill();
     }
     pub fn f2f(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1625,11 +1765,11 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn iadd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let ra = (((inst >> 24) & 0xff) << 0) as u32;
+        let ra_offset = (((inst >> 32) & 0xffffffff) << 0) as u32;
         let _rc = (((inst >> 64) & 0xff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
         let _sc_absolute = (((inst >> 74) & 0x1) << 0);
@@ -1640,11 +1780,21 @@ impl<'a> Decoder<'a> {
         let _cop = (((inst >> 84) & 0x7) << 0);
         let _pp = (((inst >> 87) & 0x7) << 0);
         let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
+        let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
+
+        // TODO: it's signed
+        // TODO: avg mod, pp + cop + FTZ rounding modes
+        let a = self.load_register(ra);
+        let b = self.ir.emit_constant_typed(self.type_u32[1], ra_offset);
+        let sa = self.ir.emit_s_convert(self.type_s32[1], a);
+        let sb = self.ir.emit_s_convert(self.type_s32[1], b);
+        let sres = self.ir.emit_iadd(self.type_s32[1], sa, sb);
+        let res = self.ir.emit_u_convert(self.type_u32[1], sres);
+        self.store_reg_predicated(rd, pg, pg_not != 0, res);
         todo!();
     }
     pub fn iadd3(&mut self, inst: u128) {

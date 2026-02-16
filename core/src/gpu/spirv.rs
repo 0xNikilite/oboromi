@@ -1,26 +1,4 @@
-//! SPIR-V binary module emitter.
-//!
-//! Emits a valid SPIR-V module word-by-word. All IDs are 1-based.
-//! The caller must emit instructions in valid SPIR-V layout order:
-//!
-//!   1. `emit_header`
-//!   2. `emit_capability`
-//!   3. `emit_ext_inst_import`
-//!   4. `emit_memory_model`
-//!   5. `emit_entry_point`
-//!   6. `emit_execution_mode`
-//!   7. `emit_name` / `emit_member_name`
-//!   8. `emit_decorate` / `emit_member_decorate`
-//!   9. Type / Constant / Global Variable declarations
-//!  10. Function definitions (function → label → body → return → function_end)
-//!
-//! Call `finalize()` after all emission to patch the ID bound in the header.
-
 use std::iter;
-
-// ════════════════════════════════════════════════════════════════════
-//  Literal encoding trait
-// ════════════════════════════════════════════════════════════════════
 
 pub trait Literal {
     type Words: Iterator<Item = u32>;
@@ -68,10 +46,6 @@ impl Literal for f64 {
     fn to_words(self) -> Self::Words { self.to_bits().to_words() }
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  String encoding helper
-// ════════════════════════════════════════════════════════════════════
-
 fn encode_string(buf: &mut Vec<u32>, s: &str) {
     let bytes = s.as_bytes();
     let mut word = 0u32;
@@ -84,10 +58,6 @@ fn encode_string(buf: &mut Vec<u32>, s: &str) {
     }
     buf.push(word); // final word includes null terminator (zero-padded)
 }
-
-// ════════════════════════════════════════════════════════════════════
-//  SPIR-V constants
-// ════════════════════════════════════════════════════════════════════
 
 pub mod capability {
     pub const SHADER: u32 = 1;
@@ -164,10 +134,6 @@ pub enum BuiltIn {
     SubgroupLocalInvocationId = 41,
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  Emitter
-// ════════════════════════════════════════════════════════════════════
-
 #[derive(Debug, Clone)]
 pub struct Emitter {
     words: Vec<u32>,
@@ -196,70 +162,49 @@ impl Emitter {
         id
     }
 
-    /// Access the emitted word stream.
+    /// Access the emitted word stream
     pub fn words(&self) -> &[u32] { &self.words }
-
-    /// Total words emitted so far.
     pub fn len(&self) -> usize { self.words.len() }
-
-    /// Number of IDs allocated.
     pub fn id_bound(&self) -> u32 { self.next_id }
 
-    // ── Internal instruction emitter ────────────────────────────
-
-    /// Emit a single SPIR-V instruction: `(word_count << 16 | opcode)` followed by operands.
     fn inst(&mut self, opcode: u32, operands: &[u32]) {
         let wc = (1 + operands.len()) as u32;
         self.words.push((wc << 16) | (opcode & 0xFFFF));
         self.words.extend_from_slice(operands);
     }
 
-    /// Typed unary: result = op(a). Returns result ID.
     fn typed_un(&mut self, op: u32, ty: u32, a: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(op, &[ty, r, a]);
         r
     }
 
-    /// Typed binary: result = op(a, b). Returns result ID.
     fn typed_bin(&mut self, op: u32, ty: u32, a: u32, b: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(op, &[ty, r, a, b]);
         r
     }
 
-    /// Typed ternary: result = op(a, b, c). Returns result ID.
     fn typed_tri(&mut self, op: u32, ty: u32, a: u32, b: u32, c: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(op, &[ty, r, a, b, c]);
         r
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Header
-    // ════════════════════════════════════════════════════════════
-
-    /// Emit the 5-word SPIR-V module header. Must be called first.
-    /// Version defaults to SPIR-V 1.5.
     pub fn emit_header(&mut self) {
-        self.words.push(0x07230203);    // magic
-        self.words.push(0x00010500);    // version 1.5
-        self.words.push(0);             // generator (unregistered)
+        self.words.push(0x07230203); // magic
+        self.words.push(0x00010500); // version 1.5
+        self.words.push(0); // generator (unregistered)
         self.bound_idx = self.words.len();
-        self.words.push(0);             // bound (patched by finalize)
-        self.words.push(0);             // schema
+        self.words.push(0); // bound (patched by finalize)
+        self.words.push(0); // schema
     }
 
-    /// Patch the ID bound in the header. Call after all emission is done.
     pub fn finalize(&mut self) {
         if self.bound_idx < self.words.len() {
             self.words[self.bound_idx] = self.next_id;
         }
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Capability / Extension / Mode  (opcodes 11, 14-17)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_capability(&mut self, cap: u32) {
         self.inst(17, &[cap]);
@@ -276,6 +221,33 @@ impl Emitter {
         let mut data = vec![r];
         encode_string(&mut data, name);
         self.inst(11, &data);
+        r
+    }
+
+    pub fn emit_type_struct_typed(&mut self, members: &[(&str, u32)]) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![r];
+        data.extend(members.iter().map(|e| e.1));
+        self.inst(30, &data);
+        for i in 0..members.len() {
+            self.emit_member_name(r, i as u32, members[i].0);
+        }
+        r
+    }
+    pub fn emit_constant_typed<T: Literal>(&mut self, ty: u32, value: T) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![ty, r];
+        data.extend(value.to_words());
+        self.inst(43, &data);
+        r
+    }
+    pub fn emit_constant_composite_typed<T: Literal + Copy>(&mut self, ty: u32, constituents: &[T]) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![ty, r];
+        for e in constituents.iter() {
+            data.extend(e.to_words());
+        }
+        self.inst(44, &data);
         r
     }
 
@@ -296,10 +268,6 @@ impl Emitter {
         self.inst(16, &data);
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Debug  (opcodes 5-6)
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_name(&mut self, target: u32, name: &str) {
         let mut data = vec![target];
         encode_string(&mut data, name);
@@ -311,10 +279,6 @@ impl Emitter {
         encode_string(&mut data, name);
         self.inst(6, &data);
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Annotations  (opcodes 71-74)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_decorate(&mut self, target: u32, deco: u32, literals: &[u32]) {
         let mut data = vec![target, deco];
@@ -339,10 +303,6 @@ impl Emitter {
         data.extend_from_slice(targets);
         self.inst(74, &data);
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Types  (opcodes 19-33)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_type_void(&mut self) -> u32 {
         let r = self.alloc_id();
@@ -440,10 +400,6 @@ impl Emitter {
         r
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Constants  (opcodes 41-44, 48)
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_constant_true(&mut self, ty: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(41, &[ty, r]);
@@ -464,28 +420,10 @@ impl Emitter {
         r
     }
 
-    pub fn emit_constant_typed<T: Literal>(&mut self, ty: u32, value: T) -> u32 {
-        let r = self.alloc_id();
-        let mut data = vec![ty, r];
-        data.extend(value.to_words());
-        self.inst(43, &data);
-        r
-    }
-
     pub fn emit_constant_composite(&mut self, ty: u32, constituents: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r];
         data.extend_from_slice(constituents);
-        self.inst(44, &data);
-        r
-    }
-
-    pub fn emit_constant_composite_typed<T: Literal + Copy>(&mut self, ty: u32, constituents: &[T]) -> u32 {
-        let r = self.alloc_id();
-        let mut data = vec![ty, r];
-        for e in constituents.iter() {
-            data.extend(e.to_words());
-        }
         self.inst(44, &data);
         r
     }
@@ -497,10 +435,6 @@ impl Emitter {
         self.inst(48, &data);
         r
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Memory  (opcodes 59, 61-62, 65-66)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_variable(&mut self, ty: u32, storage_class: u32) -> u32 {
         let r = self.alloc_id();
@@ -544,10 +478,6 @@ impl Emitter {
         self.inst(63, &[target, source]);
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Functions  (opcodes 54-57)
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_function(&mut self, return_type: u32, control: u32, func_type: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(54, &[return_type, r, control, func_type]);
@@ -571,10 +501,6 @@ impl Emitter {
         self.inst(57, &data);
         r
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Composite  (opcodes 79-83)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_vector_shuffle(&mut self, ty: u32, v1: u32, v2: u32, components: &[u32]) -> u32 {
         let r = self.alloc_id();
@@ -611,31 +537,15 @@ impl Emitter {
     pub fn emit_copy_object(&mut self, ty: u32, operand: u32) -> u32 {
         self.typed_un(83, ty, operand)
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Conversion  (opcodes 109-115, 124)
-    // ════════════════════════════════════════════════════════════
-
-    /// float → unsigned int
+    
     pub fn emit_convert_f_to_u(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(109, ty, val) }
-    /// float → signed int
     pub fn emit_convert_f_to_s(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(110, ty, val) }
-    /// signed int → float
     pub fn emit_convert_s_to_f(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(111, ty, val) }
-    /// unsigned int → float
     pub fn emit_convert_u_to_f(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(112, ty, val) }
-    /// unsigned int width change
     pub fn emit_u_convert(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(113, ty, val) }
-    /// signed int width change
     pub fn emit_s_convert(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(114, ty, val) }
-    /// float width change
     pub fn emit_f_convert(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(115, ty, val) }
-    /// bit-preserving type cast
     pub fn emit_bitcast(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(124, ty, val) }
-
-    // ════════════════════════════════════════════════════════════
-    //  Arithmetic  (opcodes 126-141)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_snegate(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(126, ty, a) }
     pub fn emit_fnegate(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(127, ty, a) }
@@ -654,20 +564,12 @@ impl Emitter {
     pub fn emit_frem(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(140, ty, a, b) }
     pub fn emit_fmod(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(141, ty, a, b) }
 
-    // ════════════════════════════════════════════════════════════
-    //  Logical  (opcodes 164-169)
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_logical_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(164, ty, a, b) }
     pub fn emit_logical_not_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(165, ty, a, b) }
     pub fn emit_logical_or(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(166, ty, a, b) }
     pub fn emit_logical_and(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(167, ty, a, b) }
     pub fn emit_logical_not(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(168, ty, a) }
     pub fn emit_select(&mut self, ty: u32, cond: u32, a: u32, b: u32) -> u32 { self.typed_tri(169, ty, cond, a, b) }
-
-    // ════════════════════════════════════════════════════════════
-    //  Integer comparison  (opcodes 170-179)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_iequal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(170, ty, a, b) }
     pub fn emit_inot_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(171, ty, a, b) }
@@ -679,10 +581,6 @@ impl Emitter {
     pub fn emit_sless_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(177, ty, a, b) }
     pub fn emit_uless_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(178, ty, a, b) }
     pub fn emit_sless_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(179, ty, a, b) }
-
-    // ════════════════════════════════════════════════════════════
-    //  Float comparison  (opcodes 180-191)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_ford_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(180, ty, a, b) }
     pub fn emit_funord_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(181, ty, a, b) }
@@ -701,10 +599,6 @@ impl Emitter {
     pub fn emit_is_nan(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(156, ty, a) }
     pub fn emit_is_inf(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(157, ty, a) }
 
-    // ════════════════════════════════════════════════════════════
-    //  Bitwise & Shifts  (opcodes 194-205)
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_shift_right_logical(&mut self, ty: u32, base: u32, shift: u32) -> u32 { self.typed_bin(194, ty, base, shift) }
     pub fn emit_shift_right_arithmetic(&mut self, ty: u32, base: u32, shift: u32) -> u32 { self.typed_bin(195, ty, base, shift) }
     pub fn emit_shift_left_logical(&mut self, ty: u32, base: u32, shift: u32) -> u32 { self.typed_bin(196, ty, base, shift) }
@@ -722,10 +616,6 @@ impl Emitter {
     pub fn emit_bit_field_u_extract(&mut self, ty: u32, base: u32, offset: u32, count: u32) -> u32 { self.typed_tri(203, ty, base, offset, count) }
     pub fn emit_bit_reverse(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(204, ty, a) }
     pub fn emit_bit_count(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(205, ty, a) }
-
-    // ════════════════════════════════════════════════════════════
-    //  Control flow  (opcodes 245-255)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_phi(&mut self, ty: u32, sources: &[(u32, u32)]) -> u32 {
         let r = self.alloc_id();
@@ -781,11 +671,6 @@ impl Emitter {
         self.inst(255, &[]);
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Barrier  (opcodes 224-225)
-    // ════════════════════════════════════════════════════════════
-
-    /// `execution` and `memory` are Scope IDs (constants), `semantics` is MemorySemantics.
     pub fn emit_control_barrier(&mut self, execution: u32, memory: u32, semantics: u32) {
         self.inst(224, &[execution, memory, semantics]);
     }
@@ -794,10 +679,6 @@ impl Emitter {
         self.inst(225, &[memory, semantics]);
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Extended instruction (GLSL.std.450 etc.)  (opcode 12)
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_ext_inst(&mut self, ty: u32, set: u32, instruction: u32, operands: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r, set, instruction];
@@ -805,10 +686,6 @@ impl Emitter {
         self.inst(12, &data);
         r
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Image  (opcodes 86-100)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_sampled_image(&mut self, ty: u32, image: u32, sampler: u32) -> u32 {
         self.typed_bin(86, ty, image, sampler)
@@ -863,10 +740,6 @@ impl Emitter {
     pub fn emit_image_query_size(&mut self, ty: u32, image: u32) -> u32 {
         self.typed_un(104, ty, image)
     }
-
-    // ════════════════════════════════════════════════════════════
-    //  Atomic  (opcodes 227-242)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_atomic_load(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32) -> u32 {
         let r = self.alloc_id();
@@ -944,10 +817,6 @@ impl Emitter {
         r
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Derivative  (opcodes 207-213)
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_dpdx(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(207, ty, p) }
     pub fn emit_dpdy(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(208, ty, p) }
     pub fn emit_fwidth(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(209, ty, p) }
@@ -957,10 +826,6 @@ impl Emitter {
     pub fn emit_dpdx_coarse(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(213, ty, p) }
     pub fn emit_dpdy_coarse(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(214, ty, p) }
     pub fn emit_fwidth_coarse(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(215, ty, p) }
-
-    // ════════════════════════════════════════════════════════════
-    //  Group / Subgroup  (opcodes 261-267, 337-345)
-    // ════════════════════════════════════════════════════════════
 
     pub fn emit_group_non_uniform_elect(&mut self, ty: u32, scope: u32) -> u32 {
         let r = self.alloc_id();
@@ -1064,10 +929,6 @@ impl Emitter {
         r
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Miscellaneous
-    // ════════════════════════════════════════════════════════════
-
     pub fn emit_nop(&mut self) {
         self.inst(0, &[]);
     }
@@ -1082,55 +943,28 @@ impl Emitter {
         self.inst(252, &[]);
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Validation
-    // ════════════════════════════════════════════════════════════
-
-    /// Basic structural validation of the emitted module.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.words.len() < 5 {
-            return Err("Module too short for valid header");
-        }
-        if self.words[0] != 0x07230203 {
-            return Err("Invalid SPIR-V magic number");
-        }
+    pub fn validate(&self) {
+        assert!(self.words.len() >= 5);
+        assert!(self.words[0] == 0x07230203);
         // Walk instructions after header
         let mut pos = 5;
         while pos < self.words.len() {
             let header = self.words[pos];
             let wc = (header >> 16) as usize;
             let opcode = header & 0xFFFF;
-            if wc == 0 {
-                return Err("Instruction with zero word count");
-            }
-            if pos + wc > self.words.len() {
-                return Err("Instruction extends beyond module end");
-            }
+            assert!(wc > 0, "Instruction with zero word count");
+            assert!(pos + wc <= self.words.len(), "Instruction extends beyond module end");
             // OpNop is valid with wc=1
-            if opcode == 0 && wc != 1 {
-                return Err("OpNop must have word count 1");
-            }
+            assert!(opcode == 0 && wc == 1, "OpNop must have word count");
             pos += wc;
         }
-        if pos != self.words.len() {
-            return Err("Trailing data after last instruction");
-        }
-        Ok(())
+        assert!(pos == self.words.len(), "Trailing data after last instruction");
     }
 
-    /// Write the module as raw bytes (little-endian, suitable for file or Vulkan).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.words.len() * 4);
-        for &w in &self.words {
-            out.extend_from_slice(&w.to_le_bytes());
-        }
-        out
+        self.words.iter().flat_map(|e| e.to_le_bytes()).collect()
     }
 }
-
-// ════════════════════════════════════════════════════════════════════
-//  GLSL.std.450 instruction indices
-// ════════════════════════════════════════════════════════════════════
 
 pub mod glsl {
     pub const ROUND: u32 = 1;
@@ -1176,10 +1010,6 @@ pub mod glsl {
     pub const FIND_U_MSB: u32 = 75;
 }
 
-// ════════════════════════════════════════════════════════════════════
-//  Tests
-// ════════════════════════════════════════════════════════════════════
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1218,7 +1048,7 @@ mod tests {
         e.emit_function_end();
 
         e.finalize();
-        assert!(e.validate().is_ok());
+        e.validate();
 
         let u32_ty = e.emit_type_int(32, 0);
         let _ = e.emit_ext_inst(u32_ty, glsl, glsl::S_ABS, &[]);
@@ -1227,7 +1057,7 @@ mod tests {
     #[test]
     fn validate_catches_bad_magic() {
         let e = Emitter { words: vec![0xDEADBEEF, 0, 0, 1, 0], next_id: 1, bound_idx: 3 };
-        assert!(e.validate().is_err());
+        e.validate();
     }
 
     #[test]

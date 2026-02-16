@@ -391,7 +391,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_bitwise_or(self.type_u32[1], v_true, v_false)
     }
 
-    fn store_reg_predicated(&mut self, reg: u32, pred: u32, invert: bool, value: u32) {
+    fn store_register_predicated(&mut self, reg: u32, pred: u32, invert: bool, value: u32) {
         let mask = self.load_predicate_mask(pred, invert);
         let v_orig = self.load_register(reg);
         let v_store = self.select_masked(mask, value, v_orig);
@@ -404,8 +404,8 @@ impl<'a> Decoder<'a> {
 
     // %rd := %ra + $ra_offset
     pub fn al2p(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0);
+        let pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
         let ra_offset = (((inst >> 40) & 0x7ff) << 0) as u32;
@@ -420,7 +420,7 @@ impl<'a> Decoder<'a> {
         let base = self.load_register(ra);
         let offset = self.ir.emit_constant_typed(self.type_u32[1], ra_offset as u32);
         let dst_val = self.ir.emit_iadd(self.type_u32[1], base, offset);
-        self.store_register(rd, dst_val);
+        self.store_register_predicated(rd, pg, pg_not != 0, dst_val);
     }
     pub fn ald(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1794,7 +1794,7 @@ impl<'a> Decoder<'a> {
         let sb = self.ir.emit_s_convert(self.type_s32[1], b);
         let sres = self.ir.emit_iadd(self.type_s32[1], sa, sb);
         let res = self.ir.emit_u_convert(self.type_u32[1], sres);
-        self.store_reg_predicated(rd, pg, pg_not != 0, res);
+        self.store_register_predicated(rd, pg, pg_not != 0, res);
         todo!();
     }
     pub fn iadd3(&mut self, inst: u128) {

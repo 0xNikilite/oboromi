@@ -955,7 +955,7 @@ impl Emitter {
             assert!(wc > 0, "Instruction with zero word count");
             assert!(pos + wc <= self.words.len(), "Instruction extends beyond module end");
             // OpNop is valid with wc=1
-            assert!(opcode == 0 && wc == 1, "OpNop must have word count");
+            assert!(opcode != 0 || wc == 1, "OpNop must have word count 1");
             pos += wc;
         }
         assert!(pos == self.words.len(), "Trailing data after last instruction");
@@ -1055,6 +1055,7 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
     fn validate_catches_bad_magic() {
         let e = Emitter { words: vec![0xDEADBEEF, 0, 0, 1, 0], next_id: 1, bound_idx: 3 };
         e.validate();

@@ -273,6 +273,8 @@ pub struct Decoder<'a> {
     type_abstract_state: u32,
     type_ptr_abstract_state_regs: u32,
     var_abstract_state: u32,
+    const_u32_0: u32,
+    const_u32_1: u32,
 }
 impl<'a> Decoder<'a> {
     pub fn init(&mut self) {
@@ -289,6 +291,8 @@ impl<'a> Decoder<'a> {
         self.type_f32[1] = self.ir.emit_type_float(32);
         self.type_f64[1] = self.ir.emit_type_float(64);
         self.type_bool[1] = self.ir.emit_type_bool();
+        self.const_u32_0 = self.ir.emit_constant_typed(self.type_u32[1], 0u32);
+        self.const_u32_1 = self.ir.emit_constant_typed(self.type_u32[1], 1u32);
         for i in 2..=4 {
             for type_sxx in [
                 self.type_u8, self.type_u16, self.type_u32, self.type_u64,
@@ -315,7 +319,10 @@ impl<'a> Decoder<'a> {
             self.type_ptr_u8[i] = self.ir.emit_type_pointer(7, self.type_u8[i]);
             self.type_ptr_u32[i] = self.ir.emit_type_pointer(7, self.type_u32[i]);
         }
-        self.var_abstract_state = self.ir.emit_variable(self.type_abstract_state, 7);
+        let type_ptr_abstract_state = self.ir.emit_type_pointer(7, self.type_abstract_state);
+        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 7);
+
+
     }
 
     fn load_register(&mut self, reg: u32) -> u32 {
@@ -323,7 +330,7 @@ impl<'a> Decoder<'a> {
         if reg == 255 { // RZ (Zero Register)
             self.ir.emit_constant_typed(self.type_u32[1], 0u32)
         } else {
-            let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[0]);
+            let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
             let indexes = &[
                 self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
             ];
@@ -335,7 +342,7 @@ impl<'a> Decoder<'a> {
     fn store_register(&mut self, reg: u32, val: u32) {
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
         // Write to RZ is ignored but for uniformity it's kept
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[0]);
+        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
         let indexes = &[
             self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
         ];
@@ -348,7 +355,7 @@ impl<'a> Decoder<'a> {
     /// %mask = 1 - uint(pred >> N)
     /// <do some things>
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[1]);
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
         let res = self.ir.emit_load(self.type_u8[1], ptr);
         self.ir.emit_u_convert(self.type_u32[1], res)
     }
@@ -380,7 +387,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[1]);
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
         self.ir.emit_store(ptr, val)
     }
 
@@ -404,8 +411,8 @@ impl<'a> Decoder<'a> {
 
     // %rd := %ra + $ra_offset
     pub fn al2p(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0);
-        let pg_not = (((inst >> 15) & 0x1) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
         let ra_offset = (((inst >> 40) & 0x7ff) << 0) as u32;
@@ -1795,7 +1802,12 @@ impl<'a> Decoder<'a> {
         let sres = self.ir.emit_iadd(self.type_s32[1], sa, sb);
         let res = self.ir.emit_u_convert(self.type_u32[1], sres);
         self.store_register_predicated(rd, pg, pg_not != 0, res);
-        todo!();
+        assert!(_rc == 0xFF, "IADD: rc (3rd source) not implemented");
+        assert!(_e == 0, "IADD: extended precision not implemented");
+        assert!(_sc_absolute == 0, "IADD: source absolute modifier not implemented");
+        assert!(_sc_negate == 0, "IADD: source negate modifier not implemented");
+        assert!(_cop == 0, "IADD: comparison op not implemented");
+        assert!(_ftz == 0, "IADD: FTZ not implemented");
     }
     pub fn iadd3(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

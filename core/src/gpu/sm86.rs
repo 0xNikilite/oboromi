@@ -304,7 +304,8 @@ impl<'a> Decoder<'a> {
         }
 
         {
-            let type_regs_array = self.ir.emit_type_array(self.type_u32[1], MAX_REG_COUNT as u32);
+            let length_const = self.ir.emit_constant_typed(self.type_u32[1], MAX_REG_COUNT as u32);
+            let type_regs_array = self.ir.emit_type_array(self.type_u32[1], length_const);
             let members = &[
                 ("regs", type_regs_array),
                 ("pred", self.type_u8[1]),
@@ -326,22 +327,21 @@ impl<'a> Decoder<'a> {
     }
 
     fn load_register(&mut self, reg: u32) -> u32 {
-        assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
         if reg == 255 { // RZ (Zero Register)
-            self.ir.emit_constant_typed(self.type_u32[1], 0u32)
-        } else {
-            let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-            let indexes = &[
-                self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
-            ];
-            let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, indexes);
-            self.ir.emit_load(self.type_u32[1], reg_ptr)
+            return self.ir.emit_constant_typed(self.type_u32[1], 0u32);
         }
+        assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
+        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
+        let indexes = &[
+            self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
+        ];
+        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, indexes);
+        self.ir.emit_load(self.type_u32[1], reg_ptr)
     }
 
     fn store_register(&mut self, reg: u32, val: u32) {
+        if reg == 255 { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        // Write to RZ is ignored but for uniformity it's kept
         let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
         let indexes = &[
             self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
@@ -374,10 +374,12 @@ impl<'a> Decoder<'a> {
             let base = self.load_predicate();
             let shift = self.ir.emit_constant_typed(self.type_u32[1], pred as u8);
             let one_const = self.ir.emit_constant_typed(self.type_u32[1], 1 as u8);
-            // %result = %one - ((%pred >> %shift) & %one)
+            // extract single bit: (%pred >> %shift) & 1 → 0 or 1
             let srl_res = self.ir.emit_shift_right_logical(self.type_u32[1], base, shift);
             let and_res = self.ir.emit_bitwise_and(self.type_u32[1], srl_res, one_const);
-            let res = self.ir.emit_isub(self.type_u32[1], one_const, and_res);
+            // broadcast to full mask: 0 - bit → 0x00000000 or 0xFFFFFFFF
+            let zero_const = self.ir.emit_constant_typed(self.type_u32[1], 0u32);
+            let res = self.ir.emit_isub(self.type_u32[1], zero_const, and_res);
             if invert {
                 self.ir.emit_not(self.type_u32[1], res)
             } else {
@@ -1793,21 +1795,18 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
 
-        // TODO: it's signed
-        // TODO: avg mod, pp + cop + FTZ rounding modes
-        let a = self.load_register(ra);
-        let b = self.ir.emit_constant_typed(self.type_u32[1], ra_offset);
-        let sa = self.ir.emit_s_convert(self.type_s32[1], a);
-        let sb = self.ir.emit_s_convert(self.type_s32[1], b);
-        let sres = self.ir.emit_iadd(self.type_s32[1], sa, sb);
-        let res = self.ir.emit_u_convert(self.type_u32[1], sres);
-        self.store_register_predicated(rd, pg, pg_not != 0, res);
+        // guards for unimplemented features
         assert!(_rc == 0xFF, "IADD: rc (3rd source) not implemented");
         assert!(_e == 0, "IADD: extended precision not implemented");
         assert!(_sc_absolute == 0, "IADD: source absolute modifier not implemented");
         assert!(_sc_negate == 0, "IADD: source negate modifier not implemented");
         assert!(_cop == 0, "IADD: comparison op not implemented");
         assert!(_ftz == 0, "IADD: FTZ not implemented");
+
+        let a = self.load_register(ra);
+        let b = self.ir.emit_constant_typed(self.type_u32[1], ra_offset);
+        let res = self.ir.emit_iadd(self.type_u32[1], a, b);
+        self.store_register_predicated(rd, pg, pg_not != 0, res);
     }
     pub fn iadd3(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

@@ -642,6 +642,11 @@ impl Emitter {
         r
     }
 
+    /// Emit an OpLabel with a pre-allocated ID (for forward references).
+    pub fn emit_label_id(&mut self, id: u32) {
+        self.inst(248, &[id]);
+    }
+
     pub fn emit_branch(&mut self, target: u32) {
         self.inst(249, &[target]);
     }

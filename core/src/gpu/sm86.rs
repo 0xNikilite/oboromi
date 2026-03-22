@@ -2,6 +2,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use crate::gpu::spirv;
 
 static MAX_REG_COUNT: usize = 254;
@@ -275,6 +276,8 @@ pub struct Decoder<'a> {
     var_abstract_state: u32,
     const_u32_0: u32,
     const_u32_1: u32,
+    // Cache for emitted u32 constants to avoid duplicate OpConstant
+    const_cache: HashMap<u32, u32>,
 }
 impl<'a> Decoder<'a> {
     pub fn init(&mut self) {
@@ -291,8 +294,11 @@ impl<'a> Decoder<'a> {
         self.type_f32[1] = self.ir.emit_type_float(32);
         self.type_f64[1] = self.ir.emit_type_float(64);
         self.type_bool[1] = self.ir.emit_type_bool();
+        self.const_cache = HashMap::new();
         self.const_u32_0 = self.ir.emit_constant_typed(self.type_u32[1], 0u32);
         self.const_u32_1 = self.ir.emit_constant_typed(self.type_u32[1], 1u32);
+        self.const_cache.insert(0, self.const_u32_0);
+        self.const_cache.insert(1, self.const_u32_1);
         for i in 2..=4 {
             for type_sxx in [
                 self.type_u8, self.type_u16, self.type_u32, self.type_u64,
@@ -326,16 +332,25 @@ impl<'a> Decoder<'a> {
 
     }
 
+    /// Return the SPIR-V id for an OpConstant(u32, value).
+    /// Reuses a previously emitted constant if one exists.
+    fn cached_const_u32(&mut self, value: u32) -> u32 {
+        if let Some(&id) = self.const_cache.get(&value) {
+            return id;
+        }
+        let id = self.ir.emit_constant_typed(self.type_u32[1], value);
+        self.const_cache.insert(value, id);
+        id
+    }
+
     fn load_register(&mut self, reg: u32) -> u32 {
         if reg == 255 { // RZ (Zero Register)
-            return self.ir.emit_constant_typed(self.type_u32[1], 0u32);
+            return self.const_u32_0;
         }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
         let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let indexes = &[
-            self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
-        ];
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, indexes);
+        let idx = self.cached_const_u32(reg);
+        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
         self.ir.emit_load(self.type_u32[1], reg_ptr)
     }
 
@@ -343,16 +358,14 @@ impl<'a> Decoder<'a> {
         if reg == 255 { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
         let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let indexes = &[
-            self.ir.emit_constant_typed(self.type_u32[1], reg as u32)
-        ];
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, indexes);
+        let idx = self.cached_const_u32(reg);
+        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
         self.ir.emit_store(reg_ptr, val);
     }
 
     /// there are 8 predicates per invocation, the plan to modify them is as follows:
     /// %pred = load
-    /// %mask = 1 - uint(pred >> N)
+    /// %mask = 0 - ((%pred >> N) & 1)    -> 0x00000000 or 0xFFFFFFFF
     /// <do some things>
     fn load_predicate(&mut self) -> u32 {
         let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
@@ -360,26 +373,26 @@ impl<'a> Decoder<'a> {
         self.ir.emit_u_convert(self.type_u32[1], res)
     }
 
-    /// Produces a mask, %mask = 1 - uint(pred >> N)
-    /// use to not make non-uniform control flows (yeah fuck it constant runtime and whatever)
+    /// produces a full bitmask from a single predicate bit:
+    ///   bit = (%pred >> N) & 1    -> 0 or 1
+    ///   mask = 0 - bit            -> 0x00000000 or 0xFFFFFFFF
+    /// used to avoid non-uniform control flow (branchless predication).
     fn load_predicate_mask(&mut self, pred: u32, invert: bool) -> u32 {
         if pred == 0x07 {
-            let one_const = self.ir.emit_constant_typed(self.type_u32[1], 0xffff_ffff as u32);
+            let all_ones = self.cached_const_u32(0xffff_ffff);
             if invert {
-                self.ir.emit_not(self.type_u32[1], one_const)
+                self.ir.emit_not(self.type_u32[1], all_ones)
             } else {
-                one_const
+                all_ones
             }
         } else {
             let base = self.load_predicate();
-            let shift = self.ir.emit_constant_typed(self.type_u32[1], pred as u8);
-            let one_const = self.ir.emit_constant_typed(self.type_u32[1], 1 as u8);
+            let shift = self.cached_const_u32(pred);
             // extract single bit: (%pred >> %shift) & 1 → 0 or 1
             let srl_res = self.ir.emit_shift_right_logical(self.type_u32[1], base, shift);
-            let and_res = self.ir.emit_bitwise_and(self.type_u32[1], srl_res, one_const);
+            let and_res = self.ir.emit_bitwise_and(self.type_u32[1], srl_res, self.const_u32_1);
             // broadcast to full mask: 0 - bit → 0x00000000 or 0xFFFFFFFF
-            let zero_const = self.ir.emit_constant_typed(self.type_u32[1], 0u32);
-            let res = self.ir.emit_isub(self.type_u32[1], zero_const, and_res);
+            let res = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, and_res);
             if invert {
                 self.ir.emit_not(self.type_u32[1], res)
             } else {
@@ -401,6 +414,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_register_predicated(&mut self, reg: u32, pred: u32, invert: bool, value: u32) {
+        if reg == 255 { return; } // Write to RZ is always a no-op
         let mask = self.load_predicate_mask(pred, invert);
         let v_orig = self.load_register(reg);
         let v_store = self.select_masked(mask, value, v_orig);
@@ -1804,7 +1818,7 @@ impl<'a> Decoder<'a> {
         assert!(_ftz == 0, "IADD: FTZ not implemented");
 
         let a = self.load_register(ra);
-        let b = self.ir.emit_constant_typed(self.type_u32[1], ra_offset);
+        let b = self.cached_const_u32(ra_offset);
         let res = self.ir.emit_iadd(self.type_u32[1], a, b);
         self.store_register_predicated(rd, pg, pg_not != 0, res);
     }
@@ -1832,11 +1846,11 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn iadd32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let ra = (((inst >> 24) & 0xff) << 0) as u32;
+        let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
         let _rc = (((inst >> 64) & 0xff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
         let _sc_absolute = (((inst >> 74) & 0x1) << 0);
@@ -1847,12 +1861,24 @@ impl<'a> Decoder<'a> {
         let _cop = (((inst >> 84) & 0x7) << 0);
         let _pp = (((inst >> 87) & 0x7) << 0);
         let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
+        let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+
+        // guards for unimplemented features
+        assert!(_e == 0, "IADD32I: extended precision not implemented");
+        assert!(_sc_absolute == 0, "IADD32I: source absolute modifier not implemented");
+        assert!(_sc_negate == 0, "IADD32I: source negate modifier not implemented");
+        assert!(_cop == 0, "IADD32I: comparison op not implemented");
+        assert!(_ftz == 0, "IADD32I: FTZ not implemented");
+
+        // Rd = Ra + imm32
+        let a = self.load_register(ra);
+        let b = self.cached_const_u32(imm32);
+        let res = self.ir.emit_iadd(self.type_u32[1], a, b);
+        self.store_register_predicated(rd, pg, pg_not != 0, res);
     }
     pub fn ide(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2170,8 +2196,8 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn kill(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let _pp = (((inst >> 87) & 0x7) << 0);
         let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
@@ -2179,7 +2205,30 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        self.ir.emit_kill();
+
+        if pg == 0x07 && pg_not == 0 {
+            // Unconditional kill (PT = always true)
+            self.ir.emit_kill();
+        } else if pg == 0x07 && pg_not != 0 {
+            // Never kill (!PT = always false) -> dead code, emit nothing
+        } else {
+            // Conditional kill: OpKill is a block terminator, so we need
+            // real control flow (OpSelectionMerge + OpBranchConditional).
+            let mask = self.load_predicate_mask(pg, pg_not != 0);
+            let cond = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+
+            let kill_label = self.ir.alloc_id();
+            let merge_label = self.ir.alloc_id();
+
+            self.ir.emit_selection_merge(merge_label, 0);
+            self.ir.emit_branch_conditional(cond, kill_label, merge_label);
+
+            self.ir.emit_label_id(kill_label);
+            self.ir.emit_kill();
+
+            // Merge block -> execution continues here if predicate was false
+            self.ir.emit_label_id(merge_label);
+        }
     }
     pub fn ld(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

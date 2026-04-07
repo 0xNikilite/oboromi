@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 struct IpcMethod {
     pub index: u32,
     pub name: String,
@@ -148,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/nn/auto.defs");
 
-    let data = std::fs::read_to_string("src/nn/auto.defs")?;
+    let data = std::fs::read_to_string("src/nn/auto.defs").unwrap_or_default();
     let mut w = String::new();
     generate(&mut w, &data)?;
 

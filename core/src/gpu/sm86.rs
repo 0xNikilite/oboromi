@@ -280,6 +280,37 @@ pub struct Decoder<'a> {
     const_cache: HashMap<u32, u32>,
 }
 impl<'a> Decoder<'a> {
+    pub fn new(ir: &'a mut spirv::Emitter) -> Self {
+        Self {
+            ir,
+            type_void: 0,
+            type_ptr_u32: [0; 5],
+            type_ptr_u8: [0; 5],
+            type_u8: [0; 5],
+            type_u16: [0; 5],
+            type_u32: [0; 5],
+            type_u64: [0; 5],
+            type_s8: [0; 5],
+            type_s16: [0; 5],
+            type_s32: [0; 5],
+            type_s64: [0; 5],
+            type_f16: [0; 5],
+            type_f32: [0; 5],
+            type_f64: [0; 5],
+            type_bool: [0; 5],
+            type_abstract_state: 0,
+            type_ptr_abstract_state_regs: 0,
+            var_abstract_state: 0,
+            const_u32_0: 0,
+            const_u32_1: 0,
+            const_cache: HashMap::new(),
+        }
+    }
+
+    pub fn get_type_void(&self) -> u32 {
+        self.type_void
+    }
+    
     pub fn init(&mut self) {
         self.type_void = self.ir.emit_type_void();
         self.type_u8[1] = self.ir.emit_type_int(8, 0);
@@ -331,6 +362,7 @@ impl<'a> Decoder<'a> {
 
 
     }
+    
 
     /// Return the SPIR-V id for an OpConstant(u32, value).
     /// Reuses a previously emitted constant if one exists.

@@ -2,7 +2,6 @@ use ash::vk;
 
 pub mod sm86;
 pub mod spirv;
-pub mod test;
 
 pub struct VkState {
     pub entry: ash::Entry,

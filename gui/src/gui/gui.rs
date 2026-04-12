@@ -148,23 +148,50 @@ impl eframe::App for GUI {
 
             ui.heading("oboromi");
             ui.separator();
-
-            if let Some(handle) = self.test_thread.take() {
-                self.logs = handle.join().unwrap();
+            if let Some(handle) = &self.test_thread {
+                if handle.is_finished() {
+                    let handle = self.test_thread.take().unwrap();
+                    match handle.join() {
+                        Ok(logs) => self.logs = logs,
+                        Err(e) => {
+                            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = e.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic occurred".to_string()
+                            };
+                            self.logs = vec![format!("Thread panicked: {}", msg)];
+                        }
+                    }
+                }
             }
 
             if self.test_thread.is_none() {
-                if ui.button("Run CPU Tests").clicked() {
-                    let ctx = ctx.clone();
-                    self.test_thread = Some(std::thread::spawn(move || {
-                        ctx.request_repaint();
-                        run_tests()
-                    }));
-                    self.logs = vec![
-                        "Warming up JIT compiler...".to_string(),
-                        "Running ARM64 tests...".to_string(),
-                    ];
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("Run CPU Tests").clicked() {
+                        let ctx = ctx.clone();
+                        self.test_thread = Some(std::thread::spawn(move || {
+                            ctx.request_repaint();
+                            run_tests()
+                        }));
+                        self.logs = vec![
+                            "Warming up JIT compiler...".to_string(),
+                            "Running ARM64 tests...".to_string(),
+                        ];
+                    }
+                    if ui.button("Run GPU Tests").clicked() {
+                        let ctx = ctx.clone();
+                        self.test_thread = Some(std::thread::spawn(move || {
+                            ctx.request_repaint();
+                            oboromi_core::tests::run_gpu_tests()
+                        }));
+                        self.logs = vec![
+                            "Initializing GPU decoder environment...".to_string(),
+                            "Running SM86 instruction translations...".to_string(),
+                        ];
+                    }
+                });
             } else {
                 ui.label("Running tests...");
             }

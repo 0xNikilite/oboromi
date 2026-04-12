@@ -310,7 +310,7 @@ impl<'a> Decoder<'a> {
     pub fn get_type_void(&self) -> u32 {
         self.type_void
     }
-    
+
     pub fn init(&mut self) {
         self.type_void = self.ir.emit_type_void();
         self.type_u8[1] = self.ir.emit_type_int(8, 0);
@@ -451,6 +451,64 @@ impl<'a> Decoder<'a> {
         let v_orig = self.load_register(reg);
         let v_store = self.select_masked(mask, value, v_orig);
         self.store_register(reg, v_store);
+    }
+
+    fn emit_cmp_against_zero(&mut self, cop: u32, value: u32) -> u32 {
+        // returns a SPIR-V u32 id containing 0 or 1
+        // cop encoding: 0=F, 1=LT, 2=EQ, 3=LE, 4=GT, 5=NE, 6=GE, 7=T
+        match cop {
+            0 => self.const_u32_0,
+            7 => self.const_u32_1,
+            _ => {
+                let shift31 = self.cached_const_u32(31);
+                // sign bit: 1 if value is negative (signed), 0 otherwise
+                let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], value, shift31);
+
+                match cop {
+                    1 => sign_bit, // LT
+                    6 => self.ir.emit_isub(self.type_u32[1], self.const_u32_1, sign_bit), // GE
+                    _ => {
+                        // need is_nonzero for EQ, LE, GT, NE
+                        // is_nonzero = (value | (0 - value)) >>u 31
+                        let neg_val = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, value);
+                        let val_or_neg = self.ir.emit_bitwise_or(self.type_u32[1], value, neg_val);
+                        let is_nonzero = self.ir.emit_shift_right_logical(self.type_u32[1], val_or_neg, shift31);
+
+                        match cop {
+                            2 => self.ir.emit_isub(self.type_u32[1], self.const_u32_1, is_nonzero), // EQ
+                            5 => is_nonzero, // NE
+                            3 => { // LE = LT | EQ
+                                let is_zero = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, is_nonzero);
+                                self.ir.emit_bitwise_or(self.type_u32[1], sign_bit, is_zero)
+                            }
+                            4 => { // GT = !LE
+                                let is_zero = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, is_nonzero);
+                                let le = self.ir.emit_bitwise_or(self.type_u32[1], sign_bit, is_zero);
+                                self.ir.emit_isub(self.type_u32[1], self.const_u32_1, le)
+                            }
+                            _ => panic!("emit_cmp_against_zero: unknown cop {}", cop),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn set_predicate_bit(&mut self, pred_idx: u32, val: u32) {
+        // val is a SPIR-V u32 id containing 0 or 1
+        // pred_idx is which predicate bit (0-7) to set
+        if pred_idx == 7 {
+            // PT (always true) cannot be modified
+            return;
+        }
+        let base = self.load_predicate();
+        let bit_pos = self.cached_const_u32(pred_idx);
+        let mask = self.ir.emit_shift_left_logical(self.type_u32[1], self.const_u32_1, bit_pos);
+        let not_mask = self.ir.emit_not(self.type_u32[1], mask);
+        let cleared = self.ir.emit_bitwise_and(self.type_u32[1], base, not_mask);
+        let shifted_val = self.ir.emit_shift_left_logical(self.type_u32[1], val, bit_pos);
+        let new_pred = self.ir.emit_bitwise_or(self.type_u32[1], cleared, shifted_val);
+        self.store_predicate(new_pred);
     }
 
     pub fn finish(&mut self) {
@@ -1830,9 +1888,9 @@ impl<'a> Decoder<'a> {
         let _sc_negate = (((inst >> 75) & 0x1) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
+        let pu = (((inst >> 81) & 0x7) << 0) as u32;
+        let cop = (((inst >> 84) & 0x7) << 0) as u32;
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
@@ -1843,7 +1901,6 @@ impl<'a> Decoder<'a> {
         // guards for unimplemented features
         assert!(_rc == 0xFF, "IADD: rc (3rd source) not implemented");
         assert!(_e == 0, "IADD: extended precision not implemented");
-        assert!(_cop == 0, "IADD: comparison op not implemented");
         assert!(_ftz == 0, "IADD: FTZ not implemented");
 
         let a = self.load_register(ra);
@@ -1875,7 +1932,7 @@ impl<'a> Decoder<'a> {
         // apply source modifiers
         if _sc_absolute != 0 {
             // |b| via branchless abs: (b ^ mask) - mask
-            // where mask = 0 - (b >>u 31) → 0x00000000 if positive, 0xFFFFFFFF if negative
+            // where mask = 0 - (b >>u 31) -> 0x00000000 if positive, 0xFFFFFFFF if negative
             let shift = self.cached_const_u32(31);
             let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
             let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
@@ -1887,6 +1944,14 @@ impl<'a> Decoder<'a> {
         }
 
         let res = self.ir.emit_iadd(self.type_u32[1], a, b);
+
+        // handle comparison op (set predicate based on result vs zero)
+        if cop != 0 {
+            let cmp_result = self.emit_cmp_against_zero(cop, res);
+            assert!(pp == 0, "IADD: predicate combination pp={} not implemented", pp);
+            self.set_predicate_bit(pu, cmp_result);
+        }
+
         self.store_register_predicated(rd, pg, pg_not != 0, res);
     }
     pub fn iadd3(&mut self, inst: u128) {
@@ -1900,9 +1965,9 @@ impl<'a> Decoder<'a> {
         let _sc_negate = (((inst >> 75) & 0x1) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
+        let pu = (((inst >> 81) & 0x7) << 0) as u32;
+        let cop = (((inst >> 84) & 0x7) << 0) as u32;
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
@@ -1912,7 +1977,6 @@ impl<'a> Decoder<'a> {
 
         // guards for unimplemented features
         assert!(_e == 0, "IADD3: extended precision not implemented");
-        assert!(_cop == 0, "IADD3: comparison op not implemented");
         assert!(_ftz == 0, "IADD3: FTZ not implemented");
 
         let a = self.load_register(ra);
@@ -1923,8 +1987,6 @@ impl<'a> Decoder<'a> {
 
         // apply source modifiers to B
         if _sc_absolute != 0 {
-            // |b| via branchless abs: (b ^ mask) - mask
-            // where mask = 0 - (b >>u 31) → 0x00000000 if positive, 0xFFFFFFFF if negative
             let shift = self.cached_const_u32(31);
             let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
             let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
@@ -1940,6 +2002,14 @@ impl<'a> Decoder<'a> {
         // rd = ra + b + rc
         let ab = self.ir.emit_iadd(self.type_u32[1], a, b);
         let res = self.ir.emit_iadd(self.type_u32[1], ab, c);
+
+        // handle comparison op
+        if cop != 0 {
+            let cmp_result = self.emit_cmp_against_zero(cop, res);
+            assert!(pp == 0, "IADD3: predicate combination pp={} not implemented", pp);
+            self.set_predicate_bit(pu, cmp_result);
+        }
+
         self.store_register_predicated(rd, pg, pg_not != 0, res);
     }
     pub fn iadd32i(&mut self, inst: u128) {
@@ -1954,9 +2024,9 @@ impl<'a> Decoder<'a> {
         let _sc_negate = (((inst >> 75) & 0x1) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
+        let pu = (((inst >> 81) & 0x7) << 0) as u32;
+        let cop = (((inst >> 84) & 0x7) << 0) as u32;
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
@@ -1965,7 +2035,6 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
 
         assert!(_e == 0, "IADD32I: extended precision not implemented");
-        assert!(_cop == 0, "IADD32I: comparison op not implemented");
         assert!(_ftz == 0, "IADD32I: FTZ not implemented");
 
         // Rd = Ra + imm32
@@ -1974,8 +2043,6 @@ impl<'a> Decoder<'a> {
 
         // apply source modifiers
         if _sc_absolute != 0 {
-            // |b| via branchless abs: (b ^ mask) - mask
-            // where mask = 0 - (b >>u 31) → 0x00000000 if positive, 0xFFFFFFFF if negative
             let shift = self.cached_const_u32(31);
             let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
             let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
@@ -1987,6 +2054,14 @@ impl<'a> Decoder<'a> {
         }
 
         let res = self.ir.emit_iadd(self.type_u32[1], a, b);
+
+        // handle comparison op
+        if cop != 0 {
+            let cmp_result = self.emit_cmp_against_zero(cop, res);
+            assert!(pp == 0, "IADD32I: predicate combination pp={} not implemented", pp);
+            self.set_predicate_bit(pu, cmp_result);
+        }
+
         self.store_register_predicated(rd, pg, pg_not != 0, res);
     }
     pub fn ide(&mut self, inst: u128) {

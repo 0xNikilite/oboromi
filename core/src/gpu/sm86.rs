@@ -1792,7 +1792,6 @@ impl<'a> Decoder<'a> {
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let ra_offset = (((inst >> 32) & 0xffffffff) << 0) as u32;
         let _rc = (((inst >> 64) & 0xff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
         let _sc_absolute = (((inst >> 74) & 0x1) << 0);
@@ -1818,7 +1817,31 @@ impl<'a> Decoder<'a> {
         assert!(_ftz == 0, "IADD: FTZ not implemented");
 
         let a = self.load_register(ra);
-        let b = self.cached_const_u32(ra_offset);
+
+        // determine source encoding from opcode bits 9-11:
+        //   4 (100) = immediate (ra_offset, bits 32-63)
+        //   1 (001) = register  (rb, bits 32-39)
+        //   5 (101) = constant bank (sc_addr + sc_bank)
+        //   6 (110) = uniform register bank
+        let src_type = ((inst >> 9) & 0x7) as u32;
+        let b = match src_type {
+            4 => {
+                let ra_offset = (((inst >> 32) & 0xffffffff) << 0) as u32;
+                self.cached_const_u32(ra_offset)
+            }
+            1 => {
+                let rb = (((inst >> 32) & 0xff) << 0) as u32;
+                self.load_register(rb)
+            }
+            5 => {
+                todo!("IADD: constant bank source not yet implemented")
+            }
+            6 => {
+                todo!("IADD: uniform register bank source not yet implemented")
+            }
+            _ => panic!("IADD: unknown source encoding type {}", src_type),
+        };
+
         let res = self.ir.emit_iadd(self.type_u32[1], a, b);
         self.store_register_predicated(rd, pg, pg_not != 0, res);
     }

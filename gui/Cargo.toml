@@ -8,11 +8,11 @@ description = "oboromi emulator GUI frontend"
 
 [dependencies]
 oboromi-core = { path = "../core", default-features = false }
-egui = { workspace = true }
-eframe = { workspace = true }
-fern = { workspace = true }
 log = { workspace = true }
-image = "0.25.6"
+fern = { workspace = true }
+egui = "0.33.3"
+eframe = "0.33.3"
+image = "0.25.10"
 
 [features]
 default = []

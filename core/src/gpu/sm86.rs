@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use crate::gpu::spirv;
 
-static MAX_REG_COUNT: usize = 254;
+static MAX_REG_COUNT: u8 = 254;
 static MAX_UNIFORM_REG_COUNT: usize = 63;
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
@@ -330,13 +330,13 @@ impl<'a> Decoder<'a> {
         self.const_u32_1 = self.ir.emit_constant_typed(self.type_u32[1], 1u32);
         self.const_cache.insert(0, self.const_u32_0);
         self.const_cache.insert(1, self.const_u32_1);
-        for i in 2..=4 {
+        for i in 2..=4_u8 {
             for type_sxx in [
                 self.type_u8, self.type_u16, self.type_u32, self.type_u64,
                 self.type_s8, self.type_s16, self.type_s32, self.type_s64,
                 self.type_f16, self.type_f32, self.type_f64, self.type_bool
             ] {
-                self.ir.emit_type_vector(type_sxx[i], i as u32);
+                self.ir.emit_type_vector(type_sxx[i as usize], i as u32);
             }
         }
 

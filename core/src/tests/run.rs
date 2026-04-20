@@ -1,7 +1,10 @@
 //! Test suite for Dynarmic JIT backend
-use crate::cpu::UnicornCPU;
-use std::time::{Duration, Instant};
 
+use std::fmt::Display;
+use std::time::{Duration, Instant};
+use crate::cpu::{CpuCore, Fault};
+
+const TEST_MEMORY_SIZE: u64 = 0x10000;
 const TEST_BASE_ADDR: u64 = 0x0000_1000;
 const BREAKPOINT_ADDR: u64 = 0x0000_2000;
 
@@ -33,7 +36,7 @@ impl TestResult {
         }
     }
 
-    fn fail(name: &str, message: &str, duration: Duration) -> Self {
+    fn fail(name: &str, message: impl Display, duration: Duration) -> Self {
         TestResult {
             name: name.to_string(),
             passed: false,
@@ -73,7 +76,7 @@ mod arm64 {
     pub fn branch(offset: i32) -> u32 {
         // B imm26 - offset is in 4-byte instruction words
         // Encoding: 0b000101 | imm26
-        let imm26 = (offset as u32) & 0x03FF_FFFF;
+        let imm26 = offset.cast_unsigned() & 0x03FF_FFFF;
         0x14000000 | imm26
     }
 
@@ -95,15 +98,7 @@ mod arm64 {
 fn warmup_jit() {
     println!("Warming up Unicorn emulator...");
     let _start = Instant::now();
-    let cpu = match UnicornCPU::new() {
-        Some(cpu) => cpu,
-        None => {
-            println!("Failed to create CPU for warmup");
-            return;
-        }
-    };
-    cpu.set_sp(0x8000);
-    cpu.set_pc(TEST_BASE_ADDR);
+    let cpu = CpuCore::new_mock(TEST_MEMORY_SIZE);
     let mut addr = TEST_BASE_ADDR;
     for instr in [
         arm64::nop(),
@@ -112,77 +107,76 @@ fn warmup_jit() {
         arm64::mov_reg(3, 4),
         arm64::brk(0),
     ] {
-        cpu.write_u32(addr, instr);
+        cpu.write_u32(addr, instr).unwrap();
         addr += 4;
     }
 
-    cpu.set_x(0, 10);
-    cpu.set_x(1, 20);
-    cpu.set_x(2, 30);
-    cpu.set_x(4, 0xCAFE);
+    cpu.store_x::<0>(10);
+    cpu.store_x::<1>(20);
+    cpu.store_x::<2>(30);
+    cpu.store_x::<4>(0xCAFE);
     
     println!("Compiling warmup code...");
     let start = Instant::now();
-    let _ = cpu.run();
+    let _ = cpu.execute_at(TEST_BASE_ADDR);
     let elapsed = start.elapsed();
     println!("JIT warmup completed in {elapsed:?}");
 }
 
 fn run_test<F, V>(name: &str, instructions: &[u32], setup: F, verify: V) -> TestResult
 where
-    F: FnOnce(&UnicornCPU),
-    V: FnOnce(&UnicornCPU) -> bool,
+    F: FnOnce(&CpuCore),
+    V: FnOnce(&CpuCore) -> bool,
 {
     let start = Instant::now();
     let timeout = get_test_timeout();
     
     println!("Running test: {name} ({} instructions)", instructions.len());
-    let cpu = match UnicornCPU::new() {
-        Some(cpu) => {
-            println!("CPU created successfully");
-            cpu
-        }
-        None => {
-            println!("FAILED to create CPU!");
-            return TestResult::fail(name, "Failed to create CPU", start.elapsed());
-        }
-    };
+    let cpu = CpuCore::new_mock(TEST_MEMORY_SIZE);
 
     println!("Setting initial state...");
-    cpu.set_sp(0x8000);
-    cpu.set_pc(TEST_BASE_ADDR);
+    cpu.store_sp(0x8000);
 
     let mut current_addr = TEST_BASE_ADDR;
     for (i, &instr) in instructions.iter().enumerate() {
-        cpu.write_u32(current_addr, instr);
+        cpu.write_u32(current_addr, instr).unwrap();
         println!("Wrote instruction {}: {instr:#08X} at {current_addr:#016X}", i + 1);
         current_addr += 4;
     }
 
-    cpu.write_u32(current_addr, arm64::brk(0));
+    cpu.write_u32(current_addr, arm64::brk(0)).unwrap();
     println!("Added breakpoint at {current_addr:#016X}");
     
     println!("Running test setup...");
     setup(&cpu);
     
     println!("Executing {} instructions with run()...", instructions.len());
-    let result = cpu.run();
-    let final_pc = cpu.get_pc();
-    println!("Execution completed, PC: {final_pc:#016X}, result: {result}");
-    
+    let result = cpu.execute_at(TEST_BASE_ADDR);
+    let final_pc = cpu.load_pc();
+    println!("Execution completed, PC: {final_pc:#016X}, result: {result:?}");
+
     let duration = start.elapsed();
 
-    if duration > timeout {
-        TestResult::timeout(name, duration)
-    } else if result == 0 {
-        TestResult::fail(name, &format!("Execution failed (PC = {final_pc:#016X})"), duration)
-    } else {
-        println!("Running verification...");
-        let verification_result = verify(&cpu);
-        if verification_result {
-            TestResult::pass(name, duration)
-        } else {
-            TestResult::fail(name, &format!("Verification failed (PC = {final_pc:#016X})"), duration)
+    match result {
+        _ if duration > timeout => TestResult::timeout(name, duration),
+        Ok(()) => TestResult::fail(name, "test cpu unexpectedly halted", duration),
+        Err(Fault::UnhandledException) => {
+            println!("Running verification...");
+            match verify(&cpu) {
+                true => TestResult::pass(name, duration),
+                false => TestResult::fail(
+                    name,
+                    format_args!("Verification failed (PC = {final_pc:#016X})"),
+                    duration
+                )
+            }
+        }
+        Err(err) => {
+            TestResult::fail(
+                name,
+                format_args!("Execution faulted (PC = {final_pc:#016X}); fault: {err:?}"),
+                duration
+            )
         }
     }
 }
@@ -205,60 +199,62 @@ pub fn run_tests() -> Vec<String> {
             "NOP",
             &[arm64::nop()],
             |_cpu| {},
-            |cpu| cpu.get_pc() >= TEST_BASE_ADDR + 4,
+            |cpu| cpu.load_pc() >= TEST_BASE_ADDR + 4,
         ),
         run_test(
             "ADD X1, X1, #2",
             &[arm64::add_imm(1, 1, 2)],
             |cpu| {
-                cpu.set_x(1, 5);
+                cpu.store_x::<1>(5);
             },
-            |cpu| cpu.get_x(1) == 7,
+            |cpu| cpu.load_x::<1>() == 7,
         ),
         run_test(
             "SUB X2, X2, #1",
             &[arm64::sub_imm(2, 2, 1)],
             |cpu| {
-                cpu.set_x(2, 10);
+                cpu.store_x::<2>(10);
             },
-            |cpu| cpu.get_x(2) == 9,
+            |cpu| cpu.load_x::<2>() == 9,
         ),
         run_test(
             "ADD X0, X0, X1",
             &[arm64::add_reg(0, 0, 1)],
             |cpu| {
-                cpu.set_x(0, 7);
-                cpu.set_x(1, 3);
+                cpu.store_x::<0>(7);
+                cpu.store_x::<1>(3);
             },
-            |cpu| cpu.get_x(0) == 10,
+            |cpu| cpu.load_x::<0>() == 10,
         ),
         run_test(
             "MOV X3, X4",
             &[arm64::mov_reg(3, 4)],
             |cpu| {
-                cpu.set_x(3, 0);
-                cpu.set_x(4, 0xDEADBEEF);
+                cpu.store_x::<3>(0);
+                cpu.store_x::<4>(0xDEADBEEF);
             },
-            |cpu| cpu.get_x(3) == 0xDEADBEEF,
+            |cpu| cpu.load_x::<3>() == 0xDEADBEEF,
         ),
         run_test(
             "RET",
             &[arm64::ret()],
             |cpu| {
-                cpu.set_x(30, 0x2000);
+                cpu.store_x::<30>(0x2000);
             },
-            |cpu| cpu.get_pc() == 0x2000,
+            |cpu| cpu.load_pc() == 0x2000,
         ),
         
         run_test(
+            // WHAT?!?!??!?!?!?!?!?
             "Atomic ADD Test",
             &[arm64::add_imm(0, 0, 50)],
             |cpu| {
-                cpu.set_x(0, 100);
+                cpu.store_x::<0>(100);
             },
-            |cpu| cpu.get_x(0) == 150,
+            |cpu| cpu.load_x::<0>() == 150,
         ),
         run_test(
+            // WHAT?!?!??!?!?!?!?!?
             "Memory Access Pattern",
             &[
                 arm64::add_imm(1, 1, 1),
@@ -266,9 +262,9 @@ pub fn run_tests() -> Vec<String> {
                 arm64::add_imm(1, 1, 1),
             ],
             |cpu| {
-                cpu.set_x(1, 0);
+                cpu.store_x::<1>(0);
             },
-            |cpu| cpu.get_x(1) == 3,
+            |cpu| cpu.load_x::<1>() == 3,
         ),
         run_test(
             "Multiple Arithmetic Ops",
@@ -278,10 +274,10 @@ pub fn run_tests() -> Vec<String> {
                 arm64::add_reg(0, 0, 1),
             ],
             |cpu| {
-                cpu.set_x(0, 10);
-                cpu.set_x(1, 20);
+                cpu.store_x::<0>(10);
+                cpu.store_x::<1>(20);
             },
-            |cpu| cpu.get_x(0) == 32 && cpu.get_x(1) == 17,
+            |cpu| cpu.load_x::<0>() == 32 && cpu.load_x::<1>() == 17,
         ),
     ];
 
@@ -299,7 +295,10 @@ pub fn run_tests() -> Vec<String> {
     
     results.push(format!("Total: {} ({passed} / {failed}) time {total_time:?}", test_results.len()));
     if failed > 0 && cfg!(target_os = "macos") {
-        results.push(format!(r"macOS JIT cold start may cause first-test timeout; this is normal after build system changes"));
+        results.push(
+            r"macOS JIT cold start may cause first-test timeout; this is normal after build system changes"
+                .to_string()
+        );
     }
     results
 }

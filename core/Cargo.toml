@@ -10,11 +10,10 @@ description = "Core emulator library for oboromi"
 path = "src/lib.rs"
 
 [dependencies]
-unicorn-engine = "2.1.1"
-libc = "0.2.177"
-memmap2 = "0.9.9"
-log = { workspace = true }
+unicorn-engine-sys = "2.1.5"
+memmap2 = "0.9.10"
 ash = "0.38.0+1.3.281"
+thiserror = { workspace = true }
 
 [features]
 default = []

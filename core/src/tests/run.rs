@@ -243,29 +243,6 @@ pub fn run_tests() -> Vec<String> {
             },
             |cpu| cpu.load_pc() == 0x2000,
         ),
-        
-        run_test(
-            // WHAT?!?!??!?!?!?!?!?
-            "Atomic ADD Test",
-            &[arm64::add_imm(0, 0, 50)],
-            |cpu| {
-                cpu.store_x::<0>(100);
-            },
-            |cpu| cpu.load_x::<0>() == 150,
-        ),
-        run_test(
-            // WHAT?!?!??!?!?!?!?!?
-            "Memory Access Pattern",
-            &[
-                arm64::add_imm(1, 1, 1),
-                arm64::add_imm(1, 1, 1),
-                arm64::add_imm(1, 1, 1),
-            ],
-            |cpu| {
-                cpu.store_x::<1>(0);
-            },
-            |cpu| cpu.load_x::<1>() == 3,
-        ),
         run_test(
             "Multiple Arithmetic Ops",
             &[

@@ -330,14 +330,19 @@ impl<'a> Decoder<'a> {
         self.const_u32_1 = self.ir.emit_constant_typed(self.type_u32[1], 1u32);
         self.const_cache.insert(0, self.const_u32_0);
         self.const_cache.insert(1, self.const_u32_1);
-        for i in 2..=4_u8 {
-            for type_sxx in [
-                self.type_u8, self.type_u16, self.type_u32, self.type_u64,
-                self.type_s8, self.type_s16, self.type_s32, self.type_s64,
-                self.type_f16, self.type_f32, self.type_f64, self.type_bool
-            ] {
-                self.ir.emit_type_vector(type_sxx[i as usize], i as u32);
-            }
+        for i in 2..=4 {
+            self.type_u8[i] = self.ir.emit_type_vector(self.type_u8[1], i as u32);
+            self.type_u16[i] = self.ir.emit_type_vector(self.type_u16[1], i as u32);
+            self.type_u32[i] = self.ir.emit_type_vector(self.type_u32[1], i as u32);
+            self.type_u64[i] = self.ir.emit_type_vector(self.type_u64[1], i as u32);
+            self.type_s8[i] = self.ir.emit_type_vector(self.type_s8[1], i as u32);
+            self.type_s16[i] = self.ir.emit_type_vector(self.type_s16[1], i as u32);
+            self.type_s32[i] = self.ir.emit_type_vector(self.type_s32[1], i as u32);
+            self.type_s64[i] = self.ir.emit_type_vector(self.type_s64[1], i as u32);
+            self.type_f16[i] = self.ir.emit_type_vector(self.type_f16[1], i as u32);
+            self.type_f32[i] = self.ir.emit_type_vector(self.type_f32[1], i as u32);
+            self.type_f64[i] = self.ir.emit_type_vector(self.type_f64[1], i as u32);
+            self.type_bool[i] = self.ir.emit_type_vector(self.type_bool[1], i as u32);
         }
 
         {

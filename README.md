@@ -10,6 +10,7 @@
 
 <h1 align="center">oboromi</h1>
 <h4 align="center">a WIP ounce emulator foundation written in Rust</h4>
+<h5 align="center">written lowercase.</h5>
 
 oboromi is a WIP emulator for the Nintendo Switch 2.
 

@@ -2699,9 +2699,25 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn mov(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+
+        // MOV shares one primary opcode across several addressing-mode
+        // variants (register, constant-bank, indexed constant-bank, immediate)
+        // that real hardware disambiguates using bits inside the operand
+        // field itself, not the opcode. Re-derive the same 13-bit selector
+        // the dispatcher used to route here; only the immediate form
+        // (key 0x1a02 / CLASS "mov__RI") is implemented so far.
+        let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
+        if variant_key == 0x1a02 {
+            // Rd = imm32
+            let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
+            let val = self.cached_const_u32(imm32);
+            self.store_register_predicated(rd, pg, pg_not != 0, val);
+            return;
+        }
+
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let _pixmasku04 = (((inst >> 72) & 0xf) << 0);

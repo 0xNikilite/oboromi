@@ -1,64 +1,50 @@
-# Contributing to oboromi
+updated : 30/07/2026
 
-First off, thanks for taking the time to contribute!
+# contributing to oboromi
 
-The following is a set of guidelines for contributing to `oboromi`. These are mostly guidelines, not rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
+Thanks for the interest! oboromi is an (not yet what you probably think) emulator written in Rust
 
-## Getting Started
+## before you start
 
-### Prerequisites
+You'll need:
+- **Rust** stable, latest version ([rustup](https://rustup.rs) if you don't have it)
+- **CMake** better latest version, for the Unicorn engine
+- **ninja-build**, if you are on windows just install it with `winget install Ninja-Build.Ninja`, on unix-like system just use your Package Manager (e.g. apt, brew)
+- a decent C++ compiler (Clang on Linux/macOS, MSVC on Windows)
 
-To build and run `oboromi`, you will need:
-
-*   **Rust**: Latest stable version. [Install Rust](https://www.rust-lang.org/tools/install).
-*   **CMake**: Version 3.16 or higher.
-*   **Ninja**: Build system.
-*   **C++ Compiler**: MSVC (Windows) or Clang (macOS/Linux).
-
-### Building the Project
-
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/0xNikilite/oboromi
-    cd oboromi
-    ```
-
-2.  Build and run:
-    ```bash
-    cargo run
-    ```
-
-### Running Tests (no tests yet)
-
-We prioritize correctness. Please ensure all tests pass before submitting a PR.
+clone it and try building:
 
 ```bash
-cargo test
+git clone https://github.com/0xNikilite/oboromi
+cd oboromi
+cargo run
 ```
 
-## Code Style
+## Project state (read before opening a PR)
 
-We follow standard Rust community guidelines.
+do not touch Unicorn-related stuff plz, we are working on using a [custom arm emulator](https://github.com/vrtgs/rapid-arm-emu)
 
-*   **Formatting**: Run `cargo fmt` to ensure your code is formatted correctly.
-*   **Linting**: Run `cargo clippy` to catch common mistakes and improve code quality. (rn it's normal if it fails)
+## tests
 
-## Submitting a Pull Request
+nothing to mention, but we like tests, if you implement a new feature make sure to make a simple way to test it (not needed, but would be cool)
 
-1.  Fork the repository and create your branch from `main`.
-2.  If you've added code that should be tested, add tests.
-3.  Ensure the test suite passes.
-4.  Make sure your code lints.
-5.  Issue that pull request!
+## code style
 
-## Reporting Bugs
+~~- Run `cargo fmt` before committing, please.~~ (skip this for now)
 
-Bugs are tracked as GitHub issues. When filing an issue, please explain the problem and include additional details to help maintainers reproduce the problem:
+## opening a PR
 
-*   Use a clear and descriptive title for the issue to identify the problem.
-*   Describe the exact steps which reproduce the problem.
-*   Describe the behavior you observed after following the steps.
+1. Fork, branch off `main`.
+2. commit changes
+3. Open the PR and explain the "why," not just the "what."
 
-## License
+## reporting bugs
 
-By contributing, you agree that your contributions will be licensed under its GNU General Public License v3.
+An issue with:
+- a clear title
+- steps to reproduce
+- what you expected vs. what actually happened
+
+## license
+
+By contributing, you agree your code gets released under GNU GPLv3, same as the rest of the project.

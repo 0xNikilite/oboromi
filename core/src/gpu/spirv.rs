@@ -68,7 +68,7 @@ pub mod capability {
     pub const INT8: u32 = 39;
     pub const STORAGE_BUFFER_16BIT: u32 = 4433;
     pub const STORAGE_BUFFER_8BIT: u32 = 4448;
-    pub const PHYSICAL_STORAGE_BUFFER: u32 = 5347;
+    pub const PHYSICAL_STORAGE_BUFFER_ADDRESSES: u32 = 5348;
     pub const VARIABLE_POINTERS: u32 = 4442;
 }
 
@@ -537,7 +537,7 @@ impl Emitter {
     pub fn emit_copy_object(&mut self, ty: u32, operand: u32) -> u32 {
         self.typed_un(83, ty, operand)
     }
-    
+
     pub fn emit_convert_f_to_u(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(109, ty, val) }
     pub fn emit_convert_f_to_s(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(110, ty, val) }
     pub fn emit_convert_s_to_f(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(111, ty, val) }

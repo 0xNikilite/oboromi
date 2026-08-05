@@ -1,0 +1,6 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <!-- Same file the old egui frontend embedded via include_bytes!() -->
+    <file alias="oboromi_logo.png">../assets/oboromi_logo.png</file>
+</qresource>
+</RCC>

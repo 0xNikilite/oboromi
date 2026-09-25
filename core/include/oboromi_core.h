@@ -8,7 +8,7 @@
 
 constexpr static const uintptr_t CORE_COUNT = 8;
 
-constexpr static const uint64_t MEMORY_SIZE = (((12 * 1024) * 1024) * 1024);
+constexpr static const uint64_t MEMORY_SIZE = (((12ull * 1024) * 1024) * 1024);
 
 constexpr static const uint64_t MEMORY_BASE = 0;
 

@@ -6,7 +6,7 @@ pub const CORE_COUNT: usize = 8;
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("oboromi requires a 64-bit architecture to emulate 12GB of RAM.");
 // 12GB Memory
-pub const MEMORY_SIZE: u64 = 12 * 1024 * 1024 * 1024; 
+pub const MEMORY_SIZE: u64 = 12u64 * 1024 * 1024 * 1024;
 pub const MEMORY_BASE: u64 = 0x0;
 
 pub struct CpuManager {

@@ -1088,25 +1088,25 @@ impl<'a> Decoder<'a> {
 		} else if /*IABS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x813 {
 			self.iabs(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa10 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a10 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x210 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c10 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa10 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a10 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x210 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c10 {
-			self.iadd(inst);
+			self.iadd3(inst);
 		} else if /*IADD3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
 			self.iadd3(inst);
 		} else if /*IADD3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa10 {

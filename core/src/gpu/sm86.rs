@@ -1934,7 +1934,7 @@ impl<'a> Decoder<'a> {
                 self.cached_const_u32(ra_offset)
             }
             1 => {
-                let rb = ((inst >> 32) & 0xff) as u32;
+                let rb = (((inst >> 32) & 0xff) << 0) as u32;
                 self.load_register(rb)
             }
             5 => {

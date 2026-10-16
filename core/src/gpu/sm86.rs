@@ -254,6 +254,7 @@ pub enum BitSize {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResourceKind {
+    BuiltIn(u32),
     Cbuf(u32),
     Ssbo(u32),
 }
@@ -448,6 +449,25 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    fn store_ureg_predicated(&mut self, ur: u32, pred: u32, invert: bool, val: u32) {
+        if ur == 63 {
+            return;
+        }
+        let bit = if pred == 7 {
+            self.const_u32_1
+        } else {
+            let upred = self.load_upredicate();
+            let shift = self.cached_const_u32(pred);
+            let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], upred, shift);
+            self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1)
+        };
+        let mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, bit);
+        let mask = if invert { self.ir.emit_not(self.type_u32[1], mask) } else { mask };
+        let old = self.load_ureg(ur);
+        let val = self.select_masked(mask, val, old);
+        self.store_ureg(ur, val);
+    }
+
     fn load_upredicate(&mut self) -> u32 {
         let ptr = self.state_ptr(&[3]);
         self.ir.emit_load(self.type_u32[1], ptr)
@@ -530,6 +550,62 @@ impl<'a> Decoder<'a> {
         for i in 0..2 {
             let word = self.ir.emit_composite_extract(self.type_u32[1], pair, &[i]);
             self.store_register(reg + i, word);
+        }
+    }
+
+    fn special_register(&mut self, index: u32) -> u32 {
+        use spirv::{BuiltIn, decoration, storage_class::INPUT};
+        let builtin = |this: &mut Self, builtin: BuiltIn| {
+            let builtin = builtin as u32;
+            let ty = match builtin {
+                x if x == BuiltIn::LocalInvocationIndex as u32 => this.type_u32[1],
+                _ => this.type_u32[3],
+            };
+            let var = match this.resource(ResourceKind::BuiltIn(builtin)) {
+                Some(var) => var,
+                None => {
+                    let ptr = this.ir.emit_type_pointer(INPUT, ty);
+                    let var = this.ir.emit_variable(ptr, INPUT);
+                    this.ir.emit_decorate(var, decoration::BUILTIN, &[builtin]);
+                    this.resources.push(Resource { kind: ResourceKind::BuiltIn(builtin), set: 0, binding: 0, var });
+                    var
+                }
+            };
+            this.ir.emit_load(ty, var)
+        };
+        match index {
+            0 => {
+                let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
+                let mask = self.cached_const_u32(31);
+                self.ir.emit_bitwise_and(self.type_u32[1], invocation, mask)
+            }
+            3 => {
+                let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
+                let shift = self.cached_const_u32(5);
+                self.ir.emit_shift_right_logical(self.type_u32[1], invocation, shift)
+            }
+            32 => {
+                let tid = builtin(self, BuiltIn::LocalInvocationId);
+                let x = self.ir.emit_composite_extract(self.type_u32[1], tid, &[0]);
+                let y = self.ir.emit_composite_extract(self.type_u32[1], tid, &[1]);
+                let z = self.ir.emit_composite_extract(self.type_u32[1], tid, &[2]);
+                let (o16, c8, o26, c6) = (
+                    self.cached_const_u32(16), self.cached_const_u32(8),
+                    self.cached_const_u32(26), self.cached_const_u32(6),
+                );
+                let xy = self.ir.emit_bit_field_insert(self.type_u32[1], x, y, o16, c8);
+                self.ir.emit_bit_field_insert(self.type_u32[1], xy, z, o26, c6)
+            }
+            33..=35 => {
+                let tid = builtin(self, BuiltIn::LocalInvocationId);
+                self.ir.emit_composite_extract(self.type_u32[1], tid, &[index - 33])
+            }
+            37..=39 => {
+                let ctaid = builtin(self, BuiltIn::WorkgroupId);
+                self.ir.emit_composite_extract(self.type_u32[1], ctaid, &[index - 37])
+            }
+            1 | 2 | 4..=31 | 36 | 40..=133 | 255 => self.const_u32_0,
+            _ => panic!("unknown special register {index}"),
         }
     }
 
@@ -1138,8 +1214,8 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn cs2r(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) != 0;
         let _rd = (((inst >> 16) & 0xff) << 0);
         let _imm8 = (((inst >> 72) & 0xff) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
@@ -1148,7 +1224,20 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let rd = ((inst >> 16) & 0xff) as u32;
+        let sr = ((inst >> 72) & 0xff) as u32;
+        if (inst >> 80) & 1 == 0 {
+            let val = self.special_register(sr);
+            self.store_register_predicated(rd, pg, pg_not, val);
+        } else {
+            let hi = if sr == 255 { sr } else { sr + 1 };
+            let words = [self.special_register(sr), self.special_register(hi)];
+            if rd != 255 {
+                for (i, val) in words.into_iter().enumerate() {
+                    self.store_register_predicated(rd + i as u32, pg, pg_not, val);
+                }
+            }
+        }
     }
     pub fn csmtest(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2874,8 +2963,8 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn s2r(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) != 0;
         let _rd = (((inst >> 16) & 0xff) << 0);
         let _imm8 = (((inst >> 72) & 0xff) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
@@ -2883,11 +2972,14 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let rd = ((inst >> 16) & 0xff) as u32;
+        let sr = ((inst >> 72) & 0xff) as u32;
+        let val = self.special_register(sr);
+        self.store_register_predicated(rd, pg, pg_not, val);
     }
     pub fn s2ur(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) != 0;
         let _urd = (((inst >> 16) & 0x3f) << 0);
         let _imm8 = (((inst >> 72) & 0xff) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
@@ -2895,7 +2987,10 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let urd = ((inst >> 16) & 0x3f) as u32;
+        let sr = ((inst >> 72) & 0xff) as u32;
+        let val = self.special_register(sr);
+        self.store_ureg_predicated(urd, pg, pg_not, val);
     }
     pub fn scatter(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

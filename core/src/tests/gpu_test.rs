@@ -1,6 +1,6 @@
 use crate::gpu::sm86::Decoder;
 use crate::gpu::spirv::Emitter;
-use crate::gpu::spirv::capability::{FLOAT16, FLOAT64, INT16, INT64, INT8, SHADER};
+use crate::gpu::spirv::capability::SHADER;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
@@ -76,9 +76,7 @@ mod inst {
 fn translate_module(instructions: &[u128]) -> Emitter {
     let mut emitter = Emitter::new();
     emitter.emit_header();
-    for cap in [SHADER, INT8, INT16, INT64, FLOAT16, FLOAT64] {
-        emitter.emit_capability(cap);
-    }
+    emitter.emit_capability(SHADER);
     emitter.emit_memory_model(0, 1);
 
     let mut decoder = Decoder::new(&mut emitter);
@@ -212,6 +210,7 @@ fn fixtures_match_nvdisasm() {
 fn mov_immediate_passes_spirv_val() {
     let path = std::env::temp_dir().join("oboromi_mov_immediate.spv");
     let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)]);
+    assert_eq!(module.words()[5..8], [2 << 16 | 17, SHADER, 3 << 16 | 14]);
     std::fs::write(&path, module.to_bytes()).unwrap();
     let spirv_val = std::process::Command::new("spirv-val")
         .args(["--target-env", "vulkan1.2"])

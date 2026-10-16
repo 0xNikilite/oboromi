@@ -3,7 +3,7 @@ use ash::vk::DescriptorType;
 use oboromi_core::display::present;
 use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
-use oboromi_core::gpu::{VkState, frame::render_test_frame};
+use oboromi_core::gpu::{device, frame::render_test_frame};
 use oboromi_core::tests::gpu_test::{inst, translate_module};
 use std::hint::black_box;
 use std::time::Instant;
@@ -48,7 +48,7 @@ fn bench(
 
 fn gpu_rows(rows: &mut Vec<Row>) -> String {
     let t = Instant::now();
-    let state = match VkState::new() {
+    let state = match device() {
         Ok(state) => state,
         Err(e) => return format!("skipped: {e:?}"),
     };
@@ -66,15 +66,15 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
     let words = translate_module(&[inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)], true).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let t = Instant::now();
-    let mut pipeline = ComputePipeline::new(&state, &words, &[(10, ssbo), (9, ssbo)]).unwrap();
+    let mut pipeline = ComputePipeline::new(state, &words, &[(10, ssbo), (9, ssbo)]).unwrap();
     rows.push(Row {
         name: "pipeline create (cold)",
         us: vec![t.elapsed().as_secs_f64() * 1e6],
         per_op: 0.0,
         unit: "",
     });
-    let mut input = HostBuffer::new(&state, 255 * 4).unwrap();
-    let output = HostBuffer::new(&state, 255 * 4).unwrap();
+    let mut input = HostBuffer::new(state, 255 * 4).unwrap();
+    let output = HostBuffer::new(state, 255 * 4).unwrap();
     pipeline.bind(&[(10, &input), (9, &output)]);
     let mut out = [0u8; 255 * 4];
     rows.push(bench(
@@ -95,7 +95,6 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    drop(state);
     rows.push(bench(
         "render_test_frame e2e",
         2,

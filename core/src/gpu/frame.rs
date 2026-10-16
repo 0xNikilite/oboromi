@@ -1,7 +1,7 @@
 //! Test frame: a compute shader writes a gradient into a storage buffer that is presented as is.
 use super::compute::{ComputePipeline, HostBuffer};
 use super::spirv::{BuiltIn, Emitter, decoration as deco, storage_class as sc, *};
-use super::{VkError, VkState};
+use super::{VkError, device};
 use ash::vk;
 
 const WIDTH: u32 = 1920;
@@ -68,11 +68,11 @@ fn gradient_shader() -> Vec<u32> {
 }
 
 pub fn render_test_frame() -> Result<(), VkError> {
-    let state = VkState::new()?;
+    let state = device()?;
     let size = u64::from(WIDTH * HEIGHT * 4);
-    let buffer = HostBuffer::new(&state, size)?;
+    let buffer = HostBuffer::new(state, size)?;
     let bindings = [(9, vk::DescriptorType::STORAGE_BUFFER)];
-    let mut pipeline = ComputePipeline::new(&state, &gradient_shader(), &bindings)?;
+    let mut pipeline = ComputePipeline::new(state, &gradient_shader(), &bindings)?;
     pipeline.bind(&[(9, &buffer)]);
     // Round up so 1080 rows get a partial last group; the shader guard drops the overhang.
     state.dispatch(&pipeline, [WIDTH.div_ceil(16), HEIGHT.div_ceil(16), 1])?;

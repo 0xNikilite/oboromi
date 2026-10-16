@@ -1,7 +1,7 @@
 use memmap2::Mmap;
 use std::fs;
-use std::ops::Deref;
 use std::path::Path;
+use std::ops::Deref;
 
 pub struct File {
     map: Mmap,
@@ -9,8 +9,9 @@ pub struct File {
 
 impl File {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error>
-where {
-        let file = fs::File::open(path)?;
+    where
+    {
+        let file = fs::File::open(path)?;      
         let map = unsafe { Mmap::map(&file)? };
         Ok(Self { map })
     }

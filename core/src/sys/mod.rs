@@ -1,5 +1,5 @@
-use crate::gpu;
 use crate::nn;
+use crate::gpu;
 
 #[derive(Default)]
 pub struct Services {
@@ -174,7 +174,7 @@ impl State {
     pub fn new() -> Self {
         Self {
             services: Services::default(),
-            gpu_state: gpu::State::default(),
+            gpu_state: gpu::State::default()
         }
     }
 }

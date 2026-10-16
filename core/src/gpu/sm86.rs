@@ -3,10 +3,11 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use crate::gpu::spirv;
+use crate::gpu::spirv::{self, storage_class};
 
-static MAX_REG_COUNT: usize = 254;
-static MAX_UNIFORM_REG_COUNT: usize = 63;
+const MAX_REG_COUNT: usize = 254;
+const MAX_UNIFORM_REG_COUNT: usize = 63;
+pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1;
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
 
@@ -251,6 +252,20 @@ pub enum BitSize {
     B128 = 0b11,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResourceKind {
+    Cbuf(u32),
+    Ssbo(u32),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Resource {
+    pub kind: ResourceKind,
+    pub set: u32,
+    pub binding: u32,
+    pub var: u32,
+}
+
 pub struct Decoder<'a> {
     pub ir: &'a mut spirv::Emitter,
     type_void: u32,
@@ -268,7 +283,11 @@ pub struct Decoder<'a> {
     const_u32_0: u32,
     const_u32_1: u32,
     type_ptr_ssbo_u32: u32,
-    register_io_vars: Vec<u32>,
+    type_ptr_cbuf: u32,
+    type_ptr_cbuf_u32: u32,
+    type_u64: u32,
+    glsl_ext: u32,
+    pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
 }
@@ -288,7 +307,11 @@ impl<'a> Decoder<'a> {
             const_u32_0: 0,
             const_u32_1: 0,
             type_ptr_ssbo_u32: 0,
-            register_io_vars: Vec::new(),
+            type_ptr_cbuf: 0,
+            type_ptr_cbuf_u32: 0,
+            type_u64: 0,
+            glsl_ext: 0,
+            resources: Vec::new(),
             const_cache: HashMap::new(),
         }
     }
@@ -299,7 +322,8 @@ impl<'a> Decoder<'a> {
 
     pub fn emit_entry_point(&mut self, func: u32) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
-        let interface = [&[self.var_abstract_state][..], &self.register_io_vars].concat();
+        let resources = self.resources.iter().map(|r| r.var);
+        let interface: Vec<u32> = std::iter::once(self.var_abstract_state).chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
@@ -328,21 +352,24 @@ impl<'a> Decoder<'a> {
         {
             let length_const = self.ir.emit_constant_typed(self.type_u32[1], MAX_REG_COUNT as u32);
             let type_regs_array = self.ir.emit_type_array(self.type_u32[1], length_const);
+            let ureg_count = self.cached_const_u32(MAX_UNIFORM_REG_COUNT as u32);
+            let type_uregs_array = self.ir.emit_type_array(self.type_u32[1], ureg_count);
             let members = &[
                 ("regs", type_regs_array),
                 ("pred", self.type_u32[1]),
+                ("uregs", type_uregs_array),
+                ("upred", self.type_u32[1]),
             ];
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
-            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(6, type_regs_array);
+            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(storage_class::PRIVATE, type_regs_array);
         }
 
         // Define generic pointers
-        // Storage class 6 = Private
         for i in 1..=4 {
-            self.type_ptr_u32[i] = self.ir.emit_type_pointer(6, self.type_u32[i]);
+            self.type_ptr_u32[i] = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_u32[i]);
         }
-        let type_ptr_abstract_state = self.ir.emit_type_pointer(6, self.type_abstract_state);
-        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 6);
+        let type_ptr_abstract_state = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_abstract_state);
+        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, storage_class::PRIVATE);
 
 
     }
@@ -358,34 +385,176 @@ impl<'a> Decoder<'a> {
         self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
         self.ir.emit_decorate(block, deco::BLOCK, &[]);
         self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
-        for binding in [in_binding, out_binding] {
+        for (n, binding) in [(0, in_binding), (1, out_binding)] {
             let var = self.ir.emit_variable(block_ptr, STORAGE_BUFFER);
             self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
             self.ir.emit_decorate(var, deco::BINDING, &[binding]);
-            self.register_io_vars.push(var);
+            self.resources.push(Resource { kind: ResourceKind::Ssbo(n), set: 0, binding, var });
         }
         // Every register is seeded because predicated stores read the old value.
-        for slot in 0..=MAX_REG_COUNT as u32 {
-            let word = self.ssbo_word(self.register_io_vars[0], slot);
+        let input = self.resource(ResourceKind::Ssbo(0)).unwrap();
+        for slot in 0..STATE_WORDS as u32 {
+            let word = self.ssbo_word(input, slot);
             let value = self.ir.emit_load(self.type_u32[1], word);
-            if slot < MAX_REG_COUNT as u32 {
-                self.store_register(slot, value);
-            } else {
-                self.store_predicate(value);
-            }
+            let ptr = self.state_slot(slot);
+            self.ir.emit_store(ptr, value);
         }
     }
 
     pub fn emit_register_dump(&mut self) {
-        for slot in 0..=MAX_REG_COUNT as u32 {
-            let value = if slot < MAX_REG_COUNT as u32 {
-                self.load_register(slot)
-            } else {
-                self.load_predicate()
-            };
-            let word = self.ssbo_word(self.register_io_vars[1], slot);
+        let output = self.resource(ResourceKind::Ssbo(1)).unwrap();
+        for slot in 0..STATE_WORDS as u32 {
+            let ptr = self.state_slot(slot);
+            let value = self.ir.emit_load(self.type_u32[1], ptr);
+            let word = self.ssbo_word(output, slot);
             self.ir.emit_store(word, value);
         }
+    }
+
+    fn resource(&self, kind: ResourceKind) -> Option<u32> {
+        self.resources.iter().find(|r| r.kind == kind).map(|r| r.var)
+    }
+
+    fn state_ptr(&mut self, path: &[u32]) -> u32 {
+        let ids: Vec<u32> = path.iter().map(|&i| self.cached_const_u32(i)).collect();
+        self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &ids)
+    }
+
+    // Register io word order: regs[254], pred, uregs[63], upred.
+    fn state_slot(&mut self, slot: u32) -> u32 {
+        let (regs, uregs) = (MAX_REG_COUNT as u32, MAX_UNIFORM_REG_COUNT as u32);
+        match slot {
+            s if s < regs => self.state_ptr(&[0, s]),
+            s if s == regs => self.state_ptr(&[1]),
+            s if s <= regs + uregs => self.state_ptr(&[2, s - regs - 1]),
+            _ => self.state_ptr(&[3]),
+        }
+    }
+
+    // URZ is index 63: reads zero, writes are dropped.
+    fn load_ureg(&mut self, ur: u32) -> u32 {
+        if ur == 63 {
+            return self.const_u32_0;
+        }
+        let ptr = self.state_ptr(&[2, ur]);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_ureg(&mut self, ur: u32, val: u32) {
+        if ur != 63 {
+            let ptr = self.state_ptr(&[2, ur]);
+            self.ir.emit_store(ptr, val);
+        }
+    }
+
+    fn load_upredicate(&mut self) -> u32 {
+        let ptr = self.state_ptr(&[3]);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_upredicate(&mut self, val: u32) {
+        let ptr = self.state_ptr(&[3]);
+        self.ir.emit_store(ptr, val);
+    }
+
+    // Bits 11:9 say what bits 32..64 hold: Rb (1), imm32 (2, 4), c[bank][off] (3, 5), URb with bit 91 set (6, 7).
+    // Forms 2, 3 and 7 feed that operand to C and move B to Rc at 64..72. The immediate is the whole 32-bit operand.
+    fn alu_src(&mut self, inst: u128) -> u32 {
+        let field = (inst >> 32) as u32;
+        match ((inst >> 9) & 7, (inst >> 91) & 1) {
+            (1, 0) => self.load_register(field & 0xff),
+            (2 | 4, 0) => self.cached_const_u32(field),
+            (3 | 5, 0) => self.load_cbuf(field >> 22 & 0x1f, (field >> 8 & 0x3fff) << 2),
+            (6 | 7, 1) => self.load_ureg(field & 0x3f),
+            form => todo!("ALU source form {form:?}"),
+        }
+    }
+
+    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096].
+    fn load_cbuf(&mut self, slot: u32, offset: u32) -> u32 {
+        let var = match self.resource(ResourceKind::Cbuf(slot)) {
+            Some(var) => var,
+            None => self.declare_cbuf(slot),
+        };
+        let index = [0, offset / 16, offset % 16 / 4].map(|i| self.cached_const_u32(i));
+        let ptr = self.ir.emit_access_chain(self.type_ptr_cbuf_u32, var, &index);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn declare_cbuf(&mut self, slot: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::UNIFORM};
+        assert!(slot < 8, "cbuf slot {slot} has no compute binding");
+        if self.type_ptr_cbuf == 0 {
+            let len = self.cached_const_u32(4096);
+            let array = self.ir.emit_type_array(self.type_u32[4], len);
+            let block = self.ir.emit_type_struct(&[array]);
+            // std140 pads every array element to 16 bytes, so uvec4 is the only dense u32 array a UBO can hold.
+            self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[16]);
+            self.ir.emit_decorate(block, deco::BLOCK, &[]);
+            self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+            self.type_ptr_cbuf = self.ir.emit_type_pointer(UNIFORM, block);
+            self.type_ptr_cbuf_u32 = self.ir.emit_type_pointer(UNIFORM, self.type_u32[1]);
+        }
+        let var = self.ir.emit_variable(self.type_ptr_cbuf, UNIFORM);
+        let binding = 1 + slot;
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        self.resources.push(Resource { kind: ResourceKind::Cbuf(slot), set: 0, binding, var });
+        var
+    }
+
+    // Int64 is declared on first use so 32-bit shaders still run on devices without shaderInt64.
+    fn type_u64(&mut self) -> u32 {
+        if self.type_u64 == 0 {
+            self.ir.emit_capability(spirv::capability::INT64);
+            self.type_u64 = self.ir.emit_type_int(64, 0);
+        }
+        self.type_u64
+    }
+
+    // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
+    fn load_pair(&mut self, reg: u32) -> u32 {
+        let hi = if reg == 255 { reg } else { reg + 1 };
+        let words = [self.load_register(reg), self.load_register(hi)];
+        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
+        let ty = self.type_u64();
+        self.ir.emit_bitcast(ty, pair)
+    }
+
+    fn store_pair(&mut self, reg: u32, val: u32) {
+        if reg == 255 {
+            return;
+        }
+        let pair = self.ir.emit_bitcast(self.type_u32[2], val);
+        for i in 0..2 {
+            let word = self.ir.emit_composite_extract(self.type_u32[1], pair, &[i]);
+            self.store_register(reg + i, word);
+        }
+    }
+
+    fn bitcast_f32(&mut self, val: u32) -> u32 {
+        self.ir.emit_bitcast(self.type_f32[1], val)
+    }
+
+    fn bitcast_u32(&mut self, val: u32) -> u32 {
+        self.ir.emit_bitcast(self.type_u32[1], val)
+    }
+
+    fn glsl(&mut self, op: u32, ty: u32, args: &[u32]) -> u32 {
+        if self.glsl_ext == 0 {
+            self.glsl_ext = self.ir.emit_ext_inst_import("GLSL.std.450");
+        }
+        self.ir.emit_ext_inst(ty, self.glsl_ext, op, args)
+    }
+
+    // Hardware applies |x| before negation; 4 is GLSL.std.450 FAbs.
+    fn fp_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
+        let val = if abs { self.glsl(4, self.type_f32[1], &[val]) } else { val };
+        if neg { self.ir.emit_fnegate(self.type_f32[1], val) } else { val }
+    }
+
+    fn int_src(&mut self, val: u32, neg: bool) -> u32 {
+        if neg { self.neg(val) } else { val }
     }
 
     fn ssbo_word(&mut self, var: u32, index: u32) -> u32 {
@@ -2370,26 +2539,20 @@ impl<'a> Decoder<'a> {
         let pg = (((inst >> 12) & 0x7) << 0) as u32;
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        const MOV_RR: u32 = 0x202;
+        const MOV_RI: u32 = 0x802;
+        const MOV_RC: u32 = 0xa02;
+        const MOV_RU: u32 = 0x1c02;
 
         // MOV shares one primary opcode across several addressing-mode
         // variants (register, constant-bank, indexed constant-bank, immediate)
         // that real hardware disambiguates using bits inside the operand
         // field itself, not the opcode. Re-derive the same 13-bit selector
-        // the dispatcher used to route here; only the register (key 0x202 /
-        // CLASS "mov__RR") and immediate (key 0x802 / CLASS "mov__RI") forms
-        // are implemented so far.
+        // the dispatcher used to route here; every form but cx[UR] is the
+        // ALU source selector.
         let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
-        // scripts/sm_86_instructions.txt: 0x802 is CLASS "mov__RI", 0x1a02 is "mov__RCx" (cx[UR] bank).
-        if variant_key == 0x802 {
-            // Rd = imm32
-            let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
-            let val = self.cached_const_u32(imm32);
-            self.store_register_predicated(rd, pg, pg_not != 0, val);
-            return;
-        }
-        if variant_key == 0x202 {
-            let rb = ((inst >> 32) & 0xff) as u32;
-            let val = self.load_register(rb);
+        if matches!(variant_key, MOV_RR | MOV_RI | MOV_RC | MOV_RU) {
+            let val = self.alu_src(inst);
             self.store_register_predicated(rd, pg, pg_not != 0, val);
             return;
         }

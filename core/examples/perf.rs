@@ -3,8 +3,10 @@ use ash::vk::DescriptorType;
 use oboromi_core::display::present;
 use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
+use oboromi_core::gpu::sm86::STATE_WORDS;
 use oboromi_core::gpu::{device, frame::render_test_frame};
-use oboromi_core::tests::gpu_test::{inst, translate_module};
+use oboromi_core::tests::gpu::harness::translate_module;
+use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -73,10 +75,10 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
         per_op: 0.0,
         unit: "",
     });
-    let mut input = HostBuffer::new(state, 255 * 4).unwrap();
-    let output = HostBuffer::new(state, 255 * 4).unwrap();
+    let mut input = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
+    let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     pipeline.bind(&[(10, &input), (9, &output)]);
-    let mut out = [0u8; 255 * 4];
+    let mut out = [0u8; STATE_WORDS * 4];
     rows.push(bench(
         "dispatch+fence+readback",
         50,
@@ -84,7 +86,7 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
         1.0,
         "dispatch/s",
         || {
-            input.write(&[0; 255 * 4]).unwrap();
+            input.write(&[0; STATE_WORDS * 4]).unwrap();
             state.dispatch(&pipeline, [1, 1, 1]).unwrap();
             output.read(black_box(&mut out)).unwrap();
         },

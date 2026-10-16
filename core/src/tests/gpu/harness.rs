@@ -5,7 +5,19 @@ use crate::gpu::spirv::capability::SHADER;
 use crate::gpu::{VkError, VkState};
 use ash::vk::DescriptorType;
 
-pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
+pub fn translate_module(
+    instructions: &[u128],
+    register_io: bool,
+    device: Option<&VkState>,
+) -> Emitter {
+    emit_module(register_io, device, |decoder| decoder.translate_program(instructions))
+}
+
+pub fn emit_module(
+    register_io: bool,
+    device: Option<&VkState>,
+    body: impl FnOnce(&mut Decoder),
+) -> Emitter {
     let mut emitter = Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(SHADER);
@@ -23,12 +35,12 @@ pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
         decoder.emit_register_io(10, 11);
     }
 
-    decoder.translate_program(instructions);
+    body(&mut decoder);
 
     if register_io {
         decoder.emit_register_dump();
     }
-    decoder.emit_entry_point(func);
+    decoder.emit_entry_point(func, device);
     decoder.ir.emit_return();
     decoder.ir.emit_function_end();
     decoder.ir.finalize();
@@ -62,8 +74,15 @@ pub fn run_regs(
     cbuf0: &[u32],
     global: &[u32],
 ) -> Option<(Vec<u32>, Vec<u32>)> {
-    let module = translate_module(instructions, true);
-    spirv_val(&module);
+    run_body(|decoder| decoder.translate_program(instructions), seed, cbuf0, global)
+}
+
+pub fn run_body(
+    body: impl FnOnce(&mut Decoder),
+    seed: &[u32],
+    cbuf0: &[u32],
+    global: &[u32],
+) -> Option<(Vec<u32>, Vec<u32>)> {
     let state = match VkState::new() {
         Ok(s) => s,
         Err(e @ (VkError::Loader | VkError::NoDevice)) => {
@@ -72,6 +91,8 @@ pub fn run_regs(
         }
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     };
+    let module = emit_module(true, Some(&state), body);
+    spirv_val(&module);
     let float64 = module.words().windows(2).any(|words| words == [2 << 16 | 17, 10]);
     if float64 && !state.shader_float64 {
         eprintln!("skipping: Vulkan device lacks shaderFloat64");

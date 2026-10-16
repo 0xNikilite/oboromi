@@ -70,6 +70,8 @@ pub mod capability {
     pub const STORAGE_BUFFER_8BIT: u32 = 4448;
     pub const PHYSICAL_STORAGE_BUFFER_ADDRESSES: u32 = 5348;
     pub const VARIABLE_POINTERS: u32 = 4442;
+    pub const DENORM_PRESERVE: u32 = 4464;
+    pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
 }
 
 pub mod storage_class {
@@ -95,6 +97,8 @@ pub mod execution_model {
 pub mod execution_mode {
     pub const LOCAL_SIZE: u32 = 17;
     pub const ORIGIN_UPPER_LEFT: u32 = 7;
+    pub const DENORM_PRESERVE: u32 = 4459;
+    pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4461;
 }
 
 pub mod decoration {

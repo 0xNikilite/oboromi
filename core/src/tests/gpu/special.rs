@@ -51,7 +51,7 @@ mod tests {
 
     #[test]
     fn special_register_builtins_are_entry_point_inputs() {
-        let module = translate_module(&[s2r(0, 33), s2r(1, 37), s2r(2, 0)], false);
+        let module = translate_module(&[s2r(0, 33), s2r(1, 37), s2r(2, 0)], false, None);
         spirv_val(&module);
         let path = std::env::temp_dir().join(format!("oboromi-special-{}.spv", std::process::id()));
         std::fs::write(&path, module.to_bytes()).unwrap();
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "unknown special register 200")]
     fn unknown_special_register_panics_with_index() {
-        translate_module(&[s2r(0, 200)], false);
+        translate_module(&[s2r(0, 200)], false, None);
     }
 
     #[test]

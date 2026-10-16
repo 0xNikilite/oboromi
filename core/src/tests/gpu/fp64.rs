@@ -252,6 +252,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "RM rounding mode")]
     fn directed_rounding_names_unsupported_mode() {
-        translate_module(&[WORD_DADD_REG | 1 << 78], true);
+        translate_module(&[WORD_DADD_REG | 1 << 78], true, None);
     }
 }

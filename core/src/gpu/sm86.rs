@@ -311,6 +311,7 @@ pub struct Decoder<'a> {
     type_ptr_abstract_state_regs: u32,
     var_abstract_state: u32,
     var_pc: u32,
+    var_rpc: [u32; 2],
     pc: u32,
     const_u32_0: u32,
     const_u32_1: u32,
@@ -397,6 +398,7 @@ impl<'a> Decoder<'a> {
             type_ptr_abstract_state_regs: 0,
             var_abstract_state: 0,
             var_pc: 0,
+            var_rpc: [0; 2],
             pc: 0,
             const_u32_0: 0,
             const_u32_1: 0,
@@ -423,7 +425,7 @@ impl<'a> Decoder<'a> {
     pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, local_size: [u32; 3]) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc].into_iter().chain(resources).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1]].into_iter().chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
@@ -480,6 +482,7 @@ impl<'a> Decoder<'a> {
         let type_ptr_abstract_state = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_abstract_state);
         self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, storage_class::PRIVATE);
         self.var_pc = self.ir.emit_variable(self.type_ptr_u32[1], storage_class::PRIVATE);
+        self.var_rpc = [(); 2].map(|_| self.ir.emit_variable(self.type_ptr_u32[1], storage_class::PRIVATE));
 
 
     }
@@ -4065,9 +4068,48 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        if opcode(inst) == 0x353 {
-            let address = self.cached_const_u32(if inst >> 31 & 1 == 0 { (self.pc + 1) * 16 } else { 0 });
-            self.store_register((inst >> 16 & 0xff) as u32, address);
+        let op = opcode(inst);
+        if op == 0x353 {
+            let value = self.ir.emit_load(self.type_u32[1], self.var_rpc[(inst >> 31 & 1) as usize]);
+            return self.store_register((inst >> 16 & 0xff) as u32, value);
+        }
+        let values = match op {
+            0x352 => [self.load_register((inst >> 32 & 0xff) as u32), self.const_u32_0],
+            0x952 => [self.cached_const_u32((inst >> 32) as u32), self.const_u32_0],
+            0xb52 => {
+                let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) as u32) << 2);
+                [self.load_cbuf(ResourceKind::Cbuf((inst >> 54 & 0x1f) as u32), offset), self.const_u32_0]
+            }
+            0x1d52 => [self.load_ureg((inst >> 32 & 0x3f) as u32), self.const_u32_0],
+            0x954 => {
+                let address = ((inst >> 34) & 0x7fff_ffff_ffff) << 2;
+                [self.cached_const_u32(address as u32), self.cached_const_u32((address >> 32) as u32)]
+            }
+            0xb54 => {
+                let offset = ((inst >> 40 & 0x3fff) as u32) << 2;
+                let bank = ResourceKind::Cbuf((inst >> 54 & 0x1f) as u32);
+                let lo = self.cached_const_u32(offset);
+                let hi = self.cached_const_u32(offset + 4);
+                [self.load_cbuf(bank, lo), self.load_cbuf(bank, hi)]
+            }
+            0x1d54 => {
+                let ur = (inst >> 32 & 0x3f) as u32;
+                [self.load_ureg(ur), self.load_ureg(nth_reg(ur, URZ, 1))]
+            }
+            0x1b52 | 0x1b54 => {
+                let bank = self.load_ureg((inst >> 32 & 0x3f) as u32);
+                let offset = ((inst >> 40 & 0x3fff) as u32) << 2;
+                let lo = self.cached_const_u32(offset);
+                let hi = self.cached_const_u32(offset + 4);
+                [self.load_dynamic_cbuf(bank, lo), self.load_dynamic_cbuf(bank, hi)]
+            }
+            _ => unreachable!(),
+        };
+        if matches!(op, 0x1b54 | 0xb54 | 0x954 | 0x1d54) {
+            self.ir.emit_store(self.var_rpc[0], values[0]);
+            self.ir.emit_store(self.var_rpc[1], values[1]);
+        } else {
+            self.ir.emit_store(self.var_rpc[(inst >> 31 & 1) as usize], values[0]);
         }
     }
     pub fn rtt(&mut self, inst: u128) {

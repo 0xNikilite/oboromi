@@ -4,8 +4,8 @@ mod tests {
     use crate::tests::gpu_test::inst::{
         IMM_B, UIADD3, alu3, bra, bra_conv, bra_div, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, preds, ret_rel,
         uldc64, W2I_ARRIVES, W2I_BMOV, W2I_BREAK, W2I_CCTLT, W2I_CSMTEST, W2I_DEPBAR, W2I_ERRBAR, W2I_IDE, W2I_JMP,
-        W2I_LEPC, W2I_NANOSLEEP, W2I_PMTRIG, W2I_QSPC, W2I_R2B, W2I_RPCMOV_HI, W2I_RPCMOV_LO, W2I_RTT, W2I_SETLMEMBASE,
-        W2I_YIELD,
+        W2I_LEPC, W2I_NANOSLEEP, W2I_PMTRIG, W2I_QSPC, W2I_R2B, W2I_RPCMOV_HI, W2I_RPCMOV_LO, W2I_RPCMOV_SET_HI,
+        W2I_RPCMOV_SET_LO, W2I_RTT, W2I_SETLMEMBASE, W2I_YIELD,
     };
 
     #[test]
@@ -188,9 +188,10 @@ mod tests {
 
     #[test]
     fn rpcmov_reads_the_next_byte_address_pair() {
-        let Some((regs, _)) = run_regs(&[W2I_RPCMOV_LO, W2I_RPCMOV_HI], &[10, 11, 12, 13], &[], &[]) else {
+        let program = [W2I_RPCMOV_SET_LO, W2I_RPCMOV_SET_HI, W2I_RPCMOV_LO, W2I_RPCMOV_HI];
+        let Some((regs, _)) = run_regs(&program, &[10, 11, 12, 13], &[], &[]) else {
             return;
         };
-        assert_eq!(regs[..4], [10, 11, 16, 0]);
+        assert_eq!(regs[..4], [10, 11, 0x1234, 0x5678]);
     }
 }

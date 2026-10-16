@@ -12,5 +12,6 @@ mod logic;
 mod memory;
 mod shared;
 mod special;
+mod texture;
 mod uniform;
 mod warp;

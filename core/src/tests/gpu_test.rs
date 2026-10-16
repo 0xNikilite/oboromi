@@ -110,6 +110,9 @@ pub mod inst {
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
     const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
+    const TLD: u128 = 0xb66;
+    const TEX_2D: u128 = 1 << 61;
+    const TLD_LZ: u128 = 1 << 87;
     const LDS: u128 = 0x984;
     const STS: u128 = 0x388;
     const ATOMS_ADD: u128 = 0x38c;
@@ -203,6 +206,14 @@ pub mod inst {
         inst |= ((rb as u128) & 0xff) << 32;
         inst |= ((off as u128) & 0xff_ffff) << 40;
         inst
+    }
+
+    pub fn tld_lz(rd: u32, rd2: u32, ra: u32, bank: u32, byte_offset: u32, mask: u32) -> u128 {
+        alu(TLD | TEX_2D | TLD_LZ | LDG_PU_PT | COP_EN, rd, ra, 0xff)
+            | (rd2 as u128) << 64
+            | (byte_offset as u128 / 4) << 40
+            | (bank as u128) << 54
+            | (mask as u128) << 72
     }
 
     pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
@@ -799,6 +810,8 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::MATCH | inst::MATCH_ANY | inst::MATCH_U64, 10, 12, 0), "MATCH.ANY.U64 R10, R12 ;"),
         (inst::alu3(inst::FSWZADD, 6, 5, 0x66, 4), "FSWZADD R6, R5, R4, PNNPPNNP;"),
         (inst::s2r(8, 57), "S2R R8, SR_LTMASK ;"),
+        (inst::tld_lz(4, 6, 2, 3, 0x10, 0xf), "TLD.LZ R6, R4, R2, 0x3, 0x4, 2D ;"),
+        (inst::tld_lz(8, 0xff, 2, 3, 0x10, 0xa), "TLD.LZ RZ, R8, R2, 0x3, 0x4, 2D, 0xa ;"),
         (inst::s2r(11, 60), "S2R R11, SR_GEMASK ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;

@@ -12,6 +12,7 @@ pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1;
 pub const SUPPORT_BINDING: u32 = 0;
 pub const CBUF_BINDING: u32 = 1;
 pub const GLOBAL_BINDING: u32 = 9;
+pub const TEXTURE_BINDING: u32 = 12;
 const RZ: u32 = 255;
 const URZ: u32 = 63;
 const SRZ: u32 = 255;
@@ -285,6 +286,7 @@ pub enum ResourceKind {
     Local,
     Shared,
     Warp,
+    Texture2D { cbuf_bank: u32, byte_offset: u32 },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -321,6 +323,8 @@ pub struct Decoder<'a> {
     type_f64: u32,
     type_f16: u32,
     type_f16x2: u32,
+    type_texture_2d: u32,
+    type_sampled_texture_2d: u32,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
@@ -388,6 +392,8 @@ impl<'a> Decoder<'a> {
             type_f64: 0,
             type_f16: 0,
             type_f16x2: 0,
+            type_texture_2d: 0,
+            type_sampled_texture_2d: 0,
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
@@ -4369,32 +4375,54 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn tld(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _b = (((inst >> 59) & 0x1) << 0);
-        let _scr = (((inst >> 60) & 0x1) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _sem = (((inst >> 79) & 0x3) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(opcode(inst) == 0xb66 && inst >> 59 & 3 == 0, "TLD only in the bound cbuf form: {inst:#034x}");
+        for (bit, modifier) in [(76, "AOFFI"), (77, "CL"), (78, "MS"), (79, "F16.RN"), (80, "F16.RZ")] {
+            assert!(inst >> bit & 1 == 0, "TLD.{modifier}");
+        }
+        assert!(inst >> 61 & 7 == 1, "TLD dimension {} is not 2D", inst >> 61 & 7);
+        assert!(inst >> 81 & 7 == PT as u128, "TLD sparse residency predicate");
+        let [rd, ra, rb, rd2] = [16, 24, 32, 64].map(|bit| (inst >> bit & 0xff) as u32);
+        let lod = match inst >> 87 & 7 {
+            1 => self.const_u32_0,
+            3 => self.load_register(rb),
+            mode => todo!("TLD lod mode {mode}"),
+        };
+        let coords = [ra, ra + 1].map(|r| self.load_register(r));
+        let coord = self.ir.emit_composite_construct(self.type_u32[2], &coords);
+        let texture = self.texture_2d((inst >> 54 & 0x1f) as u32, (inst >> 40 & 0x3fff) as u32 * 4);
+        let sampled = self.ir.emit_load(self.type_sampled_texture_2d, texture);
+        let image = self.ir.emit_image(self.type_texture_2d, sampled);
+        const LOD_OPERAND: u32 = 2;
+        let texel = self.ir.emit_image_fetch(self.type_f32[4], image, coord, &[LOD_OPERAND, lod]);
+        // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1.
+        let written = (0..4).filter(|c| inst >> (72 + c) & 1 != 0);
+        for (i, component) in written.enumerate() {
+            let value = self.ir.emit_composite_extract(self.type_f32[1], texel, &[component]);
+            let bits = self.bitcast_u32(value);
+            let reg = if i < 2 { nth_reg(rd, RZ, i as u32) } else { nth_reg(rd2, RZ, i as u32 - 2) };
+            self.store_register(reg, bits);
+        }
+    }
+
+    // A bound texture is keyed by the cbuf word holding its handle, so the host picks the image from that handle at dispatch.
+    fn texture_2d(&mut self, cbuf_bank: u32, byte_offset: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::UNIFORM_CONSTANT};
+        let kind = ResourceKind::Texture2D { cbuf_bank, byte_offset };
+        if let Some(var) = self.resource(kind) {
+            return var;
+        }
+        if self.type_sampled_texture_2d == 0 {
+            const DIM_2D: u32 = 1;
+            self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 0, 0, 0, 1, 0);
+            self.type_sampled_texture_2d = self.ir.emit_type_sampled_image(self.type_texture_2d);
+        }
+        let textures = self.resources.iter().filter(|r| matches!(r.kind, ResourceKind::Texture2D { .. })).count();
+        let ptr = self.ir.emit_type_pointer(UNIFORM_CONSTANT, self.type_sampled_texture_2d);
+        let var = self.ir.emit_variable(ptr, UNIFORM_CONSTANT);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::BINDING, &[TEXTURE_BINDING + textures as u32]);
+        self.resources.push(Resource { kind, var });
+        var
     }
     pub fn tld4(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

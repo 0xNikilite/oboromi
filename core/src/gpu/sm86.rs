@@ -740,6 +740,55 @@ impl<'a> Decoder<'a> {
         if neg { self.neg(val) } else { val }
     }
 
+    // FTZ keeps the sign: a subnormal becomes the zero of the same sign.
+    fn flush_subnormal(&mut self, bits: u32) -> u32 {
+        let [exponent, sign] = [0x7f80_0000, 0x8000_0000].map(|c| self.cached_const_u32(c));
+        let exp = self.ir.emit_bitwise_and(self.type_u32[1], bits, exponent);
+        let subnormal = self.ir.emit_iequal(self.type_bool[1], exp, self.const_u32_0);
+        let zero = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign);
+        self.ir.emit_select(self.type_u32[1], subnormal, zero, bits)
+    }
+
+    fn fp_operand(&mut self, bits: u32, abs: bool, neg: bool, ftz: bool) -> u32 {
+        let bits = if ftz { self.flush_subnormal(bits) } else { bits };
+        let val = self.bitcast_f32(bits);
+        self.fp_src(val, abs, neg)
+    }
+
+    fn fp_reg(&mut self, inst: u128, reg_lsb: u32, abs_bit: u32, neg_bit: u32, ftz: bool) -> u32 {
+        let bits = self.load_register((inst >> reg_lsb & 0xff) as u32);
+        self.fp_operand(bits, inst >> abs_bit & 1 != 0, inst >> neg_bit & 1 != 0, ftz)
+    }
+
+    // An immediate fills all of bits 32..64, so it has no |x| (62) or -x (63) bit.
+    fn fp_alu_src(&mut self, inst: u128, ftz: bool) -> u32 {
+        let bits = self.alu_src(inst);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        self.fp_operand(bits, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0, ftz)
+    }
+
+    // FMZ makes 0 * x a +0 even for x = inf or NaN, and implies FTZ.
+    fn fmz_operands(&mut self, a: u32, b: u32) -> [u32; 2] {
+        let zero = self.ir.emit_constant_typed(self.type_f32[1], 0.0f32);
+        let [a_zero, b_zero] = [a, b].map(|x| self.ir.emit_ford_equal(self.type_bool[1], x, zero));
+        let either = self.ir.emit_logical_or(self.type_bool[1], a_zero, b_zero);
+        [a, b].map(|x| self.ir.emit_select(self.type_f32[1], either, zero, x))
+    }
+
+    // .SAT maps NaN to +0, which NClamp (GLSL.std.450 81) does and FClamp leaves undefined.
+    fn fp_arith_result(&mut self, inst: u128, val: u32, ftz: bool) -> u32 {
+        let rnd = (inst >> 78 & 3) as usize;
+        assert!(rnd == 0, ".{} needs directed rounding, only RN is implemented", ["RN", "RM", "RP", "RZ"][rnd]);
+        let val = if inst >> 77 & 1 != 0 {
+            let [zero, one] = [0.0f32, 1.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
+            self.glsl(81, self.type_f32[1], &[val, zero, one])
+        } else {
+            val
+        };
+        let bits = self.bitcast_u32(val);
+        if ftz { self.flush_subnormal(bits) } else { bits }
+    }
+
     fn ssbo_word(&mut self, var: u32, index: u32) -> u32 {
         let index = self.cached_const_u32(index);
         self.ir
@@ -1592,67 +1641,27 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn fadd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.fp_reg(inst, 24, 73, 72, ftz);
+        let b = self.fp_alu_src(inst, ftz);
+        let sum = self.ir.emit_fadd(self.type_f32[1], a, b);
+        let bits = self.fp_arith_result(inst, sum, ftz);
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
-    pub fn fchk(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+    pub fn fchk(&mut self, _inst: u128) {
+        panic!("FCHK is not implemented: NAK, Ryujinx and Eden have no lowering for it, so it waits for silicon fixtures");
     }
     pub fn ffma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let fmz = inst >> 76 & 1 != 0;
+        let ftz = fmz || inst >> 80 & 1 != 0;
+        let a = self.fp_reg(inst, 24, 73, 72, ftz);
+        let src = self.fp_alu_src(inst, ftz);
+        let rc = self.fp_reg(inst, 64, 74, 75, ftz);
+        let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [rc, src] } else { [src, rc] };
+        let [a, b] = if fmz { self.fmz_operands(a, b) } else { [a, b] };
+        let val = self.glsl(spirv::glsl::FMA, self.type_f32[1], &[a, b, c]);
+        let bits = self.fp_arith_result(inst, val, ftz);
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn flo(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1672,49 +1681,32 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn fmnmx(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _rndsrc = (((inst >> 82) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 81 & 3 == 0, "FMNMX.NAN and .XORSIGN are not implemented");
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.fp_reg(inst, 24, 73, 72, ftz);
+        let b = self.fp_alu_src(inst, ftz);
+        let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let take_min = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+        // NMin and NMax (GLSL.std.450 79, 80) return the other operand when one is NaN, like the hardware.
+        let [min, max] = [79, 80].map(|op| self.glsl(op, self.type_f32[1], &[a, b]));
+        let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
+        let bits = self.bitcast_u32(val);
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fmul(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let fmz = inst >> 76 & 1 != 0;
+        let ftz = fmz || inst >> 80 & 1 != 0;
+        let a = self.fp_reg(inst, 24, 73, 72, ftz);
+        let b = self.fp_alu_src(inst, ftz);
+        let [a, b] = if fmz { self.fmz_operands(a, b) } else { [a, b] };
+        let mut product = self.ir.emit_fmul(self.type_f32[1], a, b);
+        let scale = (inst >> 84 & 7) as i32 - 4;
+        if scale != 0 {
+            let factor = self.ir.emit_constant_typed(self.type_f32[1], 2f32.powi(scale));
+            product = self.ir.emit_fmul(self.type_f32[1], product, factor);
+        }
+        let bits = self.fp_arith_result(inst, product, ftz);
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn footprint(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2934,21 +2926,29 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn mufu(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _mufuop = (((inst >> 74) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
+        let ty = self.type_f32[1];
+        let x = self.fp_alu_src(inst, false);
+        let val = match inst >> 74 & 0xf {
+            // Since SM70 SIN and COS take the angle in turns, nvcc scales by 1/(2*pi) first.
+            op @ (0 | 1) => {
+                let tau = self.ir.emit_constant_typed(ty, std::f32::consts::TAU);
+                let radians = self.ir.emit_fmul(ty, x, tau);
+                self.glsl(if op == 0 { COS } else { SIN }, ty, &[radians])
+            }
+            2 => self.glsl(EXP2, ty, &[x]),
+            3 => self.glsl(LOG2, ty, &[x]),
+            4 => {
+                let one = self.ir.emit_constant_typed(ty, 1.0f32);
+                self.ir.emit_fdiv(ty, one, x)
+            }
+            5 => self.glsl(INVERSE_SQRT, ty, &[x]),
+            8 => self.glsl(SQRT, ty, &[x]),
+            9 => self.glsl(TANH, ty, &[x]),
+            op => panic!("MUFU op {op} (RCP64H, RSQ64H) is not implemented"),
+        };
+        let bits = self.bitcast_u32(val);
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn nanosleep(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

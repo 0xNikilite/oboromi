@@ -17,6 +17,7 @@ public:
 private slots:
     void onRunCpuTestsClicked();
     void onRunGpuTestsClicked();
+    void onRenderTestFrameClicked();
     void onCpuTestsFinished();
     void onGpuTestsFinished();
 

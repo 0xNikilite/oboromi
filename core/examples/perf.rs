@@ -66,7 +66,7 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
     let words = translate_module(&[inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)], true).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let t = Instant::now();
-    let pipeline = ComputePipeline::new(&state, &words, &[(10, ssbo), (9, ssbo)]).unwrap();
+    let mut pipeline = ComputePipeline::new(&state, &words, &[(10, ssbo), (9, ssbo)]).unwrap();
     rows.push(Row {
         name: "pipeline create (cold)",
         us: vec![t.elapsed().as_secs_f64() * 1e6],

@@ -267,6 +267,8 @@ pub struct Decoder<'a> {
     var_abstract_state: u32,
     const_u32_0: u32,
     const_u32_1: u32,
+    type_ptr_ssbo_u32: u32,
+    register_io_vars: Vec<u32>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
 }
@@ -285,6 +287,8 @@ impl<'a> Decoder<'a> {
             var_abstract_state: 0,
             const_u32_0: 0,
             const_u32_1: 0,
+            type_ptr_ssbo_u32: 0,
+            register_io_vars: Vec::new(),
             const_cache: HashMap::new(),
         }
     }
@@ -294,12 +298,10 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn emit_entry_point(&mut self, func: u32) {
-        self.ir.emit_entry_point(
-            spirv::execution_model::GLCOMPUTE,
-            func,
-            "main",
-            &[self.var_abstract_state],
-        );
+        // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
+        let interface = [&[self.var_abstract_state][..], &self.register_io_vars].concat();
+        self.ir
+            .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
             .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[1, 1, 1]);
     }
@@ -345,6 +347,52 @@ impl<'a> Decoder<'a> {
 
     }
     
+
+    pub fn emit_register_io(&mut self, in_binding: u32, out_binding: u32) {
+        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
+        let array = self.ir.emit_type_runtime_array(self.type_u32[1]);
+        let block = self.ir.emit_type_struct(&[array]);
+        let block_ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
+        self.type_ptr_ssbo_u32 = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_u32[1]);
+        // std430 layout: a Block struct holding a stride-4 runtime array at offset 0.
+        self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
+        self.ir.emit_decorate(block, deco::BLOCK, &[]);
+        self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+        for binding in [in_binding, out_binding] {
+            let var = self.ir.emit_variable(block_ptr, STORAGE_BUFFER);
+            self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+            self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+            self.register_io_vars.push(var);
+        }
+        // Every register is seeded because predicated stores read the old value.
+        for slot in 0..=MAX_REG_COUNT as u32 {
+            let word = self.ssbo_word(self.register_io_vars[0], slot);
+            let value = self.ir.emit_load(self.type_u32[1], word);
+            if slot < MAX_REG_COUNT as u32 {
+                self.store_register(slot, value);
+            } else {
+                self.store_predicate(value);
+            }
+        }
+    }
+
+    pub fn emit_register_dump(&mut self) {
+        for slot in 0..=MAX_REG_COUNT as u32 {
+            let value = if slot < MAX_REG_COUNT as u32 {
+                self.load_register(slot)
+            } else {
+                self.load_predicate()
+            };
+            let word = self.ssbo_word(self.register_io_vars[1], slot);
+            self.ir.emit_store(word, value);
+        }
+    }
+
+    fn ssbo_word(&mut self, var: u32, index: u32) -> u32 {
+        let index = self.cached_const_u32(index);
+        self.ir
+            .emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
+    }
 
     /// Return the SPIR-V id for an OpConstant(u32, value).
     /// Reuses a previously emitted constant if one exists.

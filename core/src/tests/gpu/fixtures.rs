@@ -189,6 +189,8 @@ mod tests {
             .collect()
     }
 
+    const NOT_REPLAYABLE: &[&str] = &["sts/lane-address"];
+
     #[test]
     fn fixtures_match_warp_silicon() {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
@@ -196,6 +198,12 @@ mod tests {
             let score = scores.entry(fixture.family.clone()).or_default();
             if !fixture.observed || fixture.lanes_active != u32::MAX {
                 score.skipped += 1;
+                continue;
+            }
+            let id = format!("{}/{}", fixture.family, fixture.case);
+            if NOT_REPLAYABLE.contains(&id.as_str()) {
+                score.skipped += 1;
+                eprintln!("{id}: skipped, rig seed kernel wrote shared memory so one instruction cannot replay it");
                 continue;
             }
             let mut words = vec![fixture.word];

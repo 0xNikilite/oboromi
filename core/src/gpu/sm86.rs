@@ -257,6 +257,8 @@ pub enum ResourceKind {
     BuiltIn(u32),
     Cbuf(u32),
     Ssbo(u32),
+    Support,
+    Global,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -285,6 +287,7 @@ pub struct Decoder<'a> {
     pc: u32,
     const_u32_0: u32,
     const_u32_1: u32,
+    type_ptr_ssbo: u32,
     type_ptr_ssbo_u32: u32,
     type_ptr_cbuf: u32,
     type_ptr_cbuf_u32: u32,
@@ -317,6 +320,7 @@ impl<'a> Decoder<'a> {
             pc: 0,
             const_u32_0: 0,
             const_u32_1: 0,
+            type_ptr_ssbo: 0,
             type_ptr_ssbo_u32: 0,
             type_ptr_cbuf: 0,
             type_ptr_cbuf_u32: 0,
@@ -388,23 +392,9 @@ impl<'a> Decoder<'a> {
     
 
     pub fn emit_register_io(&mut self, in_binding: u32, out_binding: u32) {
-        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
-        let array = self.ir.emit_type_runtime_array(self.type_u32[1]);
-        let block = self.ir.emit_type_struct(&[array]);
-        let block_ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
-        self.type_ptr_ssbo_u32 = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_u32[1]);
-        // std430 layout: a Block struct holding a stride-4 runtime array at offset 0.
-        self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
-        self.ir.emit_decorate(block, deco::BLOCK, &[]);
-        self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
-        for (n, binding) in [(0, in_binding), (1, out_binding)] {
-            let var = self.ir.emit_variable(block_ptr, STORAGE_BUFFER);
-            self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
-            self.ir.emit_decorate(var, deco::BINDING, &[binding]);
-            self.resources.push(Resource { kind: ResourceKind::Ssbo(n), set: 0, binding, var });
-        }
+        let input = self.declare_ssbo(ResourceKind::Ssbo(0), in_binding);
+        self.declare_ssbo(ResourceKind::Ssbo(1), out_binding);
         // Every register is seeded because predicated stores read the old value.
-        let input = self.resource(ResourceKind::Ssbo(0)).unwrap();
         for slot in 0..STATE_WORDS as u32 {
             let word = self.ssbo_word(input, slot);
             let value = self.ir.emit_load(self.type_u32[1], word);
@@ -421,6 +411,25 @@ impl<'a> Decoder<'a> {
             let word = self.ssbo_word(output, slot);
             self.ir.emit_store(word, value);
         }
+    }
+
+    fn declare_ssbo(&mut self, kind: ResourceKind, binding: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
+        if self.type_ptr_ssbo == 0 {
+            let array = self.ir.emit_type_runtime_array(self.type_u32[1]);
+            let block = self.ir.emit_type_struct(&[array]);
+            self.type_ptr_ssbo = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
+            self.type_ptr_ssbo_u32 = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_u32[1]);
+            // std430 layout: a Block struct holding a stride-4 runtime array at offset 0.
+            self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
+            self.ir.emit_decorate(block, deco::BLOCK, &[]);
+            self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+        }
+        let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        self.resources.push(Resource { kind, set: 0, binding, var });
+        var
     }
 
     // Vulkan only takes structured control flow, so guest branches store a pc that one loop around a switch dispatches on.
@@ -555,26 +564,36 @@ impl<'a> Decoder<'a> {
         match ((inst >> 9) & 7, (inst >> 91) & 1) {
             (1, 0) => self.load_register(field & 0xff),
             (2 | 4, 0) => self.cached_const_u32(field),
-            (3 | 5, 0) => self.load_cbuf(field >> 22 & 0x1f, (field >> 8 & 0x3fff) << 2),
+            (3 | 5, 0) => {
+                let offset = self.cached_const_u32((field >> 8 & 0x3fff) << 2);
+                self.load_cbuf(ResourceKind::Cbuf(field >> 22 & 0x1f), offset)
+            }
             (6 | 7, 1) => self.load_ureg(field & 0x3f),
             form => todo!("ALU source form {form:?}"),
         }
     }
 
-    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096].
-    fn load_cbuf(&mut self, slot: u32, offset: u32) -> u32 {
-        let var = match self.resource(ResourceKind::Cbuf(slot)) {
+    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
+    fn load_cbuf(&mut self, kind: ResourceKind, offset: u32) -> u32 {
+        let var = match self.resource(kind) {
             Some(var) => var,
-            None => self.declare_cbuf(slot),
+            None => self.declare_cbuf(kind),
         };
-        let index = [0, offset / 16, offset % 16 / 4].map(|i| self.cached_const_u32(i));
-        let ptr = self.ir.emit_access_chain(self.type_ptr_cbuf_u32, var, &index);
+        let [two, three, four] = [2, 3, 4].map(|i| self.cached_const_u32(i));
+        let vec = self.ir.emit_shift_right_logical(self.type_u32[1], offset, four);
+        let word = self.ir.emit_shift_right_logical(self.type_u32[1], offset, two);
+        let elem = self.ir.emit_bitwise_and(self.type_u32[1], word, three);
+        let ptr = self.ir.emit_access_chain(self.type_ptr_cbuf_u32, var, &[self.const_u32_0, vec, elem]);
         self.ir.emit_load(self.type_u32[1], ptr)
     }
 
-    fn declare_cbuf(&mut self, slot: u32) -> u32 {
+    fn declare_cbuf(&mut self, kind: ResourceKind) -> u32 {
         use spirv::{decoration as deco, storage_class::UNIFORM};
-        assert!(slot < 8, "cbuf slot {slot} has no compute binding");
+        let binding = match kind {
+            ResourceKind::Cbuf(slot) if slot < 8 => 1 + slot,
+            ResourceKind::Support => 0,
+            _ => panic!("{kind:?} has no compute uniform binding"),
+        };
         if self.type_ptr_cbuf == 0 {
             let len = self.cached_const_u32(4096);
             let array = self.ir.emit_type_array(self.type_u32[4], len);
@@ -587,11 +606,28 @@ impl<'a> Decoder<'a> {
             self.type_ptr_cbuf_u32 = self.ir.emit_type_pointer(UNIFORM, self.type_u32[1]);
         }
         let var = self.ir.emit_variable(self.type_ptr_cbuf, UNIFORM);
-        let binding = 1 + slot;
         self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
-        self.resources.push(Resource { kind: ResourceKind::Cbuf(slot), set: 0, binding, var });
+        self.resources.push(Resource { kind, set: 0, binding, var });
         var
+    }
+
+    // Guest address A is word (A - base) / 4 of the binding 9 SSBO, base being support word 0; below 4 GiB the low words suffice.
+    fn global_word(&mut self, inst: u128, word: u32) -> u32 {
+        assert!(inst >> 91 & 1 == 0 || inst >> 76 & 1 == 1, "uniform register in a global address");
+        let var = match self.resource(ResourceKind::Global) {
+            Some(var) => var,
+            None => self.declare_ssbo(ResourceKind::Global, 9),
+        };
+        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
+        let offset = (((inst >> 40) as i32) << 8 >> 8) as u32;
+        let offset = self.cached_const_u32(offset.wrapping_add(4 * word));
+        let ra = self.load_register((inst >> 24) as u32 & 0xff);
+        let addr = self.ir.emit_iadd(self.type_u32[1], ra, offset);
+        let rel = self.ir.emit_isub(self.type_u32[1], addr, base);
+        let two = self.cached_const_u32(2);
+        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, two);
+        self.ir.emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
     }
 
     // Int64 is declared on first use so 32-bit shaders still run on devices without shaderInt64.
@@ -2489,29 +2525,40 @@ impl<'a> Decoder<'a> {
     pub fn ldc(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 38) & 0xffff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let ra = (((inst >> 24) & 0xff) << 0) as u32;
+        let ra_offset = (((inst >> 38) & 0xffff) << 0) as u16 as i16 as u32;
+        let sc_bank = (((inst >> 54) & 0x1f) << 0) as u32;
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
+        let stride = (((inst >> 78) & 0x3) << 0) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 91 & 1 == 0 && stride == 0, "LDC with a uniform bank or a segmented address");
+        let words = match sz {
+            4 | 5 => 1 << (sz - 4),
+            _ => todo!("LDC size {sz}"),
+        };
+        let base = self.load_register(ra);
+        for i in 0..words {
+            let offset = self.cached_const_u32(ra_offset.wrapping_add(4 * i));
+            let addr = self.ir.emit_iadd(self.type_u32[1], base, offset);
+            let value = self.load_cbuf(ResourceKind::Cbuf(sc_bank), addr);
+            self.store_register(if rd == 255 { rd } else { rd + i }, value);
+        }
     }
     pub fn ldg(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _ra = (((inst >> 24) & 0xff) << 0);
         let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let _pnz = (((inst >> 64) & 0xf) << 0);
         let _sp2 = (((inst >> 68) & 0x3) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let _memdesc = (((inst >> 76) & 0x1) << 0);
         let _mem = (((inst >> 77) & 0xf) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
@@ -2521,7 +2568,15 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let words = match sz {
+            4..=6 => 1 << (sz - 4),
+            _ => todo!("LDG size {sz}"),
+        };
+        for i in 0..words {
+            let ptr = self.global_word(inst, i);
+            let value = self.ir.emit_load(self.type_u32[1], ptr);
+            self.store_register(if rd == 255 { rd } else { rd + i }, value);
+        }
     }
     pub fn ldgdepbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3219,10 +3274,10 @@ impl<'a> Decoder<'a> {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
+        let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let _memdesc = (((inst >> 76) & 0x1) << 0);
         let _mem = (((inst >> 77) & 0xf) << 0);
         let _cop = (((inst >> 84) & 0x7) << 0);
@@ -3231,7 +3286,15 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let words = match sz {
+            4..=6 => 1 << (sz - 4),
+            _ => todo!("STG size {sz}"),
+        };
+        for i in 0..words {
+            let ptr = self.global_word(inst, i);
+            let value = self.load_register(if rb == 255 { rb } else { rb + i });
+            self.ir.emit_store(ptr, value);
+        }
     }
     pub fn stl(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3750,18 +3813,27 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn uldc(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _urd = (((inst >> 16) & 0x3f) << 0);
-        let _ra_offset = (((inst >> 38) & 0xffff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
+        let urd = (((inst >> 16) & 0x3f) << 0) as u32;
+        let ra_offset = (((inst >> 38) & 0xffff) << 0) as u32;
+        let sc_bank = (((inst >> 54) & 0x1f) << 0) as u32;
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 91 & 1 == 0 && pg == 7 && pg_not == 0, "ULDC with a uniform address or predicate");
+        let words = match sz {
+            4 | 5 => 1 << (sz - 4),
+            _ => todo!("ULDC size {sz}"),
+        };
+        for i in 0..words {
+            let offset = self.cached_const_u32(ra_offset + 4 * i);
+            let value = self.load_cbuf(ResourceKind::Cbuf(sc_bank), offset);
+            self.store_ureg(if urd == 63 { urd } else { urd + i }, value);
+        }
     }
     pub fn ulea(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

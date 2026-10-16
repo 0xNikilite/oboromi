@@ -26,6 +26,16 @@ pub mod inst {
     const IADD3_NO_CARRY: u128 = 0x3fff << 77;
     const KILL_PP_PT: u128 = 7 << 87;
     const NO_SCOREBOARD: u128 = 0x3f << 110;
+    const LDG: u128 = 0x381;
+    const STG: u128 = 0x386;
+    const LDC: u128 = 0xb82;
+    const ULDC: u128 = 0xab9;
+    const ADDR_64: u128 = 1 << 72;
+    const SZ_32: u128 = 4 << 73;
+    const SZ_64: u128 = 5 << 73;
+    const LDG_PU_PT: u128 = 7 << 81;
+    const COP_EN: u128 = 1 << 84;
+    const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -74,6 +84,43 @@ pub mod inst {
         let mut inst = MOV_RR | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((rb as u128) & 0xff) << 32;
+        inst
+    }
+
+    // ldg.e rd, [ra + off]
+    pub fn ldg(rd: u32, ra: u32, off: u32) -> u128 {
+        let mut inst = LDG | PT_GUARD | ADDR_64 | SZ_32 | LDG_PU_PT | COP_EN;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((off as u128) & 0xff_ffff) << 40;
+        inst
+    }
+
+    // stg.e [ra + off], rb
+    pub fn stg(ra: u32, off: u32, rb: u32) -> u128 {
+        let mut inst = STG | PT_GUARD | ADDR_64 | SZ_32 | COP_EN | NO_WRITE_SCOREBOARD;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((rb as u128) & 0xff) << 32;
+        inst |= ((off as u128) & 0xff_ffff) << 40;
+        inst
+    }
+
+    // ldc rd, c[bank][ra + off]
+    pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
+        let mut inst = LDC | PT_GUARD | SZ_32;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((off as u128) & 0xffff) << 38;
+        inst |= ((bank as u128) & 0x1f) << 54;
+        inst
+    }
+
+    // uldc.64 urd, c[bank][off]
+    pub fn uldc64(urd: u32, bank: u32, off: u32) -> u128 {
+        let mut inst = ULDC | PT_GUARD | SZ_64;
+        inst |= ((urd as u128) & 0x3f) << 16;
+        inst |= ((off as u128) & 0xffff) << 38;
+        inst |= ((bank as u128) & 0x1f) << 54;
         inst
     }
 
@@ -203,6 +250,10 @@ fn fixtures_match_nvdisasm() {
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
         (inst::bra(-80), "BRA -0x40;"),
         (inst::exit(), "EXIT;"),
+        (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
+        (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
+        (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
+        (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

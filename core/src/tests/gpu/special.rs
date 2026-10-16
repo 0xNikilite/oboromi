@@ -40,7 +40,7 @@ mod tests {
             cs2r(14, 81, false),
             s2ur(5, 37),
         ];
-        let Some(regs) = run_regs(&program, &seed, &[]) else {
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
             return;
         };
         let mut expected = [0; 15];
@@ -96,7 +96,7 @@ mod tests {
             predicated(s2ur(5, 37), 0, false),
             predicated(s2ur(6, 37), 0, true),
         ];
-        let Some(regs) = run_regs(&program, &seed, &[]) else {
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
             return;
         };
         assert_eq!(regs[0..3], [u32::MAX, u32::MAX, 0]);

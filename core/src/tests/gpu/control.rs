@@ -12,7 +12,7 @@ mod tests {
             let mut seed = vec![10, 11];
             seed.resize(P0, 0);
             seed.push(p0);
-            let Some(regs) = run_regs(&program, &seed, &[]) else {
+            let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
                 return;
             };
             assert_eq!(regs[..2], expected, "P0 = {p0}");
@@ -26,7 +26,7 @@ mod tests {
             let mut seed = vec![10];
             seed.resize(P0, 0);
             seed.push(p0);
-            let Some(regs) = run_regs(&program, &seed, &[]) else {
+            let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
                 return;
             };
             assert_eq!(regs[0], expected, "P0 = {p0}");
@@ -45,7 +45,7 @@ mod tests {
             bra(-80),
             mov_imm(4, 5),
         ];
-        let Some(regs) = run_regs(&program, &[10, 11, 12, 13, 14], &[]) else {
+        let Some((regs, _)) = run_regs(&program, &[10, 11, 12, 13, 14], &[], &[]) else {
             return;
         };
         assert_eq!(regs[..5], [1, 2, 12, 4, 14]);

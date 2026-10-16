@@ -78,7 +78,7 @@ mod tests {
             for (&reg, &value) in fixture.input_regs.iter().zip(&fixture.inputs) {
                 seed[reg] = value;
             }
-            let Some(regs) = run_regs(&fixture.words, &seed, &[]) else {
+            let Some((regs, _)) = run_regs(&fixture.words, &seed, &[], &[]) else {
                 eprintln!("skipping silicon fixtures: no Vulkan device");
                 return;
             };

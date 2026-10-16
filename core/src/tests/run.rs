@@ -68,7 +68,7 @@ mod arm64 {
     pub fn mov_reg(rd: u8, rm: u8) -> u32 {
         0xAA0003E0 | ((rm as u32) << 16) | (rd as u32)
     }
-    
+
     #[allow(dead_code)] // TODO: implement proper branch tests
     pub fn branch(offset: i32) -> u32 {
         // B imm26 - offset is in 4-byte instruction words
@@ -120,7 +120,7 @@ fn warmup_jit() {
     cpu.set_x(1, 20);
     cpu.set_x(2, 30);
     cpu.set_x(4, 0xCAFE);
-    
+
     println!("Compiling warmup code...");
     let start = Instant::now();
     let _ = cpu.run();
@@ -135,7 +135,7 @@ where
 {
     let start = Instant::now();
     let timeout = get_test_timeout();
-    
+
     println!("Running test: {name} ({} instructions)", instructions.len());
     let cpu = match UnicornCPU::new() {
         Some(cpu) => {
@@ -155,34 +155,48 @@ where
     let mut current_addr = TEST_BASE_ADDR;
     for (i, &instr) in instructions.iter().enumerate() {
         cpu.write_u32(current_addr, instr);
-        println!("Wrote instruction {}: {instr:#08X} at {current_addr:#016X}", i + 1);
+        println!(
+            "Wrote instruction {}: {instr:#08X} at {current_addr:#016X}",
+            i + 1
+        );
         current_addr += 4;
     }
 
     cpu.write_u32(current_addr, arm64::brk(0));
     println!("Added breakpoint at {current_addr:#016X}");
-    
+
     println!("Running test setup...");
     setup(&cpu);
-    
-    println!("Executing {} instructions with run()...", instructions.len());
+
+    println!(
+        "Executing {} instructions with run()...",
+        instructions.len()
+    );
     let result = cpu.run();
     let final_pc = cpu.get_pc();
     println!("Execution completed, PC: {final_pc:#016X}, result: {result}");
-    
+
     let duration = start.elapsed();
 
     if duration > timeout {
         TestResult::timeout(name, duration)
     } else if result == 0 {
-        TestResult::fail(name, &format!("Execution failed (PC = {final_pc:#016X})"), duration)
+        TestResult::fail(
+            name,
+            &format!("Execution failed (PC = {final_pc:#016X})"),
+            duration,
+        )
     } else {
         println!("Running verification...");
         let verification_result = verify(&cpu);
         if verification_result {
             TestResult::pass(name, duration)
         } else {
-            TestResult::fail(name, &format!("Verification failed (PC = {final_pc:#016X})"), duration)
+            TestResult::fail(
+                name,
+                &format!("Verification failed (PC = {final_pc:#016X})"),
+                duration,
+            )
         }
     }
 }
@@ -194,12 +208,12 @@ pub fn run_tests() -> Vec<String> {
     println!("Starting Unicorn Instruction Tests...");
     println!("Base address: {TEST_BASE_ADDR:#016X}");
     println!("Breakpoint address: {BREAKPOINT_ADDR:#016X}");
-    
+
     warmup_jit();
     if cfg!(target_os = "macos") {
         println!("  macOS test timeout: {:?}", get_test_timeout());
     }
-    
+
     let test_results = [
         run_test(
             "NOP",
@@ -249,7 +263,6 @@ pub fn run_tests() -> Vec<String> {
             },
             |cpu| cpu.get_pc() == 0x2000,
         ),
-        
         run_test(
             "Atomic ADD Test",
             &[arm64::add_imm(0, 0, 50)],
@@ -288,7 +301,10 @@ pub fn run_tests() -> Vec<String> {
     let mut passed = 0;
     for result in &test_results {
         let icon = ["N", "Y"][result.passed as usize];
-        let result_str = format!("{icon} {} - {} ({:?})", result.name, result.message, result.duration);
+        let result_str = format!(
+            "{icon} {} - {} ({:?})",
+            result.name, result.message, result.duration
+        );
         if result.passed {
             passed += 1;
         }
@@ -296,8 +312,11 @@ pub fn run_tests() -> Vec<String> {
     }
     let failed = test_results.len() - passed;
     let total_time = start_time.elapsed();
-    
-    results.push(format!("Total: {} ({passed} / {failed}) time {total_time:?}", test_results.len()));
+
+    results.push(format!(
+        "Total: {} ({passed} / {failed}) time {total_time:?}",
+        test_results.len()
+    ));
     if failed > 0 && cfg!(target_os = "macos") {
         results.push(format!(r"macOS JIT cold start may cause first-test timeout; this is normal after build system changes"));
     }

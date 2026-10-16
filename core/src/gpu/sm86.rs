@@ -697,6 +697,7 @@ impl<'a> Decoder<'a> {
         let field = (inst >> 32) as u32;
         let words = match ((inst >> 9) & 7, (inst >> 91) & 1) {
             (1, 0) => return self.load_pair(field & 0xff),
+            (2 | 4, 0) => [self.const_u32_0, self.cached_const_u32(field)],
             (3 | 5, 0) => {
                 let offset = (field >> 8 & 0x3fff) << 2;
                 let bank = ResourceKind::Cbuf(field >> 22 & 0x1f);
@@ -918,6 +919,16 @@ impl<'a> Decoder<'a> {
         self.ir.emit_bitcast(self.type_u32[1], val)
     }
 
+    fn bitcast_f64(&mut self, val: u32) -> u32 {
+        let ty = self.type_f64();
+        self.ir.emit_bitcast(ty, val)
+    }
+
+    fn bitcast_u64(&mut self, val: u32) -> u32 {
+        let ty = self.type_u64();
+        self.ir.emit_bitcast(ty, val)
+    }
+
     fn glsl(&mut self, op: u32, ty: u32, args: &[u32]) -> u32 {
         if self.glsl_ext == 0 {
             self.glsl_ext = self.ir.emit_ext_inst_import("GLSL.std.450");
@@ -929,6 +940,17 @@ impl<'a> Decoder<'a> {
     fn fp_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
         let val = if abs { self.glsl(4, self.type_f32[1], &[val]) } else { val };
         if neg { self.ir.emit_fnegate(self.type_f32[1], val) } else { val }
+    }
+
+    fn fp64_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
+        let ty = self.type_f64();
+        let val = if abs { self.glsl(spirv::glsl::F_ABS, ty, &[val]) } else { val };
+        if neg { self.ir.emit_fnegate(ty, val) } else { val }
+    }
+
+    fn fp64_rounding(inst: u128) {
+        let mode = (inst >> 78 & 3) as usize;
+        assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
     }
 
     fn fp_ftz(&mut self, val: u32) -> u32 {
@@ -1706,23 +1728,20 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dadd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        Self::fp64_rounding(inst);
+        let ty = self.type_f64();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let form = inst >> 9 & 7;
+        let b = if form == 1 { self.load_pair((inst >> 64 & 0xff) as u32) } else { self.alu_src_pair(inst) };
+        let b = self.bitcast_f64(b);
+        let imm = matches!(form, 2 | 4);
+        let (abs, neg) = if form == 1 { (inst >> 74 & 1 != 0, inst >> 75 & 1 != 0) } else { (inst >> 62 & 1 != 0, inst >> 63 & 1 != 0) };
+        let b = self.fp64_src(b, !imm && abs, !imm && neg);
+        let result = self.ir.emit_fadd(ty, a, b);
+        let result = self.bitcast_u64(result);
+        self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn depbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1739,26 +1758,22 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dfma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        Self::fp64_rounding(inst);
+        let ty = self.type_f64();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let src = self.alu_src_pair(inst);
+        let src = self.bitcast_f64(src);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        let src = self.fp64_src(src, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let c = self.load_pair((inst >> 64 & 0xff) as u32);
+        let c = self.bitcast_f64(c);
+        let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
+        let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [c, src] } else { [src, c] };
+        let result = self.glsl(spirv::glsl::FMA, ty, &[a, b, c]);
+        let result = self.bitcast_u64(result);
+        self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dmma(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1784,46 +1799,41 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dmul(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        Self::fp64_rounding(inst);
+        let ty = self.type_f64();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let b = self.alu_src_pair(inst);
+        let b = self.bitcast_f64(b);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        let b = self.fp64_src(b, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let result = self.ir.emit_fmul(ty, a, b);
+        let result = self.bitcast_u64(result);
+        self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dsetp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _test = (((inst >> 76) & 0xf) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let b = self.alu_src_pair(inst);
+        let b = self.bitcast_f64(b);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        let b = self.fp64_src(b, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let value = self.fp_compare((inst >> 76 & 15) as u32, a, b);
+        let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], value, self.const_u32_1);
+        let pred = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let pred = self.ir.emit_bitwise_and(self.type_u32[1], pred, self.const_u32_1);
+        let combine = |this: &mut Self, value| match inst >> 74 & 3 {
+            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, pred),
+            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, pred),
+            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, pred),
+            mode => panic!("DSETP boolean mode {mode} is invalid"),
+        };
+        let value = combine(self, value);
+        let inverse = combine(self, inverse);
+        self.combine_and_set_predicate_bit((inst >> 81 & 7) as u32, 0, value);
+        self.combine_and_set_predicate_bit((inst >> 84 & 7) as u32, 0, inverse);
     }
     pub fn errbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

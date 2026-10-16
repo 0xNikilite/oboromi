@@ -105,6 +105,11 @@ pub fn run_body(
     };
     let module = emit_module(true, Some(&state), seeds.len() as u32, body);
     spirv_val(&module);
+    let float64 = module.words().windows(2).any(|words| words == [2 << 16 | 17, 10]);
+    if float64 && !state.shader_float64 {
+        eprintln!("skipping: Vulkan device lacks shaderFloat64");
+        return None;
+    }
     let bytes = |words: &[u32]| {
         words
             .iter()

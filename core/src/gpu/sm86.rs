@@ -2710,6 +2710,7 @@ impl<'a> Decoder<'a> {
         // CLASS "mov__RR") and immediate (key 0x802 / CLASS "mov__RI") forms
         // are implemented so far.
         let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
+        // scripts/sm_86_instructions.txt: 0x802 is CLASS "mov__RI", 0x1a02 is "mov__RCx" (cx[UR] bank).
         if variant_key == 0x802 {
             // Rd = imm32
             let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;

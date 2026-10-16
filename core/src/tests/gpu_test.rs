@@ -207,6 +207,21 @@ fn fixtures_match_nvdisasm() {
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
         (inst::bra(-80), "BRA -0x40;"),
         (inst::exit(), "EXIT;"),
+        (0x004fc800078e02090000000700077224, "IMAD R7, R0, R7, R9 ;"),
+        (0x004fc800078e18ff0000000302017211, "LEA R1, R2, R3, 0x3 ;"),
+        (0x004fc80003906270000000030200720c, "ISETP.GE.AND P0, P1, R2, R3, PT ;"),
+        (0x004fc800078e00060000000302047225, "IMAD.WIDE.U32 R4, R2, R3, R6 ;"),
+        (0x004fc800078e02060000000302017227, "IMAD.HI R1, R2, R3, R6 ;"),
+        (0x004fc800000e06060000000302017224, "IMAD.X R1, R2, R3, R6, P0 ;"),
+        (0x004fc800000e0e060000000302017224, "IMAD.X R1, R2, R3, ~R6, P0 ;"),
+        (0x004fc800078e02060000000502017824, "IMAD R1, R2, 0x5, R6 ;"),
+        (0x004fc800078e02060000000002017a24, "IMAD R1, R2, c[0x0][0x0], R6 ;"),
+        (0x004fc8000f8e02060000000402017c24, "IMAD R1, R2, UR4, R6 ;"),
+        (0x004fc800078e02030000000502017424, "IMAD R1, R2, R3, 0x5 ;"),
+        (0x004fc80003902270000000050200780c, "ISETP.EQ.AND P0, P1, R2, 0x5, PT ;"),
+        (0x004fc800039022700000000002007a0c, "ISETP.EQ.AND P0, P1, R2, c[0x0][0x0], PT ;"),
+        (0x004fc8000b9022700000000402007c0c, "ISETP.EQ.AND P0, P1, R2, UR4, PT ;"),
+        (0x004fc80003906320000000030200720c, "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

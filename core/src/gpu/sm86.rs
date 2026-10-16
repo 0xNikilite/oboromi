@@ -2744,7 +2744,11 @@ impl<'a> Decoder<'a> {
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let rc = if inst >> 91 & 1 != 0 { (inst >> 32) as u32 & 0xff } else { (inst >> 64) as u32 & 0xff };
+        let rc = if matches!(inst >> 9 & 7, 2 | 3 | 7) {
+            (inst >> 32) as u32 & 0xff
+        } else {
+            (inst >> 64) as u32 & 0xff
+        };
         let negate_a = (((inst >> 72) & 0x1) << 0);
         let x = (((inst >> 74) & 0x1) << 0);
         let negate_c = (((inst >> 75) & 0x1) << 0);

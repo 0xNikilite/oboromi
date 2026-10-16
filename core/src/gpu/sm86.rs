@@ -1036,7 +1036,7 @@ impl<'a> Decoder<'a> {
         [0, 1].map(|i| {
             let lane = self.ir.emit_composite_extract(half, half2, &[i]);
             let lane = self.ir.emit_f_convert(self.type_f32[1], lane);
-            self.fp_src(lane, abs, neg)
+            self.fp_src(self.type_f32[1], lane, abs, neg)
         })
     }
 

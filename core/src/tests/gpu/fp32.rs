@@ -10,13 +10,27 @@ mod tests {
     fn assert_f32(got: &[u32], want: &[f32]) {
         for (i, (&got, want)) in got.iter().zip(want).enumerate() {
             let ok = got == want.to_bits() || want.is_nan() && f32::from_bits(got).is_nan();
-            assert!(ok, "output {i}: got {got:#x} ({}), want {want}", f32::from_bits(got));
+            assert!(
+                ok,
+                "output {i}: got {got:#x} ({}), want {want}",
+                f32::from_bits(got)
+            );
         }
     }
 
     #[test]
     fn fadd_fmul_ffma_round_to_nearest_like_ieee() {
-        let x = [1.5, -2.25, 0.1, 3.0e38, -0.0, f32::INFINITY, f32::NAN, 7.0, f32::NEG_INFINITY];
+        let x = [
+            1.5,
+            -2.25,
+            0.1,
+            3.0e38,
+            -0.0,
+            f32::INFINITY,
+            f32::NAN,
+            7.0,
+            f32::NEG_INFINITY,
+        ];
         let program = [
             inst::fadd(20, 0, 1),
             inst::fadd_imm(21, 2, 0.2),
@@ -59,7 +73,18 @@ mod tests {
 
     #[test]
     fn ftz_fmz_and_sat_flush_zero_and_clamp() {
-        let x = [f32::from_bits(1), 2f32.powi(100), 2f32.powi(-100), 2f32.powi(-30), 0.0, f32::INFINITY, -f32::from_bits(1), 2.0, 0.5, f32::NAN];
+        let x = [
+            f32::from_bits(1),
+            2f32.powi(100),
+            2f32.powi(-100),
+            2f32.powi(-30),
+            0.0,
+            f32::INFINITY,
+            -f32::from_bits(1),
+            2.0,
+            0.5,
+            f32::NAN,
+        ];
         let program = [
             inst::fmul(10, 0, 1) | FP_FTZ,
             inst::fmul(11, 2, 3) | FP_FTZ,
@@ -74,7 +99,10 @@ mod tests {
         let Some((regs, _)) = run_regs(&program, &bits(&x), &[], &[]) else {
             return;
         };
-        assert_f32(&regs[10..19], &[0.0, 0.0, -0.0, 0.0, x[1], 1.0, 0.0, 0.25, 0.0]);
+        assert_f32(
+            &regs[10..19],
+            &[0.0, 0.0, -0.0, 0.0, x[1], 1.0, 0.0, 0.25, 0.0],
+        );
     }
 
     #[test]
@@ -125,9 +153,22 @@ mod tests {
             return;
         };
         let turn = x[4] * std::f32::consts::TAU;
-        let want = [x[0].recip(), x[0].sqrt().recip(), x[1].sqrt(), x[2].exp2(), x[3].log2(), turn.sin(), turn.cos(), x[5].tanh()];
+        let want = [
+            x[0].recip(),
+            x[0].sqrt().recip(),
+            x[1].sqrt(),
+            x[2].exp2(),
+            x[3].log2(),
+            turn.sin(),
+            turn.cos(),
+            x[5].tanh(),
+        ];
         for (i, (&got, want)) in regs[10..18].iter().zip(want).enumerate() {
-            assert!(got.abs_diff(want.to_bits()) <= 4, "output {i}: got {}, want {want}", f32::from_bits(got));
+            assert!(
+                got.abs_diff(want.to_bits()) <= 4,
+                "output {i}: got {}, want {want}",
+                f32::from_bits(got)
+            );
         }
     }
 }

@@ -1,7 +1,7 @@
 //! ffi bridge for the qt/c++ gui. panics are caught and forwarded to the
 //! log callback to avoid unwinding across the c boundary.
 
-use crate::display::{DISPLAY, FrameCallback};
+use crate::display::{CALLBACK, DISPLAY, FrameCallback};
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -99,7 +99,7 @@ pub unsafe extern "C" fn oboromi_frame_read(
 /// `callback` runs on the presenting thread after every frame, null clears it.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_set_callback(callback: FrameCallback, user: *mut c_void) {
-    DISPLAY.lock().unwrap().on_present = (callback, user as usize);
+    *CALLBACK.lock().unwrap() = (callback, user as usize);
 }
 
 #[cfg(test)]
@@ -108,10 +108,10 @@ mod tests {
 
     #[test]
     fn presented_frame_reads_back_through_ffi() {
-        assert_eq!(oboromi_frame_generation(), 0);
+        let generation = oboromi_frame_generation();
         let pixels: Vec<u8> = (0..16).collect();
         crate::display::present(2, 2, &pixels);
-        assert_eq!(oboromi_frame_generation(), 1);
+        assert_eq!(oboromi_frame_generation(), generation + 1);
 
         let (mut width, mut height) = (0, 0);
         let mut dst = vec![0u8; 16];

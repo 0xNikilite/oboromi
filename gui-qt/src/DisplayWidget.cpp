@@ -22,7 +22,6 @@ DisplayWidget::~DisplayWidget() {
 }
 
 void DisplayWidget::frameReady() {
-    // presents that land before this runs collapse into one read of the latest frame
     const auto generation = oboromi_frame_generation();
     if (generation == m_generation) return;
 

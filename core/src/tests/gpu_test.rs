@@ -13,41 +13,41 @@ pub struct TestResult {
 // helpers to build sm86 instructions
 #[doc(hidden)]
 pub mod inst {
-    // iadd rd, ra, imm32 (src_type=4, opcode=0x810)
+    const IADD3_IMM: u128 = 0x810;
+    const IADD3_RRR: u128 = 0x210;
+    const MOV_RI: u128 = 0x802;
+    const MOV_RR: u128 = 0x202;
+    const KILL: u128 = 0x95b;
+    const PT_GUARD: u128 = 7 << 12;
+    const RC_RZ: u128 = 0xff << 64;
+    const PIXMASK_ALL: u128 = 0xf << 72;
+    const IADD3_NO_CARRY: u128 = 0x3fff << 77;
+    const KILL_PP_PT: u128 = 7 << 87;
+    const NO_SCOREBOARD: u128 = 0x3f << 110;
+
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0x7810;
+        let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
-        inst |= 0x7ffe0ffu128 << 64;
         inst
     }
 
-    // iadd rd, ra, rb (src_type=1, opcode=0x210)
     pub fn iadd_reg(rd: u32, ra: u32, rb: u32) -> u128 {
-        let mut inst: u128 = 0x7210;
-        inst |= ((rd as u128) & 0xff) << 16;
-        inst |= ((ra as u128) & 0xff) << 24;
-        inst |= ((rb as u128) & 0xff) << 32;
-        inst |= 0x7ffe0ffu128 << 64;
-        inst
+        iadd3_reg(rd, ra, rb, 0xff)
     }
 
-    // iadd3 rd, ra, rb, rc (register form, key 0x210; rc must be 0xFF)
     pub fn iadd3_reg(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
-        let mut inst: u128 = 0x7210;
+        let mut inst = IADD3_RRR | PT_GUARD | IADD3_NO_CARRY;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
         inst |= ((rc as u128) & 0xff) << 64;
-        inst |= 0x7ffe000u128 << 64;
         inst
     }
 
-    // mov rd, imm32 (opcode=0x802)
     pub fn mov_imm(rd: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0x7802;
-        inst |= 0xfu128 << 72;
+        let mut inst = MOV_RI | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
         inst
@@ -73,16 +73,14 @@ pub mod inst {
     }
 
     pub fn mov_reg(rd: u32, rb: u32) -> u128 {
-        let mut inst: u128 = 0x7202;
-        inst |= 0xfu128 << 72;
+        let mut inst = MOV_RR | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((rb as u128) & 0xff) << 32;
         inst
     }
 
-    // kill (opcode=0x95b)
     pub fn kill(pred: u32, invert: bool) -> u128 {
-        let mut inst: u128 = 0x95b | 0x7 << 87 | 0x3f << 110;
+        let mut inst = KILL | KILL_PP_PT | NO_SCOREBOARD;
         inst |= ((pred as u128) & 0x7) << 12;
         if invert {
             inst |= 1 << 15;

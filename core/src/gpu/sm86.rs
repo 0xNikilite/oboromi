@@ -2539,6 +2539,10 @@ impl<'a> Decoder<'a> {
         let pg = (((inst >> 12) & 0x7) << 0) as u32;
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        const MOV_RR: u32 = 0x202;
+        const MOV_RI: u32 = 0x802;
+        const MOV_RC: u32 = 0xa02;
+        const MOV_RU: u32 = 0x1c02;
 
         // MOV shares one primary opcode across several addressing-mode
         // variants (register, constant-bank, indexed constant-bank, immediate)
@@ -2547,8 +2551,7 @@ impl<'a> Decoder<'a> {
         // the dispatcher used to route here; every form but cx[UR] is the
         // ALU source selector.
         let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
-        // scripts/sm_86_instructions.txt: 0x202 "mov__RR", 0x802 "mov__RI", 0xa02 "mov__RC", 0x1c02 "mov__RU", 0x1a02 "mov__RCx" (cx[UR] bank).
-        if matches!(variant_key, 0x202 | 0x802 | 0xa02 | 0x1c02) {
+        if matches!(variant_key, MOV_RR | MOV_RI | MOV_RC | MOV_RU) {
             let val = self.alu_src(inst);
             self.store_register_predicated(rd, pg, pg_not != 0, val);
             return;

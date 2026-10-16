@@ -50,7 +50,8 @@ pub fn spirv_val(module: &Emitter) {
 pub const GLOBAL_BASE: u64 = 0x2_0000_1000;
 pub const PRED: usize = 254;
 pub const UREG: usize = PRED + 1;
-pub const UPRED: usize = STATE_WORDS - 1;
+pub const UPRED: usize = STATE_WORDS - 2;
+pub const LIVE: usize = STATE_WORDS - 1;
 
 pub fn run_regs(
     instructions: &[u128],
@@ -71,6 +72,20 @@ pub fn run_lanes(
     run_body(|decoder| decoder.translate_program(instructions), seeds, cbuf0, global)
 }
 
+fn pad_to_warps(seeds: &[Vec<u32>]) -> Vec<u32> {
+    let idle = vec![0; STATE_WORDS];
+    let mut words = Vec::new();
+    for lane in 0..seeds.len().next_multiple_of(32) {
+        let seed = seeds.get(lane).unwrap_or(&idle);
+        let start = words.len();
+        words.extend(seed.iter().copied().chain(std::iter::repeat(0)).take(STATE_WORDS));
+        if seed.len() <= LIVE {
+            words[start + LIVE] = 1;
+        }
+    }
+    words
+}
+
 pub fn run_body(
     body: impl FnOnce(&mut Decoder),
     seeds: &[Vec<u32>],
@@ -80,10 +95,10 @@ pub fn run_body(
     run_textured(body, seeds, cbuf0, global, &[])
 }
 
-/// Runs `body` as one workgroup with an invocation per seed, the state words of invocation i seeded from `seeds[i]`,
-/// cbuf slot 0 holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and the (width, height, RGBA8 texels)
-/// of `textures[i]` at `TEXTURE_BINDING + i`, returning every invocation's state words and the global words, or `None`
-/// when there is no Vulkan device.
+/// Runs `body` as one workgroup of whole warps with an invocation per seed, the state words of invocation i seeded
+/// from `seeds[i]`, cbuf slot 0 holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and the (width, height,
+/// RGBA8 texels) of `textures[i]` at `TEXTURE_BINDING + i`, returning every seeded invocation's state words and the
+/// global words, or `None` when there is no Vulkan device.
 pub fn run_textured(
     body: impl FnOnce(&mut Decoder),
     seeds: &[Vec<u32>],
@@ -99,7 +114,8 @@ pub fn run_textured(
         }
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     };
-    let module = emit_module(true, Some(&state), seeds.len() as u32, body);
+    let words = pad_to_warps(seeds);
+    let module = emit_module(true, Some(&state), (words.len() / STATE_WORDS) as u32, body);
     spirv_val(&module);
     let float64 = module.words().windows(2).any(|words| words == [2 << 16 | 17, 10]);
     if float64 && !state.shader_float64 {
@@ -112,10 +128,6 @@ pub fn run_textured(
             .flat_map(|w| w.to_le_bytes())
             .collect::<Vec<_>>()
     };
-    let words: Vec<u32> = seeds
-        .iter()
-        .flat_map(|seed| seed.iter().copied().chain(std::iter::repeat(0)).take(STATE_WORDS))
-        .collect();
     let size = 4 * words.len() as u64;
     let mut input = HostBuffer::new(&state, size).unwrap();
     input.write(&bytes(&words)).unwrap();
@@ -143,6 +155,6 @@ pub fn run_textured(
             .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
             .collect()
     };
-    let lanes = read(&output, words.len()).chunks(STATE_WORDS).map(<[u32]>::to_vec).collect();
+    let lanes = read(&output, words.len()).chunks(STATE_WORDS).take(seeds.len()).map(<[u32]>::to_vec).collect();
     Some((lanes, read(&memory, global.len())))
 }

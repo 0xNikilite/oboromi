@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{run_lanes, run_regs, translate_module, GLOBAL_BASE, PRED};
+    use crate::tests::gpu::harness::{run_lanes, run_regs, translate_module, GLOBAL_BASE, LIVE, PRED};
     use std::collections::BTreeMap;
     use std::panic::catch_unwind;
 
@@ -190,13 +190,14 @@ mod tests {
     }
 
     const NOT_REPLAYABLE: &[&str] = &["sts/lane-address"];
+    const LIVE_MASK_SUPPORTED: bool = false;
 
     #[test]
     fn fixtures_match_warp_silicon() {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
         for fixture in warp_fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
-            if !fixture.observed || fixture.lanes_active != u32::MAX {
+            if !fixture.observed || fixture.lanes_active != u32::MAX && !LIVE_MASK_SUPPORTED {
                 score.skipped += 1;
                 continue;
             }
@@ -223,7 +224,7 @@ mod tests {
                 score.unimplemented += 1;
                 continue;
             }
-            let mut seeds = vec![vec![0; PRED + 1]; 32];
+            let mut seeds = vec![vec![0; LIVE + 1]; 32];
             for (lane, seed) in seeds.iter_mut().enumerate() {
                 for (input, &reg) in fixture.inputs[lane * 4..][..4]
                     .iter()
@@ -235,6 +236,7 @@ mod tests {
                 seed[fixture.global_lo] = GLOBAL_BASE as u32;
                 seed[fixture.global_hi] = (GLOBAL_BASE >> 32) as u32;
                 seed[PRED] = 1;
+                seed[LIVE] = fixture.lanes_active >> lane & 1;
             }
             let global_before: Vec<_> = (0..256).map(|i| 0x6100_0000 + i).collect();
             let Some((lanes, global)) = run_lanes(&words, &seeds, &[], &global_before) else {

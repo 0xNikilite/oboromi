@@ -24,7 +24,7 @@ pub mod inst {
     const RC_RZ: u128 = 0xff << 64;
     const PIXMASK_ALL: u128 = 0xf << 72;
     const IADD3_NO_CARRY: u128 = 0x3fff << 77;
-    const KILL_PP_PT: u128 = 7 << 87;
+    const PP_PT: u128 = 7 << 87;
     const NO_SCOREBOARD: u128 = 0x3f << 110;
     const FADD_RR: u128 = 0x221;
     const FADD_RI: u128 = 0x421;
@@ -63,6 +63,22 @@ pub mod inst {
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
     const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
+    const BRA: u128 = 0x947;
+    const BRA_UREG: u128 = 0x947 | 1 << 91;
+    const BRA_UPRED: u128 = 0x547 | 1 << 91;
+    const BRX: u128 = 0x949;
+    const JMX: u128 = 0x94c;
+    const BSSY: u128 = 0x945;
+    const BSYNC: u128 = 0x941;
+    const CALL_REL: u128 = 0x944;
+    const RET: u128 = 0x950;
+    const EXIT: u128 = 0x94d;
+    const COND_U: u128 = 1 << 32;
+    const COND_DIV: u128 = 2 << 32;
+    const COND_CONV: u128 = 3 << 32;
+    const URB_INVERT: u128 = 1 << 30;
+    const URZ: u32 = 63;
+    const RET_NODEC: u128 = 1 << 86;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -152,7 +168,7 @@ pub mod inst {
     }
 
     pub fn kill(pred: u32, invert: bool) -> u128 {
-        let mut inst = KILL | KILL_PP_PT | NO_SCOREBOARD;
+        let mut inst = KILL | PP_PT | NO_SCOREBOARD;
         inst |= ((pred as u128) & 0x7) << 12;
         if invert {
             inst |= 1 << 15;
@@ -160,14 +176,53 @@ pub mod inst {
         inst
     }
 
-    // bra (opcode=0x947), offset in bytes from the next instruction
-    pub fn bra(offset: i64) -> u128 {
-        0x7947 | 0x7 << 87 | 0x3f << 110 | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
+    // offset in bytes, from the next instruction for relative forms; ra is Ra, URb or UPq
+    fn control(op: u128, ra: u32, offset: i64) -> u128 {
+        op | PT_GUARD | PP_PT | NO_SCOREBOARD | (ra as u128 & 0xff) << 24 | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
     }
 
-    // exit (opcode=0x94d)
+    pub fn bra(offset: i64) -> u128 {
+        control(BRA, 0, offset)
+    }
+
+    pub fn bra_upred(upq: u32, invert: bool, offset: i64) -> u128 {
+        control(BRA_UPRED | COND_U, upq | (invert as u32) << 3, offset)
+    }
+
+    pub fn bra_div(offset: i64) -> u128 {
+        control(BRA_UREG | COND_DIV | URB_INVERT, URZ, offset)
+    }
+
+    pub fn bra_conv(offset: i64) -> u128 {
+        control(BRA_UREG | COND_CONV | URB_INVERT, URZ, offset)
+    }
+
+    pub fn brx(ra: u32, offset: i64) -> u128 {
+        control(BRX, ra, offset)
+    }
+
+    pub fn jmx(ra: u32, offset: i64) -> u128 {
+        control(JMX, ra, offset)
+    }
+
+    pub fn bssy(bar: u32, offset: i64) -> u128 {
+        control(BSSY, 0, offset) | (bar as u128) << 16
+    }
+
+    pub fn bsync(bar: u32) -> u128 {
+        control(BSYNC, 0, 0) | (bar as u128) << 16
+    }
+
+    pub fn call_rel(offset: i64) -> u128 {
+        control(CALL_REL, 0, offset)
+    }
+
+    pub fn ret_rel(ra: u32, offset: i64) -> u128 {
+        control(RET | RET_NODEC, ra, offset)
+    }
+
     pub fn exit() -> u128 {
-        0x794d | 0x7 << 87 | 0x3f << 110
+        control(EXIT, 0, 0)
     }
 
     fn alu(op: u128, rd: u32, ra: u32, b: u32) -> u128 {
@@ -317,6 +372,15 @@ fn fixtures_match_nvdisasm() {
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
         (inst::bra(-80), "BRA -0x40;"),
         (inst::exit(), "EXIT;"),
+        (inst::bssy(0, 0x40), "BSSY B0, 0x50;"),
+        (inst::bsync(0), "BSYNC B0;"),
+        (inst::call_rel(0x20), "CALL.REL 0x30;"),
+        (inst::ret_rel(20, -0x60), "RET.REL.NODEC R20 -0x50;"),
+        (inst::brx(4, -0x10), "BRX R4 -0x10;"),
+        (inst::jmx(4, 0), "JMX R4;"),
+        (inst::bra_upred(0, true, 0x10), "BRA.U !UP0, 0x20;"),
+        (inst::bra_div(0x10), "BRA.DIV ~URZ, 0x20;"),
+        (inst::bra_conv(0x10), "BRA.CONV ~URZ, 0x20;"),
         (inst::fadd(1, 2, 3), "FADD R1, R2, R3;"),
         (inst::fadd(1, 2, 3) | inst::FP_ABS_A | inst::FP_NEG_A | inst::FP_NEG_B, "FADD R1, -|R2|, -R3;"),
         (inst::fadd(1, 2, 3) | inst::FP_ABS_B | inst::FP_SAT | inst::FP_FTZ, "FADD.FTZ.SAT R1, R2, |R3|;"),

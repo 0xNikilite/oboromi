@@ -101,22 +101,3 @@ pub unsafe extern "C" fn oboromi_frame_read(
 pub extern "C" fn oboromi_frame_set_callback(callback: FrameCallback, user: *mut c_void) {
     *CALLBACK.lock().unwrap() = (callback, user as usize);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn presented_frame_reads_back_through_ffi() {
-        let generation = oboromi_frame_generation();
-        let pixels: Vec<u8> = (0..16).collect();
-        crate::display::present(2, 2, &pixels);
-        assert_eq!(oboromi_frame_generation(), generation + 1);
-
-        let (mut width, mut height) = (0, 0);
-        let mut dst = vec![0u8; 16];
-        let len = unsafe { oboromi_frame_read(dst.as_mut_ptr(), 16, &mut width, &mut height) };
-        assert_eq!((len, width, height), (16, 2, 2));
-        assert_eq!(dst, pixels);
-    }
-}

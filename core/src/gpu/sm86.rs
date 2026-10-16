@@ -963,7 +963,8 @@ impl<'a> Decoder<'a> {
         let ty = self.type_f64();
         let bits = self.alu_src_pair(inst);
         let val = self.ir.emit_bitcast(ty, bits);
-        self.fp64_src(val, inst >> 62 & 1 != 0, inst >> 63 & 1 != 0)
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        self.fp64_src(val, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0)
     }
 
     fn fp64_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
@@ -1766,10 +1767,7 @@ impl<'a> Decoder<'a> {
         let a = self.load_pair((inst >> 24 & 0xff) as u32);
         let a = self.bitcast_f64(a);
         let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let src = self.alu_src_pair(inst);
-        let src = self.bitcast_f64(src);
-        let imm = matches!(inst >> 9 & 7, 2 | 4);
-        let src = self.fp64_src(src, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let src = self.fp64_alu_src(inst);
         let c = self.load_pair((inst >> 64 & 0xff) as u32);
         let c = self.bitcast_f64(c);
         let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
@@ -1807,10 +1805,7 @@ impl<'a> Decoder<'a> {
         let a = self.load_pair((inst >> 24 & 0xff) as u32);
         let a = self.bitcast_f64(a);
         let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let b = self.alu_src_pair(inst);
-        let b = self.bitcast_f64(b);
-        let imm = matches!(inst >> 9 & 7, 2 | 4);
-        let b = self.fp64_src(b, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let b = self.fp64_alu_src(inst);
         let result = self.ir.emit_fmul(ty, a, b);
         let result = self.bitcast_u64(result);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
@@ -1819,10 +1814,7 @@ impl<'a> Decoder<'a> {
         let a = self.load_pair((inst >> 24 & 0xff) as u32);
         let a = self.bitcast_f64(a);
         let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let b = self.alu_src_pair(inst);
-        let b = self.bitcast_f64(b);
-        let imm = matches!(inst >> 9 & 7, 2 | 4);
-        let b = self.fp64_src(b, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let b = self.fp64_alu_src(inst);
         let value = self.fp_compare((inst >> 76 & 15) as u32, a, b);
         let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], value, self.const_u32_1);
         let pred = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);

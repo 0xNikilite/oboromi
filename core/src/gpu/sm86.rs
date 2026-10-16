@@ -672,6 +672,7 @@ impl<'a> Decoder<'a> {
             };
             this.ir.emit_load(ty, var)
         };
+        // SR_VIRTID holds the warp id at bit 8, SR_TID packs x, y and z at bits 0, 16 and 26.
         match index {
             0 => {
                 let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
@@ -680,19 +681,17 @@ impl<'a> Decoder<'a> {
             }
             3 => {
                 let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
-                let shift = self.cached_const_u32(5);
-                self.ir.emit_shift_right_logical(self.type_u32[1], invocation, shift)
+                let [five, eight] = [5, 8].map(|i| self.cached_const_u32(i));
+                let warp = self.ir.emit_shift_right_logical(self.type_u32[1], invocation, five);
+                self.ir.emit_shift_left_logical(self.type_u32[1], warp, eight)
             }
             32 => {
                 let tid = builtin(self, BuiltIn::LocalInvocationId);
                 let x = self.ir.emit_composite_extract(self.type_u32[1], tid, &[0]);
                 let y = self.ir.emit_composite_extract(self.type_u32[1], tid, &[1]);
                 let z = self.ir.emit_composite_extract(self.type_u32[1], tid, &[2]);
-                let (o16, c8, o26, c6) = (
-                    self.cached_const_u32(16), self.cached_const_u32(8),
-                    self.cached_const_u32(26), self.cached_const_u32(6),
-                );
-                let xy = self.ir.emit_bit_field_insert(self.type_u32[1], x, y, o16, c8);
+                let [o16, c10, o26, c6] = [16, 10, 26, 6].map(|i| self.cached_const_u32(i));
+                let xy = self.ir.emit_bit_field_insert(self.type_u32[1], x, y, o16, c10);
                 self.ir.emit_bit_field_insert(self.type_u32[1], xy, z, o26, c6)
             }
             33..=35 => {

@@ -2,7 +2,7 @@
 mod tests {
     use crate::gpu::sm86::STATE_WORDS;
     use crate::tests::gpu::harness::run_regs;
-    use crate::tests::gpu_test::inst::{bra, exit, guard, mov_imm, uldc64};
+    use crate::tests::gpu_test::inst::{bra, exit, guard, kill, mov_imm, uldc64};
 
     const P0: usize = 254;
     const UR4: usize = P0 + 1 + 4;
@@ -37,16 +37,17 @@ mod tests {
     }
 
     #[test]
-    fn predicated_bra_skips_mov() {
-        let program = [guard(bra(16), 0, false), mov_imm(0, 1)];
-        for (p0, expected) in [(1, 10), (0, 1)] {
-            let mut seed = vec![10];
-            seed.resize(P0, 0);
-            seed.push(p0);
-            let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
-                return;
-            };
-            assert_eq!(regs[0], expected, "P0 = {p0}");
+    fn predicated_bra_and_kill_skip_mov() {
+        for skip in [guard(bra(16), 0, false), kill(0, false)] {
+            for (p0, expected) in [(1, 10), (0, 1)] {
+                let mut seed = vec![10];
+                seed.resize(P0, 0);
+                seed.push(p0);
+                let Some((regs, _)) = run_regs(&[skip, mov_imm(0, 1)], &seed, &[], &[]) else {
+                    return;
+                };
+                assert_eq!(regs[0], expected, "{skip:#x}, P0 = {p0}");
+            }
         }
     }
 

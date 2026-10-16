@@ -438,7 +438,7 @@ impl<'a> Decoder<'a> {
         let mut leaders = vec![0, len];
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));
-            if matches!(inst & (1 << 91 | 0xfff), 0x947 | 0x94d) {
+            if matches!(inst & (1 << 91 | 0xfff), 0x947 | 0x94d | 0x95b) {
                 leaders.push(pc + 1);
             }
         }
@@ -2461,39 +2461,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn kill(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-
-        if pg == 0x07 && pg_not == 0 {
-            // Unconditional kill (PT = always true)
-            self.ir.emit_kill();
-        } else if pg == 0x07 && pg_not != 0 {
-            // Never kill (!PT = always false) -> dead code, emit nothing
-        } else {
-            // Conditional kill: OpKill is a block terminator, so we need
-            // real control flow (OpSelectionMerge + OpBranchConditional).
-            let mask = self.load_predicate_mask(pg, pg_not != 0);
-            let cond = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
-
-            let kill_label = self.ir.alloc_id();
-            let merge_label = self.ir.alloc_id();
-
-            self.ir.emit_selection_merge(merge_label, 0);
-            self.ir.emit_branch_conditional(cond, kill_label, merge_label);
-
-            self.ir.emit_label_id(kill_label);
-            self.ir.emit_kill();
-
-            // Merge block -> execution continues here if predicate was false
-            self.ir.emit_label_id(merge_label);
-        }
+        self.exit(inst);
     }
     pub fn ld(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

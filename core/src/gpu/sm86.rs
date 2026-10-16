@@ -3581,21 +3581,10 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn plop3(&mut self, inst: u128) {
-        let p = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let q = self.load_predicate_mask((inst >> 77 & 7) as u32, inst >> 80 & 1 != 0);
-        let r = if inst >> 67 & 1 != 0 {
-            let up = self.load_upredicate();
-            let shift = self.cached_const_u32((inst >> 68 & 7) as u32);
-            let bit = self.ir.emit_shift_right_logical(self.type_u32[1], up, shift);
-            let bit = self.ir.emit_bitwise_and(self.type_u32[1], bit, self.const_u32_1);
-            let mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, bit);
-            if inst >> 71 & 1 != 0 { self.ir.emit_not(self.type_u32[1], mask) } else { mask }
-        } else {
-            self.load_predicate_mask((inst >> 68 & 7) as u32, inst >> 71 & 1 != 0)
-        };
-        let p = self.ir.emit_bitwise_and(self.type_u32[1], p, self.const_u32_1);
-        let q = self.ir.emit_bitwise_and(self.type_u32[1], q, self.const_u32_1);
-        let r = self.ir.emit_bitwise_and(self.type_u32[1], r, self.const_u32_1);
+        let uniform = inst & 0xfff == 0x89c;
+        let p = self.pred_bit(uniform, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let q = self.pred_bit(uniform, (inst >> 77 & 7) as u32, inst >> 80 & 1 != 0);
+        let r = self.pred_bit(uniform || inst >> 67 & 1 != 0, (inst >> 68 & 7) as u32, inst >> 71 & 1 != 0);
         let two = self.cached_const_u32(2);
         let p = self.ir.emit_shift_left_logical(self.type_u32[1], p, two);
         let q = self.ir.emit_shift_left_logical(self.type_u32[1], q, self.const_u32_1);
@@ -3609,8 +3598,8 @@ impl<'a> Decoder<'a> {
         let lut = ((inst >> 72 & 0x1f) << 3 | (inst >> 64 & 7)) as u32;
         let result = eval(self, lut);
         let second = eval(self, (inst >> 16 & 0xff) as u32);
-        self.combine_and_set_predicate_bit((inst >> 81 & 7) as u32, 0, result);
-        self.combine_and_set_predicate_bit((inst >> 84 & 7) as u32, 0, second);
+        self.store_pred_bit(uniform, (inst >> 81 & 7) as u32, result);
+        self.store_pred_bit(uniform, (inst >> 84 & 7) as u32, second);
     }
     pub fn pmtrig(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3851,11 +3840,11 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn sel(&mut self, inst: u128) {
-        let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let a = self.load_register((inst >> 24 & 0xff) as u32);
-        let b = self.alu_src(inst);
-        let result = self.select_masked(mask, a, b);
-        self.store_register((inst >> 16 & 0xff) as u32, result);
+        let p = self.pred_bit(is_uniform(inst), (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let p = self.ir.emit_inot_equal(self.type_bool[1], p, self.const_u32_0);
+        let (a, b) = (self.alu_reg(inst, 24), self.src_b(inst));
+        let result = self.ir.emit_select(self.type_u32[1], p, a, b);
+        self.store_alu(inst, result);
     }
     pub fn setctaid(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4491,19 +4480,7 @@ impl<'a> Decoder<'a> {
     }
     pub fn uplop3(&mut self, inst: u128) {
         assert!(inst & 0xfff == 0x89c, "UPLOP3 with register sources");
-        let [p, q, r] = [(87, 90), (77, 80), (68, 71)].map(|(pred, not)| self.pred_bit(true, (inst >> pred & 7) as u32, inst >> not & 1 != 0));
-        let two = self.cached_const_u32(2);
-        let p = self.ir.emit_shift_left_logical(self.type_u32[1], p, two);
-        let q = self.ir.emit_shift_left_logical(self.type_u32[1], q, self.const_u32_1);
-        let index = self.ir.emit_bitwise_or(self.type_u32[1], p, q);
-        let index = self.ir.emit_bitwise_or(self.type_u32[1], index, r);
-        let luts = [(inst >> 72 & 0x1f) << 3 | inst >> 64 & 7, inst >> 16 & 0xff];
-        for (lut, dst) in luts.into_iter().zip([81, 84]) {
-            let lut = self.cached_const_u32(lut as u32);
-            let bit = self.ir.emit_shift_right_logical(self.type_u32[1], lut, index);
-            let bit = self.ir.emit_bitwise_and(self.type_u32[1], bit, self.const_u32_1);
-            self.store_pred_bit(true, (inst >> dst & 7) as u32, bit);
-        }
+        self.plop3(inst)
     }
     pub fn upopc(&mut self, inst: u128) {
         self.popc(inst)
@@ -4525,11 +4502,7 @@ impl<'a> Decoder<'a> {
         self.store_upredicate(result);
     }
     pub fn usel(&mut self, inst: u128) {
-        let p = self.pred_bit(true, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let p = self.ir.emit_inot_equal(self.type_bool[1], p, self.const_u32_0);
-        let (a, b) = (self.alu_reg(inst, 24), self.src_b(inst));
-        let result = self.ir.emit_select(self.type_u32[1], p, a, b);
-        self.store_alu(inst, result);
+        self.sel(inst)
     }
     pub fn usgxt(&mut self, inst: u128) {
         self.sgxt(inst)

@@ -89,6 +89,10 @@ jobs:
           echo "RUSTFLAGS=-C link-arg=-Wl,-no_pie" >> $GITHUB_ENV
           echo "Limiting parallelism to reduce memory usage"
 
+      - name: Install GPU test tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y spirv-tools mesa-vulkan-drivers libvulkan1
+
       - name: Build project
         shell: bash
         run: |
@@ -102,6 +106,7 @@ jobs:
         shell: bash
         env:
           RUST_BACKTRACE: full
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json:/usr/share/vulkan/icd.d/lvp_icd.json
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
             cargo test --locked --verbose

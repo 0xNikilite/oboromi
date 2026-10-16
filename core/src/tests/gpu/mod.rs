@@ -13,3 +13,4 @@ mod memory;
 mod shared;
 mod special;
 mod uniform;
+mod warp;

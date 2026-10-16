@@ -261,6 +261,7 @@ pub enum ResourceKind {
     Support,
     Global,
     Local,
+    Shared,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -291,11 +292,14 @@ pub struct Decoder<'a> {
     const_u32_1: u32,
     type_ptr_ssbo: u32,
     type_ptr_ssbo_u32: u32,
+    type_ptr_shared_u32: u32,
     type_ptr_cbuf: u32,
     type_ptr_cbuf_u32: u32,
     type_u64: u32,
     type_s64: u32,
     type_f64: u32,
+    type_f16: u32,
+    type_f16x2: u32,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
@@ -344,11 +348,14 @@ impl<'a> Decoder<'a> {
             const_u32_1: 0,
             type_ptr_ssbo: 0,
             type_ptr_ssbo_u32: 0,
+            type_ptr_shared_u32: 0,
             type_ptr_cbuf: 0,
             type_ptr_cbuf_u32: 0,
             type_u64: 0,
             type_s64: 0,
             type_f64: 0,
+            type_f16: 0,
+            type_f16x2: 0,
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
@@ -359,14 +366,14 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
-    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>) {
+    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, lanes: u32) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
         let interface: Vec<u32> = [self.var_abstract_state, self.var_pc].into_iter().chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
-            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[1, 1, 1]);
+            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[lanes, 1, 1]);
         use spirv::{capability as cap, execution_mode as mode};
         if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
             self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);
@@ -427,9 +434,10 @@ impl<'a> Decoder<'a> {
     pub fn emit_register_io(&mut self, in_binding: u32, out_binding: u32) {
         let input = self.declare_ssbo(ResourceKind::Ssbo(0), in_binding);
         self.declare_ssbo(ResourceKind::Ssbo(1), out_binding);
+        let base = self.invocation_state_base();
         // Every register is seeded because predicated stores read the old value.
         for slot in 0..STATE_WORDS as u32 {
-            let word = self.ssbo_word(input, slot);
+            let word = self.ssbo_word(input, base, slot);
             let value = self.ir.emit_load(self.type_u32[1], word);
             let ptr = self.state_slot(slot);
             self.ir.emit_store(ptr, value);
@@ -438,12 +446,36 @@ impl<'a> Decoder<'a> {
 
     pub fn emit_register_dump(&mut self) {
         let output = self.resource(ResourceKind::Ssbo(1)).unwrap();
+        let base = self.invocation_state_base();
         for slot in 0..STATE_WORDS as u32 {
             let ptr = self.state_slot(slot);
             let value = self.ir.emit_load(self.type_u32[1], ptr);
-            let word = self.ssbo_word(output, slot);
+            let word = self.ssbo_word(output, base, slot);
             self.ir.emit_store(word, value);
         }
+    }
+
+    fn invocation_state_base(&mut self) -> u32 {
+        let invocation = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
+        let stride = self.cached_const_u32(STATE_WORDS as u32);
+        self.ir.emit_imul(self.type_u32[1], invocation, stride)
+    }
+
+    fn shared_mem(&mut self, word: u32) -> u32 {
+        use spirv::storage_class::WORKGROUP;
+        let var = match self.resource(ResourceKind::Shared) {
+            Some(var) => var,
+            None => {
+                let len = self.cached_const_u32(256);
+                let array = self.ir.emit_type_array(self.type_u32[1], len);
+                let ptr = self.ir.emit_type_pointer(WORKGROUP, array);
+                self.type_ptr_shared_u32 = self.ir.emit_type_pointer(WORKGROUP, self.type_u32[1]);
+                let var = self.ir.emit_variable(ptr, WORKGROUP);
+                self.resources.push(Resource { kind: ResourceKind::Shared, set: 0, binding: 0, var });
+                var
+            }
+        };
+        self.ir.emit_access_chain(self.type_ptr_shared_u32, var, &[word])
     }
 
     fn declare_ssbo(&mut self, kind: ResourceKind, binding: u32) -> u32 {
@@ -666,6 +698,7 @@ impl<'a> Decoder<'a> {
         let field = (inst >> 32) as u32;
         let words = match ((inst >> 9) & 7, (inst >> 91) & 1) {
             (1, 0) => return self.load_pair(field & 0xff),
+            (2 | 4, 0) => [self.const_u32_0, self.cached_const_u32(field)],
             (3 | 5, 0) => {
                 let offset = (field >> 8 & 0x3fff) << 2;
                 let bank = ResourceKind::Cbuf(field >> 22 & 0x1f);
@@ -866,6 +899,41 @@ impl<'a> Decoder<'a> {
         self.type_f64
     }
 
+    // Float16 is declared on first use so fp32 shaders still run on devices without shaderFloat16.
+    fn type_f16(&mut self) -> u32 {
+        if self.type_f16 == 0 {
+            self.ir.emit_capability(spirv::capability::FLOAT16);
+            self.type_f16 = self.ir.emit_type_float(16);
+        }
+        self.type_f16
+    }
+
+    fn type_f16x2(&mut self) -> u32 {
+        if self.type_f16x2 == 0 {
+            let half = self.type_f16();
+            self.type_f16x2 = self.ir.emit_type_vector(half, 2);
+        }
+        self.type_f16x2
+    }
+
+    // Component 0 is bits 15:0 (H0), so bitcast_u32 is the inverse.
+    fn unpack_half2(&mut self, word: u32) -> u32 {
+        let ty = self.type_f16x2();
+        self.ir.emit_bitcast(ty, word)
+    }
+
+    // ISWZ: 0 = H1_H0, 2 = H0_H0, 3 = H1_H1; 1 (F32) reads a whole f32 and is not a swizzle.
+    fn half2_swizzle(&mut self, half2: u32, iswz: u32) -> u32 {
+        let lanes = match iswz {
+            0 => return half2,
+            2 => [0, 0],
+            3 => [1, 1],
+            _ => panic!("ISWZ {iswz} is not a half2 swizzle"),
+        };
+        let ty = self.type_f16x2();
+        self.ir.emit_vector_shuffle(ty, half2, half2, &lanes)
+    }
+
     // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
     fn load_pair(&mut self, reg: u32) -> u32 {
         let hi = if reg == 255 { reg } else { reg + 1 };
@@ -886,39 +954,41 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn special_register(&mut self, index: u32) -> u32 {
+    fn builtin(&mut self, builtin: spirv::BuiltIn) -> u32 {
         use spirv::{BuiltIn, decoration, storage_class::INPUT};
-        let builtin = |this: &mut Self, builtin: BuiltIn| {
-            let builtin = builtin as u32;
-            let ty = match builtin {
-                x if x == BuiltIn::LocalInvocationIndex as u32 => this.type_u32[1],
-                _ => this.type_u32[3],
-            };
-            let var = match this.resource(ResourceKind::BuiltIn(builtin)) {
-                Some(var) => var,
-                None => {
-                    let ptr = this.ir.emit_type_pointer(INPUT, ty);
-                    let var = this.ir.emit_variable(ptr, INPUT);
-                    this.ir.emit_decorate(var, decoration::BUILTIN, &[builtin]);
-                    this.resources.push(Resource { kind: ResourceKind::BuiltIn(builtin), set: 0, binding: 0, var });
-                    var
-                }
-            };
-            this.ir.emit_load(ty, var)
+        let builtin = builtin as u32;
+        let ty = match builtin {
+            x if x == BuiltIn::LocalInvocationIndex as u32 => self.type_u32[1],
+            _ => self.type_u32[3],
         };
+        let var = match self.resource(ResourceKind::BuiltIn(builtin)) {
+            Some(var) => var,
+            None => {
+                let ptr = self.ir.emit_type_pointer(INPUT, ty);
+                let var = self.ir.emit_variable(ptr, INPUT);
+                self.ir.emit_decorate(var, decoration::BUILTIN, &[builtin]);
+                self.resources.push(Resource { kind: ResourceKind::BuiltIn(builtin), set: 0, binding: 0, var });
+                var
+            }
+        };
+        self.ir.emit_load(ty, var)
+    }
+
+    fn special_register(&mut self, index: u32) -> u32 {
+        use spirv::BuiltIn;
         match index {
             0 => {
-                let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
+                let invocation = self.builtin(BuiltIn::LocalInvocationIndex);
                 let mask = self.cached_const_u32(31);
                 self.ir.emit_bitwise_and(self.type_u32[1], invocation, mask)
             }
             3 => {
-                let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
+                let invocation = self.builtin(BuiltIn::LocalInvocationIndex);
                 let shift = self.cached_const_u32(5);
                 self.ir.emit_shift_right_logical(self.type_u32[1], invocation, shift)
             }
             32 => {
-                let tid = builtin(self, BuiltIn::LocalInvocationId);
+                let tid = self.builtin(BuiltIn::LocalInvocationId);
                 let x = self.ir.emit_composite_extract(self.type_u32[1], tid, &[0]);
                 let y = self.ir.emit_composite_extract(self.type_u32[1], tid, &[1]);
                 let z = self.ir.emit_composite_extract(self.type_u32[1], tid, &[2]);
@@ -930,11 +1000,11 @@ impl<'a> Decoder<'a> {
                 self.ir.emit_bit_field_insert(self.type_u32[1], xy, z, o26, c6)
             }
             33..=35 => {
-                let tid = builtin(self, BuiltIn::LocalInvocationId);
+                let tid = self.builtin(BuiltIn::LocalInvocationId);
                 self.ir.emit_composite_extract(self.type_u32[1], tid, &[index - 33])
             }
             37..=39 => {
-                let ctaid = builtin(self, BuiltIn::WorkgroupId);
+                let ctaid = self.builtin(BuiltIn::WorkgroupId);
                 self.ir.emit_composite_extract(self.type_u32[1], ctaid, &[index - 37])
             }
             1 | 2 | 4..=31 | 36 | 40..=133 | 255 => self.const_u32_0,
@@ -950,6 +1020,16 @@ impl<'a> Decoder<'a> {
         self.ir.emit_bitcast(self.type_u32[1], val)
     }
 
+    fn bitcast_f64(&mut self, val: u32) -> u32 {
+        let ty = self.type_f64();
+        self.ir.emit_bitcast(ty, val)
+    }
+
+    fn bitcast_u64(&mut self, val: u32) -> u32 {
+        let ty = self.type_u64();
+        self.ir.emit_bitcast(ty, val)
+    }
+
     fn glsl(&mut self, op: u32, ty: u32, args: &[u32]) -> u32 {
         if self.glsl_ext == 0 {
             self.glsl_ext = self.ir.emit_ext_inst_import("GLSL.std.450");
@@ -961,6 +1041,17 @@ impl<'a> Decoder<'a> {
     fn fp_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
         let val = if abs { self.glsl(4, self.type_f32[1], &[val]) } else { val };
         if neg { self.ir.emit_fnegate(self.type_f32[1], val) } else { val }
+    }
+
+    fn fp64_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
+        let ty = self.type_f64();
+        let val = if abs { self.glsl(spirv::glsl::F_ABS, ty, &[val]) } else { val };
+        if neg { self.ir.emit_fnegate(ty, val) } else { val }
+    }
+
+    fn fp64_rounding(inst: u128) {
+        let mode = (inst >> 78 & 3) as usize;
+        assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
     }
 
     fn fp_ftz(&mut self, val: u32) -> u32 {
@@ -1094,8 +1185,9 @@ impl<'a> Decoder<'a> {
         if ftz { self.flush_subnormal(bits) } else { bits }
     }
 
-    fn ssbo_word(&mut self, var: u32, index: u32) -> u32 {
-        let index = self.cached_const_u32(index);
+    fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
+        let offset = self.cached_const_u32(offset);
+        let index = self.ir.emit_iadd(self.type_u32[1], base, offset);
         self.ir
             .emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
     }
@@ -1737,23 +1829,20 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dadd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        Self::fp64_rounding(inst);
+        let ty = self.type_f64();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let form = inst >> 9 & 7;
+        let b = if form == 1 { self.load_pair((inst >> 64 & 0xff) as u32) } else { self.alu_src_pair(inst) };
+        let b = self.bitcast_f64(b);
+        let imm = matches!(form, 2 | 4);
+        let (abs, neg) = if form == 1 { (inst >> 74 & 1 != 0, inst >> 75 & 1 != 0) } else { (inst >> 62 & 1 != 0, inst >> 63 & 1 != 0) };
+        let b = self.fp64_src(b, !imm && abs, !imm && neg);
+        let result = self.ir.emit_fadd(ty, a, b);
+        let result = self.bitcast_u64(result);
+        self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn depbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1770,26 +1859,22 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dfma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        Self::fp64_rounding(inst);
+        let ty = self.type_f64();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let src = self.alu_src_pair(inst);
+        let src = self.bitcast_f64(src);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        let src = self.fp64_src(src, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let c = self.load_pair((inst >> 64 & 0xff) as u32);
+        let c = self.bitcast_f64(c);
+        let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
+        let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [c, src] } else { [src, c] };
+        let result = self.glsl(spirv::glsl::FMA, ty, &[a, b, c]);
+        let result = self.bitcast_u64(result);
+        self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dmma(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1815,46 +1900,41 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dmul(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        Self::fp64_rounding(inst);
+        let ty = self.type_f64();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let b = self.alu_src_pair(inst);
+        let b = self.bitcast_f64(b);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        let b = self.fp64_src(b, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let result = self.ir.emit_fmul(ty, a, b);
+        let result = self.bitcast_u64(result);
+        self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dsetp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _test = (((inst >> 76) & 0xf) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let a = self.load_pair((inst >> 24 & 0xff) as u32);
+        let a = self.bitcast_f64(a);
+        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let b = self.alu_src_pair(inst);
+        let b = self.bitcast_f64(b);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        let b = self.fp64_src(b, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0);
+        let value = self.fp_compare((inst >> 76 & 15) as u32, a, b);
+        let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], value, self.const_u32_1);
+        let pred = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let pred = self.ir.emit_bitwise_and(self.type_u32[1], pred, self.const_u32_1);
+        let combine = |this: &mut Self, value| match inst >> 74 & 3 {
+            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, pred),
+            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, pred),
+            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, pred),
+            mode => panic!("DSETP boolean mode {mode} is invalid"),
+        };
+        let value = combine(self, value);
+        let inverse = combine(self, inverse);
+        self.combine_and_set_predicate_bit((inst >> 81 & 7) as u32, 0, value);
+        self.combine_and_set_predicate_bit((inst >> 84 & 7) as u32, 0, inverse);
     }
     pub fn errbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3218,19 +3298,19 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        // LDGSTS completes synchronously in this model.
     }
     pub fn ldgsts(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xfff) << 0);
-        let _rb_offset = (((inst >> 44) & 0xfffff) << 0);
-        let _ra_urc = (((inst >> 64) & 0x3f) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let ra = (((inst >> 24) & 0xff) << 0) as u32;
+        let ra_offset = (((inst >> 32) as i32) << 20 >> 20) as u32;
+        let rb_offset = (((inst >> 44) as i32) << 12 >> 12) as u32;
+        let ra_urc = (((inst >> 64) & 0x3f) << 0) as u32;
         let _input_reg_sz_32_dist = (((inst >> 70) & 0x1) << 0);
         let _sp2 = (((inst >> 71) & 0x3) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let _memdesc = (((inst >> 76) & 0x1) << 0);
         let _mem = (((inst >> 77) & 0xf) << 0);
         let _nan = (((inst >> 81) & 0x1) << 0);
@@ -3243,7 +3323,34 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let [ra_offset, rb_offset] = [ra_offset, rb_offset].map(|v| self.cached_const_u32(v));
+        let mut global = self.load_register(ra);
+        let mut shared = self.load_register(rd);
+        match opcode(inst) {
+            0x1fae => {
+                let ur = self.load_ureg(ra_urc);
+                global = self.ir.emit_iadd(self.type_u32[1], global, ur);
+            }
+            0x1dae => {
+                let ur = self.load_ureg(ra_urc);
+                shared = self.ir.emit_iadd(self.type_u32[1], shared, ur);
+            }
+            _ => unreachable!(),
+        }
+        global = self.ir.emit_iadd(self.type_u32[1], global, ra_offset);
+        shared = self.ir.emit_iadd(self.type_u32[1], shared, rb_offset);
+        let two = self.cached_const_u32(2);
+        let words = 1 << (sz - 4);
+        for i in 0..words {
+            let offset = self.cached_const_u32(4 * i);
+            let global = self.ir.emit_iadd(self.type_u32[1], global, offset);
+            let shared = self.ir.emit_iadd(self.type_u32[1], shared, offset);
+            let src = self.global_word_at(global);
+            let value = self.ir.emit_load(self.type_u32[1], src);
+            let word = self.ir.emit_shift_right_logical(self.type_u32[1], shared, two);
+            let dst = self.shared_mem(word);
+            self.ir.emit_store(dst, value);
+        }
     }
     pub fn ldl(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4717,3 +4824,30 @@ impl<'a> Decoder<'a> {
 }
 
 include!("sm86_decoder_generated.rs");
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::gpu::harness::run_body;
+
+    #[test]
+    fn half2_lanes_round_trip_through_a_register() {
+        if !crate::gpu::device().is_ok_and(|d| d.shader_float16) {
+            return eprintln!("skipping: no shaderFloat16");
+        }
+        let program = |d: &mut super::Decoder| {
+            let half2 = d.load_register(0);
+            let half2 = d.unpack_half2(half2);
+            let ty = d.type_f16x2();
+            let sum = d.ir.emit_fadd(ty, half2, half2);
+            let packed = d.bitcast_u32(sum);
+            d.store_register(1, packed);
+            let hi = d.half2_swizzle(sum, 3);
+            let hi = d.bitcast_u32(hi);
+            d.store_register(2, hi);
+        };
+        let Some((lanes, _)) = run_body(program, &[vec![0xC000_3E00]], &[], &[]) else {
+            return;
+        };
+        assert_eq!(lanes[0][1..3], [0xC400_4200, 0xC400_C400]);
+    }
+}

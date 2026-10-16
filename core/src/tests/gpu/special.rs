@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::sm86::STATE_WORDS;
-    use crate::tests::gpu::harness::{run_regs, spirv_val, translate_module};
+    use crate::tests::gpu::harness::{GLOBAL_BASE, run_lanes, run_regs, spirv_val, translate_module};
+    use crate::tests::gpu_test::inst;
 
     fn s2r(rd: u32, sr: u32) -> u128 {
         0x7919 | (rd as u128) << 16 | (sr as u128) << 72
@@ -47,6 +48,23 @@ mod tests {
         expected[11] = u32::MAX;
         assert_eq!(regs[..15], expected);
         assert_eq!(regs[ur5], 0);
+    }
+
+    #[test]
+    fn lanes_keep_own_registers_and_share_global_memory() {
+        let seeds: Vec<Vec<u32>> = (0..32u64)
+            .map(|i| {
+                let address = GLOBAL_BASE + 4 * i;
+                vec![0, 0, address as u32, (address >> 32) as u32]
+            })
+            .collect();
+        let program = [s2r(0, 33), inst::stg(2, 0, 0)];
+        let Some((lanes, global)) = run_lanes(&program, &seeds, &[], &[u32::MAX; 32]) else {
+            return;
+        };
+        let ids: Vec<u32> = (0..32).collect();
+        assert_eq!(lanes.iter().map(|regs| regs[0]).collect::<Vec<_>>(), ids);
+        assert_eq!(global, ids);
     }
 
     #[test]

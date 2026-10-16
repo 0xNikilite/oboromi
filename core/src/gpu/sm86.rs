@@ -1252,12 +1252,27 @@ impl<'a> Decoder<'a> {
             lanes = [both, self.ir.emit_bitwise_xor(self.type_u32[1], both, self.const_u32_1)];
         }
         let p = self.pp_bit(inst);
-        lanes.map(|lane| match inst >> 69 & 3 {
-            0 => self.ir.emit_bitwise_and(self.type_u32[1], lane, p),
-            1 => self.ir.emit_bitwise_or(self.type_u32[1], lane, p),
-            2 => self.ir.emit_bitwise_xor(self.type_u32[1], lane, p),
-            _ => panic!("invalid half compare combine op"),
-        })
+        lanes.map(|lane| self.bool_op(inst >> 69 & 3, lane, p))
+    }
+
+    // Pu (83:81) takes the result and Pv (86:84) its inverse, each combined with Pp by the op at 75:74.
+    fn store_setp(&mut self, inst: u128, result: u32) {
+        let p = self.pp_bit(inst);
+        let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], result, self.const_u32_1);
+        for (value, lsb) in [(result, 81), (inverse, 84)] {
+            let value = self.bool_op(inst >> 74 & 3, value, p);
+            self.store_pred_bit(is_uniform(inst), (inst >> lsb & 7) as u32, value);
+        }
+    }
+
+    fn bool_op(&mut self, op: u128, a: u32, b: u32) -> u32 {
+        let ty = self.type_u32[1];
+        match op {
+            0 => self.ir.emit_bitwise_and(ty, a, b),
+            1 => self.ir.emit_bitwise_or(ty, a, b),
+            2 => self.ir.emit_bitwise_xor(ty, a, b),
+            _ => panic!("boolean op {op} is invalid"),
+        }
     }
 
     // B fills the low `bits`, A the next `bits` and the low bits of C the rest, as PTX cvt.pack.
@@ -2160,18 +2175,7 @@ impl<'a> Decoder<'a> {
         let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
         let b = self.fp64_alu_src(inst);
         let value = self.fp_compare((inst >> 76 & 15) as u32, a, b);
-        let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], value, self.const_u32_1);
-        let pred = self.pp_bit(inst);
-        let combine = |this: &mut Self, value| match inst >> 74 & 3 {
-            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, pred),
-            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, pred),
-            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, pred),
-            mode => panic!("DSETP boolean mode {mode} is invalid"),
-        };
-        let value = combine(self, value);
-        let inverse = combine(self, inverse);
-        self.store_pred_bit(false, (inst >> 81 & 7) as u32, value);
-        self.store_pred_bit(false, (inst >> 84 & 7) as u32, inverse);
+        self.store_setp(inst, value);
     }
     pub fn errbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2476,12 +2480,7 @@ impl<'a> Decoder<'a> {
         let b = self.fp_alu_src(inst, ftz);
         let comparison = self.fp_compare((inst >> 76 & 0xf) as u32, a, b);
         let p = self.pp_bit(inst);
-        let result = match inst >> 74 & 3 {
-            0 => self.ir.emit_bitwise_and(self.type_u32[1], comparison, p),
-            1 => self.ir.emit_bitwise_or(self.type_u32[1], comparison, p),
-            2 => self.ir.emit_bitwise_xor(self.type_u32[1], comparison, p),
-            _ => unreachable!(),
-        };
+        let result = self.bool_op(inst >> 74 & 3, comparison, p);
         let mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, result);
         self.store_register(rd, mask);
     }
@@ -2490,18 +2489,7 @@ impl<'a> Decoder<'a> {
         let a = self.fp_reg(inst, 24, 73, 72, ftz);
         let b = self.fp_alu_src(inst, ftz);
         let comparison = self.fp_compare((inst >> 76 & 0xf) as u32, a, b);
-        let inverse = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, comparison);
-        let p = self.pp_bit(inst);
-        let combine = |this: &mut Self, value| match inst >> 74 & 3 {
-            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, p),
-            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, p),
-            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, p),
-            _ => unreachable!(),
-        };
-        let result = combine(self, comparison);
-        let inverse = combine(self, inverse);
-        self.store_pred_bit(false, (inst >> 81 & 7) as u32, result);
-        self.store_pred_bit(false, (inst >> 84 & 7) as u32, inverse);
+        self.store_setp(inst, comparison);
     }
     pub fn fswzadd(&mut self, inst: u128) {
         let (ty, f32_ty, bool_ty) = (self.type_u32[1], self.type_f32[1], self.type_bool[1]);
@@ -3038,77 +3026,38 @@ impl<'a> Decoder<'a> {
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let ex = inst >> 72 & 1 != 0;
         let signed = inst >> 73 & 1 != 0;
-        let bop = ((inst >> 74) & 3) as u32;
-        let cmp = ((inst >> 76) & 7) as u32;
-        let pu = ((inst >> 81) & 7) as u32;
-        let pv = ((inst >> 84) & 7) as u32;
-        let pp = ((inst >> 87) & 7) as u32;
-        let pp_not = inst >> 90 & 1 != 0;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        let uniform = is_uniform(inst);
+        let cmp = (inst >> 76 & 7) as u32;
         let (a, b) = (self.alu_reg(inst, 24), self.src_b(inst));
-        let mut result = match (cmp, signed) {
-            (0, _) => self.const_u32_0,
-            (7, _) => self.const_u32_1,
-            (2, _) => {
-                let v = self.ir.emit_iequal(self.type_bool[1], a, b);
-                self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0)
-            }
-            (5, _) => {
-                let v = self.ir.emit_inot_equal(self.type_bool[1], a, b);
-                self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0)
-            }
-            (1, false) => { let v = self.ir.emit_uless_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (1, true) => { let v = self.ir.emit_sless_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (3, false) => { let v = self.ir.emit_uless_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (3, true) => { let v = self.ir.emit_sless_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (4, false) => { let v = self.ir.emit_ugreater_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (4, true) => { let v = self.ir.emit_sgreater_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (6, false) => { let v = self.ir.emit_ugreater_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (6, true) => { let v = self.ir.emit_sgreater_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            _ => unreachable!(),
-        };
-        if ex && !matches!(cmp, 0 | 7) {
-            let pr = ((inst >> 68) & 7) as u32;
-            let pr_not = inst >> 71 & 1 != 0;
-            let pr = self.pred_bit(uniform, pr, pr_not);
-            let equal = self.ir.emit_iequal(self.type_bool[1], a, b);
-            let equal = self.ir.emit_select(self.type_u32[1], equal, self.const_u32_1, self.const_u32_0);
-            result = match cmp {
-                2 => self.ir.emit_bitwise_and(self.type_u32[1], equal, pr),
-                5 => self.ir.emit_bitwise_or(self.type_u32[1], result, pr),
-                _ => {
-                    let strict = match (cmp, signed) {
-                        (1 | 3, false) => self.ir.emit_uless_than(self.type_bool[1], a, b),
-                        (1 | 3, true) => self.ir.emit_sless_than(self.type_bool[1], a, b),
-                        (4 | 6, false) => self.ir.emit_ugreater_than(self.type_bool[1], a, b),
-                        (4 | 6, true) => self.ir.emit_sgreater_than(self.type_bool[1], a, b),
-                        _ => unreachable!(),
-                    };
-                    let strict = self.ir.emit_select(self.type_u32[1], strict, self.const_u32_1, self.const_u32_0);
-                    let tied = self.ir.emit_bitwise_and(self.type_u32[1], equal, pr);
-                    self.ir.emit_bitwise_or(self.type_u32[1], strict, tied)
-                }
+        // The compare field is a mask of LT (1), EQ (2) and GT (4).
+        let compare = |this: &mut Self, cmp| {
+            let ty = this.type_bool[1];
+            let cond = match (cmp, signed) {
+                (0, _) => return this.const_u32_0,
+                (7, _) => return this.const_u32_1,
+                (1, false) => this.ir.emit_uless_than(ty, a, b),
+                (1, true) => this.ir.emit_sless_than(ty, a, b),
+                (2, _) => this.ir.emit_iequal(ty, a, b),
+                (3, false) => this.ir.emit_uless_than_equal(ty, a, b),
+                (3, true) => this.ir.emit_sless_than_equal(ty, a, b),
+                (4, false) => this.ir.emit_ugreater_than(ty, a, b),
+                (4, true) => this.ir.emit_sgreater_than(ty, a, b),
+                (5, _) => this.ir.emit_inot_equal(ty, a, b),
+                (6, false) => this.ir.emit_ugreater_than_equal(ty, a, b),
+                _ => this.ir.emit_sgreater_than_equal(ty, a, b),
             };
-        }
-        let p = self.pred_bit(uniform, pp, pp_not);
-        let not_result = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, result);
-        let combine = |this: &mut Self, value| match bop {
-            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, p),
-            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, p),
-            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, p),
-            _ => unreachable!(),
+            this.bool_bit(cond)
         };
-        let u = combine(self, result);
-        let v = combine(self, not_result);
-        self.store_pred_bit(uniform, pu, u);
-        self.store_pred_bit(uniform, pv, v);
+        let mut result = compare(self, cmp);
+        // .EX compares the high words of a wider value, so a tie takes Pr, the low words' result.
+        if inst >> 72 & 1 != 0 && !matches!(cmp, 0 | 7) {
+            let pr = self.pred_bit(is_uniform(inst), (inst >> 68 & 7) as u32, inst >> 71 & 1 != 0);
+            let strict = compare(self, cmp & 5);
+            let equal = compare(self, 2);
+            let tied = self.ir.emit_bitwise_and(self.type_u32[1], equal, pr);
+            result = self.ir.emit_bitwise_or(self.type_u32[1], strict, tied);
+        }
+        self.store_setp(inst, result);
     }
     pub fn jmp(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3822,9 +3771,7 @@ impl<'a> Decoder<'a> {
         let mut acc = lanes[0];
         for &v in &lanes[1..] {
             acc = match inst >> 78 & 7 {
-                0 => self.ir.emit_bitwise_and(ty, acc, v),
-                1 => self.ir.emit_bitwise_or(ty, acc, v),
-                2 => self.ir.emit_bitwise_xor(ty, acc, v),
+                op @ 0..=2 => self.bool_op(op, acc, v),
                 3 => self.ir.emit_iadd(ty, acc, v),
                 4 => self.glsl(if signed { spirv::glsl::S_MIN } else { spirv::glsl::U_MIN }, ty, &[acc, v]),
                 5 => self.glsl(if signed { spirv::glsl::S_MAX } else { spirv::glsl::U_MAX }, ty, &[acc, v]),

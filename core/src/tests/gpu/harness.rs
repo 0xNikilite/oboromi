@@ -10,6 +10,18 @@ pub fn translate_module(
     register_io: bool,
     device: Option<&VkState>,
 ) -> Emitter {
+    emit_module(register_io, device, |decoder| {
+        for &inst in instructions {
+            decoder.translate(inst);
+        }
+    })
+}
+
+pub fn emit_module(
+    register_io: bool,
+    device: Option<&VkState>,
+    body: impl FnOnce(&mut Decoder),
+) -> Emitter {
     let mut emitter = Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(SHADER);
@@ -27,9 +39,7 @@ pub fn translate_module(
         decoder.emit_register_io(10, 9);
     }
 
-    for &inst in instructions {
-        decoder.translate(inst);
-    }
+    body(&mut decoder);
 
     if register_io {
         decoder.emit_register_dump();
@@ -61,6 +71,15 @@ pub fn spirv_val(module: &Emitter) {
 /// Runs `instructions` once with the state words seeded from `seed` and cbuf slot 0 holding `cbuf0`,
 /// returning every state word, or `None` when there is no Vulkan device.
 pub fn run_regs(instructions: &[u128], seed: &[u32], cbuf0: &[u32]) -> Option<Vec<u32>> {
+    let translate = |decoder: &mut Decoder| {
+        for &inst in instructions {
+            decoder.translate(inst);
+        }
+    };
+    run_body(translate, seed, cbuf0)
+}
+
+pub fn run_body(body: impl FnOnce(&mut Decoder), seed: &[u32], cbuf0: &[u32]) -> Option<Vec<u32>> {
     let state = match VkState::new() {
         Ok(s) => s,
         Err(e @ (VkError::Loader | VkError::NoDevice)) => {
@@ -69,7 +88,7 @@ pub fn run_regs(instructions: &[u128], seed: &[u32], cbuf0: &[u32]) -> Option<Ve
         }
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     };
-    let module = translate_module(instructions, true, Some(&state));
+    let module = emit_module(true, Some(&state), body);
     spirv_val(&module);
     let bytes = |words: &[u32]| {
         words

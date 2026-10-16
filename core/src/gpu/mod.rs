@@ -28,6 +28,7 @@ pub struct VkState {
     pub submit: std::sync::Mutex<compute::Submit>,
     pub signed_zero_inf_nan_preserve: bool,
     pub denorm_preserve: bool,
+    pub shader_float16: bool,
 }
 
 pub fn device() -> Result<&'static VkState, VkError> {
@@ -50,7 +51,7 @@ impl VkState {
                 e => VkError::Vk(e),
             })?;
         match Self::open_device(&instance) {
-            Ok((physical_device, queue_family, device, command_pool)) => {
+            Ok((physical_device, queue_family, device, command_pool, shader_float16)) => {
                 let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
                 let mut props =
                     vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
@@ -70,6 +71,7 @@ impl VkState {
                     denorm_preserve: float_controls.shader_denorm_preserve_float32 == vk::TRUE
                         && float_controls.denorm_behavior_independence
                             != vk::ShaderFloatControlsIndependence::NONE,
+                    shader_float16,
                 };
                 let alloc = vk::CommandBufferAllocateInfo::default()
                     .command_pool(command_pool)
@@ -89,7 +91,7 @@ impl VkState {
 
     fn open_device(
         instance: &ash::Instance,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -107,13 +109,19 @@ impl VkState {
         let queue_info = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family)
             .queue_priorities(&priorities)];
-        let device_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_info);
+        let mut float16_int8 = vk::PhysicalDeviceShaderFloat16Int8Features::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut float16_int8);
+        unsafe { instance.get_physical_device_features2(physical_device, &mut features) };
+        let shader_float16 = float16_int8.shader_float16 == vk::TRUE;
+        let device_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_info)
+            .push_next(&mut float16_int8);
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool)),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16)),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

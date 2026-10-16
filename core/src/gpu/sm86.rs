@@ -292,6 +292,8 @@ pub struct Decoder<'a> {
     type_ptr_cbuf: u32,
     type_ptr_cbuf_u32: u32,
     type_u64: u32,
+    type_s64: u32,
+    type_f64: u32,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
@@ -343,6 +345,8 @@ impl<'a> Decoder<'a> {
             type_ptr_cbuf: 0,
             type_ptr_cbuf_u32: 0,
             type_u64: 0,
+            type_s64: 0,
+            type_f64: 0,
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
@@ -647,6 +651,28 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    fn alu_src_pair(&mut self, inst: u128) -> u32 {
+        let field = (inst >> 32) as u32;
+        let words = match ((inst >> 9) & 7, (inst >> 91) & 1) {
+            (1, 0) => return self.load_pair(field & 0xff),
+            (3 | 5, 0) => {
+                let offset = (field >> 8 & 0x3fff) << 2;
+                let bank = ResourceKind::Cbuf(field >> 22 & 0x1f);
+                let lo_offset = self.cached_const_u32(offset);
+                let hi_offset = self.cached_const_u32(offset + 4);
+                [self.load_cbuf(bank, lo_offset), self.load_cbuf(bank, hi_offset)]
+            }
+            (6 | 7, 1) => {
+                let ur = field & 0x3f;
+                [self.load_ureg(ur), self.load_ureg((ur + 1).min(63))]
+            }
+            form => todo!("64-bit ALU source form {form:?}"),
+        };
+        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
+        let ty = self.type_u64();
+        self.ir.emit_bitcast(ty, pair)
+    }
+
     // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
     fn load_cbuf(&mut self, kind: ResourceKind, offset: u32) -> u32 {
         let var = match self.resource(kind) {
@@ -711,6 +737,22 @@ impl<'a> Decoder<'a> {
             self.type_u64 = self.ir.emit_type_int(64, 0);
         }
         self.type_u64
+    }
+
+    fn type_s64(&mut self) -> u32 {
+        if self.type_s64 == 0 {
+            self.ir.emit_capability(spirv::capability::INT64);
+            self.type_s64 = self.ir.emit_type_int(64, 1);
+        }
+        self.type_s64
+    }
+
+    fn type_f64(&mut self) -> u32 {
+        if self.type_f64 == 0 {
+            self.ir.emit_capability(spirv::capability::FLOAT64);
+            self.type_f64 = self.ir.emit_type_float(64);
+        }
+        self.type_f64
     }
 
     // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
@@ -812,6 +854,45 @@ impl<'a> Decoder<'a> {
 
     fn int_src(&mut self, val: u32, neg: bool) -> u32 {
         if neg { self.neg(val) } else { val }
+    }
+
+    fn store_f2i(&mut self, rd: u32, fmt: u32, val: u32, rounded: u32, min: u32, max: u32) {
+        let signed = fmt & 1 != 0;
+        let below = self.ir.emit_ford_less_than(self.type_bool[1], rounded, min);
+        let above = self.ir.emit_ford_greater_than_equal(self.type_bool[1], rounded, max);
+        let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+        if fmt < 6 {
+            let converted = if signed {
+                let converted = self.ir.emit_convert_f_to_s(self.type_s32[1], rounded);
+                self.ir.emit_bitcast(self.type_u32[1], converted)
+            } else {
+                self.ir.emit_convert_f_to_u(self.type_u32[1], rounded)
+            };
+            let lo = if signed { match fmt { 1 => (-128i32) as u32, 3 => (-32768i32) as u32, _ => i32::MIN as u32 } } else { 0 };
+            let hi = match fmt { 0 => u8::MAX as u32, 1 => i8::MAX as u32, 2 => u16::MAX as u32, 3 => i16::MAX as u32, 4 => u32::MAX, _ => i32::MAX as u32 };
+            let lo = self.cached_const_u32(lo);
+            let hi = self.cached_const_u32(hi);
+            let result = self.ir.emit_select(self.type_u32[1], below, lo, converted);
+            let result = self.ir.emit_select(self.type_u32[1], above, hi, result);
+            let result = self.ir.emit_select(self.type_u32[1], nan, self.const_u32_0, result);
+            self.store_register(rd, result);
+        } else {
+            let u64_ty = self.type_u64();
+            let converted = if signed {
+                let s64_ty = self.type_s64();
+                let converted = self.ir.emit_convert_f_to_s(s64_ty, rounded);
+                self.ir.emit_bitcast(u64_ty, converted)
+            } else {
+                self.ir.emit_convert_f_to_u(u64_ty, rounded)
+            };
+            let lo = self.ir.emit_constant_typed(u64_ty, if signed { i64::MIN as u64 } else { 0 });
+            let hi = self.ir.emit_constant_typed(u64_ty, if signed { i64::MAX as u64 } else { u64::MAX });
+            let zero = self.ir.emit_constant_typed(u64_ty, 0u64);
+            let result = self.ir.emit_select(u64_ty, below, lo, converted);
+            let result = self.ir.emit_select(u64_ty, above, hi, result);
+            let result = self.ir.emit_select(u64_ty, nan, zero, result);
+            self.store_pair(rd, result);
+        }
     }
 
     // FTZ keeps the sign: a subnormal becomes the zero of the same sign.
@@ -1654,20 +1735,88 @@ impl<'a> Decoder<'a> {
     pub fn f2f(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0);
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _dstfmt_srcfmt = (((inst >> 84) & 0x7) << 3) | (((inst >> 75) & 0x7) << 0);
+        let abs = ((inst >> 62) & 1) != 0;
+        let neg = ((inst >> 63) & 1) != 0;
+        let rnd = ((inst >> 78) & 3) as u32;
+        let ftz = ((inst >> 80) & 1) != 0;
+        let fmt = (((inst >> 84) & 0x7) << 3) | (((inst >> 75) & 0x7) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let f64_ty = self.type_f64();
+        let val = match fmt {
+            19 => {
+                let bits = self.alu_src(inst);
+                let bits = if ftz {
+                    let exp = self.cached_const_u32(0x7f80_0000);
+                    let sign = self.cached_const_u32(0x8000_0000);
+                    let masked = self.ir.emit_bitwise_and(self.type_u32[1], bits, exp);
+                    let denorm = self.ir.emit_iequal(self.type_bool[1], masked, self.const_u32_0);
+                    let signed_zero = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign);
+                    self.ir.emit_select(self.type_u32[1], denorm, signed_zero, bits)
+                } else { bits };
+                let val = self.bitcast_f32(bits);
+                let val = self.fp_src(val, abs, neg);
+                self.ir.emit_f_convert(f64_ty, val)
+            }
+            26 => {
+                let val = self.alu_src_pair(inst);
+                let val = self.ir.emit_bitcast(f64_ty, val);
+                let val = if abs { self.glsl(4, f64_ty, &[val]) } else { val };
+                let val = if neg { self.ir.emit_fnegate(f64_ty, val) } else { val };
+                let nearest = self.ir.emit_f_convert(self.type_f32[1], val);
+                self.ir.emit_decorate(nearest, 42, &[]);
+                let mut bits = self.bitcast_u32(nearest);
+                if rnd != 0 {
+                    let back = self.ir.emit_f_convert(f64_ty, nearest);
+                    self.ir.emit_decorate(back, 42, &[]);
+                    let less = self.ir.emit_ford_less_than(self.type_bool[1], back, val);
+                    let greater = self.ir.emit_ford_greater_than(self.type_bool[1], back, val);
+                    let sign = self.cached_const_u32(0x8000_0000);
+                    let sign = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign);
+                    let negative = self.ir.emit_inot_equal(self.type_bool[1], sign, self.const_u32_0);
+                    let plus = self.ir.emit_iadd(self.type_u32[1], bits, self.const_u32_1);
+                    let minus = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
+                    let up = self.ir.emit_select(self.type_u32[1], negative, minus, plus);
+                    let down = self.ir.emit_select(self.type_u32[1], negative, plus, minus);
+                    let (use_up, use_down) = match rnd {
+                        1 => (None, Some(greater)),
+                        2 => (Some(less), None),
+                        _ => {
+                            let positive = self.ir.emit_logical_not(self.type_bool[1], negative);
+                            let use_up = self.ir.emit_logical_and(self.type_bool[1], negative, less);
+                            let use_down = self.ir.emit_logical_and(self.type_bool[1], positive, greater);
+                            (Some(use_up), Some(use_down))
+                        }
+                    };
+                    if let Some(cond) = use_up {
+                        bits = self.ir.emit_select(self.type_u32[1], cond, up, bits);
+                    }
+                    if let Some(cond) = use_down {
+                        bits = self.ir.emit_select(self.type_u32[1], cond, down, bits);
+                    }
+                }
+                let bits = if ftz {
+                    let exp = self.cached_const_u32(0x7f80_0000);
+                    let sign = self.cached_const_u32(0x8000_0000);
+                    let masked = self.ir.emit_bitwise_and(self.type_u32[1], bits, exp);
+                    let denorm = self.ir.emit_iequal(self.type_bool[1], masked, self.const_u32_0);
+                    let signed_zero = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign);
+                    self.ir.emit_select(self.type_u32[1], denorm, signed_zero, bits)
+                } else { bits };
+                self.store_register(rd as u32, bits);
+                return;
+            }
+            _ => todo!("F2F format {fmt} requires f16 support"),
+        };
+        let u64_ty = self.type_u64();
+        let bits = self.ir.emit_bitcast(u64_ty, val);
+        self.store_pair(rd as u32, bits);
     }
     pub fn f2fp(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1687,28 +1836,73 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("F2FP requires f16 support");
     }
     pub fn f2i(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _ra_urb = (((inst >> 32) & 0x3f) << 0);
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _extract = (((inst >> 60) & 0x3) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _dstfmt = (((inst >> 75) & 0x3) << 1) | (((inst >> 72) & 0x1) << 0);
+        let abs = ((inst >> 62) & 1) != 0;
+        let neg = ((inst >> 63) & 1) != 0;
+        let dstfmt = ((((inst >> 75) & 0x3) << 1) | (((inst >> 72) & 0x1) << 0)) as u32;
         let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _mode = (((inst >> 84) & 0x3) << 0);
+        let rnd = ((inst >> 78) & 3) as usize;
+        let ftz = ((inst >> 80) & 1) != 0;
+        let srcfmt = ((inst >> 84) & 3) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let op = [2, 8, 9, 3][rnd];
+        if srcfmt == 2 {
+            let mut bits = self.alu_src(inst);
+            if ftz {
+                let exp = self.cached_const_u32(0x7f80_0000);
+                let sign = self.cached_const_u32(0x8000_0000);
+                let masked = self.ir.emit_bitwise_and(self.type_u32[1], bits, exp);
+                let denorm = self.ir.emit_iequal(self.type_bool[1], masked, self.const_u32_0);
+                let signed_zero = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign);
+                bits = self.ir.emit_select(self.type_u32[1], denorm, signed_zero, bits);
+            }
+            let val = self.bitcast_f32(bits);
+            let val = self.fp_src(val, abs, neg);
+            let rounded = self.glsl(op, self.type_f32[1], &[val]);
+            let (min, max) = match dstfmt {
+                0 => (0.0, 256.0), 1 => (-128.0, 128.0),
+                2 => (0.0, 65536.0), 3 => (-32768.0, 32768.0),
+                4 => (0.0, 4294967296.0), 5 => (-2147483648.0, 2147483648.0),
+                6 => (0.0, 18446744073709551616.0), 7 => (-9223372036854775808.0, 9223372036854775808.0),
+                _ => unreachable!(),
+            };
+            let min = self.cached_const_u32((min as f32).to_bits());
+            let min = self.bitcast_f32(min);
+            let max = self.cached_const_u32((max as f32).to_bits());
+            let max = self.bitcast_f32(max);
+            self.store_f2i(rd, dstfmt, val, rounded, min, max);
+        } else if srcfmt == 3 {
+            let f64_ty = self.type_f64();
+            let bits = self.alu_src_pair(inst);
+            let val = self.ir.emit_bitcast(f64_ty, bits);
+            let val = if abs { self.glsl(4, f64_ty, &[val]) } else { val };
+            let val = if neg { self.ir.emit_fnegate(f64_ty, val) } else { val };
+            let rounded = self.glsl(op, f64_ty, &[val]);
+            let (min, max) = match dstfmt {
+                0 => (0.0, 256.0), 1 => (-128.0, 128.0),
+                2 => (0.0, 65536.0), 3 => (-32768.0, 32768.0),
+                4 => (0.0, 4294967296.0), 5 => (-2147483648.0, 2147483648.0),
+                6 => (0.0, 18446744073709551616.0), 7 => (-9223372036854775808.0, 9223372036854775808.0),
+                _ => unreachable!(),
+            };
+            let min = self.ir.emit_constant_typed(f64_ty, min);
+            let max = self.ir.emit_constant_typed(f64_ty, max);
+            self.store_f2i(rd, dstfmt, val, rounded, min, max);
+        } else {
+            todo!("F2I source format {srcfmt} is not implemented");
+        }
     }
     pub fn f2ip(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1728,7 +1922,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("F2IP requires f16 support");
     }
     pub fn fadd(&mut self, inst: u128) {
         let ftz = inst >> 80 & 1 != 0;
@@ -1825,21 +2019,52 @@ impl<'a> Decoder<'a> {
     pub fn frnd(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let _extract = (((inst >> 60) & 0x3) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _fmt = (((inst >> 84) & 0x3) << 2) | (((inst >> 75) & 0x3) << 0);
+        let abs = ((inst >> 62) & 1) != 0;
+        let neg = ((inst >> 63) & 1) != 0;
+        let rnd = ((inst >> 78) & 3) as usize;
+        let ftz = ((inst >> 80) & 1) != 0;
+        let fmt = (((inst >> 84) & 0x3) << 2) | (((inst >> 75) & 0x3) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let op = [2, 8, 9, 3][rnd];
+        match fmt {
+            10 => {
+                let mut bits = self.alu_src(inst);
+                if ftz {
+                    let exp = self.cached_const_u32(0x7f80_0000);
+                    let sign = self.cached_const_u32(0x8000_0000);
+                    let masked = self.ir.emit_bitwise_and(self.type_u32[1], bits, exp);
+                    let denorm = self.ir.emit_iequal(self.type_bool[1], masked, self.const_u32_0);
+                    let signed_zero = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign);
+                    bits = self.ir.emit_select(self.type_u32[1], denorm, signed_zero, bits);
+                }
+                let val = self.bitcast_f32(bits);
+                let val = self.fp_src(val, abs, neg);
+                let ty = self.type_f32[1];
+                let val = self.glsl(op, ty, &[val]);
+                let val = self.bitcast_u32(val);
+                self.store_register(rd, val);
+            }
+            15 => {
+                let ty = self.type_f64();
+                let val = self.alu_src_pair(inst);
+                let val = self.ir.emit_bitcast(ty, val);
+                let val = if abs { self.glsl(4, ty, &[val]) } else { val };
+                let val = if neg { self.ir.emit_fnegate(ty, val) } else { val };
+                let val = self.glsl(op, ty, &[val]);
+                let u64_ty = self.type_u64();
+                let val = self.ir.emit_bitcast(u64_ty, val);
+                self.store_pair(rd, val);
+            }
+            _ => todo!("FRND format {fmt} requires f16 support"),
+        }
     }
     pub fn fsel(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2183,19 +2408,60 @@ impl<'a> Decoder<'a> {
     pub fn i2f(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _ra_urb = (((inst >> 32) & 0x3f) << 0);
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
-        let _size = (((inst >> 75) & 0x3) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _srcfmt = (((inst >> 84) & 0x3) << 1) | (((inst >> 74) & 0x1) << 0);
+        let extract = ((inst >> 60) & 3) as u32;
+        let size = ((inst >> 75) & 3) as u32;
+        let rnd = ((inst >> 78) & 3) as u32;
+        let srcfmt = ((((inst >> 84) & 0x3) << 1) | (((inst >> 74) & 0x1) << 0)) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let signed = srcfmt & 1 != 0;
+        let mut val = if srcfmt >= 6 {
+            self.alu_src_pair(inst)
+        } else {
+            let val = self.alu_src(inst);
+            if srcfmt < 4 {
+                let offset = self.cached_const_u32(extract * 8);
+                let width = self.cached_const_u32(if srcfmt < 2 { 8 } else { 16 });
+                if signed {
+                    self.ir.emit_bit_field_s_extract(self.type_u32[1], val, offset, width)
+                } else {
+                    self.ir.emit_bit_field_u_extract(self.type_u32[1], val, offset, width)
+                }
+            } else { val }
+        };
+        if signed {
+            let ty = if srcfmt >= 6 {
+                self.type_s64()
+            } else { self.type_s32[1] };
+            val = self.ir.emit_bitcast(ty, val);
+        }
+        let result = match size {
+            2 => if signed {
+                self.ir.emit_convert_s_to_f(self.type_f32[1], val)
+            } else {
+                self.ir.emit_convert_u_to_f(self.type_f32[1], val)
+            },
+            3 => {
+                let ty = self.type_f64();
+                if signed { self.ir.emit_convert_s_to_f(ty, val) } else { self.ir.emit_convert_u_to_f(ty, val) }
+            }
+            _ => todo!("I2F destination format {size} requires f16 support"),
+        };
+        assert!(rnd == 0, "directed I2F rounding is not implemented");
+        if size == 3 {
+            let u64_ty = self.type_u64();
+            let result = self.ir.emit_bitcast(u64_ty, result);
+            self.store_pair(rd, result);
+        } else {
+            let result = self.bitcast_u32(result);
+            self.store_register(rd, result);
+        }
     }
     pub fn i2fp(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2211,21 +2477,38 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("I2FP requires f16 support");
     }
     pub fn i2i(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
+        let dstfmt = ((inst >> 76) & 3) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let val = self.alu_src(inst);
+        let (lo, hi) = match dstfmt {
+            0 => (0, u8::MAX as u32),
+            1 => (i8::MIN as i32 as u32, i8::MAX as u32),
+            2 => (0, u16::MAX as u32),
+            3 => (i16::MIN as i32 as u32, i16::MAX as u32),
+            _ => unreachable!(),
+        };
+        let zero = self.const_u32_0;
+        let lo_const = self.cached_const_u32(lo);
+        let hi_const = self.cached_const_u32(hi);
+        let negative = self.ir.emit_sless_than(self.type_bool[1], val, zero);
+        let below = self.ir.emit_sless_than(self.type_bool[1], val, lo_const);
+        let above = self.ir.emit_sgreater_than(self.type_bool[1], val, hi_const);
+        let low = if dstfmt & 1 != 0 { below } else { negative };
+        let result = self.ir.emit_select(self.type_u32[1], low, lo_const, val);
+        let result = self.ir.emit_select(self.type_u32[1], above, hi_const, result);
+        self.store_register(rd, result);
     }
     pub fn i2ip(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2243,7 +2526,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("I2IP requires f16 support");
     }
     pub fn iabs(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use crate::gpu::spirv;
-use crate::gpu::spirv::capability;
 
 static MAX_REG_COUNT: usize = 254;
 static MAX_UNIFORM_REG_COUNT: usize = 63;
@@ -258,17 +257,9 @@ pub struct Decoder<'a> {
     // Pointers
     type_ptr_u32: [u32; 5],
     // Declared types for headers
-    type_u8: [u32; 5],
-    type_u16: [u32; 5],
     type_u32: [u32; 5],
-    type_u64: [u32; 5],
-    type_s8: [u32; 5],
-    type_s16: [u32; 5],
     type_s32: [u32; 5],
-    type_s64: [u32; 5],
-    type_f16: [u32; 5],
     type_f32: [u32; 5],
-    type_f64: [u32; 5],
     type_bool: [u32; 5],
     // abstract state
     type_abstract_state: u32,
@@ -285,17 +276,9 @@ impl<'a> Decoder<'a> {
             ir,
             type_void: 0,
             type_ptr_u32: [0; 5],
-            type_u8: [0; 5],
-            type_u16: [0; 5],
             type_u32: [0; 5],
-            type_u64: [0; 5],
-            type_s8: [0; 5],
-            type_s16: [0; 5],
             type_s32: [0; 5],
-            type_s64: [0; 5],
-            type_f16: [0; 5],
             type_f32: [0; 5],
-            type_f64: [0; 5],
             type_bool: [0; 5],
             type_abstract_state: 0,
             type_ptr_abstract_state_regs: 0,
@@ -362,62 +345,6 @@ impl<'a> Decoder<'a> {
 
     }
     
-
-    fn lazy_type(
-        &mut self,
-        field: fn(&mut Self) -> &mut [u32; 5],
-        cap: u32,
-        bits: u32,
-        sign: Option<u32>,
-        n: usize,
-    ) -> u32 {
-        if field(self)[n] == 0 {
-            let id = if n == 1 {
-                self.ir.emit_capability(cap);
-                match sign {
-                    Some(sign) => self.ir.emit_type_int(bits, sign),
-                    None => self.ir.emit_type_float(bits),
-                }
-            } else {
-                let scalar = self.lazy_type(field, cap, bits, sign, 1);
-                self.ir.emit_type_vector(scalar, n as u32)
-            };
-            field(self)[n] = id;
-        }
-        field(self)[n]
-    }
-
-    fn type_u8(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_u8, capability::INT8, 8, Some(0), n)
-    }
-
-    fn type_u16(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_u16, capability::INT16, 16, Some(0), n)
-    }
-
-    fn type_u64(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_u64, capability::INT64, 64, Some(0), n)
-    }
-
-    fn type_s8(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_s8, capability::INT8, 8, Some(1), n)
-    }
-
-    fn type_s16(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_s16, capability::INT16, 16, Some(1), n)
-    }
-
-    fn type_s64(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_s64, capability::INT64, 64, Some(1), n)
-    }
-
-    fn type_f16(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_f16, capability::FLOAT16, 16, None, n)
-    }
-
-    fn type_f64(&mut self, n: usize) -> u32 {
-        self.lazy_type(|d| &mut d.type_f64, capability::FLOAT64, 64, None, n)
-    }
 
     /// Return the SPIR-V id for an OpConstant(u32, value).
     /// Reuses a previously emitted constant if one exists.

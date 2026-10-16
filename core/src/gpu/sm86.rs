@@ -361,6 +361,25 @@ fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
 
+pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
+    let mut emitter = spirv::Emitter::new();
+    emitter.emit_header();
+    emitter.emit_capability(spirv::capability::SHADER);
+    emitter.emit_memory_model(0, 1);
+    let mut decoder = Decoder::new(&mut emitter);
+    decoder.init();
+    let void_ty = decoder.get_type_void();
+    let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
+    let func = decoder.ir.emit_function(void_ty, 0, func_ty);
+    decoder.ir.emit_label();
+    body(&mut decoder);
+    decoder.emit_entry_point(func, device, local_size);
+    decoder.ir.emit_return();
+    decoder.ir.emit_function_end();
+    decoder.ir.finalize();
+    emitter
+}
+
 impl<'a> Decoder<'a> {
     pub fn new(ir: &'a mut spirv::Emitter) -> Self {
         Self {
@@ -398,14 +417,14 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
-    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, lanes: u32) {
+    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, local_size: [u32; 3]) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
         let interface: Vec<u32> = [self.var_abstract_state, self.var_pc].into_iter().chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
-            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[lanes, 1, 1]);
+            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &local_size);
         use spirv::{capability as cap, execution_mode as mode};
         if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
             self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);

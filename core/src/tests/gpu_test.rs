@@ -225,7 +225,7 @@ pub mod inst {
         control(EXIT, 0, 0)
     }
 
-    fn alu(op: u128, rd: u32, ra: u32, b: u32) -> u128 {
+    pub fn alu(op: u128, rd: u32, ra: u32, b: u32) -> u128 {
         op | PT_GUARD | (rd as u128) << 16 | (ra as u128) << 24 | (b as u128) << 32
     }
 
@@ -267,6 +267,50 @@ pub mod inst {
 
     pub fn guard(inst: u128, pred: u32, invert: bool) -> u128 {
         inst & !(0xf << 12) | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
+    }
+
+    const UNIFORM: u128 = 1 << 91;
+    const PU_PT: u128 = 7 << 81;
+    pub const LOP3: u128 = 0x212;
+    pub const ULOP3: u128 = 0x292 | UNIFORM;
+    pub const SHF: u128 = 0x219;
+    pub const USHF: u128 = 0x299 | UNIFORM;
+    pub const PRMT: u128 = 0x216;
+    pub const UPRMT: u128 = 0x296 | UNIFORM;
+    pub const POPC: u128 = 0x309;
+    pub const UPOPC: u128 = 0x2bf | UNIFORM;
+    pub const FLO: u128 = 0x300 | PU_PT;
+    pub const UFLO: u128 = 0x2bd | UNIFORM | PU_PT;
+    pub const BREV: u128 = 0x301;
+    pub const UBREV: u128 = 0x2be | UNIFORM;
+    pub const BMSK: u128 = 0x21b;
+    pub const UBMSK: u128 = 0x29b | UNIFORM;
+    pub const SGXT: u128 = 0x21a;
+    pub const USGXT: u128 = 0x29a | UNIFORM;
+    // XOR into a register-B opcode: form 4 takes B as imm32, form 2 takes C as imm32 and B from the Rc slot.
+    pub const IMM_B: u128 = 5 << 9;
+    pub const IMM_C: u128 = 3 << 9;
+    pub const INVERT_B: u128 = 1 << 63;
+    pub const PAND: u128 = 1 << 80;
+    pub const S32: u128 = 1 << 73;
+    pub const FLO_SH: u128 = 1 << 74;
+    pub const WRAP: u128 = 1 << 75;
+    pub const SHF_U64: u128 = 1 << 73;
+    pub const SHF_S32: u128 = 2 << 73;
+    pub const SHF_U32: u128 = 3 << 73;
+    pub const SHF_R: u128 = 1 << 76;
+    pub const SHF_HI: u128 = 1 << 80;
+
+    pub fn alu3(op: u128, rd: u32, ra: u32, b: u32, rc: u32) -> u128 {
+        alu(op, rd, ra, b) | (rc as u128) << 64
+    }
+
+    pub fn lop3_fields(lut: u8, pu: u32, pp: u32, pp_not: bool) -> u128 {
+        (lut as u128) << 72 | (pu as u128) << 81 | (pp as u128) << 87 | (pp_not as u128) << 90
+    }
+
+    pub fn prmt_mode(mode: u32) -> u128 {
+        (mode as u128) << 72
     }
 }
 
@@ -413,6 +457,40 @@ fn fixtures_match_nvdisasm() {
         (0x004fc8000b9022700000000402007c0c, "ISETP.EQ.AND P0, P1, R2, UR4, PT ;"),
         (0x004fc80003906320000000030200720c, "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;"),
         (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
+        (inst::alu3(inst::LOP3 | inst::lop3_fields(0xca, 7, 7, true), 10, 1, 2, 3), "LOP3.LUT R10, R1, R2, R3, 0xca, !PT;"),
+        (inst::alu3(inst::LOP3 ^ inst::IMM_B | inst::PAND | inst::lop3_fields(0xc0, 2, 4, true), 255, 1, 0x8000_0000, 255), "LOP3.LUT.PAND P2, RZ, R1, 0x80000000, RZ, 0xc0, !P4;"),
+        (inst::alu3(inst::SHF | inst::SHF_U32 | inst::SHF_HI | inst::WRAP, 10, 0, 2, 1), "SHF.L.W.U32.HI R10, R0, R2, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_S32 | inst::SHF_HI, 12, 255, 31, 1), "SHF.R.S32.HI R12, RZ, 0x1f, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_U64, 14, 0, 64, 1), "SHF.R.U64 R14, R0, 0x40, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_HI, 15, 0, 64, 1), "SHF.R.S64.HI R15, R0, 0x40, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_C | inst::SHF_R | inst::SHF_U32, 17, 0, 0xabcd, 2), "SHF.R.U32 R17, R0, R2, 0xabcd;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B, 12, 0, 0x5098, 1), "PRMT R12, R0, 0x5098, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(1), 13, 0, 1, 1), "PRMT.F4E R13, R0, 0x1, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(2), 14, 0, 0, 1), "PRMT.B4E R14, R0, 0x0, R1;"),
+        (inst::alu3(inst::PRMT | inst::prmt_mode(3), 19, 0, 2, 1), "PRMT.RC8 R19, R0, R2, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(4), 16, 0, 1, 1), "PRMT.ECL R16, R0, 0x1, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(5), 17, 0, 2, 1), "PRMT.ECR R17, R0, 0x2, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(6), 18, 0, 1, 1), "PRMT.RC16 R18, R0, 0x1, R1;"),
+        (inst::alu(inst::POPC | inst::INVERT_B, 11, 0, 0), "POPC R11, ~R0 ;"),
+        (inst::alu(inst::POPC ^ inst::IMM_B, 14, 0, 0x8000_000f), "POPC R14, 0x8000000f ;"),
+        (inst::alu(inst::FLO | inst::FLO_SH, 13, 0, 1), "FLO.U32.SH R13, R1 ;"),
+        (inst::alu(inst::FLO | inst::S32 | inst::FLO_SH, 18, 0, 4), "FLO.SH R18, R4 ;"),
+        (inst::alu(inst::FLO | inst::INVERT_B, 17, 0, 3), "FLO.U32 R17, ~R3 ;"),
+        (inst::alu(inst::BREV ^ inst::IMM_B, 12, 0, 3), "BREV R12, 0x3 ;"),
+        (inst::alu(inst::BMSK | inst::WRAP, 17, 7, 1), "BMSK.W R17, R7, R1;"),
+        (inst::alu(inst::BMSK ^ inst::IMM_B, 18, 2, 4), "BMSK R18, R2, 0x4;"),
+        (inst::alu(inst::SGXT | inst::S32, 16, 0, 4), "SGXT R16, R0, R4;"),
+        (inst::alu(inst::SGXT ^ inst::IMM_B | inst::S32 | inst::WRAP, 15, 3, 33), "SGXT.W R15, R3, 0x21;"),
+        (inst::alu(inst::SGXT ^ inst::IMM_B, 11, 1, 8), "SGXT.U32 R11, R1, 0x8;"),
+        (inst::alu3(inst::ULOP3 | inst::lop3_fields(0xc0, 7, 7, true), 10, 1, 3, 63), "ULOP3.LUT UR10, UR1, UR3, URZ, 0xc0, !UPT;"),
+        (inst::alu3(inst::ULOP3 ^ inst::IMM_B | inst::lop3_fields(0xc0, 1, 7, true), 63, 2, 1, 63), "ULOP3.LUT UP1, URZ, UR2, 0x1, URZ, 0xc0, !UPT;"),
+        (inst::alu3(inst::USHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_U32 | inst::SHF_HI, 11, 63, 31, 2), "USHF.R.U32.HI UR11, URZ, 0x1f, UR2;"),
+        (inst::alu3(inst::UPRMT ^ inst::IMM_B, 12, 1, 0x0123, 63), "UPRMT UR12, UR1, 0x123, URZ;"),
+        (inst::alu(inst::UPOPC, 13, 0, 2), "UPOPC UR13, UR2;"),
+        (inst::alu(inst::UFLO, 14, 0, 2), "UFLO.U32 UR14, UR2;"),
+        (inst::alu(inst::UBREV, 15, 0, 1), "UBREV UR15, UR1;"),
+        (inst::alu(inst::UBMSK ^ inst::IMM_B, 16, 4, 8), "UBMSK UR16, UR4, 0x8;"),
+        (inst::alu(inst::USGXT ^ inst::IMM_B | inst::S32, 17, 3, 16), "USGXT UR17, UR3, 0x10;"),
         (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),

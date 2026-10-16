@@ -15,45 +15,47 @@ pub struct TestResult {
 mod inst {
     // iadd rd, ra, imm32 (src_type=4, opcode=0x810)
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0x810;
+        let mut inst: u128 = 0x7810;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
-        inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
+        inst |= 0x7ffe0ffu128 << 64;
         inst
     }
 
     // iadd rd, ra, rb (src_type=1, opcode=0x210)
     pub fn iadd_reg(rd: u32, ra: u32, rb: u32) -> u128 {
-        let mut inst: u128 = 0x210;
+        let mut inst: u128 = 0x7210;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
-        inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
+        inst |= 0x7ffe0ffu128 << 64;
         inst
     }
 
     // iadd3 rd, ra, rb, rc (register form, key 0x210; rc must be 0xFF)
     pub fn iadd3_reg(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
-        let mut inst: u128 = 0x210;
+        let mut inst: u128 = 0x7210;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
         inst |= ((rc as u128) & 0xff) << 64;
+        inst |= 0x7ffe000u128 << 64;
         inst
     }
 
-    // mov rd, imm32 (immediate form, CLASS "mov__RI", key=0x1a02: bit91=1, low12=0xa02)
+    // mov rd, imm32 (opcode=0x802)
     pub fn mov_imm(rd: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0xa02;
-        inst |= 1u128 << 91;
+        let mut inst: u128 = 0x7802;
+        inst |= 0xfu128 << 72;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
         inst
     }
 
     pub fn mov_reg(rd: u32, rb: u32) -> u128 {
-        let mut inst: u128 = 0x202;
+        let mut inst: u128 = 0x7202;
+        inst |= 0xfu128 << 72;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((rb as u128) & 0xff) << 32;
         inst
@@ -61,7 +63,7 @@ mod inst {
 
     // kill (opcode=0x95b)
     pub fn kill(pred: u32, invert: bool) -> u128 {
-        let mut inst: u128 = 0x95b;
+        let mut inst: u128 = 0x95b | 0x7 << 87 | 0x3f << 110;
         inst |= ((pred as u128) & 0x7) << 12;
         if invert {
             inst |= 1 << 15;
@@ -167,4 +169,33 @@ pub fn run_gpu_tests() -> Vec<String> {
     results.push(summary);
 
     results
+}
+
+#[test]
+fn fixtures_match_nvdisasm() {
+    let Some(nvdisasm) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .chain(std::fs::read_dir("/usr/local").into_iter().flatten().flatten().map(|e| e.path().join("bin")))
+        .map(|dir| dir.join("nvdisasm"))
+        .find(|path| path.is_file())
+    else {
+        eprintln!("nvdisasm not found, skipping");
+        return;
+    };
+    let bin = std::env::temp_dir().join(format!("oboromi-fixture-{}.bin", std::process::id()));
+    let fixtures: &[(u128, &str)] = &[
+        (inst::iadd_imm(1, 2, 42), "IADD3 R1, R2, 0x2a, RZ;"),
+        (inst::iadd_reg(1, 2, 3), "IADD3 R1, R2, R3, RZ;"),
+        (inst::iadd3_reg(1, 2, 3, 0xFF), "IADD3 R1, R2, R3, RZ;"),
+        (inst::mov_imm(1, 0xCAFEBABE), "MOV R1, 0xcafebabe;"),
+        (inst::mov_reg(1, 2), "MOV R1, R2;"),
+        (inst::kill(7, false), "KILL;"),
+    ];
+    for &(word, expected) in fixtures {
+        std::fs::write(&bin, word.to_le_bytes()).unwrap();
+        let out = std::process::Command::new(&nvdisasm).args(["--binary", "SM86"]).arg(&bin).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let disasm = text.lines().find_map(|line| line.split("/*0000*/").nth(1)).unwrap_or_default();
+        assert_eq!(disasm.trim(), expected, "{word:#x}");
+    }
+    std::fs::remove_file(bin).unwrap();
 }

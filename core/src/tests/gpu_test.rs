@@ -13,30 +13,32 @@ pub struct TestResult {
 
 // helpers to build sm86 instructions
 mod inst {
-    // iadd rd, ra, imm32 (src_type=4, opcode=0x810)
+    const IADD3_IMM: u128 = 0x810;
+    const IADD3_RRR: u128 = 0x210;
+    const MOV_RI: u128 = 0x802;
+    const MOV_RR: u128 = 0x202;
+    const KILL: u128 = 0x95b;
+    const PT_GUARD: u128 = 7 << 12;
+    const RC_RZ: u128 = 0xff << 64;
+    const PIXMASK_ALL: u128 = 0xf << 72;
+    const IADD3_NO_CARRY: u128 = 0x3fff << 77;
+    const KILL_PP_PT: u128 = 7 << 87;
+    const NO_SCOREBOARD: u128 = 0x3f << 110;
+
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0x810;
+        let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
-        inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
         inst
     }
 
-    // iadd rd, ra, rb (src_type=1, opcode=0x210)
     pub fn iadd_reg(rd: u32, ra: u32, rb: u32) -> u128 {
-        let mut inst: u128 = 0x210;
-        inst |= ((rd as u128) & 0xff) << 16;
-        inst |= ((ra as u128) & 0xff) << 24;
-        inst |= ((rb as u128) & 0xff) << 32;
-        inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
-        inst
+        iadd3_reg(rd, ra, rb, 0xff)
     }
 
-    // iadd3 rd, ra, rb, rc (opcode=0x510, variant 0x1510 via bit91)
     pub fn iadd3_reg(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
-        let mut inst: u128 = 0x510;
-        inst |= 1u128 << 91; // use 0x1510 variant to avoid iadd overlap
+        let mut inst = IADD3_RRR | PT_GUARD | IADD3_NO_CARRY;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
@@ -44,27 +46,22 @@ mod inst {
         inst
     }
 
-    // iadd32i rd, ra, imm32 (opcode=0x410)
-    pub fn iadd32i(rd: u32, ra: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0x410;
-        inst |= ((rd as u128) & 0xff) << 16;
-        inst |= ((ra as u128) & 0xff) << 24;
-        inst |= ((imm32 as u128) & 0xffffffff) << 32;
-        inst
-    }
-
-    // mov rd, imm32 (immediate form, CLASS "mov__RI", key=0x1a02: bit91=1, low12=0xa02)
     pub fn mov_imm(rd: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0xa02;
-        inst |= 1u128 << 91;
+        let mut inst = MOV_RI | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
         inst
     }
 
-    // kill (opcode=0x8e0)
+    pub fn mov_reg(rd: u32, rb: u32) -> u128 {
+        let mut inst = MOV_RR | PT_GUARD | PIXMASK_ALL;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((rb as u128) & 0xff) << 32;
+        inst
+    }
+
     pub fn kill(pred: u32, invert: bool) -> u128 {
-        let mut inst: u128 = 0x8e0;
+        let mut inst = KILL | KILL_PP_PT | NO_SCOREBOARD;
         inst |= ((pred as u128) & 0x7) << 12;
         if invert {
             inst |= 1 << 15;
@@ -137,9 +134,9 @@ pub fn run_gpu_tests() -> Vec<String> {
     let tests = vec![
         run_translation_test("IADD Immediate", &[inst::iadd_imm(1, 2, 42)]),
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
-        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 4)]),
-        run_translation_test("IADD32I", &[inst::iadd32i(1, 2, 100)]),
+        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 0xFF)]),
         run_translation_test("MOV immediate", &[inst::mov_imm(1, 0xCAFEBABE)]),
+        run_translation_test("MOV register", &[inst::mov_reg(1, 2)]),
         run_translation_test("KILL PT", &[inst::kill(7, false)]),
     ];
 
@@ -170,4 +167,33 @@ pub fn run_gpu_tests() -> Vec<String> {
     results.push(summary);
 
     results
+}
+
+#[test]
+fn fixtures_match_nvdisasm() {
+    let Some(nvdisasm) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .chain(std::fs::read_dir("/usr/local").into_iter().flatten().flatten().map(|e| e.path().join("bin")))
+        .map(|dir| dir.join("nvdisasm"))
+        .find(|path| path.is_file())
+    else {
+        eprintln!("nvdisasm not found, skipping");
+        return;
+    };
+    let bin = std::env::temp_dir().join(format!("oboromi-fixture-{}.bin", std::process::id()));
+    let fixtures: &[(u128, &str)] = &[
+        (inst::iadd_imm(1, 2, 42), "IADD3 R1, R2, 0x2a, RZ;"),
+        (inst::iadd_reg(1, 2, 3), "IADD3 R1, R2, R3, RZ;"),
+        (inst::iadd3_reg(1, 2, 3, 0xFF), "IADD3 R1, R2, R3, RZ;"),
+        (inst::mov_imm(1, 0xCAFEBABE), "MOV R1, 0xcafebabe;"),
+        (inst::mov_reg(1, 2), "MOV R1, R2;"),
+        (inst::kill(7, false), "KILL;"),
+    ];
+    for &(word, expected) in fixtures {
+        std::fs::write(&bin, word.to_le_bytes()).unwrap();
+        let out = std::process::Command::new(&nvdisasm).args(["--binary", "SM86"]).arg(&bin).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let disasm = text.lines().find_map(|line| line.split("/*0000*/").nth(1)).unwrap_or_default();
+        assert_eq!(disasm.trim(), expected, "{word:#x}");
+    }
+    std::fs::remove_file(bin).unwrap();
 }

@@ -22,6 +22,7 @@ pub struct VkState {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
     pub physical_device: vk::PhysicalDevice,
+    pub shader_float64: bool,
     pub device: ash::Device,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
@@ -48,12 +49,13 @@ impl VkState {
                 e => VkError::Vk(e),
             })?;
         match Self::open_device(&instance) {
-            Ok((physical_device, queue_family, device, command_pool)) => {
+            Ok((physical_device, queue_family, shader_float64, device, command_pool)) => {
                 let mut state = Self {
                     queue: unsafe { device.get_device_queue(queue_family, 0) },
                     entry,
                     instance,
                     physical_device,
+                    shader_float64,
                     device,
                     command_pool,
                     submit: Default::default(),
@@ -76,7 +78,7 @@ impl VkState {
 
     fn open_device(
         instance: &ash::Instance,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, bool, ash::Device, vk::CommandPool), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -94,13 +96,15 @@ impl VkState {
         let queue_info = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family)
             .queue_priorities(&priorities)];
-        let device_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_info);
+        let shader_float64 = unsafe { instance.get_physical_device_features(physical_device) }.shader_float64 != 0;
+        let features = vk::PhysicalDeviceFeatures::default().shader_float64(shader_float64);
+        let device_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_info).enabled_features(&features);
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool)),
+            Ok(pool) => Ok((physical_device, queue_family, shader_float64, device, pool)),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

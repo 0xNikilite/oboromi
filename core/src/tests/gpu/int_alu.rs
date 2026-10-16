@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::run_regs;
+    use crate::tests::gpu::harness::{UREG, run_regs};
     use crate::tests::gpu_test::inst;
 
     const IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
@@ -20,9 +20,8 @@ mod tests {
 
     #[test]
     fn mov_reads_cbuf_and_uniform_register() {
-        let ur4 = 254 + 1 + 4;
-        let mut seed = vec![0; ur4 + 1];
-        seed[ur4] = 0x5678;
+        let mut seed = vec![0; UREG + 5];
+        seed[UREG + 4] = 0x5678;
         let program = [inst::mov_cbuf(5, 0, 0x10), inst::mov_ureg(6, 4)];
         let Some((regs, _)) = run_regs(&program, &seed, &[0, 0, 0, 0, 0x1234], &[]) else {
             return;
@@ -36,14 +35,8 @@ mod tests {
         let cases = [
             ([0, 0, 0, 0], [0, 0]),
             ([1, 1, 0, 1], [2, 1]),
-            (
-                [0x7fffffff, 0x7fffffff, 0, 0x7fffffff],
-                [0x80000000, 0x7fffffff],
-            ),
-            (
-                [0x80000000, 0x80000000, 0, 0x80000000],
-                [0x80000000, 0x80000000],
-            ),
+            ([0x7fffffff, 0x7fffffff, 0, 0x7fffffff], [0x80000000, 0x7fffffff]),
+            ([0x80000000, 0x80000000, 0, 0x80000000], [0x80000000, 0x80000000]),
             ([0xffffffff, 0xffffffff, 0, 0xffffffff], [0, 0xffffffff]),
         ];
         for ([a, b, _, c], expected) in cases {
@@ -51,9 +44,7 @@ mod tests {
             seed[0] = a;
             seed[7] = b;
             seed[9] = c;
-            let Some((regs, _)) = run_regs(&[word], &seed, &[], &[]) else {
-                return;
-            };
+            let Some((regs, _)) = run_regs(&[word], &seed, &[], &[]) else { return };
             assert_eq!([regs[7], regs[9]], expected);
         }
     }
@@ -61,9 +52,7 @@ mod tests {
     #[test]
     fn lea_shifts_then_adds() {
         let word = 0x004fc800078e18ff0000000302017211;
-        let Some((regs, _)) = run_regs(&[word], &[0, 0, 3, 5], &[], &[]) else {
-            return;
-        };
+        let Some((regs, _)) = run_regs(&[word], &[0, 0, 3, 5], &[], &[]) else { return };
         assert_eq!(regs[1], 29);
     }
 
@@ -144,9 +133,7 @@ mod tests {
         seed[4] = 7;
         seed[6] = 11;
         seed[ur4] = 7;
-        let Some((regs, _)) = run_regs(&words, &seed, &[7], &[]) else {
-            return;
-        };
+        let Some((regs, _)) = run_regs(&words, &seed, &[7], &[]) else { return };
         assert_eq!(regs[1], 20);
 
         let wide = 0x004fc800078e00060000000302047225;
@@ -154,17 +141,13 @@ mod tests {
         seed[2] = u32::MAX;
         seed[3] = 2;
         seed[6] = 1;
-        let Some((regs, _)) = run_regs(&[wide], &seed, &[], &[]) else {
-            return;
-        };
+        let Some((regs, _)) = run_regs(&[wide], &seed, &[], &[]) else { return };
         assert_eq!(regs[4..6], [u32::MAX, 1]);
 
         let high = 0x004fc800078e02060000000302017227;
         seed[2] = u32::MAX - 1;
         seed[3] = 3;
-        let Some((regs, _)) = run_regs(&[high], &seed, &[], &[]) else {
-            return;
-        };
+        let Some((regs, _)) = run_regs(&[high], &seed, &[], &[]) else { return };
         assert_eq!(regs[1], 0);
 
         let x = 0x004fc800000e06060000000302017224;
@@ -173,14 +156,10 @@ mod tests {
         seed[3] = 3;
         seed[6] = 4;
         seed[254] = 1;
-        let Some((regs, _)) = run_regs(&[x], &seed, &[], &[]) else {
-            return;
-        };
+        let Some((regs, _)) = run_regs(&[x], &seed, &[], &[]) else { return };
         assert_eq!(regs[1], 11);
         let invert_c = 0x004fc800000e0e060000000302017224;
-        let Some((regs, _)) = run_regs(&[invert_c], &seed, &[], &[]) else {
-            return;
-        };
+        let Some((regs, _)) = run_regs(&[invert_c], &seed, &[], &[]) else { return };
         assert_eq!(regs[1], 2);
     }
 }

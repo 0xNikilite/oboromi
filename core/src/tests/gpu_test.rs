@@ -20,6 +20,10 @@ pub mod inst {
     const MOV_RC: u128 = 0xa02;
     const MOV_RU: u128 = 0xc02 | 1 << 91;
     const KILL: u128 = 0x95b;
+    const GUARD: u128 = 0xf << 12;
+    const S2R: u128 = 0x919;
+    const CS2R: u128 = 0x805;
+    const S2UR: u128 = 0x9c3;
     const PT_GUARD: u128 = 7 << 12;
     const RC_RZ: u128 = 0xff << 64;
     const PIXMASK_ALL: u128 = 0xf << 72;
@@ -40,7 +44,6 @@ pub mod inst {
     pub const FP_NEG_B: u128 = 1 << 63;
     pub const FP_NEG_A: u128 = 1 << 72;
     pub const FP_ABS_A: u128 = 1 << 73;
-    pub const FP_ABS_C: u128 = 1 << 74;
     pub const FP_NEG_C: u128 = 1 << 75;
     pub const FP_FMZ: u128 = 1 << 76;
     pub const FP_SAT: u128 = 1 << 77;
@@ -78,6 +81,13 @@ pub mod inst {
     const COND_CONV: u128 = 3 << 32;
     const URB_INVERT: u128 = 1 << 30;
     const URZ: u32 = 63;
+    const F2F: u128 = 0x310;
+    const F2I: u128 = 0x305;
+    const F2I_64: u128 = 0x311;
+    const FRND: u128 = 0x307;
+    const I2F: u128 = 0x306;
+    const I2F_64: u128 = 0x312;
+    const I2I: u128 = 0x238;
     const RET_NODEC: u128 = 1 << 86;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
@@ -130,7 +140,6 @@ pub mod inst {
         inst
     }
 
-    // ldg.e rd, [ra + off]
     pub fn ldg(rd: u32, ra: u32, off: u32) -> u128 {
         let mut inst = LDG | PT_GUARD | ADDR_64 | SZ_32 | LDG_PU_PT | COP_EN;
         inst |= ((rd as u128) & 0xff) << 16;
@@ -139,7 +148,6 @@ pub mod inst {
         inst
     }
 
-    // stg.e [ra + off], rb
     pub fn stg(ra: u32, off: u32, rb: u32) -> u128 {
         let mut inst = STG | PT_GUARD | ADDR_64 | SZ_32 | COP_EN | NO_WRITE_SCOREBOARD;
         inst |= ((ra as u128) & 0xff) << 24;
@@ -148,7 +156,6 @@ pub mod inst {
         inst
     }
 
-    // ldc rd, c[bank][ra + off]
     pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
         let mut inst = LDC | PT_GUARD | SZ_32;
         inst |= ((rd as u128) & 0xff) << 16;
@@ -158,13 +165,24 @@ pub mod inst {
         inst
     }
 
-    // uldc.64 urd, c[bank][off]
     pub fn uldc64(urd: u32, bank: u32, off: u32) -> u128 {
         let mut inst = ULDC | PT_GUARD | SZ_64;
         inst |= ((urd as u128) & 0x3f) << 16;
         inst |= ((off as u128) & 0xffff) << 38;
         inst |= ((bank as u128) & 0x1f) << 54;
         inst
+    }
+
+    pub fn s2r(rd: u32, sr: u32) -> u128 {
+        S2R | PT_GUARD | ((rd as u128) & 0xff) << 16 | ((sr as u128) & 0xff) << 72
+    }
+
+    pub fn cs2r(rd: u32, sr: u32, wide: bool) -> u128 {
+        CS2R | PT_GUARD | ((rd as u128) & 0xff) << 16 | ((sr as u128) & 0xff) << 72 | (wide as u128) << 80
+    }
+
+    pub fn s2ur(urd: u32, sr: u32) -> u128 {
+        S2UR | PT_GUARD | ((urd as u128) & 0x3f) << 16 | ((sr as u128) & 0xff) << 72
     }
 
     pub fn kill(pred: u32, invert: bool) -> u128 {
@@ -176,13 +194,8 @@ pub mod inst {
         inst
     }
 
-    // offset in bytes, from the next instruction for relative forms; ra is Ra, URb or UPq
     fn control(op: u128, ra: u32, offset: i64) -> u128 {
-        op | PT_GUARD
-            | PP_PT
-            | NO_SCOREBOARD
-            | (ra as u128 & 0xff) << 24
-            | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
+        op | PT_GUARD | PP_PT | NO_SCOREBOARD | (ra as u128 & 0xff) << 24 | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
     }
 
     pub fn bra(offset: i64) -> u128 {
@@ -269,8 +282,45 @@ pub mod inst {
         alu(MUFU_R, rd, 0, rb) | (op as u128) << 74
     }
 
+    pub mod cvt {
+        pub const F32: u32 = 2;
+        pub const F64: u32 = 3;
+        pub const U8: u32 = 0;
+        pub const S8: u32 = 1;
+        pub const U32: u32 = 4;
+        pub const S32: u32 = 5;
+        pub const U64: u32 = 6;
+        pub const S64: u32 = 7;
+        pub const RN: u32 = 0;
+        pub const RM: u32 = 1;
+        pub const RP: u32 = 2;
+        pub const RZ: u32 = 3;
+    }
+
+    pub fn f2f(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32, ftz: bool) -> u128 {
+        alu(F2F, rd, 0, rb) | (dst as u128) << 75 | (src as u128) << 84 | (rnd as u128) << 78 | (ftz as u128) << 80
+    }
+
+    pub fn f2i(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32) -> u128 {
+        let op = if src == cvt::F64 { F2I_64 } else { F2I };
+        alu(op, rd, 0, rb) | (dst as u128 & 1) << 72 | (dst as u128 >> 1) << 75 | (src as u128) << 84 | (rnd as u128) << 78
+    }
+
+    pub fn frnd(rd: u32, rb: u32, rnd: u32) -> u128 {
+        alu(FRND, rd, 0, rb) | (cvt::F32 as u128) << 75 | (cvt::F32 as u128) << 84 | (rnd as u128) << 78
+    }
+
+    pub fn i2f(rd: u32, rb: u32, dst: u32, src: u32) -> u128 {
+        let op = if dst == cvt::F64 || src >= cvt::U64 { I2F_64 } else { I2F };
+        alu(op, rd, 0, rb) | (dst as u128) << 75 | (src as u128 & 1) << 74 | (src as u128 >> 1) << 84
+    }
+
+    pub fn i2i(rd: u32, rb: u32, dst: u32) -> u128 {
+        alu(I2I, rd, 0, rb) | (dst as u128) << 76
+    }
+
     pub fn guard(inst: u128, pred: u32, invert: bool) -> u128 {
-        inst & !(0xf << 12) | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
+        inst & !GUARD | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
     }
 
     const UNIFORM: u128 = 1 << 91;
@@ -320,11 +370,7 @@ pub mod inst {
 
 fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
     let start = Instant::now();
-    println!(
-        "Running test: {} ({} instructions)",
-        name,
-        instructions.len()
-    );
+    println!("Running test: {} ({} instructions)", name, instructions.len());
     let result = catch_unwind(AssertUnwindSafe(|| {
         translate_module(instructions, false, None).validate()
     }));
@@ -374,7 +420,10 @@ pub fn run_gpu_tests() -> Vec<String> {
     let mut passed = 0;
     for t in &tests {
         let icon = if t.passed { "Y" } else { "N" };
-        let line = format!("{} {} - {} ({:?})", icon, t.name, t.message, t.duration);
+        let line = format!(
+            "{} {} - {} ({:?})",
+            icon, t.name, t.message, t.duration
+        );
         println!("{}", line);
         results.push(line);
         if t.passed {
@@ -400,13 +449,7 @@ pub fn run_gpu_tests() -> Vec<String> {
 #[test]
 fn fixtures_match_nvdisasm() {
     let Some(nvdisasm) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .chain(
-            std::fs::read_dir("/usr/local")
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.path().join("bin")),
-        )
+        .chain(std::fs::read_dir("/usr/local").into_iter().flatten().flatten().map(|e| e.path().join("bin")))
         .map(|dir| dir.join("nvdisasm"))
         .find(|path| path.is_file())
     else {
@@ -456,10 +499,7 @@ fn fixtures_match_nvdisasm() {
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
         (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::kill(7, false), "KILL;"),
-        (
-            inst::guard(inst::mov_imm(1, 5), 0, false),
-            "@P0 MOV R1, 0x5;",
-        ),
+        (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
         (inst::bra(-80), "BRA -0x40;"),
         (inst::exit(), "EXIT;"),
@@ -473,81 +513,36 @@ fn fixtures_match_nvdisasm() {
         (inst::bra_div(0x10), "BRA.DIV ~URZ, 0x20;"),
         (inst::bra_conv(0x10), "BRA.CONV ~URZ, 0x20;"),
         (inst::fadd(1, 2, 3), "FADD R1, R2, R3;"),
-        (
-            inst::fadd(1, 2, 3) | inst::FP_ABS_A | inst::FP_NEG_A | inst::FP_NEG_B,
-            "FADD R1, -|R2|, -R3;",
-        ),
-        (
-            inst::fadd(1, 2, 3) | inst::FP_ABS_B | inst::FP_SAT | inst::FP_FTZ,
-            "FADD.FTZ.SAT R1, R2, |R3|;",
-        ),
+        (inst::fadd(1, 2, 3) | inst::FP_ABS_A | inst::FP_NEG_A | inst::FP_NEG_B, "FADD R1, -|R2|, -R3;"),
+        (inst::fadd(1, 2, 3) | inst::FP_ABS_B | inst::FP_SAT | inst::FP_FTZ, "FADD.FTZ.SAT R1, R2, |R3|;"),
         (inst::fadd_imm(1, 2, 0.5), "FADD R1, R2, 0.5;"),
         (inst::fmul(1, 2, 3), "FMUL R1, R2, R3;"),
         (inst::fmul(1, 2, 3) | inst::FP_FMZ, "FMUL.FMZ R1, R2, R3;"),
-        (
-            inst::fmul(1, 2, 3) | inst::FP_FTZ | inst::FP_SAT,
-            "FMUL.FTZ.SAT R1, R2, R3;",
-        ),
+        (inst::fmul(1, 2, 3) | inst::FP_FTZ | inst::FP_SAT, "FMUL.FTZ.SAT R1, R2, R3;"),
         (inst::fmul_imm(1, 2, 3.0), "FMUL R1, R2, 3;"),
         (inst::ffma(1, 2, 3, 4), "FFMA R1, R2, R3, R4;"),
-        (
-            inst::ffma(1, 2, 3, 4) | inst::FP_NEG_C | inst::FP_FMZ,
-            "FFMA.FMZ R1, R2, R3, -R4;",
-        ),
+        (inst::ffma(1, 2, 3, 4) | inst::FP_NEG_C | inst::FP_FMZ, "FFMA.FMZ R1, R2, R3, -R4;"),
         (inst::ffma_imm_b(1, 2, 2.0, 4), "FFMA R1, R2, 2, R4;"),
         (inst::ffma_imm_c(1, 2, 3, 0.5), "FFMA R1, R2, R3, 0.5;"),
         (inst::fmnmx(1, 2, 3, 7, false), "FMNMX R1, R2, R3, PT;"),
-        (
-            inst::fmnmx(1, 2, 3, 0, true) | inst::FP_NEG_A | inst::FP_ABS_B,
-            "FMNMX R1, -R2, |R3|, !P0;",
-        ),
+        (inst::fmnmx(1, 2, 3, 0, true) | inst::FP_NEG_A | inst::FP_ABS_B, "FMNMX R1, -R2, |R3|, !P0;"),
         (inst::mufu(1, inst::MUFU_RCP, 3), "MUFU.RCP R1, R3 ;"),
         (inst::mufu(1, inst::MUFU_TANH, 3), "MUFU.TANH R1, R3 ;"),
         (0x004fc800078e02090000000700077224, "IMAD R7, R0, R7, R9 ;"),
         (0x004fc800078e18ff0000000302017211, "LEA R1, R2, R3, 0x3 ;"),
-        (
-            0x004fc80003906270000000030200720c,
-            "ISETP.GE.AND P0, P1, R2, R3, PT ;",
-        ),
-        (
-            0x004fc800078e00060000000302047225,
-            "IMAD.WIDE.U32 R4, R2, R3, R6 ;",
-        ),
-        (
-            0x004fc800078e02060000000302017227,
-            "IMAD.HI R1, R2, R3, R6 ;",
-        ),
-        (
-            0x004fc800000e06060000000302017224,
-            "IMAD.X R1, R2, R3, R6, P0 ;",
-        ),
-        (
-            0x004fc800000e0e060000000302017224,
-            "IMAD.X R1, R2, R3, ~R6, P0 ;",
-        ),
+        (0x004fc80003906270000000030200720c, "ISETP.GE.AND P0, P1, R2, R3, PT ;"),
+        (0x004fc800078e00060000000302047225, "IMAD.WIDE.U32 R4, R2, R3, R6 ;"),
+        (0x004fc800078e02060000000302017227, "IMAD.HI R1, R2, R3, R6 ;"),
+        (0x004fc800000e06060000000302017224, "IMAD.X R1, R2, R3, R6, P0 ;"),
+        (0x004fc800000e0e060000000302017224, "IMAD.X R1, R2, R3, ~R6, P0 ;"),
         (0x004fc800078e02060000000502017824, "IMAD R1, R2, 0x5, R6 ;"),
-        (
-            0x004fc800078e02060000000002017a24,
-            "IMAD R1, R2, c[0x0][0x0], R6 ;",
-        ),
+        (0x004fc800078e02060000000002017a24, "IMAD R1, R2, c[0x0][0x0], R6 ;"),
         (0x004fc8000f8e02060000000402017c24, "IMAD R1, R2, UR4, R6 ;"),
         (0x004fc800078e02030000000502017424, "IMAD R1, R2, R3, 0x5 ;"),
-        (
-            0x004fc80003902270000000050200780c,
-            "ISETP.EQ.AND P0, P1, R2, 0x5, PT ;",
-        ),
-        (
-            0x004fc800039022700000000002007a0c,
-            "ISETP.EQ.AND P0, P1, R2, c[0x0][0x0], PT ;",
-        ),
-        (
-            0x004fc8000b9022700000000402007c0c,
-            "ISETP.EQ.AND P0, P1, R2, UR4, PT ;",
-        ),
-        (
-            0x004fc80003906320000000030200720c,
-            "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;",
-        ),
+        (0x004fc80003902270000000050200780c, "ISETP.EQ.AND P0, P1, R2, 0x5, PT ;"),
+        (0x004fc800039022700000000002007a0c, "ISETP.EQ.AND P0, P1, R2, c[0x0][0x0], PT ;"),
+        (0x004fc8000b9022700000000402007c0c, "ISETP.EQ.AND P0, P1, R2, UR4, PT ;"),
+        (0x004fc80003906320000000030200720c, "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;"),
         (W1D_FSETP[0], "FSETP.F.AND P0, P1, R2, R3, PT ;"),
         (W1D_FSETP[1], "FSETP.LT.AND P0, P1, R2, R3, PT ;"),
         (W1D_FSETP[2], "FSETP.EQ.AND P0, P1, R2, R3, PT ;"),
@@ -580,209 +575,61 @@ fn fixtures_match_nvdisasm() {
         (W1D_IADD3_OBSERVER, "IADD3.X R9, RZ, RZ, RZ, P0, P1 ;"),
         (W1D_IADD3_X, "IADD3.X R7, R0, R7, R9, PT, PT ;"),
         (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
-        (
-            inst::alu3(
-                inst::LOP3 | inst::lop3_fields(0xca, 7, 7, true),
-                10,
-                1,
-                2,
-                3,
-            ),
-            "LOP3.LUT R10, R1, R2, R3, 0xca, !PT;",
-        ),
-        (
-            inst::alu3(
-                inst::LOP3 ^ inst::IMM_B | inst::PAND | inst::lop3_fields(0xc0, 2, 4, true),
-                255,
-                1,
-                0x8000_0000,
-                255,
-            ),
-            "LOP3.LUT.PAND P2, RZ, R1, 0x80000000, RZ, 0xc0, !P4;",
-        ),
-        (
-            inst::alu3(
-                inst::SHF | inst::SHF_U32 | inst::SHF_HI | inst::WRAP,
-                10,
-                0,
-                2,
-                1,
-            ),
-            "SHF.L.W.U32.HI R10, R0, R2, R1;",
-        ),
-        (
-            inst::alu3(
-                inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_S32 | inst::SHF_HI,
-                12,
-                255,
-                31,
-                1,
-            ),
-            "SHF.R.S32.HI R12, RZ, 0x1f, R1;",
-        ),
-        (
-            inst::alu3(
-                inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_U64,
-                14,
-                0,
-                64,
-                1,
-            ),
-            "SHF.R.U64 R14, R0, 0x40, R1;",
-        ),
-        (
-            inst::alu3(
-                inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_HI,
-                15,
-                0,
-                64,
-                1,
-            ),
-            "SHF.R.S64.HI R15, R0, 0x40, R1;",
-        ),
-        (
-            inst::alu3(
-                inst::SHF ^ inst::IMM_C | inst::SHF_R | inst::SHF_U32,
-                17,
-                0,
-                0xabcd,
-                2,
-            ),
-            "SHF.R.U32 R17, R0, R2, 0xabcd;",
-        ),
-        (
-            inst::alu3(inst::PRMT ^ inst::IMM_B, 12, 0, 0x5098, 1),
-            "PRMT R12, R0, 0x5098, R1;",
-        ),
-        (
-            inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(1), 13, 0, 1, 1),
-            "PRMT.F4E R13, R0, 0x1, R1;",
-        ),
-        (
-            inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(2), 14, 0, 0, 1),
-            "PRMT.B4E R14, R0, 0x0, R1;",
-        ),
-        (
-            inst::alu3(inst::PRMT | inst::prmt_mode(3), 19, 0, 2, 1),
-            "PRMT.RC8 R19, R0, R2, R1;",
-        ),
-        (
-            inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(4), 16, 0, 1, 1),
-            "PRMT.ECL R16, R0, 0x1, R1;",
-        ),
-        (
-            inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(5), 17, 0, 2, 1),
-            "PRMT.ECR R17, R0, 0x2, R1;",
-        ),
-        (
-            inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(6), 18, 0, 1, 1),
-            "PRMT.RC16 R18, R0, 0x1, R1;",
-        ),
-        (
-            inst::alu(inst::POPC | inst::INVERT_B, 11, 0, 0),
-            "POPC R11, ~R0 ;",
-        ),
-        (
-            inst::alu(inst::POPC ^ inst::IMM_B, 14, 0, 0x8000_000f),
-            "POPC R14, 0x8000000f ;",
-        ),
-        (
-            inst::alu(inst::FLO | inst::FLO_SH, 13, 0, 1),
-            "FLO.U32.SH R13, R1 ;",
-        ),
-        (
-            inst::alu(inst::FLO | inst::S32 | inst::FLO_SH, 18, 0, 4),
-            "FLO.SH R18, R4 ;",
-        ),
-        (
-            inst::alu(inst::FLO | inst::INVERT_B, 17, 0, 3),
-            "FLO.U32 R17, ~R3 ;",
-        ),
-        (
-            inst::alu(inst::BREV ^ inst::IMM_B, 12, 0, 3),
-            "BREV R12, 0x3 ;",
-        ),
-        (
-            inst::alu(inst::BMSK | inst::WRAP, 17, 7, 1),
-            "BMSK.W R17, R7, R1;",
-        ),
-        (
-            inst::alu(inst::BMSK ^ inst::IMM_B, 18, 2, 4),
-            "BMSK R18, R2, 0x4;",
-        ),
-        (
-            inst::alu(inst::SGXT | inst::S32, 16, 0, 4),
-            "SGXT R16, R0, R4;",
-        ),
-        (
-            inst::alu(inst::SGXT ^ inst::IMM_B | inst::S32 | inst::WRAP, 15, 3, 33),
-            "SGXT.W R15, R3, 0x21;",
-        ),
-        (
-            inst::alu(inst::SGXT ^ inst::IMM_B, 11, 1, 8),
-            "SGXT.U32 R11, R1, 0x8;",
-        ),
-        (
-            inst::alu3(
-                inst::ULOP3 | inst::lop3_fields(0xc0, 7, 7, true),
-                10,
-                1,
-                3,
-                63,
-            ),
-            "ULOP3.LUT UR10, UR1, UR3, URZ, 0xc0, !UPT;",
-        ),
-        (
-            inst::alu3(
-                inst::ULOP3 ^ inst::IMM_B | inst::lop3_fields(0xc0, 1, 7, true),
-                63,
-                2,
-                1,
-                63,
-            ),
-            "ULOP3.LUT UP1, URZ, UR2, 0x1, URZ, 0xc0, !UPT;",
-        ),
-        (
-            inst::alu3(
-                inst::USHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_U32 | inst::SHF_HI,
-                11,
-                63,
-                31,
-                2,
-            ),
-            "USHF.R.U32.HI UR11, URZ, 0x1f, UR2;",
-        ),
-        (
-            inst::alu3(inst::UPRMT ^ inst::IMM_B, 12, 1, 0x0123, 63),
-            "UPRMT UR12, UR1, 0x123, URZ;",
-        ),
+        (inst::alu3(inst::LOP3 | inst::lop3_fields(0xca, 7, 7, true), 10, 1, 2, 3), "LOP3.LUT R10, R1, R2, R3, 0xca, !PT;"),
+        (inst::alu3(inst::LOP3 ^ inst::IMM_B | inst::PAND | inst::lop3_fields(0xc0, 2, 4, true), 255, 1, 0x8000_0000, 255), "LOP3.LUT.PAND P2, RZ, R1, 0x80000000, RZ, 0xc0, !P4;"),
+        (inst::alu3(inst::SHF | inst::SHF_U32 | inst::SHF_HI | inst::WRAP, 10, 0, 2, 1), "SHF.L.W.U32.HI R10, R0, R2, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_S32 | inst::SHF_HI, 12, 255, 31, 1), "SHF.R.S32.HI R12, RZ, 0x1f, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_U64, 14, 0, 64, 1), "SHF.R.U64 R14, R0, 0x40, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_HI, 15, 0, 64, 1), "SHF.R.S64.HI R15, R0, 0x40, R1;"),
+        (inst::alu3(inst::SHF ^ inst::IMM_C | inst::SHF_R | inst::SHF_U32, 17, 0, 0xabcd, 2), "SHF.R.U32 R17, R0, R2, 0xabcd;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B, 12, 0, 0x5098, 1), "PRMT R12, R0, 0x5098, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(1), 13, 0, 1, 1), "PRMT.F4E R13, R0, 0x1, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(2), 14, 0, 0, 1), "PRMT.B4E R14, R0, 0x0, R1;"),
+        (inst::alu3(inst::PRMT | inst::prmt_mode(3), 19, 0, 2, 1), "PRMT.RC8 R19, R0, R2, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(4), 16, 0, 1, 1), "PRMT.ECL R16, R0, 0x1, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(5), 17, 0, 2, 1), "PRMT.ECR R17, R0, 0x2, R1;"),
+        (inst::alu3(inst::PRMT ^ inst::IMM_B | inst::prmt_mode(6), 18, 0, 1, 1), "PRMT.RC16 R18, R0, 0x1, R1;"),
+        (inst::alu(inst::POPC | inst::INVERT_B, 11, 0, 0), "POPC R11, ~R0 ;"),
+        (inst::alu(inst::POPC ^ inst::IMM_B, 14, 0, 0x8000_000f), "POPC R14, 0x8000000f ;"),
+        (inst::alu(inst::FLO | inst::FLO_SH, 13, 0, 1), "FLO.U32.SH R13, R1 ;"),
+        (inst::alu(inst::FLO | inst::S32 | inst::FLO_SH, 18, 0, 4), "FLO.SH R18, R4 ;"),
+        (inst::alu(inst::FLO | inst::INVERT_B, 17, 0, 3), "FLO.U32 R17, ~R3 ;"),
+        (inst::alu(inst::BREV ^ inst::IMM_B, 12, 0, 3), "BREV R12, 0x3 ;"),
+        (inst::alu(inst::BMSK | inst::WRAP, 17, 7, 1), "BMSK.W R17, R7, R1;"),
+        (inst::alu(inst::BMSK ^ inst::IMM_B, 18, 2, 4), "BMSK R18, R2, 0x4;"),
+        (inst::alu(inst::SGXT | inst::S32, 16, 0, 4), "SGXT R16, R0, R4;"),
+        (inst::alu(inst::SGXT ^ inst::IMM_B | inst::S32 | inst::WRAP, 15, 3, 33), "SGXT.W R15, R3, 0x21;"),
+        (inst::alu(inst::SGXT ^ inst::IMM_B, 11, 1, 8), "SGXT.U32 R11, R1, 0x8;"),
+        (inst::alu3(inst::ULOP3 | inst::lop3_fields(0xc0, 7, 7, true), 10, 1, 3, 63), "ULOP3.LUT UR10, UR1, UR3, URZ, 0xc0, !UPT;"),
+        (inst::alu3(inst::ULOP3 ^ inst::IMM_B | inst::lop3_fields(0xc0, 1, 7, true), 63, 2, 1, 63), "ULOP3.LUT UP1, URZ, UR2, 0x1, URZ, 0xc0, !UPT;"),
+        (inst::alu3(inst::USHF ^ inst::IMM_B | inst::SHF_R | inst::SHF_U32 | inst::SHF_HI, 11, 63, 31, 2), "USHF.R.U32.HI UR11, URZ, 0x1f, UR2;"),
+        (inst::alu3(inst::UPRMT ^ inst::IMM_B, 12, 1, 0x0123, 63), "UPRMT UR12, UR1, 0x123, URZ;"),
         (inst::alu(inst::UPOPC, 13, 0, 2), "UPOPC UR13, UR2;"),
         (inst::alu(inst::UFLO, 14, 0, 2), "UFLO.U32 UR14, UR2;"),
         (inst::alu(inst::UBREV, 15, 0, 1), "UBREV UR15, UR1;"),
-        (
-            inst::alu(inst::UBMSK ^ inst::IMM_B, 16, 4, 8),
-            "UBMSK UR16, UR4, 0x8;",
-        ),
-        (
-            inst::alu(inst::USGXT ^ inst::IMM_B | inst::S32, 17, 3, 16),
-            "USGXT UR17, UR3, 0x10;",
-        ),
+        (inst::alu(inst::UBMSK ^ inst::IMM_B, 16, 4, 8), "UBMSK UR16, UR4, 0x8;"),
+        (inst::alu(inst::USGXT ^ inst::IMM_B | inst::S32, 17, 3, 16), "USGXT UR17, UR3, 0x10;"),
         (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
+        (inst::s2r(1, 33), "S2R R1, SR_TID.X ;"),
+        (inst::cs2r(4, 80, false), "CS2R.32 R4, SR_CLOCKLO;"),
+        (inst::cs2r(4, 80, true), "CS2R R4, SR_CLOCKLO;"),
+        (inst::s2ur(5, 37), "S2UR UR5, SR_CTAID.X ;"),
+        (inst::f2f(0, 2, inst::cvt::F64, inst::cvt::F32, inst::cvt::RN, false), "F2F.F64.F32 R0, R2 ;"),
+        (inst::f2f(13, 14, inst::cvt::F32, inst::cvt::F64, inst::cvt::RP, false), "F2F.F32.F64.RP R13, R14 ;"),
+        (inst::f2i(1, 3, inst::cvt::S32, inst::cvt::F32, inst::cvt::RN), "F2I R1, R3 ;"),
+        (inst::f2i(10, 12, inst::cvt::S64, inst::cvt::F64, inst::cvt::RN), "F2I.S64.F64 R10, R12 ;"),
+        (inst::frnd(4, 5, inst::cvt::RN), "FRND R4, R5 ;"),
+        (inst::i2f(6, 7, inst::cvt::F32, inst::cvt::S32), "I2F R6, R7 ;"),
+        (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
+        (inst::i2i(8, 9, inst::cvt::U8), "I2I.U8.S32.SAT R8, R9;"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();
-        let out = std::process::Command::new(&nvdisasm)
-            .args(["--binary", "SM86"])
-            .arg(&bin)
-            .output()
-            .unwrap();
+        let out = std::process::Command::new(&nvdisasm).args(["--binary", "SM86"]).arg(&bin).output().unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        let disasm = text
-            .lines()
-            .find_map(|line| line.split("/*0000*/").nth(1))
-            .unwrap_or_default();
+        let disasm = text.lines().find_map(|line| line.split("/*0000*/").nth(1)).unwrap_or_default();
         assert_eq!(disasm.trim(), expected, "{word:#x}");
     }
     std::fs::remove_file(bin).unwrap();

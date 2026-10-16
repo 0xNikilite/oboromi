@@ -36,21 +36,14 @@ impl UnicornCPU {
     }
 
     /// Create a new Unicorn instance with shared memory
-    ///
+    /// 
     /// # Safety
     /// The caller must ensure `memory_ptr` is valid for the lifetime of this CPU
     /// and has at least `memory_size` bytes.
-    pub unsafe fn new_with_shared_mem(
-        core_id: u32,
-        memory_ptr: *mut u8,
-        memory_size: u64,
-    ) -> Option<Self> {
+    pub unsafe fn new_with_shared_mem(core_id: u32, memory_ptr: *mut u8, memory_size: u64) -> Option<Self> {
         let mut emu = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN)
             .map_err(|e| {
-                eprintln!(
-                    "Failed to create Unicorn instance for core {}: {:?}",
-                    core_id, e
-                );
+                eprintln!("Failed to create Unicorn instance for core {}: {:?}", core_id, e);
                 e
             })
             .ok()?;
@@ -58,17 +51,12 @@ impl UnicornCPU {
         // Map shared memory
         // unsafe because we are providing a raw pointer
         unsafe {
-            emu.mem_map_ptr(
-                0x0,
-                memory_size,
-                Prot::ALL,
-                memory_ptr as *mut std::ffi::c_void,
-            )
-            .map_err(|e| {
-                eprintln!("Failed to map shared memory for core {}: {:?}", core_id, e);
-                e
-            })
-            .ok()?;
+            emu.mem_map_ptr(0x0, memory_size, Prot::ALL, memory_ptr as *mut std::ffi::c_void)
+                .map_err(|e| {
+                    eprintln!("Failed to map shared memory for core {}: {:?}", core_id, e);
+                    e
+                })
+                .ok()?;
         }
 
         // Initialize stack pointer to end of memory, offset by core ID to avoid collision

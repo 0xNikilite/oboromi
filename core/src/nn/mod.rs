@@ -29,17 +29,25 @@ macro_rules! define_service {
 }
 
 define_service!(
-    acc, adraw, ahid, aoc, apm, applet_ae, applet_oe, arp, aud, audctl, auddebug, auddev, auddmg,
-    audin, audout, audrec, audren, audsmx, avm, banana, batlog, bcat, bgtc, bpc, bpmpmr, bsd,
-    bsdcfg, bt, btdrv, btm, btp, capmtp, caps, caps2, cec_mgr, chat, clkrst, codecctl, csrng,
-    dauth, disp, dispdrv, dmnt, dns, dt, ectx, erpt, es, eth, ethc, eupld, fan, fatal, fgm,
-    file_io, friend, fs, fsp_ldr, fsp_pr, fsp_srv, gds, gpio, gpuk, grc, gsv, hdcp, hid, hidbus,
-    host1x, hshl, htc, htcs, hwopus, i2c, idle, ifcfg, imf, ins, irs, jit, lbl, ldn, ldr, led, lm,
-    lp2p, lr, manu, mig, mii, miiimg, mm, mnpp, ncm, nd, ndd, ndrm, news, nfc, nfp, ngc, ngct,
-    nifm, nim, notif, npns, ns, nsd, ntc, nvdbg, nvdrv, nvdrvdbg, nvgem, nvmemp, olsc, omm,
-    ommdisp, ovln, pcie, pcm, pctl, pcv, pdm, pgl, pinmux, pl, pm, prepo, psc, psm, pwm, rgltr, ro,
-    rtc, sasbus, set, sf_uds, sfdnsres, spbg, spi, spl, sprof, spsm, srepo, ssl, syncpt, tc, tcap,
-    time, tma_log, tmagent, ts, tspm, uart, usb, vi, vi2, vic, wlan, xcd,
+    acc, adraw, ahid, aoc, apm, applet_ae, applet_oe, arp,
+    aud, audctl, auddebug, auddev, auddmg, audin, audout,
+    audrec, audren, audsmx, avm, banana, batlog, bcat, bgtc,
+    bpc, bpmpmr, bsd, bsdcfg, bt, btdrv, btm, btp, capmtp,
+    caps, caps2, cec_mgr, chat, clkrst, codecctl, csrng,
+    dauth, disp, dispdrv, dmnt, dns, dt, ectx, erpt, es,
+    eth, ethc, eupld, fan, fatal, fgm, file_io, friend, fs,
+    fsp_ldr, fsp_pr, fsp_srv, gds, gpio, gpuk, grc, gsv,
+    hdcp, hid, hidbus, host1x, hshl, htc, htcs, hwopus, i2c,
+    idle, ifcfg, imf, ins, irs, jit, lbl, ldn, ldr, led, lm,
+    lp2p, lr, manu, mig, mii, miiimg, mm, mnpp, ncm, nd, ndd,
+    ndrm, news, nfc, nfp, ngc, ngct, nifm, nim, notif, npns,
+    ns, nsd, ntc, nvdbg, nvdrv, nvdrvdbg, nvgem, nvmemp,
+    olsc, omm, ommdisp, ovln, pcie, pcm, pctl, pcv, pdm,
+    pgl, pinmux, pl, pm, prepo, psc, psm, pwm, rgltr, ro,
+    rtc, sasbus, set, sf_uds, sfdnsres, spbg, spi, spl,
+    sprof, spsm, srepo, ssl, syncpt, tc, tcap, time,
+    tma_log, tmagent, ts, tspm, uart, usb, vi, vi2, vic,
+    wlan, xcd,
 );
 
 pub trait ServiceTrait {

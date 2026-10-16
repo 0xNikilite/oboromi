@@ -254,7 +254,7 @@ fn translated_mov_and_iadd3_run_on_gpu() {
     output.write(&[0; 255 * 4]);
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (9, ssbo)];
-    let pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
+    let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
     pipeline.bind(&[(10, &input), (9, &output)]);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let mut out = [0u8; 12];

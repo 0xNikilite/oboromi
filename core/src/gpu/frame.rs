@@ -72,7 +72,7 @@ pub fn render_test_frame() -> Result<(), VkError> {
     let size = u64::from(WIDTH * HEIGHT * 4);
     let buffer = HostBuffer::new(&state, size)?;
     let bindings = [(9, vk::DescriptorType::STORAGE_BUFFER)];
-    let pipeline = ComputePipeline::new(&state, &gradient_shader(), &bindings)?;
+    let mut pipeline = ComputePipeline::new(&state, &gradient_shader(), &bindings)?;
     pipeline.bind(&[(9, &buffer)]);
     // Round up so 1080 rows get a partial last group; the shader guard drops the overhang.
     state.dispatch(&pipeline, [WIDTH.div_ceil(16), HEIGHT.div_ceil(16), 1])?;

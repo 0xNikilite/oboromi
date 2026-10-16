@@ -17,6 +17,8 @@ pub mod inst {
     const IADD3_RRR: u128 = 0x210;
     const MOV_RI: u128 = 0x802;
     const MOV_RR: u128 = 0x202;
+    const MOV_RC: u128 = 0xa02;
+    const MOV_RU: u128 = 0xc02 | 1 << 91;
     const KILL: u128 = 0x95b;
     const PT_GUARD: u128 = 7 << 12;
     const RC_RZ: u128 = 0xff << 64;
@@ -53,20 +55,16 @@ pub mod inst {
         inst
     }
 
-    // mov rd, c[bank][off] (opcode=0xa02, off >> 2 at bits 53:40, bank at 58:54)
     pub fn mov_cbuf(rd: u32, bank: u32, off: u32) -> u128 {
-        let mut inst: u128 = 0x7a02;
-        inst |= 0xfu128 << 72;
+        let mut inst = MOV_RC | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((off as u128 >> 2) & 0x3fff) << 40;
         inst |= ((bank as u128) & 0x1f) << 54;
         inst
     }
 
-    // mov rd, urb (opcode=0x1c02, bit 91 selects the uniform source)
     pub fn mov_ureg(rd: u32, urb: u32) -> u128 {
-        let mut inst: u128 = 0x7c02 | 1 << 91;
-        inst |= 0xfu128 << 72;
+        let mut inst = MOV_RU | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((urb as u128) & 0x3f) << 32;
         inst

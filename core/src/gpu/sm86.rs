@@ -520,8 +520,7 @@ impl<'a> Decoder<'a> {
         self.shared_mem(index)
     }
 
-    fn shared_atomic_update(&mut self, ptr: u32, update: impl Fn(&mut Self, u32) -> u32) -> u32 {
-        let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
+    fn atomic_update(&mut self, ptr: u32, scope: u32, sem: u32, update: impl Fn(&mut Self, u32) -> u32) -> u32 {
         let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
         let [header, body, merge] = [(); 3].map(|_| self.ir.alloc_id());
         self.ir.emit_branch(header);
@@ -531,7 +530,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_label_id(body);
         let old = self.ir.emit_atomic_load(self.type_u32[1], ptr, scope, relaxed);
         let new = update(self, old);
-        let seen = self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, relaxed, relaxed, new, old);
+        let seen = self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, relaxed, new, old);
         let done = self.ir.emit_iequal(self.type_bool[1], seen, old);
         self.ir.emit_branch_conditional(done, merge, header);
         self.ir.emit_label_id(merge);
@@ -885,62 +884,48 @@ impl<'a> Decoder<'a> {
     }
 
     fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
-        const DEVICE: u32 = 1;
-        const ACQUIRE_RELEASE_UNIFORM: u32 = 0x48;
-        assert!(sz <= 1, "global atomic size {sz}: 64-bit and float atomics are not supported");
+        use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY};
+        if sz >= 2 {
+            todo!("64-bit and float global atomics");
+        }
         let address = self.global_address(inst, 64, 40);
         let ptr = self.global_word_at(address);
         let value = self.load_register(rb);
-        let (ty, scope, sem) = (self.type_u32[1], self.cached_const_u32(DEVICE), self.cached_const_u32(ACQUIRE_RELEASE_UNIFORM));
-        let signed = sz == 1;
+        let scope = self.cached_const_u32(spirv::scope::DEVICE);
+        let sem = self.cached_const_u32(ACQUIRE_RELEASE | UNIFORM_MEMORY);
         if inst & 1 != 0 {
             let swap = self.load_register((inst >> 64 & 0xff) as u32);
-            return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, self.const_u32_0, swap, value);
+            return self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value);
         }
-        match op {
-            0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, value),
-            1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, value),
-            1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, value),
-            2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, value),
-            2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, value),
-            3 | 4 => self.atomic_wrapping_step(ptr, scope, sem, value, op == 3),
-            5 => self.ir.emit_atomic_and(ty, ptr, scope, sem, value),
-            6 => self.ir.emit_atomic_or(ty, ptr, scope, sem, value),
-            7 => self.ir.emit_atomic_xor(ty, ptr, scope, sem, value),
-            8 => self.ir.emit_atomic_exchange(ty, ptr, scope, sem, value),
-            _ => panic!("global atomic op {op} is not supported"),
-        }
+        self.atomic_op(ptr, scope, sem, op, sz == 1, value)
     }
 
-    // INC is old >= bound ? 0 : old + 1 and DEC is old == 0 || old > bound ? bound : old - 1, which SPIR-V has no
-    // atomic for, so the step retries a compare-exchange until no other invocation wrote in between.
-    fn atomic_wrapping_step(&mut self, ptr: u32, scope: u32, sem: u32, bound: u32, inc: bool) -> u32 {
-        let (ty, bool_ty, zero, one) = (self.type_u32[1], self.type_bool[1], self.const_u32_0, self.const_u32_1);
-        let [header, body, cont, merge] = [(); 4].map(|_| self.ir.alloc_id());
-        self.ir.emit_branch(header);
-        self.ir.emit_label_id(header);
-        self.ir.emit_loop_merge(merge, cont, 0);
-        self.ir.emit_branch(body);
-        self.ir.emit_label_id(body);
-        let old = self.ir.emit_atomic_load(ty, ptr, scope, zero);
-        let new = if inc {
-            let wraps = self.ir.emit_ugreater_than_equal(bool_ty, old, bound);
-            let next = self.ir.emit_iadd(ty, old, one);
-            self.ir.emit_select(ty, wraps, zero, next)
-        } else {
-            let is_zero = self.ir.emit_iequal(bool_ty, old, zero);
-            let above = self.ir.emit_ugreater_than(bool_ty, old, bound);
-            let wraps = self.ir.emit_logical_or(bool_ty, is_zero, above);
-            let prev = self.ir.emit_isub(ty, old, one);
-            self.ir.emit_select(ty, wraps, bound, prev)
-        };
-        let seen = self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, zero, new, old);
-        let done = self.ir.emit_iequal(bool_ty, seen, old);
-        self.ir.emit_branch(cont);
-        self.ir.emit_label_id(cont);
-        self.ir.emit_branch_conditional(done, merge, header);
-        self.ir.emit_label_id(merge);
-        old
+    fn atomic_op(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
+        let ty = self.type_u32[1];
+        match op {
+            0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, b),
+            1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, b),
+            1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, b),
+            2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, b),
+            2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, b),
+            3 => self.atomic_update(ptr, scope, sem, |d, old| {
+                let wraps = d.ir.emit_ugreater_than_equal(d.type_bool[1], old, b);
+                let next = d.ir.emit_iadd(ty, old, d.const_u32_1);
+                d.ir.emit_select(ty, wraps, d.const_u32_0, next)
+            }),
+            4 => self.atomic_update(ptr, scope, sem, |d, old| {
+                let zero = d.ir.emit_iequal(d.type_bool[1], old, d.const_u32_0);
+                let above = d.ir.emit_ugreater_than(d.type_bool[1], old, b);
+                let wraps = d.ir.emit_logical_or(d.type_bool[1], zero, above);
+                let next = d.ir.emit_isub(ty, old, d.const_u32_1);
+                d.ir.emit_select(ty, wraps, b, next)
+            }),
+            5 => self.ir.emit_atomic_and(ty, ptr, scope, sem, b),
+            6 => self.ir.emit_atomic_or(ty, ptr, scope, sem, b),
+            7 => self.ir.emit_atomic_xor(ty, ptr, scope, sem, b),
+            8 => self.ir.emit_atomic_exchange(ty, ptr, scope, sem, b),
+            _ => todo!("atomic op {op}"),
+        }
     }
 
     // Local memory is a lazy 4 KiB Private array per invocation.
@@ -977,18 +962,34 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn store_narrow(&mut self, ptr: u32, address: u32, size: u32, value: u32) {
+    fn store_narrow(&mut self, kind: ResourceKind, ptr: u32, address: u32, size: u32, value: u32) {
         if size >= 4 {
             return self.ir.emit_store(ptr, value);
         }
-        let word = self.ir.emit_load(self.type_u32[1], ptr);
+        let ty = self.type_u32[1];
         let three = self.cached_const_u32(3);
-        let byte = self.ir.emit_bitwise_and(self.type_u32[1], address, three);
-        let eight = self.cached_const_u32(8);
-        let offset = self.ir.emit_imul(self.type_u32[1], byte, eight);
-        let width = self.cached_const_u32(if size < 2 { 8 } else { 16 });
-        let word = self.ir.emit_bit_field_insert(self.type_u32[1], word, value, offset, width);
-        self.ir.emit_store(ptr, word);
+        let byte = self.ir.emit_bitwise_and(ty, address, three);
+        let offset = self.ir.emit_shift_left_logical(ty, byte, three);
+        let low = self.cached_const_u32(if size < 2 { 0xff } else { 0xffff });
+        let mask = self.ir.emit_shift_left_logical(ty, low, offset);
+        let keep = self.ir.emit_not(ty, mask);
+        let value = self.ir.emit_shift_left_logical(ty, value, offset);
+        let value = self.ir.emit_bitwise_and(ty, value, mask);
+        let scope = match kind {
+            ResourceKind::Local => {
+                let word = self.ir.emit_load(ty, ptr);
+                let word = self.ir.emit_bitwise_and(ty, word, keep);
+                let word = self.ir.emit_bitwise_or(ty, word, value);
+                return self.ir.emit_store(ptr, word);
+            }
+            ResourceKind::Shared => spirv::scope::WORKGROUP,
+            _ => spirv::scope::DEVICE,
+        };
+        // Lanes storing other bytes of the same word race, so the bytes are cleared and set atomically.
+        let scope = self.cached_const_u32(scope);
+        let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
+        self.ir.emit_atomic_and(ty, ptr, scope, relaxed, keep);
+        self.ir.emit_atomic_or(ty, ptr, scope, relaxed, value);
     }
 
     fn memory_word_at(&mut self, kind: ResourceKind, address: u32) -> u32 {
@@ -1019,7 +1020,7 @@ impl<'a> Decoder<'a> {
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);
             let ptr = self.memory_word_at(kind, word_address);
             let value = self.load_register(if src == 255 { src } else { src + i });
-            self.store_narrow(ptr, address, size, value);
+            self.store_narrow(kind, ptr, address, size, value);
         }
     }
 
@@ -1703,8 +1704,11 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn atom(&mut self, inst: u128) {
-        assert_ne!(opcode(inst) & 0xfff, 0xf8a, "ATOM.ARRIVE is not supported");
-        self.atomg(inst);
+        match opcode(inst) {
+            0x1f8a => todo!("ATOM.ARRIVE and ATOM.POPC.INC"),
+            0x38b if inst >> 87 & 1 == 1 => todo!("ATOM.CAST"),
+            _ => self.atomg(inst),
+        }
     }
     pub fn atomg(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1755,33 +1759,11 @@ impl<'a> Decoder<'a> {
         let (ty, signed) = (self.type_u32[1], sz == 1);
         let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
         let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
-        let old = match op {
-            _ if cas => {
-                let c = self.load_register((inst >> 64) as u32 & 0xff);
-                self.ir.emit_atomic_compare_exchange(ty, ptr, scope, relaxed, relaxed, c, b)
-            }
-            0 => self.ir.emit_atomic_iadd(ty, ptr, scope, relaxed, b),
-            1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, relaxed, b),
-            1 => self.ir.emit_atomic_umin(ty, ptr, scope, relaxed, b),
-            2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, relaxed, b),
-            2 => self.ir.emit_atomic_umax(ty, ptr, scope, relaxed, b),
-            3 => self.shared_atomic_update(ptr, |d, old| {
-                let wraps = d.ir.emit_ugreater_than_equal(d.type_bool[1], old, b);
-                let next = d.ir.emit_iadd(ty, old, d.const_u32_1);
-                d.ir.emit_select(ty, wraps, d.const_u32_0, next)
-            }),
-            4 => self.shared_atomic_update(ptr, |d, old| {
-                let zero = d.ir.emit_iequal(d.type_bool[1], old, d.const_u32_0);
-                let above = d.ir.emit_ugreater_than(d.type_bool[1], old, b);
-                let wraps = d.ir.emit_logical_or(d.type_bool[1], zero, above);
-                let next = d.ir.emit_isub(ty, old, d.const_u32_1);
-                d.ir.emit_select(ty, wraps, b, next)
-            }),
-            5 => self.ir.emit_atomic_and(ty, ptr, scope, relaxed, b),
-            6 => self.ir.emit_atomic_or(ty, ptr, scope, relaxed, b),
-            7 => self.ir.emit_atomic_xor(ty, ptr, scope, relaxed, b),
-            8 => self.ir.emit_atomic_exchange(ty, ptr, scope, relaxed, b),
-            _ => todo!("ATOMS op {op}"),
+        let old = if cas {
+            let c = self.load_register((inst >> 64) as u32 & 0xff);
+            self.ir.emit_atomic_compare_exchange(ty, ptr, scope, relaxed, relaxed, c, b)
+        } else {
+            self.atomic_op(ptr, scope, relaxed, op, signed, b)
         };
         self.store_register(rd, old);
     }
@@ -4154,24 +4136,7 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.shared_address(inst, 64);
-        if sz >= 4 {
-            return self.store_memory(ResourceKind::Shared, address, sz, rb);
-        }
-        // Lanes storing other bytes of the same word race, so the bytes are cleared and set atomically.
-        let ptr = self.shared_word_at(address);
-        let value = self.load_register(rb);
-        let three = self.cached_const_u32(3);
-        let byte = self.ir.emit_bitwise_and(self.type_u32[1], address, three);
-        let offset = self.ir.emit_shift_left_logical(self.type_u32[1], byte, three);
-        let low = self.cached_const_u32(u32::MAX >> (32 - (8 << (sz >> 1))));
-        let mask = self.ir.emit_shift_left_logical(self.type_u32[1], low, offset);
-        let keep = self.ir.emit_not(self.type_u32[1], mask);
-        let value = self.ir.emit_shift_left_logical(self.type_u32[1], value, offset);
-        let value = self.ir.emit_bitwise_and(self.type_u32[1], value, mask);
-        let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
-        let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
-        self.ir.emit_atomic_and(self.type_u32[1], ptr, scope, relaxed, keep);
-        self.ir.emit_atomic_or(self.type_u32[1], ptr, scope, relaxed, value);
+        self.store_memory(ResourceKind::Shared, address, sz, rb);
     }
     pub fn suatom(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

@@ -105,7 +105,7 @@ pub mod inst {
     const LDC: u128 = 0xb82;
     const ULDC: u128 = 0xab9;
     const ADDR_64: u128 = 1 << 72;
-    const SZ_32: u128 = 4 << 73;
+    pub const SZ_32: u128 = 4 << 73;
     const SZ_64: u128 = 5 << 73;
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
@@ -775,6 +775,7 @@ fn fixtures_match_nvdisasm() {
         (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
         (inst::i2i(8, 9, inst::cvt::U8), "I2I.U8.S32.SAT R8, R9;"),
         (inst::alu(inst::ATOM, 4, 2, 5), "ATOM.E.ADD.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::stg(10, 0, 6) ^ inst::SZ_32, "STG.E.U8 [R10], R6 ;"),
         (inst::alu(inst::ATOMG | inst::ATOM_MAX, 4, 2, 5), "ATOMG.E.MAX.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::alu(inst::ATOMG | inst::ATOM_MIN | inst::S32, 6, 8, 5), "ATOMG.E.MIN.S32.STRONG.GPU PT, R6, [R8], R5 ;"),
         (inst::alu3(inst::ATOMG_CAS, 4, 2, 5, 6), "ATOMG.E.CAS.STRONG.GPU PT, R4, [R2], R5, R6 ;"),

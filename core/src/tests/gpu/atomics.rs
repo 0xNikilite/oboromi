@@ -1,14 +1,15 @@
 #[cfg(test)]
 mod tests {
     use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_lanes};
-    use crate::tests::gpu_test::inst::{ATOM, ATOM_DEC, ATOM_INC, ATOM_MAX, ATOM_MIN, ATOMG, ATOMG_CAS, RED, RED_UR_64, S32, alu, alu3};
+    use crate::tests::gpu_test::inst::{ATOM, ATOM_DEC, ATOM_INC, ATOM_MAX, ATOM_MIN, ATOMG, ATOMG_CAS, RED, RED_UR_64, S32, SZ_32, alu, alu3, stg};
 
     fn run(program: &[u128], r5: impl Fn(u32) -> u32, r6: impl Fn(u32) -> u32, global: &[u32]) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
         let next = GLOBAL_BASE + 4;
         let seeds: Vec<Vec<u32>> = (0..32)
             .map(|lane| {
+                let byte = next + lane as u64;
                 let mut seed = vec![0; UREG + 5];
-                seed[2..10].copy_from_slice(&[GLOBAL_BASE as u32, (GLOBAL_BASE >> 32) as u32, 0, r5(lane), r6(lane), 0, next as u32, (next >> 32) as u32]);
+                seed[2..12].copy_from_slice(&[GLOBAL_BASE as u32, (GLOBAL_BASE >> 32) as u32, 0, r5(lane), r6(lane), 0, next as u32, (next >> 32) as u32, byte as u32, (byte >> 32) as u32]);
                 seed[UREG + 4] = 8;
                 seed
             })
@@ -23,11 +24,13 @@ mod tests {
     }
 
     #[test]
-    fn atom_add_returns_each_old_value_once() {
-        let Some((lanes, global)) = run(&[alu(ATOM, 4, 2, 5)], |_| 1, |_| 0, &[0]) else {
+    fn atom_add_returns_each_old_value_once_and_byte_stores_do_not_race() {
+        let program = [alu(ATOM, 4, 2, 5), stg(10, 0, 6) ^ SZ_32];
+        let Some((lanes, global)) = run(&program, |_| 1, |lane| lane, &[0; 9]) else {
             return;
         };
-        assert_eq!((global[0], sorted(&lanes, 4)), (32, (0..32).collect()));
+        let bytes: Vec<u8> = global[1..].iter().flat_map(|word| word.to_le_bytes()).collect();
+        assert_eq!((global[0], sorted(&lanes, 4), bytes), (32, (0..32).collect(), (0..32).collect()));
     }
 
     #[test]

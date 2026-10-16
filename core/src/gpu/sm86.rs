@@ -511,28 +511,13 @@ impl<'a> Decoder<'a> {
 
     fn shared_address(&mut self, inst: u128, uniform: u32) -> u32 {
         assert!(inst >> 78 & 3 == 0, "shared address stride {}", inst >> 78 & 3);
-        let ra = self.load_register((inst >> 24) as u32 & 0xff);
-        let offset = self.cached_const_u32((((inst >> 40) as i32) << 8 >> 8) as u32);
-        let address = self.ir.emit_iadd(self.type_u32[1], ra, offset);
-        if inst >> 91 & 1 == 0 {
-            return address;
-        }
-        let ur = self.load_ureg((inst >> uniform) as u32 & 0x3f);
-        self.ir.emit_iadd(self.type_u32[1], address, ur)
+        self.global_address(inst, uniform, 40)
     }
 
-    fn shared_word(&mut self, address: u32, word: u32) -> u32 {
+    fn shared_word_at(&mut self, address: u32) -> u32 {
         let two = self.cached_const_u32(2);
         let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, two);
-        let word = self.cached_const_u32(word);
-        let index = self.ir.emit_iadd(self.type_u32[1], index, word);
         self.shared_mem(index)
-    }
-
-    fn byte_offset_bits(&mut self, address: u32) -> u32 {
-        let three = self.cached_const_u32(3);
-        let byte = self.ir.emit_bitwise_and(self.type_u32[1], address, three);
-        self.ir.emit_shift_left_logical(self.type_u32[1], byte, three)
     }
 
     fn shared_atomic_update(&mut self, ptr: u32, update: impl Fn(&mut Self, u32) -> u32) -> u32 {
@@ -951,6 +936,7 @@ impl<'a> Decoder<'a> {
         match kind {
             ResourceKind::Global => self.global_word_at(address),
             ResourceKind::Local => self.local_word_at(address),
+            ResourceKind::Shared => self.shared_word_at(address),
             _ => unreachable!(),
         }
     }
@@ -1603,7 +1589,7 @@ impl<'a> Decoder<'a> {
             _ => {}
         }
         let address = self.shared_address(inst, 64);
-        let ptr = self.shared_word(address, 0);
+        let ptr = self.shared_word_at(address);
         let b = self.load_register(rb);
         let (ty, signed) = (self.type_u32[1], sz == 1);
         let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
@@ -3404,25 +3390,7 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.shared_address(inst, 32);
-        let words = match sz {
-            0..=4 => 1,
-            5 | 6 => 1 << (sz - 4),
-            _ => todo!("LDS size {sz}"),
-        };
-        for i in 0..words {
-            let ptr = self.shared_word(address, i);
-            let mut value = self.ir.emit_load(self.type_u32[1], ptr);
-            if sz < 4 {
-                let offset = self.byte_offset_bits(address);
-                let width = self.cached_const_u32(8 << (sz >> 1));
-                value = if sz & 1 == 1 {
-                    self.ir.emit_bit_field_s_extract(self.type_u32[1], value, offset, width)
-                } else {
-                    self.ir.emit_bit_field_u_extract(self.type_u32[1], value, offset, width)
-                };
-            }
-            self.store_register(if rd == 255 { rd } else { rd + i }, value);
-        }
+        self.load_memory(ResourceKind::Shared, address, sz, rd);
     }
     pub fn ldsm(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4143,32 +4111,24 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.shared_address(inst, 64);
-        let words = match sz {
-            0..=4 => 1,
-            5 | 6 => 1 << (sz - 4),
-            _ => todo!("STS size {sz}"),
-        };
-        if sz < 4 {
-            // Lanes storing other bytes of the same word race, so the bytes are cleared and set atomically.
-            let ptr = self.shared_word(address, 0);
-            let value = self.load_register(rb);
-            let offset = self.byte_offset_bits(address);
-            let low = self.cached_const_u32(u32::MAX >> (32 - (8 << (sz >> 1))));
-            let mask = self.ir.emit_shift_left_logical(self.type_u32[1], low, offset);
-            let keep = self.ir.emit_not(self.type_u32[1], mask);
-            let value = self.ir.emit_shift_left_logical(self.type_u32[1], value, offset);
-            let value = self.ir.emit_bitwise_and(self.type_u32[1], value, mask);
-            let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
-            let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
-            self.ir.emit_atomic_and(self.type_u32[1], ptr, scope, relaxed, keep);
-            self.ir.emit_atomic_or(self.type_u32[1], ptr, scope, relaxed, value);
-            return;
+        if sz >= 4 {
+            return self.store_memory(ResourceKind::Shared, address, sz, rb);
         }
-        for i in 0..words {
-            let ptr = self.shared_word(address, i);
-            let value = self.load_register(if rb == 255 { rb } else { rb + i });
-            self.ir.emit_store(ptr, value);
-        }
+        // Lanes storing other bytes of the same word race, so the bytes are cleared and set atomically.
+        let ptr = self.shared_word_at(address);
+        let value = self.load_register(rb);
+        let three = self.cached_const_u32(3);
+        let byte = self.ir.emit_bitwise_and(self.type_u32[1], address, three);
+        let offset = self.ir.emit_shift_left_logical(self.type_u32[1], byte, three);
+        let low = self.cached_const_u32(u32::MAX >> (32 - (8 << (sz >> 1))));
+        let mask = self.ir.emit_shift_left_logical(self.type_u32[1], low, offset);
+        let keep = self.ir.emit_not(self.type_u32[1], mask);
+        let value = self.ir.emit_shift_left_logical(self.type_u32[1], value, offset);
+        let value = self.ir.emit_bitwise_and(self.type_u32[1], value, mask);
+        let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
+        let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
+        self.ir.emit_atomic_and(self.type_u32[1], ptr, scope, relaxed, keep);
+        self.ir.emit_atomic_or(self.type_u32[1], ptr, scope, relaxed, value);
     }
     pub fn suatom(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

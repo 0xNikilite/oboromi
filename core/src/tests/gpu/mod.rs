@@ -1,5 +1,6 @@
 pub mod harness;
 
+mod atomics;
 mod compare;
 mod control;
 mod convert;
@@ -13,3 +14,4 @@ mod memory;
 mod shared;
 mod special;
 mod uniform;
+mod warp;

@@ -105,7 +105,7 @@ pub mod inst {
     const LDC: u128 = 0xb82;
     const ULDC: u128 = 0xab9;
     const ADDR_64: u128 = 1 << 72;
-    const SZ_32: u128 = 4 << 73;
+    pub const SZ_32: u128 = 4 << 73;
     const SZ_64: u128 = 5 << 73;
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
@@ -453,6 +453,18 @@ pub mod inst {
     pub const SHF_R: u128 = 1 << 76;
     pub const SHF_HI: u128 = 1 << 80;
 
+    const STRONG_GPU: u128 = 7 << 77;
+    const ATOMIC: u128 = ADDR_64 | STRONG_GPU | PU_PT | COP_EN | NO_WRITE_SCOREBOARD;
+    pub const ATOM: u128 = 0x38a | ATOMIC;
+    pub const ATOMG: u128 = 0x3a8 | ATOMIC;
+    pub const ATOMG_CAS: u128 = 0x3a9 | ATOMIC;
+    pub const RED: u128 = 0x98e | ATOMIC;
+    pub const RED_UR_64: u128 = UNIFORM | 1 << 90;
+    pub const ATOM_MIN: u128 = 1 << 87;
+    pub const ATOM_MAX: u128 = 2 << 87;
+    pub const ATOM_INC: u128 = 3 << 87;
+    pub const ATOM_DEC: u128 = 4 << 87;
+
     pub fn alu3(op: u128, rd: u32, ra: u32, b: u32, rc: u32) -> u128 {
         alu(op, rd, ra, b) | (rc as u128) << 64
     }
@@ -496,6 +508,30 @@ pub mod inst {
 
     pub fn byte_select(byte: u32) -> u128 {
         (byte as u128) << 76
+    }
+
+    pub const VOTE: u128 = 0x806;
+    pub const VOTEU: u128 = 0x886;
+    pub const VOTE_ANY: u128 = 1 << 72;
+    pub const VOTE_EQ: u128 = 2 << 72;
+    pub const SHFL_II: u128 = 0xf89;
+    pub const SHFL_RI: u128 = 0x589;
+    pub const SHFL_RR: u128 = 0x389;
+    pub const SHFL_UP: u128 = 1 << 58;
+    pub const SHFL_DOWN: u128 = 2 << 58;
+    pub const SHFL_BFLY: u128 = 3 << 58;
+    pub const REDUX: u128 = 0x3c4;
+    pub const MATCH: u128 = 0x3a1;
+    pub const MATCH_ANY: u128 = 1 << 79 | PU_PT;
+    pub const MATCH_U64: u128 = 1 << 73;
+    pub const FSWZADD: u128 = 0x822;
+
+    pub fn shfl_lanes(b: u32, c: u32) -> u128 {
+        (b as u128) << 53 | (c as u128) << 40
+    }
+
+    pub fn redux_op(op: u32) -> u128 {
+        (op as u128) << 78
     }
 }
 
@@ -800,6 +836,28 @@ fn fixtures_match_nvdisasm() {
         (inst::i2f(6, 7, inst::cvt::F32, inst::cvt::S32), "I2F R6, R7 ;"),
         (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
         (inst::i2i(8, 9, inst::cvt::U8), "I2I.U8.S32.SAT R8, R9;"),
+        (inst::alu(inst::ATOM, 4, 2, 5), "ATOM.E.ADD.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::stg(10, 0, 6) ^ inst::SZ_32, "STG.E.U8 [R10], R6 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_MAX, 4, 2, 5), "ATOMG.E.MAX.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_MIN | inst::S32, 6, 8, 5), "ATOMG.E.MIN.S32.STRONG.GPU PT, R6, [R8], R5 ;"),
+        (inst::alu3(inst::ATOMG_CAS, 4, 2, 5, 6), "ATOMG.E.CAS.STRONG.GPU PT, R4, [R2], R5, R6 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_INC, 4, 2, 5), "ATOMG.E.INC.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_DEC, 6, 8, 5), "ATOMG.E.DEC.STRONG.GPU PT, R6, [R8], R5 ;"),
+        (inst::alu3(inst::RED | inst::RED_UR_64, 0, 2, 5, 4), "RED.E.ADD.STRONG.GPU [R2.64+UR4], R5 ;"),
+        (inst::alu(inst::VOTE | inst::preds(1, 0, 0, 0), 8, 0, 0), "VOTE.ALL R8, P1, P0;"),
+        (inst::alu(inst::VOTE | inst::VOTE_ANY | inst::preds(7, 0, 0, 0), 4, 0, 0), "VOTE.ANY R4, PT, P0;"),
+        (inst::alu(inst::VOTEU | inst::VOTE_EQ | inst::preds(2, 0, 0, 0), 5, 0, 0), "VOTEU.EQ UR5, UP2, P0;"),
+        (inst::alu(inst::SHFL_II | inst::SHFL_UP | inst::shfl_lanes(7, 0xf) | inst::preds(7, 0, 0, 0), 4, 5, 0), "SHFL.UP PT, R4, R5, 0x7, 0xf ;"),
+        (inst::alu(inst::SHFL_RI | inst::shfl_lanes(0, 0x181f) | inst::preds(1, 0, 0, 0), 8, 5, 6), "SHFL.IDX P1, R8, R5, R6, 0x181f ;"),
+        (inst::alu3(inst::SHFL_RR | inst::SHFL_UP | inst::preds(2, 0, 0, 0), 9, 5, 7, 12), "SHFL.UP P2, R9, R5, R7, R12 ;"),
+        (inst::alu(inst::SHFL_II | inst::SHFL_BFLY | inst::shfl_lanes(1, 0x1c03) | inst::preds(7, 0, 0, 0), 5, 4, 0), "SHFL.BFLY PT, R5, R4, 0x1, 0x1c03 ;"),
+        (inst::alu(inst::REDUX | inst::redux_op(3), 0, 4, 0), "REDUX.SUM UR0, R4 ;"),
+        (inst::alu(inst::REDUX | inst::redux_op(4) | inst::S32, 6, 4, 0), "REDUX.MIN.S32 UR6, R4 ;"),
+        (inst::alu(inst::MATCH | inst::preds(1, 0, 0, 0), 9, 7, 0), "MATCH.ALL P1, R9, R7 ;"),
+        (inst::alu(inst::MATCH | inst::MATCH_ANY | inst::MATCH_U64, 10, 12, 0), "MATCH.ANY.U64 R10, R12 ;"),
+        (inst::alu3(inst::FSWZADD, 6, 5, 0x66, 4), "FSWZADD R6, R5, R4, PNNPPNNP;"),
+        (inst::s2r(8, 57), "S2R R8, SR_LTMASK ;"),
+        (inst::s2r(11, 60), "S2R R11, SR_GEMASK ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

@@ -22,15 +22,15 @@ DisplayWidget::~DisplayWidget() {
 }
 
 void DisplayWidget::frameReady() {
-    // presents that land before this runs collapse into one read of the latest frame
     const auto generation = oboromi_frame_generation();
     if (generation == m_generation) return;
 
     uint32_t width = 0;
     uint32_t height = 0;
-    const auto size = oboromi_frame_read(nullptr, 0, &width, &height);
+    oboromi_frame_read(nullptr, 0, &width, &height);
     QImage image(width, height, QImage::Format_RGBA8888);
-    if (oboromi_frame_read(image.bits(), image.sizeInBytes(), &width, &height) != size) return;
+    oboromi_frame_read(image.bits(), image.sizeInBytes(), &width, &height);
+    if (image.width() != int(width) || image.height() != int(height)) return;
 
     m_image = image;
     m_generation = generation;

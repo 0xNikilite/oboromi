@@ -129,6 +129,7 @@ pub mod decoration {
     pub const BINDING: u32 = 33;
     pub const DESCRIPTOR_SET: u32 = 34;
     pub const OFFSET: u32 = 35;
+    pub const NO_CONTRACTION: u32 = 42;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1046,6 +1047,9 @@ pub mod glsl {
     pub const FIND_I_LSB: u32 = 73;
     pub const FIND_S_MSB: u32 = 74;
     pub const FIND_U_MSB: u32 = 75;
+    pub const N_MIN: u32 = 79;
+    pub const N_MAX: u32 = 80;
+    pub const N_CLAMP: u32 = 81;
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer};
-use crate::gpu::sm86::{Decoder, STATE_WORDS};
+use crate::gpu::sm86::{CBUF_BINDING, Decoder, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::spirv::capability::SHADER;
 use crate::gpu::{VkError, VkState};
@@ -49,23 +49,27 @@ pub fn emit_module(
 }
 
 pub fn spirv_val(module: &Emitter) {
-    let name = std::thread::current()
-        .name()
-        .unwrap_or("main")
-        .replace("::", "_");
-    let path = std::env::temp_dir().join(format!("oboromi_{name}.spv"));
-    std::fs::write(&path, module.to_bytes()).unwrap();
-    let spirv_val = std::process::Command::new("spirv-val")
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let child = Command::new("spirv-val")
         .args(["--target-env", "vulkan1.2"])
-        .arg(&path)
-        .output();
-    match spirv_val {
-        Ok(out) => assert!(out.status.success(), "{out:?}"),
-        Err(e) => eprintln!("skipping, spirv-val unavailable: {e}"),
-    }
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => return eprintln!("skipping, spirv-val unavailable: {e}"),
+    };
+    child.stdin.take().unwrap().write_all(&module.to_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
 }
 
 pub const GLOBAL_BASE: u64 = 0x2_0000_1000;
+pub const PRED: usize = 254;
+pub const UREG: usize = PRED + 1;
+pub const UPRED: usize = STATE_WORDS - 1;
 
 pub fn run_regs(
     instructions: &[u128],
@@ -131,9 +135,9 @@ pub fn run_body(
     let mut support = HostBuffer::new(&state, 16).unwrap();
     support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
-    let bindings = [(10, ssbo), (11, ssbo), (9, ssbo), (0, ubo), (1, ubo)];
+    let bindings = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output), (9, &memory), (0, &support), (1, &cbuf)]);
+    pipeline.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {
         let mut out = vec![0u8; len * 4];

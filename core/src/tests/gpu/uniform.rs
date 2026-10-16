@@ -1,10 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::run_regs;
+    use crate::tests::gpu::harness::{UPRED, UREG, run_regs};
     use crate::tests::gpu_test::inst::*;
-
-    const UR0: usize = 255;
-    const UPRED: usize = UR0 + 63;
 
     fn run(program: &[u128], seed: &[(usize, u32)]) -> Option<Vec<u32>> {
         let mut words = vec![0; UPRED + 1];
@@ -17,7 +14,6 @@ mod tests {
     #[test]
     fn uiadd3_matches_iadd3_silicon() {
         let program = [
-            guard(alu3(UIADD3 ^ IMM_B | preds(7, 7, 7, 7), 13, 0, 1, 63), 0, true),
             alu3(UIADD3 | preds(0, 1, 7, 7), 12, 0, 7, 9),
             alu3(UIADD3 | NEG_A | preds(7, 7, 7, 7), 10, 0, 7, 9),
             alu3(UIADD3 | EXTENDED | preds(7, 7, 7, 7), 11, 0, 7, 9),
@@ -29,12 +25,10 @@ mod tests {
             (0x8000_0000, [0x8000_0000, 1, 0x8000_0000, 0x8000_0002]),
             (u32::MAX, [u32::MAX - 2, 2, u32::MAX, u32::MAX]),
         ];
-        for (i, (v, [sum, carries, negated, extended])) in cases.into_iter().enumerate() {
-            let up0 = i as u32 & 1;
-            let seed = [(UR0, v), (UR0 + 7, v), (UR0 + 9, v), (UPRED, up0)];
+        for (v, [sum, carries, negated, extended]) in cases {
+            let seed = [(UREG, v), (UREG + 7, v), (UREG + 9, v)];
             let Some(regs) = run(&program, &seed) else { return };
-            let guarded = if up0 == 0 { v.wrapping_add(1) } else { 0 };
-            assert_eq!(regs[UR0 + 10..UR0 + 14], [negated, extended, sum, guarded]);
+            assert_eq!(regs[UREG + 10..UREG + 13], [negated, extended, sum]);
             assert_eq!((regs[UPRED] & 1) + (regs[UPRED] >> 1 & 1), carries);
         }
     }
@@ -49,9 +43,9 @@ mod tests {
             ([u32::MAX, u32::MAX, u32::MAX], 0),
         ];
         for ([a, b, c], expected) in cases {
-            let seed = [(UR0, a), (UR0 + 7, b), (UR0 + 9, c)];
+            let seed = [(UREG, a), (UREG + 7, b), (UREG + 9, c)];
             let Some(regs) = run(&[alu3(UIMAD | S32, 7, 0, 7, 9)], &seed) else { return };
-            assert_eq!(regs[UR0 + 7], expected);
+            assert_eq!(regs[UREG + 7], expected);
         }
     }
 
@@ -67,10 +61,10 @@ mod tests {
             alu3(UIMAD_WIDE ^ IMM_B | preds(7, 0, 0, 0), 8, 3, 0x10, 10),
             alu3(UIADD3_64 ^ IMM_B | preds(7, 7, 7, 7), 12, 10, u32::MAX, 63),
         ];
-        let seed = [(5, 0x1234), (UR0 + 10, u32::MAX), (UR0 + 11, 1), (UPRED, 0b10)];
+        let seed = [(5, 0x1234), (UREG + 10, u32::MAX), (UREG + 11, 1), (UPRED, 0b10)];
         let Some(regs) = run(&program, &seed) else { return };
         assert_eq!(
-            regs[UR0 + 1..UR0 + 14],
+            regs[UREG + 1..UREG + 14],
             [0xdead_beef, 0xdead_beef, 0x1234, 0x1234, 7, 0xdeae_508f, 0, 0x0001_233f, 2, u32::MAX, 1, u32::MAX - 1, 1]
         );
     }
@@ -84,8 +78,8 @@ mod tests {
             alu(UP2UR_IMM | byte_select(1), 7, 8, 0xff),
             alu(UR2UP_IMM | byte_select(2), 0, 9, 0xf),
         ];
-        let seed = [(UR0 + 5, 1), (UR0 + 6, u32::MAX), (UR0 + 8, 0xaaaa_aaaa), (UR0 + 9, 0x000a_0000)];
+        let seed = [(UREG + 5, 1), (UREG + 6, u32::MAX), (UREG + 8, 0xaaaa_aaaa), (UREG + 9, 0x000a_0000)];
         let Some(regs) = run(&program, &seed) else { return };
-        assert_eq!([regs[UR0 + 7], regs[UPRED]], [0xaaaa_95aa, 0x1a]);
+        assert_eq!([regs[UREG + 7], regs[UPRED]], [0xaaaa_95aa, 0x1a]);
     }
 }

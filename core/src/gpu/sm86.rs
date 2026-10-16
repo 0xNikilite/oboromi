@@ -256,6 +256,7 @@ pub enum BitSize {
 pub enum ResourceKind {
     Cbuf(u32),
     Ssbo(u32),
+    Support,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -282,6 +283,7 @@ pub struct Decoder<'a> {
     var_abstract_state: u32,
     const_u32_0: u32,
     const_u32_1: u32,
+    type_ptr_ssbo: u32,
     type_ptr_ssbo_u32: u32,
     type_ptr_cbuf: u32,
     type_ptr_cbuf_u32: u32,
@@ -306,6 +308,7 @@ impl<'a> Decoder<'a> {
             var_abstract_state: 0,
             const_u32_0: 0,
             const_u32_1: 0,
+            type_ptr_ssbo: 0,
             type_ptr_ssbo_u32: 0,
             type_ptr_cbuf: 0,
             type_ptr_cbuf_u32: 0,
@@ -377,23 +380,9 @@ impl<'a> Decoder<'a> {
     
 
     pub fn emit_register_io(&mut self, in_binding: u32, out_binding: u32) {
-        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
-        let array = self.ir.emit_type_runtime_array(self.type_u32[1]);
-        let block = self.ir.emit_type_struct(&[array]);
-        let block_ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
-        self.type_ptr_ssbo_u32 = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_u32[1]);
-        // std430 layout: a Block struct holding a stride-4 runtime array at offset 0.
-        self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
-        self.ir.emit_decorate(block, deco::BLOCK, &[]);
-        self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
-        for (n, binding) in [(0, in_binding), (1, out_binding)] {
-            let var = self.ir.emit_variable(block_ptr, STORAGE_BUFFER);
-            self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
-            self.ir.emit_decorate(var, deco::BINDING, &[binding]);
-            self.resources.push(Resource { kind: ResourceKind::Ssbo(n), set: 0, binding, var });
-        }
+        let input = self.declare_ssbo(ResourceKind::Ssbo(0), in_binding);
+        self.declare_ssbo(ResourceKind::Ssbo(1), out_binding);
         // Every register is seeded because predicated stores read the old value.
-        let input = self.resource(ResourceKind::Ssbo(0)).unwrap();
         for slot in 0..STATE_WORDS as u32 {
             let word = self.ssbo_word(input, slot);
             let value = self.ir.emit_load(self.type_u32[1], word);
@@ -410,6 +399,25 @@ impl<'a> Decoder<'a> {
             let word = self.ssbo_word(output, slot);
             self.ir.emit_store(word, value);
         }
+    }
+
+    fn declare_ssbo(&mut self, kind: ResourceKind, binding: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
+        if self.type_ptr_ssbo == 0 {
+            let array = self.ir.emit_type_runtime_array(self.type_u32[1]);
+            let block = self.ir.emit_type_struct(&[array]);
+            self.type_ptr_ssbo = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
+            self.type_ptr_ssbo_u32 = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_u32[1]);
+            // std430 layout: a Block struct holding a stride-4 runtime array at offset 0.
+            self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
+            self.ir.emit_decorate(block, deco::BLOCK, &[]);
+            self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+        }
+        let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        self.resources.push(Resource { kind, set: 0, binding, var });
+        var
     }
 
     fn resource(&self, kind: ResourceKind) -> Option<u32> {
@@ -465,26 +473,36 @@ impl<'a> Decoder<'a> {
         match ((inst >> 9) & 7, (inst >> 91) & 1) {
             (1, 0) => self.load_register(field & 0xff),
             (2 | 4, 0) => self.cached_const_u32(field),
-            (3 | 5, 0) => self.load_cbuf(field >> 22 & 0x1f, (field >> 8 & 0x3fff) << 2),
+            (3 | 5, 0) => {
+                let offset = self.cached_const_u32((field >> 8 & 0x3fff) << 2);
+                self.load_cbuf(ResourceKind::Cbuf(field >> 22 & 0x1f), offset)
+            }
             (6 | 7, 1) => self.load_ureg(field & 0x3f),
             form => todo!("ALU source form {form:?}"),
         }
     }
 
-    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096].
-    fn load_cbuf(&mut self, slot: u32, offset: u32) -> u32 {
-        let var = match self.resource(ResourceKind::Cbuf(slot)) {
+    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
+    fn load_cbuf(&mut self, kind: ResourceKind, offset: u32) -> u32 {
+        let var = match self.resource(kind) {
             Some(var) => var,
-            None => self.declare_cbuf(slot),
+            None => self.declare_cbuf(kind),
         };
-        let index = [0, offset / 16, offset % 16 / 4].map(|i| self.cached_const_u32(i));
-        let ptr = self.ir.emit_access_chain(self.type_ptr_cbuf_u32, var, &index);
+        let [two, three, four] = [2, 3, 4].map(|i| self.cached_const_u32(i));
+        let vec = self.ir.emit_shift_right_logical(self.type_u32[1], offset, four);
+        let word = self.ir.emit_shift_right_logical(self.type_u32[1], offset, two);
+        let elem = self.ir.emit_bitwise_and(self.type_u32[1], word, three);
+        let ptr = self.ir.emit_access_chain(self.type_ptr_cbuf_u32, var, &[self.const_u32_0, vec, elem]);
         self.ir.emit_load(self.type_u32[1], ptr)
     }
 
-    fn declare_cbuf(&mut self, slot: u32) -> u32 {
+    fn declare_cbuf(&mut self, kind: ResourceKind) -> u32 {
         use spirv::{decoration as deco, storage_class::UNIFORM};
-        assert!(slot < 8, "cbuf slot {slot} has no compute binding");
+        let binding = match kind {
+            ResourceKind::Cbuf(slot) if slot < 8 => 1 + slot,
+            ResourceKind::Support => 0,
+            _ => panic!("{kind:?} has no compute uniform binding"),
+        };
         if self.type_ptr_cbuf == 0 {
             let len = self.cached_const_u32(4096);
             let array = self.ir.emit_type_array(self.type_u32[4], len);
@@ -497,10 +515,9 @@ impl<'a> Decoder<'a> {
             self.type_ptr_cbuf_u32 = self.ir.emit_type_pointer(UNIFORM, self.type_u32[1]);
         }
         let var = self.ir.emit_variable(self.type_ptr_cbuf, UNIFORM);
-        let binding = 1 + slot;
         self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
-        self.resources.push(Resource { kind: ResourceKind::Cbuf(slot), set: 0, binding, var });
+        self.resources.push(Resource { kind, set: 0, binding, var });
         var
     }
 

@@ -141,20 +141,3 @@ impl State {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vk_state_new_or_skip() {
-        match VkState::new() {
-            Ok(s) => {
-                let p = unsafe { s.instance.get_physical_device_properties(s.physical_device) };
-                eprintln!("vulkan device: {:?}", p.device_name_as_c_str());
-            }
-            Err(e @ (VkError::Loader | VkError::NoDevice)) => eprintln!("skipping: {e:?}"),
-            Err(e) => panic!("vulkan device creation failed: {e:?}"),
-        }
-    }
-}

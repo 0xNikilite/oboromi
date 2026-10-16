@@ -23,9 +23,7 @@ pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
         decoder.emit_register_io(10, 11);
     }
 
-    for &inst in instructions {
-        decoder.translate(inst);
-    }
+    decoder.translate_program(instructions);
 
     if register_io {
         decoder.emit_register_dump();
@@ -84,14 +82,14 @@ pub fn run_regs(
     words.resize(STATE_WORDS, 0);
     let size = (STATE_WORDS * 4) as u64;
     let mut input = HostBuffer::new(&state, size).unwrap();
-    input.write(&bytes(&words));
+    input.write(&bytes(&words)).unwrap();
     let output = HostBuffer::new(&state, size).unwrap();
     let mut cbuf = HostBuffer::new(&state, 16 + 4 * cbuf0.len() as u64).unwrap();
-    cbuf.write(&bytes(cbuf0));
+    cbuf.write(&bytes(cbuf0)).unwrap();
     let mut memory = HostBuffer::new(&state, 4 * global.len().max(1) as u64).unwrap();
-    memory.write(&bytes(global));
+    memory.write(&bytes(global)).unwrap();
     let mut support = HostBuffer::new(&state, 16).unwrap();
-    support.write(&GLOBAL_BASE.to_le_bytes());
+    support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
     let bindings = [(10, ssbo), (11, ssbo), (9, ssbo), (0, ubo), (1, ubo)];
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
@@ -99,7 +97,7 @@ pub fn run_regs(
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| {
         let mut out = vec![0u8; len * 4];
-        buf.read(&mut out);
+        buf.read(&mut out).unwrap();
         out.chunks(4)
             .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
             .collect()

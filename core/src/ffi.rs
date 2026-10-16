@@ -39,7 +39,10 @@ pub extern "C" fn oboromi_run_cpu_tests(cb: LineCallback) {
         Err(payload) => {
             emit(
                 cb,
-                &format!("fatal: cpu test runner panicked: {}", panic_message(&payload)),
+                &format!(
+                    "fatal: cpu test runner panicked: {}",
+                    panic_message(&payload)
+                ),
             );
         }
     }
@@ -58,7 +61,10 @@ pub extern "C" fn oboromi_run_gpu_tests(cb: LineCallback) {
         Err(payload) => {
             emit(
                 cb,
-                &format!("fatal: gpu test runner panicked: {}", panic_message(&payload)),
+                &format!(
+                    "fatal: gpu test runner panicked: {}",
+                    panic_message(&payload)
+                ),
             );
         }
     }

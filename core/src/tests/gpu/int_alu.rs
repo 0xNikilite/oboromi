@@ -3,6 +3,12 @@ mod tests {
     use crate::tests::gpu::harness::{UREG, run_regs};
     use crate::tests::gpu_test::inst;
 
+    const IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
+    const IADD3_CARRY_OBSERVER: u128 = 0x008fc600007e24ff000000ffff097210;
+    const IADD3_X: u128 = 0x004fc80003fee4090000000700077210;
+    const IABS: u128 = 0x004fc800000000000000000200017213;
+    const IMNMX_U32: u128 = 0x004fc800000000000000000302017217;
+
     #[test]
     fn translated_mov_and_iadd3_run_on_gpu() {
         let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
@@ -48,6 +54,68 @@ mod tests {
         let word = 0x004fc800078e18ff0000000302017211;
         let Some((regs, _)) = run_regs(&[word], &[0, 0, 3, 5], &[], &[]) else { return };
         assert_eq!(regs[1], 29);
+    }
+
+    #[test]
+    fn iadd3_carry_inputs_and_outputs_match_silicon() {
+        let cases = [
+            ([0, 0, 0], [0, 0]),
+            ([1, 1, 1], [3, 0]),
+            ([0x7fff_ffff; 3], [0x7fff_fffd, 1]),
+            ([0x8000_0000; 3], [0x8000_0000, 1]),
+            ([u32::MAX; 3], [0xffff_fffd, 2]),
+        ];
+        for ([a, b, c], expected) in cases {
+            let mut seed = vec![0; 10];
+            seed[0] = b;
+            seed[4] = a;
+            seed[5] = c;
+            let Some((regs, _)) = run_regs(&[IADD3_CARRY, IADD3_CARRY_OBSERVER], &seed, &[], &[])
+            else {
+                return;
+            };
+            assert_eq!([regs[7], regs[9]], expected);
+        }
+
+        let mut seed = vec![0; 10];
+        seed[0] = 1;
+        seed[7] = 1;
+        seed[9] = 1;
+        let Some((regs, _)) = run_regs(&[IADD3_X], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[7], 5);
+    }
+
+    #[test]
+    fn iabs_and_imnmx_cover_signedness_and_predicate() {
+        for (value, expected) in [(0, 0), (1, 1), (u32::MAX, 1), (0x8000_0000, 0x8000_0000)] {
+            let mut seed = vec![0; 255];
+            seed[2] = value;
+            let Some((regs, _)) = run_regs(&[IABS], &seed, &[], &[]) else {
+                return;
+            };
+            assert_eq!(regs[1], expected);
+        }
+
+        let mut seed = vec![0; 255];
+        seed[2] = u32::MAX;
+        seed[3] = 1;
+        seed[254] = 1;
+        let Some((regs, _)) = run_regs(&[IMNMX_U32], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], 1);
+        let signed = IMNMX_U32 | 1 << 73;
+        let Some((regs, _)) = run_regs(&[signed], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], u32::MAX);
+        seed[254] = 0;
+        let Some((regs, _)) = run_regs(&[signed], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], 1);
     }
 
     #[test]

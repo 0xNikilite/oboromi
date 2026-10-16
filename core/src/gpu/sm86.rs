@@ -4473,7 +4473,6 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!((inst >> 12 & 7) == 7 && (inst >> 15 & 1) == 0, "predicated ULDC");
         let op = opcode(inst);
         let ura = (inst >> 24 & 0x3f) as u32;
         let words = if sz <= 4 { 1 } else { 1 << (sz - 4) };

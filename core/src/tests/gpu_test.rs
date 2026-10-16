@@ -80,6 +80,26 @@ pub mod inst {
         inst
     }
 
+    // ldg.e rd, [ra + off] (opcode=0x381, e at 72, sz=32 at 73, Pu=PT at 81, cop=EN at 84)
+    pub fn ldg(rd: u32, ra: u32, off: u32) -> u128 {
+        0x7381 | (rd as u128) << 16 | (ra as u128) << 24 | (off as u128 & 0xff_ffff) << 40 | 1 << 72 | 4 << 73 | 7 << 81 | 1 << 84
+    }
+
+    // stg.e [ra + off], rb (opcode=0x386, a store has no write barrier so dst_wr_sb at 110 is 7)
+    pub fn stg(ra: u32, off: u32, rb: u32) -> u128 {
+        0x7386 | (ra as u128) << 24 | (rb as u128) << 32 | (off as u128 & 0xff_ffff) << 40 | 1 << 72 | 4 << 73 | 1 << 84 | 7 << 110
+    }
+
+    // ldc rd, c[bank][ra + off] (opcode=0xb82, byte offset at 53:38)
+    pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
+        0x7b82 | (rd as u128) << 16 | (ra as u128) << 24 | (off as u128 & 0xffff) << 38 | (bank as u128) << 54 | 4 << 73
+    }
+
+    // uldc.64 urd, c[bank][off] (opcode=0xab9)
+    pub fn uldc64(urd: u32, bank: u32, off: u32) -> u128 {
+        0x7ab9 | (urd as u128) << 16 | (off as u128 & 0xffff) << 38 | (bank as u128) << 54 | 5 << 73
+    }
+
     // kill (opcode=0x95b)
     pub fn kill(pred: u32, invert: bool) -> u128 {
         let mut inst: u128 = 0x95b | 0x7 << 87 | 0x3f << 110;
@@ -189,6 +209,10 @@ fn fixtures_match_nvdisasm() {
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
         (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::kill(7, false), "KILL;"),
+        (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
+        (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
+        (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
+        (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

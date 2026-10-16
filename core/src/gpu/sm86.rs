@@ -257,6 +257,7 @@ pub enum ResourceKind {
     Cbuf(u32),
     Ssbo(u32),
     Support,
+    Global,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -519,6 +520,41 @@ impl<'a> Decoder<'a> {
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         self.resources.push(Resource { kind, set: 0, binding, var });
         var
+    }
+
+    // Guest address A is word (A - base) / 4 of the binding 9 SSBO, base being support word 0; below 4 GiB the low words suffice.
+    fn global_word(&mut self, inst: u128, word: u32) -> u32 {
+        assert!(inst >> 91 & 1 == 0 || inst >> 76 & 1 == 1, "uniform register in a global address");
+        let var = match self.resource(ResourceKind::Global) {
+            Some(var) => var,
+            None => self.declare_ssbo(ResourceKind::Global, 9),
+        };
+        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
+        let offset = (((inst >> 40) as i32) << 8 >> 8) as u32;
+        let offset = self.cached_const_u32(offset.wrapping_add(4 * word));
+        let ra = self.load_register((inst >> 24) as u32 & 0xff);
+        let addr = self.ir.emit_iadd(self.type_u32[1], ra, offset);
+        let rel = self.ir.emit_isub(self.type_u32[1], addr, base);
+        let two = self.cached_const_u32(2);
+        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, two);
+        self.ir.emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
+    }
+
+    // Memory accesses cannot be masked branchlessly, so a guarded one runs inside `if (Pg ^ not)`.
+    fn guarded(&mut self, inst: u128, body: impl FnOnce(&mut Self)) {
+        let (pg, not) = ((inst >> 12) as u32 & 7, inst >> 15 & 1 == 1);
+        if pg == 7 && !not {
+            return body(self);
+        }
+        let mask = self.load_predicate_mask(pg, not);
+        let cond = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+        let (then, merge) = (self.ir.alloc_id(), self.ir.alloc_id());
+        self.ir.emit_selection_merge(merge, 0);
+        self.ir.emit_branch_conditional(cond, then, merge);
+        self.ir.emit_label_id(then);
+        body(self);
+        self.ir.emit_branch(merge);
+        self.ir.emit_label_id(merge);
     }
 
     // Int64 is declared on first use so 32-bit shaders still run on devices without shaderInt64.
@@ -2342,29 +2378,42 @@ impl<'a> Decoder<'a> {
     pub fn ldc(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 38) & 0xffff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let ra = (((inst >> 24) & 0xff) << 0) as u32;
+        let ra_offset = (((inst >> 38) & 0xffff) << 0) as u16 as i16 as u32;
+        let sc_bank = (((inst >> 54) & 0x1f) << 0) as u32;
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
+        let stride = (((inst >> 78) & 0x3) << 0) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 91 & 1 == 0 && stride == 0, "LDC with a uniform bank or a segmented address");
+        let words = match sz {
+            4 | 5 => 1 << (sz - 4),
+            _ => todo!("LDC size {sz}"),
+        };
+        self.guarded(inst, |s| {
+            let base = s.load_register(ra);
+            for i in 0..words {
+                let offset = s.cached_const_u32(ra_offset.wrapping_add(4 * i));
+                let addr = s.ir.emit_iadd(s.type_u32[1], base, offset);
+                let value = s.load_cbuf(ResourceKind::Cbuf(sc_bank), addr);
+                s.store_register(if rd == 255 { rd } else { rd + i }, value);
+            }
+        });
     }
     pub fn ldg(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _ra = (((inst >> 24) & 0xff) << 0);
         let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let _pnz = (((inst >> 64) & 0xf) << 0);
         let _sp2 = (((inst >> 68) & 0x3) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let _memdesc = (((inst >> 76) & 0x1) << 0);
         let _mem = (((inst >> 77) & 0xf) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
@@ -2374,7 +2423,17 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let words = match sz {
+            4..=6 => 1 << (sz - 4),
+            _ => todo!("LDG size {sz}"),
+        };
+        self.guarded(inst, |s| {
+            for i in 0..words {
+                let ptr = s.global_word(inst, i);
+                let value = s.ir.emit_load(s.type_u32[1], ptr);
+                s.store_register(if rd == 255 { rd } else { rd + i }, value);
+            }
+        });
     }
     pub fn ldgdepbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3065,10 +3124,10 @@ impl<'a> Decoder<'a> {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
+        let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let _memdesc = (((inst >> 76) & 0x1) << 0);
         let _mem = (((inst >> 77) & 0xf) << 0);
         let _cop = (((inst >> 84) & 0x7) << 0);
@@ -3077,7 +3136,17 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let words = match sz {
+            4..=6 => 1 << (sz - 4),
+            _ => todo!("STG size {sz}"),
+        };
+        self.guarded(inst, |s| {
+            for i in 0..words {
+                let ptr = s.global_word(inst, i);
+                let value = s.load_register(if rb == 255 { rb } else { rb + i });
+                s.ir.emit_store(ptr, value);
+            }
+        });
     }
     pub fn stl(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3596,18 +3665,27 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn uldc(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _urd = (((inst >> 16) & 0x3f) << 0);
-        let _ra_offset = (((inst >> 38) & 0xffff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
+        let pg = (((inst >> 12) & 0x7) << 0) as u32;
+        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
+        let urd = (((inst >> 16) & 0x3f) << 0) as u32;
+        let ra_offset = (((inst >> 38) & 0xffff) << 0) as u32;
+        let sc_bank = (((inst >> 54) & 0x1f) << 0) as u32;
+        let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 91 & 1 == 0 && pg == 7 && pg_not == 0, "ULDC with a uniform address or predicate");
+        let words = match sz {
+            4 | 5 => 1 << (sz - 4),
+            _ => todo!("ULDC size {sz}"),
+        };
+        for i in 0..words {
+            let offset = self.cached_const_u32(ra_offset + 4 * i);
+            let value = self.load_cbuf(ResourceKind::Cbuf(sc_bank), offset);
+            self.store_ureg(if urd == 63 { urd } else { urd + i }, value);
+        }
     }
     pub fn ulea(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

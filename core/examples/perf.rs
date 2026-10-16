@@ -68,7 +68,7 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
     let words = translate_module(&[inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)], true).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let t = Instant::now();
-    let mut pipeline = ComputePipeline::new(&state, &words, &[(10, ssbo), (9, ssbo)]).unwrap();
+    let mut pipeline = ComputePipeline::new(&state, &words, &[(10, ssbo), (11, ssbo)]).unwrap();
     rows.push(Row {
         name: "pipeline create (cold)",
         us: vec![t.elapsed().as_secs_f64() * 1e6],
@@ -77,7 +77,7 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
     });
     let mut input = HostBuffer::new(&state, STATE_WORDS as u64 * 4).unwrap();
     let output = HostBuffer::new(&state, STATE_WORDS as u64 * 4).unwrap();
-    pipeline.bind(&[(10, &input), (9, &output)]);
+    pipeline.bind(&[(10, &input), (11, &output)]);
     let mut out = [0u8; STATE_WORDS * 4];
     rows.push(bench(
         "dispatch+fence+readback",

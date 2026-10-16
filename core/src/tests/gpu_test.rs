@@ -402,6 +402,39 @@ fn fixtures_match_nvdisasm() {
         eprintln!("nvdisasm not found, skipping");
         return;
     };
+    const W1D_FSETP: [u128; 16] = [
+        0x004fc80003900000000000030200720b,
+        0x004fc80003901000000000030200720b,
+        0x004fc80003902000000000030200720b,
+        0x004fc80003903000000000030200720b,
+        0x004fc80003904000000000030200720b,
+        0x004fc80003905000000000030200720b,
+        0x004fc80003906000000000030200720b,
+        0x004fc80003907000000000030200720b,
+        0x004fc80003908000000000030200720b,
+        0x004fc80003909000000000030200720b,
+        0x004fc8000390a000000000030200720b,
+        0x004fc8000390b000000000030200720b,
+        0x004fc8000390c000000000030200720b,
+        0x004fc8000390d000000000030200720b,
+        0x004fc8000390e000000000030200720b,
+        0x004fc8000390f000000000030200720b,
+    ];
+    const W1D_FSETP_MOD: u128 = 0x004fc80003901200800000030200720b;
+    const W1D_FSETP_FTZ: u128 = 0x004fc80003912000000000030200720b;
+    const W1D_FSETP_COMBINE: u128 = 0x004fc80001100400000000030200720b;
+    const W1D_FSET: u128 = 0x004fc80003802000000000030201720a;
+    const W1D_FSEL: u128 = 0x004fc800000003000000000302017208;
+    const W1D_SEL: u128 = 0x004fc800000000000000000302017207;
+    const W1D_R2P: u128 = 0x004fc800000010000000000502007804;
+    const W1D_P2R: u128 = 0x004fc80000002000000000ff03017803;
+    const W1D_PLOP3: u128 = 0x004fc80000703922000000000000781c;
+    const W1D_IABS: u128 = 0x004fc800000000000000000200017213;
+    const W1D_IMNMX_U32: u128 = 0x004fc800000000000000000302017217;
+    const W1D_IMNMX_S32: u128 = 0x004fc800000002000000000302017217;
+    const W1D_IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
+    const W1D_IADD3_OBSERVER: u128 = 0x008fc600007e24ff000000ffff097210;
+    const W1D_IADD3_X: u128 = 0x004fc80003fee4090000000700077210;
     let bin = std::env::temp_dir().join(format!("oboromi-fixture-{}.bin", std::process::id()));
     let fixtures: &[(u128, &str)] = &[
         (inst::iadd_imm(1, 2, 42), "IADD3 R1, R2, 0x2a, RZ;"),
@@ -456,6 +489,37 @@ fn fixtures_match_nvdisasm() {
         (0x004fc800039022700000000002007a0c, "ISETP.EQ.AND P0, P1, R2, c[0x0][0x0], PT ;"),
         (0x004fc8000b9022700000000402007c0c, "ISETP.EQ.AND P0, P1, R2, UR4, PT ;"),
         (0x004fc80003906320000000030200720c, "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;"),
+        (W1D_FSETP[0], "FSETP.F.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[1], "FSETP.LT.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[2], "FSETP.EQ.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[3], "FSETP.LE.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[4], "FSETP.GT.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[5], "FSETP.NE.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[6], "FSETP.GE.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[7], "FSETP.NUM.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[8], "FSETP.NAN.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[9], "FSETP.LTU.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[10], "FSETP.EQU.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[11], "FSETP.LEU.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[12], "FSETP.GTU.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[13], "FSETP.NEU.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[14], "FSETP.GEU.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP[15], "FSETP.T.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP_MOD, "FSETP.LT.AND P0, P1, |R2|, -R3, PT ;"),
+        (W1D_FSETP_FTZ, "FSETP.EQ.FTZ.AND P0, P1, R2, R3, PT ;"),
+        (W1D_FSETP_COMBINE, "FSETP.F.OR P0, P1, R2, R3, P2 ;"),
+        (W1D_FSET, "FSET.BF.EQ.AND R1, R2, R3, PT ;"),
+        (W1D_FSEL, "FSEL R1, -|R2|, R3, P0 ;"),
+        (W1D_SEL, "SEL R1, R2, R3, P0 ;"),
+        (W1D_R2P, "R2P PR, R2.B1, 0x5 ;"),
+        (W1D_P2R, "P2R.B2 R1, PR, R3, 0xff ;"),
+        (W1D_PLOP3, "PLOP3.LUT P0, PT, P0, P1, P2, 0xca, 0x0 ;"),
+        (W1D_IABS, "IABS R1, R2 ;"),
+        (W1D_IMNMX_U32, "IMNMX.U32 R1, R2, R3, P0 ;"),
+        (W1D_IMNMX_S32, "IMNMX R1, R2, R3, P0 ;"),
+        (W1D_IADD3_CARRY, "IADD3 R7, P0, P1, R4, R0, R5 ;"),
+        (W1D_IADD3_OBSERVER, "IADD3.X R9, RZ, RZ, RZ, P0, P1 ;"),
+        (W1D_IADD3_X, "IADD3.X R7, R0, R7, R9, PT, PT ;"),
         (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
         (inst::alu3(inst::LOP3 | inst::lop3_fields(0xca, 7, 7, true), 10, 1, 2, 3), "LOP3.LUT R10, R1, R2, R3, 0xca, !PT;"),
         (inst::alu3(inst::LOP3 ^ inst::IMM_B | inst::PAND | inst::lop3_fields(0xc0, 2, 4, true), 255, 1, 0x8000_0000, 255), "LOP3.LUT.PAND P2, RZ, R1, 0x80000000, RZ, 0xc0, !P4;"),

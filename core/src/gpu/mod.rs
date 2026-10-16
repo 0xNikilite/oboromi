@@ -25,6 +25,8 @@ pub struct VkState {
     pub queue_family: u32,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
+    pub command_buffer: vk::CommandBuffer,
+    pub fence: vk::Fence,
 }
 
 impl VkState {
@@ -38,15 +40,25 @@ impl VkState {
                 e => VkError::Vk(e),
             })?;
         match Self::open_device(&instance) {
-            Ok((physical_device, queue_family, device, command_pool)) => Ok(Self {
-                queue: unsafe { device.get_device_queue(queue_family, 0) },
-                entry,
-                instance,
-                physical_device,
-                device,
-                queue_family,
-                command_pool,
-            }),
+            Ok((physical_device, queue_family, device, command_pool)) => {
+                let mut state = Self {
+                    queue: unsafe { device.get_device_queue(queue_family, 0) },
+                    entry,
+                    instance,
+                    physical_device,
+                    device,
+                    queue_family,
+                    command_pool,
+                    command_buffer: vk::CommandBuffer::null(),
+                    fence: vk::Fence::null(),
+                };
+                let alloc = vk::CommandBufferAllocateInfo::default()
+                    .command_pool(command_pool)
+                    .command_buffer_count(1);
+                state.command_buffer = unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
+                state.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
+                Ok(state)
+            }
             Err(e) => {
                 unsafe { instance.destroy_instance(None) };
                 Err(e)
@@ -94,6 +106,7 @@ impl Drop for VkState {
         // Children before parents, and nothing may still be executing on the queue.
         unsafe {
             let _ = self.device.device_wait_idle();
+            self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

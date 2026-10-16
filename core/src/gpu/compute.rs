@@ -2,28 +2,25 @@
 use super::{VkError, VkState};
 use ash::vk;
 
-pub struct HostBuffer<'a> {
-    device: &'a ash::Device,
+pub struct HostBuffer {
     pub buffer: vk::Buffer,
     pub memory: vk::DeviceMemory,
     pub size: u64,
+    ptr: *mut u8,
 }
 
-impl<'a> HostBuffer<'a> {
-    pub fn new(state: &'a VkState, size: u64) -> Result<Self, VkError> {
+impl HostBuffer {
+    pub fn new(state: &VkState, size: u64) -> Result<Self, VkError> {
+        let d = &state.device;
         let info = vk::BufferCreateInfo::default()
             .size(size)
-            .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::UNIFORM_BUFFER);
-        let (d, instance) = (&state.device, &state.instance);
-        let mut buf = Self {
-            device: d,
-            buffer: unsafe { d.create_buffer(&info, None)? },
-            memory: vk::DeviceMemory::null(),
-            size,
-        };
-        let req = unsafe { d.get_buffer_memory_requirements(buf.buffer) };
+            .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
+        let buffer = unsafe { d.create_buffer(&info, None)? };
+        let req = unsafe { d.get_buffer_memory_requirements(buffer) };
+        let instance = &state.instance;
         let props =
             unsafe { instance.get_physical_device_memory_properties(state.physical_device) };
+        // Coherent memory stays mapped and needs no flush or invalidate around host access.
         let flags = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let types = &props.memory_types[..props.memory_type_count as usize];
         let memory_type = (0..)
@@ -34,42 +31,38 @@ impl<'a> HostBuffer<'a> {
         let alloc = vk::MemoryAllocateInfo::default()
             .allocation_size(req.size)
             .memory_type_index(memory_type);
-        buf.memory = unsafe { d.allocate_memory(&alloc, None)? };
-        unsafe { d.bind_buffer_memory(buf.buffer, buf.memory, 0)? };
-        Ok(buf)
-    }
-
-    pub fn write(&self, data: &[u8]) -> Result<(), VkError> {
-        self.mapped(|m| m[..data.len()].copy_from_slice(data))
-    }
-
-    pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
-        self.mapped(|m| out.copy_from_slice(&m[..out.len()]))
-    }
-
-    fn mapped(&self, f: impl FnOnce(&mut [u8])) -> Result<(), VkError> {
         unsafe {
-            let flags = vk::MemoryMapFlags::empty();
-            let ptr = self.device.map_memory(self.memory, 0, self.size, flags)?;
-            let mapped = std::slice::from_raw_parts_mut(ptr.cast(), self.size as usize);
-            f(mapped);
-            self.device.unmap_memory(self.memory);
+            let memory = d.allocate_memory(&alloc, None)?;
+            d.bind_buffer_memory(buffer, memory, 0)?;
+            let ptr = d.map_memory(memory, 0, size, vk::MemoryMapFlags::empty())?;
+            Ok(Self {
+                buffer,
+                memory,
+                size,
+                ptr: ptr.cast(),
+            })
         }
-        Ok(())
     }
-}
 
-impl Drop for HostBuffer<'_> {
-    fn drop(&mut self) {
+    pub fn write(&mut self, data: &[u8]) {
+        assert!(data.len() as u64 <= self.size);
+        unsafe { self.ptr.copy_from_nonoverlapping(data.as_ptr(), data.len()) };
+    }
+
+    pub fn read(&self, out: &mut [u8]) {
+        assert!(out.len() as u64 <= self.size);
+        unsafe { self.ptr.copy_to_nonoverlapping(out.as_mut_ptr(), out.len()) };
+    }
+
+    pub fn destroy(self, state: &VkState) {
         unsafe {
-            self.device.destroy_buffer(self.buffer, None);
-            self.device.free_memory(self.memory, None);
+            state.device.destroy_buffer(self.buffer, None);
+            state.device.free_memory(self.memory, None);
         }
     }
 }
 
-pub struct ComputePipeline<'a> {
-    device: &'a ash::Device,
+pub struct ComputePipeline {
     types: Vec<(u32, vk::DescriptorType)>,
     pub shader: vk::ShaderModule,
     pub set_layout: vk::DescriptorSetLayout,
@@ -79,24 +72,14 @@ pub struct ComputePipeline<'a> {
     pub set: vk::DescriptorSet,
 }
 
-impl<'a> ComputePipeline<'a> {
+impl ComputePipeline {
+    // All bindings live in set 0: 0 host support UBO, 1-8 guest cbufs, storage buffers from 9.
     pub fn new(
-        state: &'a VkState,
+        state: &VkState,
         spirv: &[u32],
         bindings: &[(u32, vk::DescriptorType)],
     ) -> Result<Self, VkError> {
         let d = &state.device;
-        let module_info = vk::ShaderModuleCreateInfo::default().code(spirv);
-        let mut p = Self {
-            device: d,
-            types: bindings.to_vec(),
-            shader: unsafe { d.create_shader_module(&module_info, None)? },
-            set_layout: vk::DescriptorSetLayout::null(),
-            layout: vk::PipelineLayout::null(),
-            pipeline: vk::Pipeline::null(),
-            pool: vk::DescriptorPool::null(),
-            set: vk::DescriptorSet::null(),
-        };
         let (layout_bindings, sizes): (Vec<_>, Vec<_>) = bindings
             .iter()
             .map(|&(binding, ty)| {
@@ -109,32 +92,44 @@ impl<'a> ComputePipeline<'a> {
                 (layout, size)
             })
             .unzip();
+        let module_info = vk::ShaderModuleCreateInfo::default().code(spirv);
+        let shader = unsafe { d.create_shader_module(&module_info, None)? };
         let set_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&layout_bindings);
-        p.set_layout = unsafe { d.create_descriptor_set_layout(&set_info, None)? };
-        let set_layouts = [p.set_layout];
+        let set_layout = unsafe { d.create_descriptor_set_layout(&set_info, None)? };
+        let set_layouts = [set_layout];
         let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
-        p.layout = unsafe { d.create_pipeline_layout(&layout_info, None)? };
+        let layout = unsafe { d.create_pipeline_layout(&layout_info, None)? };
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(p.shader)
+            .module(shader)
             .name(c"main");
         let info = [vk::ComputePipelineCreateInfo::default()
             .stage(stage)
-            .layout(p.layout)];
-        p.pipeline = unsafe { d.create_compute_pipelines(vk::PipelineCache::null(), &info, None) }
-            .map_err(|(_, e)| e)?[0];
+            .layout(layout)];
+        let pipeline =
+            unsafe { d.create_compute_pipelines(vk::PipelineCache::null(), &info, None) }
+                .map_err(|(_, e)| e)?[0];
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(1)
             .pool_sizes(&sizes);
-        p.pool = unsafe { d.create_descriptor_pool(&pool_info, None)? };
+        let pool = unsafe { d.create_descriptor_pool(&pool_info, None)? };
         let alloc = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(p.pool)
+            .descriptor_pool(pool)
             .set_layouts(&set_layouts);
-        p.set = unsafe { d.allocate_descriptor_sets(&alloc)? }[0];
-        Ok(p)
+        let set = unsafe { d.allocate_descriptor_sets(&alloc)? }[0];
+        let types = bindings.to_vec();
+        Ok(Self {
+            types,
+            shader,
+            set_layout,
+            layout,
+            pipeline,
+            pool,
+            set,
+        })
     }
 
-    pub fn bind(&self, buffers: &[(u32, &HostBuffer)]) {
+    pub fn bind(&self, state: &VkState, buffers: &[(u32, &HostBuffer)]) {
         for &(binding, buf) in buffers {
             let ty = self.types.iter().find(|t| t.0 == binding);
             let info = [vk::DescriptorBufferInfo::default()
@@ -145,14 +140,12 @@ impl<'a> ComputePipeline<'a> {
                 .dst_binding(binding)
                 .descriptor_type(ty.expect("unknown binding").1)
                 .buffer_info(&info);
-            unsafe { self.device.update_descriptor_sets(&[write], &[]) };
+            unsafe { state.device.update_descriptor_sets(&[write], &[]) };
         }
     }
-}
 
-impl Drop for ComputePipeline<'_> {
-    fn drop(&mut self) {
-        let d = self.device;
+    pub fn destroy(self, state: &VkState) {
+        let d = &state.device;
         unsafe {
             d.destroy_pipeline(self.pipeline, None);
             d.destroy_pipeline_layout(self.layout, None);
@@ -164,38 +157,36 @@ impl Drop for ComputePipeline<'_> {
 }
 
 impl VkState {
-    pub fn dispatch(&self, pipeline: &ComputePipeline, groups: [u32; 3]) -> Result<(), VkError> {
-        let d = &self.device;
+    // The command pool, its buffer and the queue are externally synchronized, hence &mut self.
+    pub fn dispatch(
+        &mut self,
+        pipeline: &ComputePipeline,
+        groups: [u32; 3],
+    ) -> Result<(), VkError> {
+        let (d, cmd) = (&self.device, self.command_buffer);
         let compute = vk::PipelineBindPoint::COMPUTE;
         let src = vk::PipelineStageFlags::COMPUTE_SHADER;
         let dst = vk::PipelineStageFlags::HOST;
-        let alloc = vk::CommandBufferAllocateInfo::default()
-            .command_pool(self.command_pool)
-            .command_buffer_count(1);
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // Shader writes are not visible to host reads after the fence wait without this barrier.
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::HOST_READ);
+        let cmds = [cmd];
+        let submit = [vk::SubmitInfo::default().command_buffers(&cmds)];
         unsafe {
-            let cmds = d.allocate_command_buffers(&alloc)?;
-            let cmd = cmds[0];
-            let fence = d.create_fence(&vk::FenceCreateInfo::default(), None)?;
-            let result = (|| {
-                d.begin_command_buffer(cmd, &begin)?;
-                d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
-                d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.set], &[]);
-                d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
-                d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
-                d.end_command_buffer(cmd)?;
-                let submit = [vk::SubmitInfo::default().command_buffers(&cmds)];
-                d.queue_submit(self.queue, &submit, fence)?;
-                d.wait_for_fences(&[fence], true, u64::MAX)
-            })();
-            d.destroy_fence(fence, None);
-            d.free_command_buffers(self.command_pool, &cmds);
-            Ok(result?)
+            d.reset_fences(&[self.fence])?;
+            d.begin_command_buffer(cmd, &begin)?;
+            d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
+            d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.set], &[]);
+            d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
+            d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
+            d.end_command_buffer(cmd)?;
+            d.queue_submit(self.queue, &submit, self.fence)?;
+            d.wait_for_fences(&[self.fence], true, u64::MAX)?;
         }
+        Ok(())
     }
 }
 
@@ -205,38 +196,37 @@ mod tests {
     use crate::gpu::spirv::{Emitter, decoration as deco, storage_class::STORAGE_BUFFER as SB, *};
 
     fn store_42_at_binding_9() -> Vec<u32> {
-        let mut body = Emitter::new();
-        let u32_ty = body.emit_type_int(32, 0);
-        let array = body.emit_type_runtime_array(u32_ty);
-        let block = body.emit_type_struct(&[array]);
-        let block_ptr = body.emit_type_pointer(SB, block);
-        let elem_ptr = body.emit_type_pointer(SB, u32_ty);
-        let var = body.emit_variable(block_ptr, SB);
-        let zero = body.emit_constant_typed(u32_ty, 0u32);
-        let value = body.emit_constant_typed(u32_ty, 42u32);
-        let void = body.emit_type_void();
-        let fn_ty = body.emit_type_function(void, &[]);
-        let func = body.emit_function(void, 0, fn_ty);
-        body.emit_label();
-        let elem = body.emit_access_chain(elem_ptr, var, &[zero, zero]);
-        body.emit_store(elem, value);
-        body.emit_return();
-        body.emit_function_end();
-
-        let mut head = Emitter::new();
-        head.emit_header();
-        head.emit_capability(capability::SHADER);
-        head.emit_memory_model(0, 1);
-        head.emit_entry_point(execution_model::GLCOMPUTE, func, "main", &[var]);
-        head.emit_execution_mode(func, execution_mode::LOCAL_SIZE, &[1, 1, 1]);
-        head.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
-        head.emit_decorate(block, deco::BLOCK, &[]);
-        head.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
-        head.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
-        head.emit_decorate(var, deco::BINDING, &[9]);
-        let mut words = [head.words(), body.words()].concat();
-        words[3] = body.id_bound();
-        words
+        let mut e = Emitter::new();
+        e.emit_header();
+        e.emit_capability(capability::SHADER);
+        e.emit_memory_model(0, 1);
+        let u32_ty = e.emit_type_int(32, 0);
+        let array = e.emit_type_runtime_array(u32_ty);
+        let block = e.emit_type_struct(&[array]);
+        let block_ptr = e.emit_type_pointer(SB, block);
+        let var = e.emit_variable(block_ptr, SB);
+        let (zero, value) = (
+            e.emit_constant_typed(u32_ty, 0u32),
+            e.emit_constant_typed(u32_ty, 42u32),
+        );
+        let void = e.emit_type_void();
+        let fn_ty = e.emit_type_function(void, &[]);
+        let func = e.emit_function(void, 0, fn_ty);
+        e.emit_label();
+        let elem_ptr = e.emit_type_pointer(SB, u32_ty);
+        let elem = e.emit_access_chain(elem_ptr, var, &[zero, zero]);
+        e.emit_store(elem, value);
+        e.emit_return();
+        e.emit_function_end();
+        e.emit_entry_point(execution_model::GLCOMPUTE, func, "main", &[var]);
+        e.emit_execution_mode(func, execution_mode::LOCAL_SIZE, &[1, 1, 1]);
+        e.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
+        e.emit_decorate(block, deco::BLOCK, &[]);
+        e.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+        e.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        e.emit_decorate(var, deco::BINDING, &[9]);
+        e.finalize();
+        e.words()
     }
 
     #[test]
@@ -252,19 +242,21 @@ mod tests {
         if let Ok(out) = val {
             assert!(out.status.success(), "{out:?}");
         }
-        let state = match VkState::new() {
+        let mut state = match VkState::new() {
             Ok(s) => s,
             Err(e @ (VkError::Loader | VkError::NoDevice)) => return eprintln!("skipping: {e:?}"),
             Err(e) => panic!("vulkan device creation failed: {e:?}"),
         };
-        let buf = HostBuffer::new(&state, 16).unwrap();
-        buf.write(&[0; 16]).unwrap();
+        let mut buf = HostBuffer::new(&state, 16).unwrap();
+        buf.write(&[0; 16]);
         let bindings = [(9, vk::DescriptorType::STORAGE_BUFFER)];
         let pipeline = ComputePipeline::new(&state, &words, &bindings).unwrap();
-        pipeline.bind(&[(9, &buf)]);
+        pipeline.bind(&state, &[(9, &buf)]);
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         let mut out = [0u8; 4];
-        buf.read(&mut out).unwrap();
+        buf.read(&mut out);
         assert_eq!(u32::from_le_bytes(out), 42);
+        pipeline.destroy(&state);
+        buf.destroy(&state);
     }
 }

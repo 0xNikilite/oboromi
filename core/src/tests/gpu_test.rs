@@ -110,6 +110,11 @@ pub mod inst {
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
     const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
+    const LDS: u128 = 0x984;
+    const STS: u128 = 0x388;
+    const ATOMS_ADD: u128 = 0x38c;
+    const ATOMS_CAS: u128 = 0x38d;
+    const BAR_SYNC: u128 = 0xb1d;
     const BRA: u128 = 0x947;
     const BRA_UREG: u128 = 0x947 | 1 << 91;
     const BRA_UPRED: u128 = 0x547 | 1 << 91;
@@ -215,6 +220,36 @@ pub mod inst {
         inst |= ((off as u128) & 0xffff) << 38;
         inst |= ((bank as u128) & 0x1f) << 54;
         inst
+    }
+
+    // op rd, [ra], rb, rc
+    fn shared(op: u128, rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
+        let mut inst = op | PT_GUARD;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((rb as u128) & 0xff) << 32;
+        inst |= ((rc as u128) & 0xff) << 64;
+        inst
+    }
+
+    pub fn lds(rd: u32, ra: u32) -> u128 {
+        shared(LDS | SZ_32, rd, ra, 0, 0)
+    }
+
+    pub fn sts(ra: u32, rb: u32) -> u128 {
+        shared(STS | SZ_32 | NO_WRITE_SCOREBOARD, 0, ra, rb, 0)
+    }
+
+    pub fn atoms_add(rd: u32, ra: u32, rb: u32) -> u128 {
+        shared(ATOMS_ADD, rd, ra, rb, 0)
+    }
+
+    pub fn atoms_cas(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
+        shared(ATOMS_CAS, rd, ra, rb, rc)
+    }
+
+    pub fn bar_sync() -> u128 {
+        BAR_SYNC | PT_GUARD | NO_WRITE_SCOREBOARD
     }
 
     pub fn s2r(rd: u32, sr: u32) -> u128 {
@@ -708,6 +743,13 @@ fn fixtures_match_nvdisasm() {
         (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
+        (inst::sts(15, 4), "STS [R15], R4 ;"),
+        (inst::sts(255, 255), "STS [RZ], RZ ;"),
+        (inst::lds(13, 16), "LDS R13, [R16] ;"),
+        (inst::lds(6, 255), "LDS R6, [RZ] ;"),
+        (inst::atoms_add(4, 255, 5), "ATOMS.ADD R4, [RZ], R5 ;"),
+        (inst::atoms_cas(7, 255, 8, 9), "ATOMS.CAS R7, [RZ], R8, R9 ;"),
+        (inst::bar_sync(), "BAR.SYNC 0x0 ;"),
         (inst::s2r(1, 33), "S2R R1, SR_TID.X ;"),
         (inst::cs2r(4, 80, false), "CS2R.32 R4, SR_CLOCKLO;"),
         (inst::cs2r(4, 80, true), "CS2R R4, SR_CLOCKLO;"),

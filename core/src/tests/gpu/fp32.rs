@@ -34,7 +34,7 @@ mod tests {
             inst::ffma_imm_c(33, 0, 1, 0.5),
             inst::ffma(34, 2, 2, 7) | FP_NEG_A | FP_NEG_C,
         ];
-        let Some(regs) = run_regs(&program, &bits(&x), &[]) else {
+        let Some((regs, _)) = run_regs(&program, &bits(&x), &[], &[]) else {
             return;
         };
         let want = [
@@ -71,7 +71,7 @@ mod tests {
             inst::fmul(17, 8, 8) | FP_SAT,
             inst::ffma(18, 9, 8, 8) | FP_SAT,
         ];
-        let Some(regs) = run_regs(&program, &bits(&x), &[]) else {
+        let Some((regs, _)) = run_regs(&program, &bits(&x), &[], &[]) else {
             return;
         };
         assert_f32(&regs[10..19], &[0.0, 0.0, -0.0, 0.0, x[1], 1.0, 0.0, 0.25, 0.0]);
@@ -89,7 +89,7 @@ mod tests {
             inst::fmnmx(13, 2, 1, 0, true),
             inst::fmnmx(14, 0, 1, 7, false) | FP_NEG_A | FP_ABS_B,
         ];
-        let Some(regs) = run_regs(&program, &seed, &[]) else {
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
             return;
         };
         assert_f32(&regs[10..15], &[-2.0, 1.0, 1.0, -2.0, -1.0]);
@@ -109,7 +109,7 @@ mod tests {
             inst::mufu(16, MUFU_COS, 4),
             inst::mufu(17, MUFU_TANH, 5),
         ];
-        let Some(regs) = run_regs(&program, &bits(&x), &[]) else {
+        let Some((regs, _)) = run_regs(&program, &bits(&x), &[], &[]) else {
             return;
         };
         let turn = x[4] * std::f32::consts::TAU;

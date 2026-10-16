@@ -20,7 +20,7 @@ pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
     let func = decoder.ir.emit_function(void_ty, 0, func_ty);
     decoder.ir.emit_label();
     if register_io {
-        decoder.emit_register_io(10, 9);
+        decoder.emit_register_io(10, 11);
     }
 
     decoder.translate_program(instructions);
@@ -52,9 +52,16 @@ pub fn spirv_val(module: &Emitter) {
     }
 }
 
-/// Runs `instructions` once with the state words seeded from `seed` and cbuf slot 0 holding `cbuf0`,
-/// returning every state word, or `None` when there is no Vulkan device.
-pub fn run_regs(instructions: &[u128], seed: &[u32], cbuf0: &[u32]) -> Option<Vec<u32>> {
+pub const GLOBAL_BASE: u64 = 0x2_0000_1000;
+
+/// Runs `instructions` once with the state words seeded from `seed`, cbuf slot 0 holding `cbuf0` and global memory
+/// at `GLOBAL_BASE` holding `global`, returning every state word and global word, or `None` when there is no Vulkan device.
+pub fn run_regs(
+    instructions: &[u128],
+    seed: &[u32],
+    cbuf0: &[u32],
+    global: &[u32],
+) -> Option<(Vec<u32>, Vec<u32>)> {
     let module = translate_module(instructions, true);
     spirv_val(&module);
     let state = match VkState::new() {
@@ -79,16 +86,21 @@ pub fn run_regs(instructions: &[u128], seed: &[u32], cbuf0: &[u32]) -> Option<Ve
     let output = HostBuffer::new(&state, size).unwrap();
     let mut cbuf = HostBuffer::new(&state, 16 + 4 * cbuf0.len() as u64).unwrap();
     cbuf.write(&bytes(cbuf0)).unwrap();
-    let ssbo = DescriptorType::STORAGE_BUFFER;
-    let bindings = [(10, ssbo), (9, ssbo), (1, DescriptorType::UNIFORM_BUFFER)];
+    let mut memory = HostBuffer::new(&state, 4 * global.len().max(1) as u64).unwrap();
+    memory.write(&bytes(global)).unwrap();
+    let mut support = HostBuffer::new(&state, 16).unwrap();
+    support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
+    let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
+    let bindings = [(10, ssbo), (11, ssbo), (9, ssbo), (0, ubo), (1, ubo)];
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.bind(&[(10, &input), (9, &output), (1, &cbuf)]);
+    pipeline.bind(&[(10, &input), (11, &output), (9, &memory), (0, &support), (1, &cbuf)]);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
-    let mut out = vec![0u8; STATE_WORDS * 4];
-    output.read(&mut out).unwrap();
-    Some(
+    let read = |buf: &HostBuffer, len: usize| {
+        let mut out = vec![0u8; len * 4];
+        buf.read(&mut out).unwrap();
         out.chunks(4)
             .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
-            .collect(),
-    )
+            .collect()
+    };
+    Some((read(&output, STATE_WORDS), read(&memory, global.len())))
 }

@@ -53,6 +53,16 @@ pub mod inst {
     pub const MUFU_RSQ: u32 = 5;
     pub const MUFU_SQRT: u32 = 8;
     pub const MUFU_TANH: u32 = 9;
+    const LDG: u128 = 0x381;
+    const STG: u128 = 0x386;
+    const LDC: u128 = 0xb82;
+    const ULDC: u128 = 0xab9;
+    const ADDR_64: u128 = 1 << 72;
+    const SZ_32: u128 = 4 << 73;
+    const SZ_64: u128 = 5 << 73;
+    const LDG_PU_PT: u128 = 7 << 81;
+    const COP_EN: u128 = 1 << 84;
+    const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -101,6 +111,43 @@ pub mod inst {
         let mut inst = MOV_RR | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((rb as u128) & 0xff) << 32;
+        inst
+    }
+
+    // ldg.e rd, [ra + off]
+    pub fn ldg(rd: u32, ra: u32, off: u32) -> u128 {
+        let mut inst = LDG | PT_GUARD | ADDR_64 | SZ_32 | LDG_PU_PT | COP_EN;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((off as u128) & 0xff_ffff) << 40;
+        inst
+    }
+
+    // stg.e [ra + off], rb
+    pub fn stg(ra: u32, off: u32, rb: u32) -> u128 {
+        let mut inst = STG | PT_GUARD | ADDR_64 | SZ_32 | COP_EN | NO_WRITE_SCOREBOARD;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((rb as u128) & 0xff) << 32;
+        inst |= ((off as u128) & 0xff_ffff) << 40;
+        inst
+    }
+
+    // ldc rd, c[bank][ra + off]
+    pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
+        let mut inst = LDC | PT_GUARD | SZ_32;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((off as u128) & 0xffff) << 38;
+        inst |= ((bank as u128) & 0x1f) << 54;
+        inst
+    }
+
+    // uldc.64 urd, c[bank][off]
+    pub fn uldc64(urd: u32, bank: u32, off: u32) -> u128 {
+        let mut inst = ULDC | PT_GUARD | SZ_64;
+        inst |= ((urd as u128) & 0x3f) << 16;
+        inst |= ((off as u128) & 0xffff) << 38;
+        inst |= ((bank as u128) & 0x1f) << 54;
         inst
     }
 
@@ -286,6 +333,25 @@ fn fixtures_match_nvdisasm() {
         (inst::fmnmx(1, 2, 3, 0, true) | inst::FP_NEG_A | inst::FP_ABS_B, "FMNMX R1, -R2, |R3|, !P0;"),
         (inst::mufu(1, inst::MUFU_RCP, 3), "MUFU.RCP R1, R3 ;"),
         (inst::mufu(1, inst::MUFU_TANH, 3), "MUFU.TANH R1, R3 ;"),
+        (0x004fc800078e02090000000700077224, "IMAD R7, R0, R7, R9 ;"),
+        (0x004fc800078e18ff0000000302017211, "LEA R1, R2, R3, 0x3 ;"),
+        (0x004fc80003906270000000030200720c, "ISETP.GE.AND P0, P1, R2, R3, PT ;"),
+        (0x004fc800078e00060000000302047225, "IMAD.WIDE.U32 R4, R2, R3, R6 ;"),
+        (0x004fc800078e02060000000302017227, "IMAD.HI R1, R2, R3, R6 ;"),
+        (0x004fc800000e06060000000302017224, "IMAD.X R1, R2, R3, R6, P0 ;"),
+        (0x004fc800000e0e060000000302017224, "IMAD.X R1, R2, R3, ~R6, P0 ;"),
+        (0x004fc800078e02060000000502017824, "IMAD R1, R2, 0x5, R6 ;"),
+        (0x004fc800078e02060000000002017a24, "IMAD R1, R2, c[0x0][0x0], R6 ;"),
+        (0x004fc8000f8e02060000000402017c24, "IMAD R1, R2, UR4, R6 ;"),
+        (0x004fc800078e02030000000502017424, "IMAD R1, R2, R3, 0x5 ;"),
+        (0x004fc80003902270000000050200780c, "ISETP.EQ.AND P0, P1, R2, 0x5, PT ;"),
+        (0x004fc800039022700000000002007a0c, "ISETP.EQ.AND P0, P1, R2, c[0x0][0x0], PT ;"),
+        (0x004fc8000b9022700000000402007c0c, "ISETP.EQ.AND P0, P1, R2, UR4, PT ;"),
+        (0x004fc80003906320000000030200720c, "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;"),
+        (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
+        (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
+        (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
+        (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

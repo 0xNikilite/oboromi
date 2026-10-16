@@ -281,6 +281,8 @@ pub struct Decoder<'a> {
     type_abstract_state: u32,
     type_ptr_abstract_state_regs: u32,
     var_abstract_state: u32,
+    var_pc: u32,
+    pc: u32,
     const_u32_0: u32,
     const_u32_1: u32,
     type_ptr_ssbo_u32: u32,
@@ -292,6 +294,12 @@ pub struct Decoder<'a> {
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
 }
+
+fn branch_target(pc: u32, inst: u128) -> Option<u32> {
+    let offset = ((inst >> 34) as i64) << 16 >> 18;
+    (inst & (1 << 91 | 0xfff) == 0x947).then_some((pc as i64 + 1 + offset) as u32)
+}
+
 impl<'a> Decoder<'a> {
     pub fn new(ir: &'a mut spirv::Emitter) -> Self {
         Self {
@@ -305,6 +313,8 @@ impl<'a> Decoder<'a> {
             type_abstract_state: 0,
             type_ptr_abstract_state_regs: 0,
             var_abstract_state: 0,
+            var_pc: 0,
+            pc: 0,
             const_u32_0: 0,
             const_u32_1: 0,
             type_ptr_ssbo_u32: 0,
@@ -324,7 +334,7 @@ impl<'a> Decoder<'a> {
     pub fn emit_entry_point(&mut self, func: u32) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = std::iter::once(self.var_abstract_state).chain(resources).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc].into_iter().chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
@@ -372,6 +382,7 @@ impl<'a> Decoder<'a> {
         }
         let type_ptr_abstract_state = self.ir.emit_type_pointer(6, self.type_abstract_state);
         self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 6);
+        self.var_pc = self.ir.emit_variable(self.type_ptr_u32[1], 6);
 
 
     }
@@ -411,6 +422,66 @@ impl<'a> Decoder<'a> {
             let word = self.ssbo_word(output, slot);
             self.ir.emit_store(word, value);
         }
+    }
+
+    // Vulkan only takes structured control flow, so guest branches store a pc that one loop around a switch dispatches on.
+    pub fn translate_program(&mut self, words: &[u128]) {
+        let len = words.len() as u32;
+        let mut leaders = vec![0, len];
+        for (pc, &inst) in (0..).zip(words) {
+            leaders.extend(branch_target(pc, inst));
+            if matches!(inst & (1 << 91 | 0xfff), 0x947 | 0x94d) {
+                leaders.push(pc + 1);
+            }
+        }
+        leaders.sort_unstable();
+        leaders.dedup();
+        assert_eq!(leaders.last(), Some(&len), "branch target outside the program");
+        let [header, body, dispatched, cont, merge] = [(); 5].map(|_| self.ir.alloc_id());
+        let blocks: Vec<(u32, u32)> = leaders[..leaders.len() - 1].iter().map(|&pc| (pc, self.ir.alloc_id())).collect();
+        self.ir.emit_store(self.var_pc, self.const_u32_0);
+        self.ir.emit_branch(header);
+        self.ir.emit_label_id(header);
+        self.ir.emit_loop_merge(merge, cont, 0);
+        self.ir.emit_branch(body);
+        self.ir.emit_label_id(body);
+        let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
+        self.ir.emit_selection_merge(dispatched, 0);
+        self.ir.emit_switch(pc, dispatched, &blocks);
+        for (&(start, label), &end) in blocks.iter().zip(&leaders[1..]) {
+            self.ir.emit_label_id(label);
+            let next = self.cached_const_u32(end);
+            self.ir.emit_store(self.var_pc, next);
+            for pc in start..end {
+                self.pc = pc;
+                self.translate_guarded(words[pc as usize]);
+            }
+            self.ir.emit_branch(dispatched);
+        }
+        self.ir.emit_label_id(dispatched);
+        self.ir.emit_branch(cont);
+        self.ir.emit_label_id(cont);
+        let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
+        let len = self.cached_const_u32(len);
+        let done = self.ir.emit_ugreater_than_equal(self.type_bool[1], pc, len);
+        self.ir.emit_branch_conditional(done, merge, header);
+        self.ir.emit_label_id(merge);
+    }
+
+    fn translate_guarded(&mut self, inst: u128) {
+        let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
+        if pg == 7 && !pg_not {
+            return self.translate(inst);
+        }
+        let mask = self.load_predicate_mask(pg, pg_not);
+        let cond = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+        let [then, after] = [(); 2].map(|_| self.ir.alloc_id());
+        self.ir.emit_selection_merge(after, 0);
+        self.ir.emit_branch_conditional(cond, then, after);
+        self.ir.emit_label_id(then);
+        self.translate(inst);
+        self.ir.emit_branch(after);
+        self.ir.emit_label_id(after);
     }
 
     fn resource(&self, kind: ResourceKind) -> Option<u32> {
@@ -1049,14 +1120,17 @@ impl<'a> Decoder<'a> {
         let _cond = (((inst >> 32) & 0x3) << 0);
         let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
         let _depth = (((inst >> 85) & 0x3) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(pp == 7 && pp_not == 0, "BRA Pp not implemented");
+        let target = branch_target(self.pc, inst).expect("uniform BRA not implemented");
+        let target = self.cached_const_u32(target);
+        self.ir.emit_store(self.var_pc, target);
     }
     pub fn break_(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1392,14 +1466,16 @@ impl<'a> Decoder<'a> {
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _mode = (((inst >> 84) & 0x3) << 0);
         let _depth = (((inst >> 86) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        self.ir.emit_kill();
+        assert!(pp == 7 && pp_not == 0, "EXIT Pp not implemented");
+        let exit = self.cached_const_u32(u32::MAX);
+        self.ir.emit_store(self.var_pc, exit);
     }
     pub fn f2f(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2626,8 +2702,6 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn mov(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
 
         // MOV shares one primary opcode across several addressing-mode
@@ -2640,7 +2714,7 @@ impl<'a> Decoder<'a> {
         // scripts/sm_86_instructions.txt: 0x202 "mov__RR", 0x802 "mov__RI", 0xa02 "mov__RC", 0x1c02 "mov__RU", 0x1a02 "mov__RCx" (cx[UR] bank).
         if matches!(variant_key, 0x202 | 0x802 | 0xa02 | 0x1c02) {
             let val = self.alu_src(inst);
-            self.store_register_predicated(rd, pg, pg_not != 0, val);
+            self.store_register(rd, val);
             return;
         }
 

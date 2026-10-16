@@ -16,6 +16,7 @@ const RZ: u32 = 255;
 const URZ: u32 = 63;
 const SRZ: u32 = 255;
 const PT: u32 = 7;
+const INT64_ATOMICS: u32 = 12;
 const CALL_ABS_R: u32 = 0x343;
 const CALL_REL_R: u32 = 0x344;
 const CALL_ABS: u32 = 0x943;
@@ -287,7 +288,9 @@ pub enum ResourceKind {
     Global,
     Local,
     Shared,
+    Shared64,
     Warp,
+    Global64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -317,7 +320,10 @@ pub struct Decoder<'a> {
     const_u32_1: u32,
     type_ptr_ssbo: u32,
     type_ptr_ssbo_u32: u32,
+    type_ptr_ssbo64: u32,
+    type_ptr_ssbo_u64: u32,
     type_ptr_shared_u32: u32,
+    type_ptr_shared_u64: u32,
     type_ptr_cbuf: u32,
     type_ptr_cbuf_u32: u32,
     type_u64: u32,
@@ -404,7 +410,10 @@ impl<'a> Decoder<'a> {
             const_u32_1: 0,
             type_ptr_ssbo: 0,
             type_ptr_ssbo_u32: 0,
+            type_ptr_ssbo64: 0,
+            type_ptr_ssbo_u64: 0,
             type_ptr_shared_u32: 0,
+            type_ptr_shared_u64: 0,
             type_ptr_cbuf: 0,
             type_ptr_cbuf_u32: 0,
             type_u64: 0,
@@ -590,6 +599,27 @@ impl<'a> Decoder<'a> {
         let two = self.cached_const_u32(2);
         let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, two);
         self.shared_mem(index)
+    }
+
+    fn shared_u64_at(&mut self, address: u32) -> u32 {
+        use spirv::storage_class::WORKGROUP;
+        let ty = self.type_u64();
+        self.ir.emit_capability(INT64_ATOMICS);
+        let var = match self.resource(ResourceKind::Shared64) {
+            Some(var) => var,
+            None => {
+                let len = self.cached_const_u32(128);
+                let array = self.ir.emit_type_array(ty, len);
+                let ptr = self.ir.emit_type_pointer(WORKGROUP, array);
+                self.type_ptr_shared_u64 = self.ir.emit_type_pointer(WORKGROUP, ty);
+                let var = self.ir.emit_variable(ptr, WORKGROUP);
+                self.resources.push(Resource { kind: ResourceKind::Shared64, var });
+                var
+            }
+        };
+        let three = self.cached_const_u32(3);
+        let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, three);
+        self.ir.emit_access_chain(self.type_ptr_shared_u64, var, &[index])
     }
 
     fn atomic_update(&mut self, ptr: u32, scope: u32, sem: u32, update: impl Fn(&mut Self, u32) -> u32) -> u32 {
@@ -949,6 +979,34 @@ impl<'a> Decoder<'a> {
         self.ir.emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
     }
 
+    fn global_u64_at(&mut self, address: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
+        let ty = self.type_u64();
+        self.ir.emit_capability(INT64_ATOMICS);
+        let var = match self.resource(ResourceKind::Global64) {
+            Some(var) => var,
+            None => {
+                let array = self.ir.emit_type_runtime_array(ty);
+                let block = self.ir.emit_type_struct(&[array]);
+                self.type_ptr_ssbo64 = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
+                self.type_ptr_ssbo_u64 = self.ir.emit_type_pointer(STORAGE_BUFFER, ty);
+                self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[8]);
+                self.ir.emit_decorate(block, deco::BLOCK, &[]);
+                self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+                let var = self.ir.emit_variable(self.type_ptr_ssbo64, STORAGE_BUFFER);
+                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+                self.ir.emit_decorate(var, deco::BINDING, &[GLOBAL_BINDING]);
+                self.resources.push(Resource { kind: ResourceKind::Global64, var });
+                var
+            }
+        };
+        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
+        let rel = self.ir.emit_isub(self.type_u32[1], address, base);
+        let three = self.cached_const_u32(3);
+        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, three);
+        self.ir.emit_access_chain(self.type_ptr_ssbo_u64, var, &[self.const_u32_0, index])
+    }
+
     fn global_address(&mut self, inst: u128, uniform: u32, offset_shift: u32) -> u32 {
         let mut address = self.load_register((inst >> 24) as u32 & 0xff);
         if inst >> 91 & 1 != 0 {
@@ -967,19 +1025,47 @@ impl<'a> Decoder<'a> {
 
     fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
         use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY};
-        if sz >= 2 {
-            todo!("64-bit and float global atomics");
-        }
         let address = self.global_address(inst, 64, 40);
-        let ptr = self.global_word_at(address);
-        let value = self.load_register(rb);
         let scope = self.cached_const_u32(spirv::scope::DEVICE);
         let sem = self.cached_const_u32(ACQUIRE_RELEASE | UNIFORM_MEMORY);
+        if matches!(sz, 2 | 5) {
+            assert!(crate::gpu::device().is_ok_and(|d| d.shader_buffer_int64_atomics), "64-bit global atomics require shaderBufferInt64Atomics");
+            let ptr = self.global_u64_at(address);
+            let value = self.load_pair(rb);
+            if inst & 1 != 0 {
+                let swap = self.load_pair((inst >> 64 & 0xff) as u32);
+                let ty = self.type_u64();
+                return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, self.const_u32_0, swap, value);
+            }
+            return self.atomic_op64(ptr, scope, sem, op, sz == 5, value);
+        }
+        if sz >= 2 {
+            todo!("floating-point global atomics require VK_EXT_shader_atomic_float");
+        }
+        let ptr = self.global_word_at(address);
+        let value = self.load_register(rb);
         if inst & 1 != 0 {
             let swap = self.load_register((inst >> 64 & 0xff) as u32);
             return self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value);
         }
         self.atomic_op(ptr, scope, sem, op, sz == 1, value)
+    }
+
+    fn atomic_op64(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
+        let ty = self.type_u64();
+        match op {
+            0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, b),
+            1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, b),
+            1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, b),
+            2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, b),
+            2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, b),
+            5 => self.ir.emit_atomic_and(ty, ptr, scope, sem, b),
+            6 => self.ir.emit_atomic_or(ty, ptr, scope, sem, b),
+            7 => self.ir.emit_atomic_xor(ty, ptr, scope, sem, b),
+            8 => self.ir.emit_atomic_exchange(ty, ptr, scope, sem, b),
+            9 => todo!("ATOMG.SAFEADD has no public semantics; Eden also leaves it TODO"),
+            _ => todo!("64-bit atomic op {op}"),
+        }
     }
 
     fn atomic_op(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
@@ -1006,6 +1092,7 @@ impl<'a> Decoder<'a> {
             6 => self.ir.emit_atomic_or(ty, ptr, scope, sem, b),
             7 => self.ir.emit_atomic_xor(ty, ptr, scope, sem, b),
             8 => self.ir.emit_atomic_exchange(ty, ptr, scope, sem, b),
+            9 => todo!("ATOMG.SAFEADD has no public semantics; Eden also leaves it TODO"),
             _ => todo!("atomic op {op}"),
         }
     }
@@ -1227,11 +1314,50 @@ impl<'a> Decoder<'a> {
     }
 
     fn pack_half2(&mut self, lanes: [u32; 2]) -> u32 {
+        self.pack_half2_round(lanes, false)
+    }
+
+    fn pack_half2_round(&mut self, lanes: [u32; 2], rtz: bool) -> u32 {
         let half = self.type_f16();
         let halves = lanes.map(|lane| self.ir.emit_f_convert(half, lane));
         let ty = self.type_f16x2();
         let half2 = self.ir.emit_composite_construct(ty, &halves);
-        self.bitcast_u32(half2)
+        let mut packed = self.bitcast_u32(half2);
+        if rtz {
+            let width = self.cached_const_u32(16);
+            for i in 0..2 {
+                let back = self.ir.emit_f_convert(self.type_f32[1], halves[i]);
+                let source = self.fp_src(self.type_f32[1], lanes[i], true, false);
+                let back = self.fp_src(self.type_f32[1], back, true, false);
+                let above = self.ir.emit_ford_greater_than(self.type_bool[1], back, source);
+                let offset = self.cached_const_u32(16 * i as u32);
+                let bits = self.ir.emit_bit_field_u_extract(self.type_u32[1], packed, offset, width);
+                let down = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
+                let bits = self.ir.emit_select(self.type_u32[1], above, down, bits);
+                packed = self.ir.emit_bit_field_insert(self.type_u32[1], packed, bits, offset, width);
+            }
+        }
+        packed
+    }
+
+    fn f2fp_src(&mut self, val: u32, relu: bool, satfinite: bool) -> u32 {
+        let ty = self.type_f32[1];
+        let zero = self.ir.emit_constant_typed(ty, 0.0f32);
+        let max = self.ir.emit_constant_typed(ty, 65504.0f32);
+        let min = self.ir.emit_constant_typed(ty, -65504.0f32);
+        let val = if relu || satfinite {
+            let floor = if relu { zero } else { min };
+            let below = self.ir.emit_ford_less_than(self.type_bool[1], val, floor);
+            self.ir.emit_select(ty, below, floor, val)
+        } else {
+            val
+        };
+        if satfinite {
+            let above = self.ir.emit_ford_greater_than(self.type_bool[1], val, max);
+            self.ir.emit_select(ty, above, max, val)
+        } else {
+            val
+        }
     }
 
     // .F32 writes lane 0 as one f32 instead of packing both lanes; .SAT maps NaN to +0 as in fp_arith_result.
@@ -1801,8 +1927,8 @@ impl<'a> Decoder<'a> {
     }
     pub fn atom(&mut self, inst: u128) {
         match opcode(inst) {
-            0x1f8a => todo!("ATOM.ARRIVE and ATOM.POPC.INC"),
-            0x38b if inst >> 87 & 1 == 1 => todo!("ATOM.CAST"),
+            0x1f8a => todo!("ATOM.ARRIVE and ATOM.POPC.INC expose encodings but not state-transition semantics"),
+            0x38b if inst >> 87 & 1 == 1 => todo!("ATOM.CAST exposes operands but not cast semantics"),
             _ => self.atomg(inst),
         }
     }
@@ -1825,7 +1951,11 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let old = self.global_atomic(inst, op, sz, rb);
-        self.store_register(rd, old);
+        if matches!(sz, 2 | 5) {
+            self.store_pair(rd, old);
+        } else {
+            self.store_register(rd, old);
+        }
     }
     pub fn atoms(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1844,12 +1974,48 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let cas = opcode(inst) == 0x38d;
         match opcode(inst) {
-            0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC"),
-            0x38d if op & 1 == 1 => todo!("ATOMS.CAST"),
-            _ if sz >= 2 => todo!("64-bit ATOMS"),
+            0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC expose encodings but not state-transition semantics"),
+            0x38d if op & 1 == 1 => todo!("ATOMS.CAST exposes operands but not cast semantics"),
             _ => {}
         }
         let address = self.shared_address(inst, 64);
+        if matches!(sz, 2 | 5) {
+            assert!(crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics), "64-bit shared atomics require shaderSharedInt64Atomics");
+            let ptr = self.shared_u64_at(address);
+            let lo_ptr = self.shared_word_at(address);
+            let four = self.cached_const_u32(4);
+            let hi_address = self.ir.emit_iadd(self.type_u32[1], address, four);
+            let hi_ptr = self.shared_word_at(hi_address);
+            let words = [lo_ptr, hi_ptr].map(|p| self.ir.emit_load(self.type_u32[1], p));
+            let words = self.ir.emit_composite_construct(self.type_u32[2], &words);
+            let ty = self.type_u64();
+            let initial = self.ir.emit_bitcast(ty, words);
+            self.ir.emit_store(ptr, initial);
+            let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
+            let sem = self.cached_const_u32(spirv::memory_semantics::ACQUIRE_RELEASE | spirv::memory_semantics::WORKGROUP_MEMORY);
+            self.ir.emit_control_barrier(scope, scope, sem);
+            let b = self.load_pair(rb);
+            let old = if cas {
+                let c = self.load_pair((inst >> 64) as u32 & 0xff);
+                let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
+                self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, relaxed, c, b)
+            } else {
+                self.atomic_op64(ptr, scope, sem, op, sz == 5, b)
+            };
+            self.ir.emit_control_barrier(scope, scope, sem);
+            let final_value = self.ir.emit_load(ty, ptr);
+            let final_words = self.ir.emit_bitcast(self.type_u32[2], final_value);
+            for (i, dst) in [lo_ptr, hi_ptr].into_iter().enumerate() {
+                let word = self.ir.emit_composite_extract(self.type_u32[1], final_words, &[i as u32]);
+                self.ir.emit_store(dst, word);
+            }
+            self.ir.emit_control_barrier(scope, scope, sem);
+            self.store_pair(rd, old);
+            return;
+        }
+        if sz >= 2 {
+            todo!("floating-point shared atomics require VK_EXT_shader_atomic_float");
+        }
         let ptr = self.shared_word_at(address);
         let b = self.load_register(rb);
         let (ty, signed) = (self.type_u32[1], sz == 1);
@@ -1888,9 +2054,46 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        if !matches!(pq, 0 | 4) {
-            todo!("BAR mode {pq}");
+        if pq == 1 {
+            return;
         }
+        if matches!(pq, 2 | 3) {
+            let pp = (inst >> 87 & 7) as u32;
+            let value = self.pred_bit(false, pp, inst >> 90 & 1 != 0);
+            let values = self.warp_values(value);
+            let bop = if pq == 3 { 0 } else { inst >> 74 & 3 };
+            assert!(bop != 3, "BAR.RED operation 3 is invalid");
+            let mut reductions = Vec::with_capacity(32);
+            let mut result = if bop == 1 { self.const_u32_1 } else { self.const_u32_0 };
+            for value in values {
+                result = match bop {
+                    0 => self.ir.emit_iadd(self.type_u32[1], result, value),
+                    1 => self.ir.emit_bitwise_and(self.type_u32[1], result, value),
+                    _ => self.ir.emit_bitwise_or(self.type_u32[1], result, value),
+                };
+                reductions.push(result);
+            }
+            if pq == 3 {
+                let lane = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
+                let mask = self.cached_const_u32(31);
+                let lane = self.ir.emit_bitwise_and(self.type_u32[1], lane, mask);
+                result = reductions[0];
+                for (i, &candidate) in reductions.iter().enumerate().skip(1) {
+                    let i = self.cached_const_u32(i as u32);
+                    let selected = self.ir.emit_iequal(self.type_bool[1], lane, i);
+                    result = self.ir.emit_select(self.type_u32[1], selected, candidate, result);
+                }
+            }
+            if matches!(opcode(inst), 0x31d | 0x51d) {
+                self.store_register((inst >> 32 & 0xff) as u32, result);
+            } else {
+                let nonzero = self.ir.emit_inot_equal(self.type_bool[1], result, self.const_u32_0);
+                let bit = self.bool_bit(nonzero);
+                self.store_pred_bit(false, pp, bit);
+            }
+            return;
+        }
+        assert!(matches!(pq, 0 | 4), "BAR mode {pq} is invalid");
         use spirv::memory_semantics::{ACQUIRE_RELEASE, WORKGROUP_MEMORY};
         let workgroup = self.cached_const_u32(spirv::scope::WORKGROUP);
         let semantics = self.cached_const_u32(ACQUIRE_RELEASE | WORKGROUP_MEMORY);
@@ -2412,17 +2615,21 @@ impl<'a> Decoder<'a> {
         self.store_pair(rd as u32, bits);
     }
     pub fn f2fp(&mut self, inst: u128) {
-        assert!(inst >> 75 & 1 == 0 && inst >> 77 & 1 == 0, "F2FP .RELU and .SATFINITE are not implemented");
         assert!(inst >> 76 & 1 == 0 && inst >> 86 & 1 == 0, "F2FP to BF16, E8M7 or E6M9 needs a bfloat16 type");
-        assert!(inst >> 79 & 7 == 0, "F2FP rounding other than RN is not implemented");
+        let rnd = inst >> 79 & 7;
+        assert!(matches!(rnd, 0 | 3), "F2FP.RS stochastic rounding cannot be expressed in SPIR-V");
+        let relu = inst >> 75 & 1 != 0;
+        let satfinite = inst >> 77 & 1 != 0;
         let (b, c) = self.srcs_bc(inst);
         let b = self.bitcast_f32(b);
+        let b = self.f2fp_src(b, relu, satfinite);
         let word = if inst >> 78 & 1 == 0 {
             let a = self.load_register((inst >> 24 & 0xff) as u32);
             let a = self.bitcast_f32(a);
-            self.pack_half2([b, a])
+            let a = self.f2fp_src(a, relu, satfinite);
+            self.pack_half2_round([b, a], rnd == 3)
         } else {
-            let packed = self.pack_half2([b, b]);
+            let packed = self.pack_half2_round([b, b], rnd == 3);
             let c = self.high_half_if(c, inst >> 72 & 1 != 0);
             let sixteen = self.cached_const_u32(16);
             self.ir.emit_bit_field_insert(self.type_u32[1], packed, c, sixteen, sixteen)
@@ -2907,15 +3114,38 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn i2fp(&mut self, inst: u128) {
-        assert!(inst >> 78 & 3 == 0, "I2FP.RZ is not implemented");
+        let rnd = inst >> 78 & 3;
+        assert!(matches!(rnd, 0 | 3), "I2FP rounding mode {rnd} is not defined by the SM86 table");
         let b = self.alu_src(inst);
-        let val = if inst >> 74 & 1 != 0 {
-            let b = self.ir.emit_bitcast(self.type_s32[1], b);
-            self.ir.emit_convert_s_to_f(self.type_f32[1], b)
+        let signed = inst >> 74 & 1 != 0;
+        let integer = if signed { self.ir.emit_bitcast(self.type_s32[1], b) } else { b };
+        let val = if signed {
+            self.ir.emit_convert_s_to_f(self.type_f32[1], integer)
         } else {
-            self.ir.emit_convert_u_to_f(self.type_f32[1], b)
+            self.ir.emit_convert_u_to_f(self.type_f32[1], integer)
         };
-        let bits = self.bitcast_u32(val);
+        let mut bits = self.bitcast_u32(val);
+        if rnd == 3 {
+            let negative = self.ir.emit_sless_than(self.type_bool[1], integer, self.const_u32_0);
+            let magnitude = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, integer);
+            let magnitude = if signed { self.ir.emit_select(self.type_u32[1], negative, magnitude, integer) } else { integer };
+            let [sign_mask, mantissa_mask, hidden, twenty_three, one_fifty, one_fifty_nine] =
+                [0x7fff_ffff, 0x7f_ffff, 0x80_0000, 23, 150, 159].map(|c| self.cached_const_u32(c));
+            let signless = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign_mask);
+            let exponent = self.ir.emit_shift_right_logical(self.type_u32[1], signless, twenty_three);
+            let significand = self.ir.emit_bitwise_and(self.type_u32[1], signless, mantissa_mask);
+            let significand = self.ir.emit_bitwise_or(self.type_u32[1], significand, hidden);
+            let inexact_range = self.ir.emit_ugreater_than(self.type_bool[1], exponent, one_fifty);
+            let shift = self.ir.emit_isub(self.type_u32[1], exponent, one_fifty);
+            let shift = self.ir.emit_select(self.type_u32[1], inexact_range, shift, self.const_u32_0);
+            let represented = self.ir.emit_shift_left_logical(self.type_u32[1], significand, shift);
+            let rounded_up = self.ir.emit_ugreater_than(self.type_bool[1], represented, magnitude);
+            let overflow = self.ir.emit_ugreater_than_equal(self.type_bool[1], exponent, one_fifty_nine);
+            let rounded_up = self.ir.emit_logical_or(self.type_bool[1], rounded_up, overflow);
+            let above = self.ir.emit_logical_and(self.type_bool[1], inexact_range, rounded_up);
+            let down = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
+            bits = self.ir.emit_select(self.type_u32[1], above, down, bits);
+        }
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn i2i(&mut self, inst: u128) {
@@ -3715,6 +3945,7 @@ impl<'a> Decoder<'a> {
         const MOV_RR: u32 = 0x202;
         const MOV_RI: u32 = 0x802;
         const MOV_RC: u32 = 0xa02;
+        const MOV_RCX: u32 = 0x1a02;
         const MOV_RU: u32 = 0x1c02;
 
         // MOV shares one primary opcode across several addressing-mode
@@ -3730,6 +3961,14 @@ impl<'a> Decoder<'a> {
             return;
         }
 
+        if variant_key == MOV_RCX {
+            let bank = self.load_ureg((inst >> 32 & 0x3f) as u32);
+            let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) << 2) as u32);
+            let val = self.load_dynamic_cbuf(bank, offset);
+            self.store_register(rd, val);
+            return;
+        }
+
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
@@ -3738,7 +3977,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("MOV indexed register-file forms are not constant-buffer moves");
     }
     pub fn movm(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4698,7 +4937,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("UCLEA operand fields are public, but NAK and Eden provide no operation semantics");
     }
     pub fn uf2fp(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4715,7 +4954,23 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let fmt = (inst >> 84 & 3) << 2 | (inst >> 75 & 3);
+        assert!(fmt == 9, "UF2FP BF16, E8M7 and E6M9 formats need a bfloat16 type");
+        let rnd = inst >> 79 & 7;
+        assert!(matches!(rnd, 0 | 3), "UF2FP.RS stochastic rounding cannot be expressed in SPIR-V");
+        let (b, c) = self.srcs_bc(inst);
+        let b = self.bitcast_f32(b);
+        let word = if inst >> 78 & 1 == 0 {
+            let a = self.load_ureg((inst >> 24 & 0x3f) as u32);
+            let a = self.bitcast_f32(a);
+            self.pack_half2_round([b, a], rnd == 3)
+        } else {
+            let packed = self.pack_half2_round([b, b], rnd == 3);
+            let c = self.high_half_if(c, inst >> 72 & 1 != 0);
+            let sixteen = self.cached_const_u32(16);
+            self.ir.emit_bit_field_insert(self.type_u32[1], packed, c, sixteen, sixteen)
+        };
+        self.store_ureg((inst >> 16 & 0x3f) as u32, word);
     }
     pub fn uflo(&mut self, inst: u128) {
         self.flo(inst)

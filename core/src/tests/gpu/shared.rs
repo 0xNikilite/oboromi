@@ -64,4 +64,57 @@ mod tests {
         let stored = winners[0][9];
         assert!(regs.iter().all(|r| r[6] == stored && (r[7] == 0 || r[7] == stored)));
     }
+
+    #[test]
+    fn atoms_u64_add_returns_full_old_values() {
+        if !crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics) {
+            eprintln!("skipping: no shaderSharedInt64Atomics");
+            return;
+        }
+        let seeds = lanes(|_| {
+            let mut seed = vec![0; 17];
+            seed[6] = 1;
+            seed[16] = 4;
+            seed
+        });
+        let program = [
+            inst::sts(255, 255),
+            inst::sts(16, 255),
+            inst::bar_sync(),
+            inst::W2J_ATOMS_U64_ADD,
+            inst::bar_sync(),
+            inst::lds(8, 255),
+            inst::lds(9, 16),
+        ];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else {
+            return;
+        };
+        let mut old = regs.iter().map(|r| (r[5] as u64) << 32 | r[4] as u64).collect::<Vec<_>>();
+        old.sort_unstable();
+        assert_eq!(old, (0..32).collect::<Vec<_>>());
+        assert!(regs.iter().all(|r| [r[8], r[9]] == [32, 0]));
+    }
+
+    #[test]
+    fn bar_red_and_scan_reduce_predicates() {
+        let seeds = lanes(|lane| {
+            let mut seed = vec![0; 255];
+            seed[254] = (lane % 2 == 0) as u32;
+            seed
+        });
+        let Some((regs, _)) = run_lanes(&[inst::W2J_BAR_ARV, inst::W2J_BAR_RED_POPC], &seeds, &[], &[]) else {
+            return;
+        };
+        assert!(regs.iter().all(|r| r[2] == 16));
+
+        let seeds = lanes(|lane| {
+            let mut seed = vec![0; 255];
+            seed[254] = (lane == 5) as u32;
+            seed
+        });
+        let Some((regs, _)) = run_lanes(&[inst::W2J_BAR_SCAN], &seeds, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs.iter().map(|r| r[2]).collect::<Vec<_>>(), (0..LANES).map(|lane| (lane >= 5) as u32).collect::<Vec<_>>());
+    }
 }

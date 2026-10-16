@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_lanes};
-    use crate::tests::gpu_test::inst::{ATOM, ATOM_DEC, ATOM_INC, ATOM_MAX, ATOM_MIN, ATOMG, ATOMG_CAS, RED, RED_UR_64, S32, SZ_32, alu, alu3, stg};
+    use crate::tests::gpu_test::inst::{ATOM, ATOM_DEC, ATOM_INC, ATOM_MAX, ATOM_MIN, ATOMG, ATOMG_CAS, RED, RED_UR_64, S32, SZ_32, W2J_ATOMG_U64_ADD, alu, alu3, stg};
 
     fn run(program: &[u128], r5: impl Fn(u32) -> u32, r6: impl Fn(u32) -> u32, global: &[u32]) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
         let next = GLOBAL_BASE + 4;
@@ -71,5 +71,22 @@ mod tests {
         incs.sort_unstable();
         decs.sort_unstable();
         assert_eq!((global, sorted(&lanes, 4), sorted(&lanes, 6)), (vec![2, 8], incs, decs));
+    }
+
+    #[test]
+    fn atomg_u64_add_returns_full_old_values() {
+        let seeds = (0..32).map(|_| {
+            let mut seed = vec![0; UREG + 1];
+            seed[2] = GLOBAL_BASE as u32;
+            seed[3] = (GLOBAL_BASE >> 32) as u32;
+            seed[6] = 1;
+            seed
+        }).collect::<Vec<_>>();
+        let Some((lanes, global)) = run_lanes(&[W2J_ATOMG_U64_ADD], &seeds, &[], &[0, 0]) else {
+            return;
+        };
+        let mut old = lanes.iter().map(|regs| (regs[5] as u64) << 32 | regs[4] as u64).collect::<Vec<_>>();
+        old.sort_unstable();
+        assert_eq!((old, global), ((0..32).collect(), vec![32, 0]));
     }
 }

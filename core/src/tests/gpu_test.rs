@@ -89,6 +89,10 @@ pub mod inst {
         }
         inst
     }
+
+    pub fn guard(inst: u128, pred: u32, invert: bool) -> u128 {
+        inst & !(0xf << 12) | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
+    }
 }
 
 fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
@@ -189,6 +193,7 @@ fn fixtures_match_nvdisasm() {
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
         (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::kill(7, false), "KILL;"),
+        (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

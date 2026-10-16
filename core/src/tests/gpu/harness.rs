@@ -23,9 +23,7 @@ pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
         decoder.emit_register_io(10, 9);
     }
 
-    for &inst in instructions {
-        decoder.translate(inst);
-    }
+    decoder.translate_program(instructions);
 
     if register_io {
         decoder.emit_register_dump();

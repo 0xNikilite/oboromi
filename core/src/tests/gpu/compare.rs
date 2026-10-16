@@ -8,7 +8,7 @@ mod tests {
         let mut seed = vec![0; 255];
         seed[2] = u32::MAX;
         seed[3] = 1;
-        let Some(regs) = run_regs(&[word], &seed, &[]) else { return };
+        let Some((regs, _)) = run_regs(&[word], &seed, &[], &[]) else { return };
         assert_eq!(regs[254] & 3, 2);
     }
 
@@ -21,14 +21,14 @@ mod tests {
             let mut seed = vec![0; 255];
             seed[2] = u32::MAX;
             seed[3] = 1;
-            let Some(regs) = run_regs(&[word], &seed, &[]) else { return };
+            let Some((regs, _)) = run_regs(&[word], &seed, &[], &[]) else { return };
             assert_eq!(regs[254] & 1 != 0, expected, "cmp {cmp}");
         }
         let unsigned_lt = base & !(7 << 76) & !(1 << 73) | 1 << 76;
         let mut seed = vec![0; 255];
         seed[2] = u32::MAX;
         seed[3] = 1;
-        let Some(regs) = run_regs(&[unsigned_lt], &seed, &[]) else { return };
+        let Some((regs, _)) = run_regs(&[unsigned_lt], &seed, &[], &[]) else { return };
         assert_eq!(regs[254] & 1, 0);
     }
 
@@ -46,7 +46,7 @@ mod tests {
         seed[2] = 5;
         seed[ur4] = 5;
         for (word, cbuf) in source_words.into_iter().zip([&[][..], &[5][..], &[][..]]) {
-            let Some(regs) = run_regs(&[word], &seed, cbuf) else { return };
+            let Some((regs, _)) = run_regs(&[word], &seed, cbuf, &[]) else { return };
             assert_eq!(regs[254] & 3, 1);
         }
 
@@ -54,9 +54,9 @@ mod tests {
         let xor_p2 = base & !(3 << 74) & !(7 << 87) | 2 << 74 | 2 << 87;
         seed[3] = 6;
         seed[254] = 1 << 2;
-        let Some(regs) = run_regs(&[or_p2], &seed, &[]) else { return };
+        let Some((regs, _)) = run_regs(&[or_p2], &seed, &[], &[]) else { return };
         assert_eq!(regs[254] & 3, 3);
-        let Some(regs) = run_regs(&[xor_p2], &seed, &[]) else { return };
+        let Some((regs, _)) = run_regs(&[xor_p2], &seed, &[], &[]) else { return };
         assert_eq!(regs[254] & 3, 1);
     }
 
@@ -67,7 +67,7 @@ mod tests {
         seed[2] = 5;
         seed[3] = 5;
         seed[254] = 1 << 2;
-        let Some(regs) = run_regs(&[word], &seed, &[]) else { return };
+        let Some((regs, _)) = run_regs(&[word], &seed, &[], &[]) else { return };
         assert_eq!(regs[254] & 3, 1);
     }
 }

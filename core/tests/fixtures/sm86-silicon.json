@@ -1,0 +1,3980 @@
+[
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      2,
+      1
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      4294967294,
+      2147483647
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      0,
+      2147483648
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967294,
+      4294967295
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000001",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000100077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      1,
+      0
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000001",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000100077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      3,
+      1
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000001",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000100077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      4294967295,
+      2147483647
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000001",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000100077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      1,
+      2147483648
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-00000001",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000100077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-7fffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0097fffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x7fffffff, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      2147483647,
+      0
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-7fffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0097fffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x7fffffff, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      2147483649,
+      1
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-7fffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0097fffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x7fffffff, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483645,
+      2147483647
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-7fffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0097fffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x7fffffff, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483647,
+      2147483648
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-7fffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0097fffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, 0x7fffffff, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      2147483645,
+      4294967295
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-80000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x80000000, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      2147483648,
+      0
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-80000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x80000000, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      2147483650,
+      1
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-80000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x80000000, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483646,
+      2147483647
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-80000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x80000000, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-80000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000000077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x80000000, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      2147483646,
+      4294967295
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-ffffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe009ffffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x1, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      4294967295,
+      0
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-ffffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe009ffffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x1, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-ffffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe009ffffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x1, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      4294967293,
+      2147483647
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-ffffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe009ffffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x1, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      4294967295,
+      2147483648
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-imm",
+    "case": "imm-ffffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe009ffffffff00077810",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -0x1, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967293,
+      4294967295
+    ],
+    "notes": "IADD3 immediate uses R0,imm,R9; Pu/Pv are PT",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "carry-out-p0-p1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fe2000791e0050000000004077210",
+    "nvdisasm_text": "/*0080*/                   IADD3 R7, P0, P1, R4, R0, R5 ;",
+    "observer_word_hex": "008fc600007e24ff000000ffff097210",
+    "observer_nvdisasm_text": "/*00b0*/                   IADD3.X R9, RZ, RZ, RZ, P0, P1 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "Pu=P0 and Pv=P1 observed as 0/1/2 by the following patched IADD3.X; this probe patches two words",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R4",
+      "input1": "R0",
+      "input2": "R5",
+      "input3": "R8",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "carry-out-p0-p1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fe2000791e0050000000004077210",
+    "nvdisasm_text": "/*0080*/                   IADD3 R7, P0, P1, R4, R0, R5 ;",
+    "observer_word_hex": "008fc600007e24ff000000ffff097210",
+    "observer_nvdisasm_text": "/*00b0*/                   IADD3.X R9, RZ, RZ, RZ, P0, P1 ;",
+    "inputs": [
+      1,
+      1,
+      1,
+      0
+    ],
+    "outputs": [
+      3,
+      0
+    ],
+    "notes": "Pu=P0 and Pv=P1 observed as 0/1/2 by the following patched IADD3.X; this probe patches two words",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R4",
+      "input1": "R0",
+      "input2": "R5",
+      "input3": "R8",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "carry-out-p0-p1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fe2000791e0050000000004077210",
+    "nvdisasm_text": "/*0080*/                   IADD3 R7, P0, P1, R4, R0, R5 ;",
+    "observer_word_hex": "008fc600007e24ff000000ffff097210",
+    "observer_nvdisasm_text": "/*00b0*/                   IADD3.X R9, RZ, RZ, RZ, P0, P1 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      2147483647,
+      0
+    ],
+    "outputs": [
+      2147483645,
+      1
+    ],
+    "notes": "Pu=P0 and Pv=P1 observed as 0/1/2 by the following patched IADD3.X; this probe patches two words",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R4",
+      "input1": "R0",
+      "input2": "R5",
+      "input3": "R8",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "carry-out-p0-p1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fe2000791e0050000000004077210",
+    "nvdisasm_text": "/*0080*/                   IADD3 R7, P0, P1, R4, R0, R5 ;",
+    "observer_word_hex": "008fc600007e24ff000000ffff097210",
+    "observer_nvdisasm_text": "/*00b0*/                   IADD3.X R9, RZ, RZ, RZ, P0, P1 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      2147483648,
+      0
+    ],
+    "outputs": [
+      2147483648,
+      1
+    ],
+    "notes": "Pu=P0 and Pv=P1 observed as 0/1/2 by the following patched IADD3.X; this probe patches two words",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R4",
+      "input1": "R0",
+      "input2": "R5",
+      "input3": "R8",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "carry-out-p0-p1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fe2000791e0050000000004077210",
+    "nvdisasm_text": "/*0080*/                   IADD3 R7, P0, P1, R4, R0, R5 ;",
+    "observer_word_hex": "008fc600007e24ff000000ffff097210",
+    "observer_nvdisasm_text": "/*00b0*/                   IADD3.X R9, RZ, RZ, RZ, P0, P1 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      4294967295,
+      0
+    ],
+    "outputs": [
+      4294967293,
+      2
+    ],
+    "notes": "Pu=P0 and Pv=P1 observed as 0/1/2 by the following patched IADD3.X; this probe patches two words",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R4",
+      "input1": "R0",
+      "input2": "R5",
+      "input3": "R8",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-a-bit72",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe1090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, -R0, R7, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-a-bit72",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe1090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, -R0, R7, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-a-bit72",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe1090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, -R0, R7, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-a-bit72",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe1090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, -R0, R7, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-a-bit72",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe1090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, -R0, R7, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-b-bit63",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -R7, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-b-bit63",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -R7, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-b-bit63",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -R7, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-b-bit63",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -R7, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-b-bit63",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0098000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, -R7, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-c-bit75",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe8090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, -R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-c-bit75",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe8090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, -R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-c-bit75",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe8090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, -R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-c-bit75",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe8090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, -R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "neg-c-bit75",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe8090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, -R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "plain",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "plain",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      3,
+      1
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "plain",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483645,
+      2147483647
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "plain",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "plain",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80007ffe0090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3 R7, R0, R7, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967293,
+      4294967295
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "x-pt-pt",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80003fee4090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3.X R7, R0, R7, R9, PT, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      2,
+      0
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "x-pt-pt",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80003fee4090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3.X R7, R0, R7, R9, PT, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      5,
+      1
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "x-pt-pt",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80003fee4090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3.X R7, R0, R7, R9, PT, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "x-pt-pt",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80003fee4090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3.X R7, R0, R7, R9, PT, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483650,
+      2147483648
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "iadd3-reg",
+    "case": "x-pt-pt",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80003fee4090000000700077210",
+    "nvdisasm_text": "/*0090*/                   IADD3.X R7, R0, R7, R9, PT, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "IADD3 uses R0,R7,R9; Pu/Pv are PT and carry predicates are not observable with the one-word seed",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "imad",
+    "case": "s32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800078e02090000000700077224",
+    "nvdisasm_text": "/*0090*/                   IMAD R7, R0, R7, R9 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "IMAD.S32 uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "imad",
+    "case": "s32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800078e02090000000700077224",
+    "nvdisasm_text": "/*0090*/                   IMAD R7, R0, R7, R9 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      2,
+      1
+    ],
+    "notes": "IMAD.S32 uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "imad",
+    "case": "s32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800078e02090000000700077224",
+    "nvdisasm_text": "/*0090*/                   IMAD R7, R0, R7, R9 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483648,
+      2147483647
+    ],
+    "notes": "IMAD.S32 uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "imad",
+    "case": "s32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800078e02090000000700077224",
+    "nvdisasm_text": "/*0090*/                   IMAD R7, R0, R7, R9 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "IMAD.S32 uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "imad",
+    "case": "s32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800078e02090000000700077224",
+    "nvdisasm_text": "/*0090*/                   IMAD R7, R0, R7, R9 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      0,
+      4294967295
+    ],
+    "notes": "IMAD.S32 uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-00",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e00090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x0, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-00",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e00090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x0, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      0,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-00",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e00090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x0, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      0,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-00",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e00090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x0, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      0,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-00",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e00090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x0, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      0,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-3c",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e3c090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x3c, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-3c",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e3c090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x3c, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      0,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-3c",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e3c090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x3c, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      0,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-3c",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e3c090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x3c, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      0,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-3c",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e3c090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x3c, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      0,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-96",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e96090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x96, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-96",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e96090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x96, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-96",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e96090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x96, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-96",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e96090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x96, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-96",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038e96090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0x96, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-c0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ec0090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xc0, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-c0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ec0090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xc0, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-c0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ec0090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xc0, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-c0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ec0090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xc0, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-c0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ec0090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xc0, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ca",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eca090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xca, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ca",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eca090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xca, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ca",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eca090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xca, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ca",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eca090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xca, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ca",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eca090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xca, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-e8",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ee8090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xe8, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-e8",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ee8090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xe8, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-e8",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ee8090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xe8, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-e8",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ee8090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xe8, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-e8",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038ee8090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xe8, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-fc",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038efc090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xfc, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-fc",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038efc090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xfc, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-fc",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038efc090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xfc, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-fc",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038efc090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xfc, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-fc",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038efc090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xfc, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eff090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xff, PT ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      4294967295,
+      0
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eff090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xff, PT ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      4294967295,
+      1
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eff090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xff, PT ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      4294967295,
+      2147483647
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eff090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xff, PT ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      4294967295,
+      2147483648
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "lop3",
+    "case": "lut-ff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800038eff090000000700077212",
+    "nvdisasm_text": "/*0090*/                   LOP3.LUT R7, R0, R7, R9, 0xff, PT ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "LOP3.LUT uses R0,R7,R9",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-imm",
+    "case": "imm-00000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f000000000000077802",
+    "nvdisasm_text": "/*0090*/                   MOV R7, 0x0 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      0,
+      2147483649
+    ],
+    "notes": "MOV immediate; source-independent",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-imm",
+    "case": "imm-00000001",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f000000000100077802",
+    "nvdisasm_text": "/*0090*/                   MOV R7, 0x1 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      1,
+      2147483649
+    ],
+    "notes": "MOV immediate; source-independent",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-imm",
+    "case": "imm-80000000",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f008000000000077802",
+    "nvdisasm_text": "/*0090*/                   MOV R7, 0x80000000 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2147483648,
+      2147483649
+    ],
+    "notes": "MOV immediate; source-independent",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-imm",
+    "case": "imm-ffffffff",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f00ffffffff00077802",
+    "nvdisasm_text": "/*0090*/                   MOV R7, 0xffffffff ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      4294967295,
+      2147483649
+    ],
+    "notes": "MOV immediate; source-independent",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-reg",
+    "case": "reg",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f000000000000077202",
+    "nvdisasm_text": "/*0090*/                   MOV R7, R0 ;",
+    "inputs": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "notes": "MOV register R0",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-reg",
+    "case": "reg",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f000000000000077202",
+    "nvdisasm_text": "/*0090*/                   MOV R7, R0 ;",
+    "inputs": [
+      1,
+      1,
+      0,
+      1
+    ],
+    "outputs": [
+      1,
+      1
+    ],
+    "notes": "MOV register R0",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-reg",
+    "case": "reg",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f000000000000077202",
+    "nvdisasm_text": "/*0090*/                   MOV R7, R0 ;",
+    "inputs": [
+      2147483647,
+      2147483647,
+      0,
+      2147483647
+    ],
+    "outputs": [
+      2147483647,
+      2147483647
+    ],
+    "notes": "MOV register R0",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-reg",
+    "case": "reg",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f000000000000077202",
+    "nvdisasm_text": "/*0090*/                   MOV R7, R0 ;",
+    "inputs": [
+      2147483648,
+      2147483648,
+      0,
+      2147483648
+    ],
+    "outputs": [
+      2147483648,
+      2147483648
+    ],
+    "notes": "MOV register R0",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "mov-reg",
+    "case": "reg",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc80000000f000000000000077202",
+    "nvdisasm_text": "/*0090*/                   MOV R7, R0 ;",
+    "inputs": [
+      4294967295,
+      4294967295,
+      0,
+      4294967295
+    ],
+    "outputs": [
+      4294967295,
+      4294967295
+    ],
+    "notes": "MOV register R0",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "l-u32-shift-0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000006090000000000077819",
+    "nvdisasm_text": "/*0090*/                   SHF.L.U32 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      305419896,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "l-u32-shift-1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000006090000000100077819",
+    "nvdisasm_text": "/*0090*/                   SHF.L.U32 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      610839792,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "l-u32-shift-31",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000006090000001f00077819",
+    "nvdisasm_text": "/*0090*/                   SHF.L.U32 R7, R0, 0x1f, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      0,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "l-u32-shift-32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000006090000002000077819",
+    "nvdisasm_text": "/*0090*/                   SHF.L.U32 R7, R0, 0x20, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      0,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "l-u32-shift-33",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000006090000002100077819",
+    "nvdisasm_text": "/*0090*/                   SHF.L.U32 R7, R0, 0x21, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      0,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-s32-shift-0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000014090000000000077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.S32 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      305419896,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-s32-shift-1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000014090000000100077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.S32 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2300193596,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-s32-shift-31",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000014090000001f00077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.S32 R7, R0, 0x1f, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-s32-shift-32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000014090000002000077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.S32 R7, R0, 0x20, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2147483649,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-s32-shift-33",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000014090000002100077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.S32 R7, R0, 0x21, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2147483649,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-u32-shift-0",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000016090000000000077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.U32 R7, R0, 0x0, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      305419896,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-u32-shift-1",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000016090000000100077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.U32 R7, R0, 0x1, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2300193596,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-u32-shift-31",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000016090000001f00077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.U32 R7, R0, 0x1f, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-u32-shift-32",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000016090000002000077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.U32 R7, R0, 0x20, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2147483649,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  },
+  {
+    "sm": 86,
+    "family": "shf",
+    "case": "r-u32-shift-33",
+    "device": "NVIDIA GeForce RTX 3090",
+    "driver_version": "580.95.05",
+    "cuda_version": "13.0",
+    "cuda_toolkit_version": "12.8",
+    "nvdisasm_version": "12.8.90",
+    "word_hex": "004fc800000016090000002100077819",
+    "nvdisasm_text": "/*0090*/                   SHF.R.U32 R7, R0, 0x21, R9 ;",
+    "inputs": [
+      305419896,
+      2309737967,
+      0,
+      2147483649
+    ],
+    "outputs": [
+      2147483649,
+      2147483649
+    ],
+    "notes": "SHF clamp mode C; shifts 32 and 33 are defined and clamp to 32",
+    "observed": true,
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R7",
+      "input2": "R8",
+      "input3": "R9",
+      "output0": "R7",
+      "output1": "R9"
+    }
+  }
+]

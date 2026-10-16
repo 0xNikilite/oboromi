@@ -11,6 +11,7 @@ pub struct TestResult {
 }
 
 // helpers to build sm86 instructions
+#[doc(hidden)]
 pub mod inst {
     // iadd rd, ra, imm32 (src_type=4, opcode=0x810)
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {

@@ -45,6 +45,50 @@ pub mod inst {
     pub const FP_FMZ: u128 = 1 << 76;
     pub const FP_SAT: u128 = 1 << 77;
     pub const FP_FTZ: u128 = 1 << 80;
+    pub const HADD2: u128 = 0x230;
+    pub const HMUL2: u128 = 0x232;
+    pub const HFMA2: u128 = 0x231;
+    pub const HFMA2_MMA: u128 = 0x235;
+    pub const HSET2: u128 = 0x233 | PP_PT;
+    pub const HSETP2: u128 = 0x234 | PP_PT;
+    pub const HMNMX2: u128 = 0x240;
+    pub const F2FP: u128 = 0x23e;
+    pub const F2IP: u128 = 0x243;
+    pub const I2FP_F32_U32: u128 = 0x245 | 2 << 75 | 2 << 84;
+    pub const I2IP: u128 = 0x239;
+    pub const H_F32: u128 = 1 << 78;
+    pub const H_ABS_C: u128 = 1 << 83;
+    pub const H_NEG_C: u128 = 1 << 84;
+    pub const H_RELU: u128 = 1 << 79 | PP_PT;
+    pub const H_NAN: u128 = 1 << 81;
+    pub const H_BF: u128 = 1 << 71;
+    pub const H_AND: u128 = 1 << 71;
+    pub const MERGE_C: u128 = 1 << 78;
+    pub const MERGE_H1: u128 = 1 << 72;
+    pub const PACK_S32: u128 = 1 << 74;
+    pub const F2IP_TRUNC: u128 = 3 << 78;
+    pub const I2IP_NOSAT: u128 = 1 << 74;
+    pub const I2IP_SATRELU: u128 = 2 << 74;
+    pub const H0_H0: u32 = 2;
+    pub const H1_H1: u32 = 3;
+    pub const F32_SWIZZLE: u32 = 1;
+
+    pub fn iswz(a: u32, b: u32, c: u32) -> u128 {
+        (a as u128) << 74 | (b as u128) << 60 | (c as u128) << 81
+    }
+
+    pub fn fcmp(cmp: u32, pu: u32, pv: u32) -> u128 {
+        (cmp as u128) << 76 | (pu as u128) << 81 | (pv as u128) << 84
+    }
+
+    pub fn pp(pred: u32, invert: bool) -> u128 {
+        (pred as u128) << 87 | (invert as u128) << 90
+    }
+
+    pub fn pack_fmt(dstfmt: u32, c_bits: u32) -> u128 {
+        (dstfmt as u128) << 76 | (c_bits as u128) << 72
+    }
+
     pub const MUFU_COS: u32 = 0;
     pub const MUFU_SIN: u32 = 1;
     pub const MUFU_EX2: u32 = 2;
@@ -559,7 +603,8 @@ fn fixtures_match_nvdisasm() {
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
     ];
-    for &(word, expected) in fixtures {
+    use crate::tests::gpu::fp16::tests as fp16;
+    for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();
         let out = std::process::Command::new(&nvdisasm).args(["--binary", "SM86"]).arg(&bin).output().unwrap();
         let text = String::from_utf8_lossy(&out.stdout);

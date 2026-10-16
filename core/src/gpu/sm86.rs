@@ -804,6 +804,123 @@ impl<'a> Decoder<'a> {
         self.ir.emit_vector_shuffle(ty, half2, half2, &lanes)
     }
 
+    // Each half with a zero exponent keeps only its sign.
+    fn flush_half2_subnormal(&mut self, word: u32) -> u32 {
+        let ty = self.type_u32[1];
+        let mut keep = self.const_u32_0;
+        for half in [0xffff, 0xffff_0000] {
+            let [exponent, half, sign] = [half & 0x7c00_7c00, half, half & 0x8000_8000].map(|c| self.cached_const_u32(c));
+            let exp = self.ir.emit_bitwise_and(ty, word, exponent);
+            let subnormal = self.ir.emit_iequal(self.type_bool[1], exp, self.const_u32_0);
+            let lane = self.ir.emit_select(ty, subnormal, sign, half);
+            keep = self.ir.emit_bitwise_or(ty, keep, lane);
+        }
+        self.ir.emit_bitwise_and(ty, word, keep)
+    }
+
+    // Lanes come out as exact f32 so the fp32 helpers apply; ISWZ 1 (F32) rounds the whole register to f16 for both lanes.
+    fn half2_lanes(&mut self, word: u32, iswz: u32, abs: bool, neg: bool, ftz: bool) -> [u32; 2] {
+        let (half, half2_ty) = (self.type_f16(), self.type_f16x2());
+        let (word, iswz) = if iswz == 1 {
+            let val = self.bitcast_f32(word);
+            let val = self.ir.emit_f_convert(half, val);
+            let half2 = self.ir.emit_composite_construct(half2_ty, &[val, val]);
+            (self.bitcast_u32(half2), 0)
+        } else {
+            (word, iswz)
+        };
+        let word = if ftz { self.flush_half2_subnormal(word) } else { word };
+        let half2 = self.unpack_half2(word);
+        let half2 = self.half2_swizzle(half2, iswz);
+        [0, 1].map(|i| {
+            let lane = self.ir.emit_composite_extract(half, half2, &[i]);
+            let lane = self.ir.emit_f_convert(self.type_f32[1], lane);
+            self.fp_src(lane, abs, neg)
+        })
+    }
+
+    fn half2_reg(&mut self, inst: u128, reg_lsb: u32, iswz_lsb: u32, abs_bit: u32, neg_bit: u32, ftz: bool) -> [u32; 2] {
+        let word = self.load_register((inst >> reg_lsb & 0xff) as u32);
+        self.half2_lanes(word, (inst >> iswz_lsb & 3) as u32, inst >> abs_bit & 1 != 0, inst >> neg_bit & 1 != 0, ftz)
+    }
+
+    // An immediate (form 2 or 4) is two raw halves filling bits 32..64, so it has no swizzle (61:60), |x| (62) or -x (63).
+    fn half2_alu_src(&mut self, inst: u128, ftz: bool) -> [u32; 2] {
+        let word = self.alu_src(inst);
+        if matches!(inst >> 9 & 7, 2 | 4) {
+            return self.half2_lanes(word, 0, false, false, ftz);
+        }
+        self.half2_lanes(word, (inst >> 60 & 3) as u32, inst >> 62 & 1 != 0, inst >> 63 & 1 != 0, ftz)
+    }
+
+    fn pack_half2(&mut self, lanes: [u32; 2]) -> u32 {
+        let half = self.type_f16();
+        let halves = lanes.map(|lane| self.ir.emit_f_convert(half, lane));
+        let ty = self.type_f16x2();
+        let half2 = self.ir.emit_composite_construct(ty, &halves);
+        self.bitcast_u32(half2)
+    }
+
+    // .F32 writes lane 0 as one f32 instead of packing both lanes; .SAT maps NaN to +0 as in fp_arith_result.
+    fn store_half2(&mut self, inst: u128, lanes: [u32; 2], f32_out: bool, sat: bool, ftz: bool) {
+        let lanes = if sat {
+            let [zero, one] = [0.0f32, 1.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
+            lanes.map(|lane| self.glsl(81, self.type_f32[1], &[lane, zero, one]))
+        } else {
+            lanes
+        };
+        let bits = if f32_out { self.bitcast_u32(lanes[0]) } else { self.pack_half2(lanes) };
+        let bits = match (ftz, f32_out) {
+            (false, _) => bits,
+            (true, true) => self.flush_subnormal(bits),
+            (true, false) => self.flush_half2_subnormal(bits),
+        };
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
+    }
+
+    // Bits 70:69 combine each lane's comparison with Pp (89:87, inverted by 90); .H_AND first turns the lanes into both and !both.
+    fn half2_compare(&mut self, inst: u128, h_and: bool) -> [u32; 2] {
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.half2_reg(inst, 24, 74, 73, 72, ftz);
+        let b = self.half2_alu_src(inst, ftz);
+        let op = (inst >> 76 & 0xf) as u32;
+        let mut lanes = [0, 1].map(|i| self.fp_compare(op, a[i], b[i]));
+        if h_and {
+            let both = self.ir.emit_bitwise_and(self.type_u32[1], lanes[0], lanes[1]);
+            lanes = [both, self.ir.emit_bitwise_xor(self.type_u32[1], both, self.const_u32_1)];
+        }
+        let p = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let p = self.ir.emit_bitwise_and(self.type_u32[1], p, self.const_u32_1);
+        lanes.map(|lane| match inst >> 69 & 3 {
+            0 => self.ir.emit_bitwise_and(self.type_u32[1], lane, p),
+            1 => self.ir.emit_bitwise_or(self.type_u32[1], lane, p),
+            2 => self.ir.emit_bitwise_xor(self.type_u32[1], lane, p),
+            _ => panic!("invalid half compare combine op"),
+        })
+    }
+
+    // B fills the low `bits`, A the next `bits` and the low bits of C the rest, as PTX cvt.pack.
+    fn pack_narrow(&mut self, a: u32, b: u32, c: u32, bits: u32) -> u32 {
+        let ty = self.type_u32[1];
+        let base = if bits < 16 {
+            let shift = self.cached_const_u32(2 * bits);
+            self.ir.emit_shift_left_logical(ty, c, shift)
+        } else {
+            self.const_u32_0
+        };
+        let width = self.cached_const_u32(bits);
+        let low = self.ir.emit_bit_field_insert(ty, base, b, self.const_u32_0, width);
+        self.ir.emit_bit_field_insert(ty, low, a, width, width)
+    }
+
+    fn high_half_if(&mut self, word: u32, high: bool) -> u32 {
+        if !high {
+            return word;
+        }
+        let shift = self.cached_const_u32(16);
+        self.ir.emit_shift_right_logical(self.type_u32[1], word, shift)
+    }
+
     // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
     fn load_pair(&mut self, reg: u32) -> u32 {
         let hi = if reg == 255 { reg } else { reg + 1 };
@@ -1907,24 +2024,22 @@ impl<'a> Decoder<'a> {
         self.store_pair(rd as u32, bits);
     }
     pub fn f2fp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _rndmode = (((inst >> 79) & 0x7) << 0);
-        let _dstfmt = (((inst >> 86) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("F2FP requires f16 support");
+        assert!(inst >> 75 & 1 == 0 && inst >> 77 & 1 == 0, "F2FP .RELU and .SATFINITE are not implemented");
+        assert!(inst >> 76 & 1 == 0 && inst >> 86 & 1 == 0, "F2FP to BF16, E8M7 or E6M9 needs a bfloat16 type");
+        assert!(inst >> 79 & 7 == 0, "F2FP rounding other than RN is not implemented");
+        let (b, c) = self.srcs_bc(inst);
+        let b = self.bitcast_f32(b);
+        let word = if inst >> 78 & 1 == 0 {
+            let a = self.load_register((inst >> 24 & 0xff) as u32);
+            let a = self.bitcast_f32(a);
+            self.pack_half2([b, a])
+        } else {
+            let packed = self.pack_half2([b, b]);
+            let c = self.high_half_if(c, inst >> 72 & 1 != 0);
+            let sixteen = self.cached_const_u32(16);
+            self.ir.emit_bit_field_insert(self.type_u32[1], packed, c, sixteen, sixteen)
+        };
+        self.store_register((inst >> 16 & 0xff) as u32, word);
     }
     pub fn f2i(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1993,24 +2108,24 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn f2ip(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("F2IP requires f16 support");
+        let signed = inst >> 76 & 1 != 0;
+        let relu = inst >> 75 & 1 != 0;
+        let lo = if signed && !relu { -128.0f32 } else { 0.0 };
+        let hi = if signed { 127.0f32 } else { 255.0 };
+        let [lo, hi] = [lo, hi].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
+        let round = if inst >> 78 & 3 == 3 { spirv::glsl::TRUNC } else { spirv::glsl::ROUND_EVEN };
+        let (b, c) = self.srcs_bc(inst);
+        let a = self.load_register((inst >> 24 & 0xff) as u32);
+        let [a, b] = [a, b].map(|x| {
+            let x = self.bitcast_f32(x);
+            let x = self.glsl(round, self.type_f32[1], &[x]);
+            let x = self.glsl(81, self.type_f32[1], &[x, lo, hi]);
+            let x = self.ir.emit_convert_f_to_s(self.type_s32[1], x);
+            self.bitcast_u32(x)
+        });
+        let c = self.high_half_if(c, inst >> 72 & 1 != 0);
+        let word = self.pack_narrow(a, b, c, 8);
+        self.store_register((inst >> 16 & 0xff) as u32, word);
     }
     pub fn fadd(&mut self, inst: u128) {
         let ftz = inst >> 80 & 1 != 0;
@@ -2298,76 +2413,36 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn hadd2(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.half2_reg(inst, 24, 74, 73, 72, ftz);
+        let b = self.half2_alu_src(inst, ftz);
+        let sum = [0, 1].map(|i| self.ir.emit_fadd(self.type_f32[1], a[i], b[i]));
+        self.store_half2(inst, sum, inst >> 78 & 1 != 0, inst >> 77 & 1 != 0, ftz);
     }
     pub fn hfma2(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _satrelu = (((inst >> 79) & 0x1) << 1) | (((inst >> 77) & 0x1) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _mode = (((inst >> 81) & 0x3) << 0);
-        let _clear = (((inst >> 83) & 0x1) << 0);
-        let _clear = (((inst >> 84) & 0x1) << 0);
-        let _ofmt = (((inst >> 85) & 0x1) << 1) | (((inst >> 78) & 0x1) << 0);
-        let _iswzb = (((inst >> 86) & 0x1) << 2) | (((inst >> 60) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let ofmt = (inst >> 85 & 1) << 1 | inst >> 78 & 1;
+        assert!(ofmt < 2, "HFMA2.BF16_V2 needs a bfloat16 type");
+        assert!(inst >> 86 & 1 == 0, "HFMA2 .H0_NH1 is not implemented");
+        let fmz = inst >> 76 & 1 != 0;
+        let ftz = fmz || inst >> 80 & 1 != 0;
+        let a = self.half2_reg(inst, 24, 74, 73, 72, ftz);
+        let src = self.half2_alu_src(inst, ftz);
+        let rc = self.half2_reg(inst, 64, 81, 83, 84, ftz);
+        let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [rc, src] } else { [src, rc] };
+        let zero = self.ir.emit_constant_typed(self.type_f32[1], 0.0f32);
+        let val = [0, 1].map(|i| {
+            let [a, b] = if fmz { self.fmz_operands(a[i], b[i]) } else { [a[i], b[i]] };
+            let val = self.glsl(spirv::glsl::FMA, self.type_f32[1], &[a, b, c[i]]);
+            if inst >> 79 & 1 == 0 {
+                return val;
+            }
+            let negative = self.ir.emit_ford_less_than(self.type_bool[1], val, zero);
+            self.ir.emit_select(self.type_f32[1], negative, zero, val)
+        });
+        self.store_half2(inst, val, ofmt == 1, inst >> 77 & 1 != 0, ftz);
     }
     pub fn hfma2_mma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _satrelu = (((inst >> 79) & 0x1) << 1) | (((inst >> 77) & 0x1) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _clear = (((inst >> 83) & 0x1) << 0);
-        let _clear = (((inst >> 84) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        self.hfma2(inst);
     }
     pub fn hmma(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2395,106 +2470,50 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn hmnmx2(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _rndsrc = (((inst >> 82) & 0x1) << 0);
-        let _ofmt = (((inst >> 85) & 0x1) << 1) | (((inst >> 78) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let ofmt = (inst >> 85 & 1) << 1 | inst >> 78 & 1;
+        assert!(ofmt < 2, "HMNMX2.BF16_V2 needs a bfloat16 type");
+        assert!(inst >> 82 & 1 == 0, "HMNMX2.XORSIGN is not implemented");
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.half2_reg(inst, 24, 74, 73, 72, ftz);
+        let b = self.half2_alu_src(inst, ftz);
+        let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let take_min = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+        let nan = self.ir.emit_constant_typed(self.type_f32[1], f32::NAN);
+        let val = [0, 1].map(|i| {
+            let [min, max] = [79, 80].map(|op| self.glsl(op, self.type_f32[1], &[a[i], b[i]]));
+            let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
+            if inst >> 81 & 1 == 0 {
+                return val;
+            }
+            let [a_nan, b_nan] = [a[i], b[i]].map(|x| self.ir.emit_f_is_nan(self.type_bool[1], x));
+            let either = self.ir.emit_logical_or(self.type_bool[1], a_nan, b_nan);
+            self.ir.emit_select(self.type_f32[1], either, nan, val)
+        });
+        self.store_half2(inst, val, ofmt == 1, false, ftz);
     }
     pub fn hmul2(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let fmz = inst >> 76 & 1 != 0;
+        let ftz = fmz || inst >> 80 & 1 != 0;
+        let a = self.half2_reg(inst, 24, 74, 73, 72, ftz);
+        let b = self.half2_alu_src(inst, ftz);
+        let product = [0, 1].map(|i| {
+            let [a, b] = if fmz { self.fmz_operands(a[i], b[i]) } else { [a[i], b[i]] };
+            self.ir.emit_fmul(self.type_f32[1], a, b)
+        });
+        self.store_half2(inst, product, inst >> 78 & 1 != 0, inst >> 77 & 1 != 0, ftz);
     }
     pub fn hset2(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _bop = (((inst >> 69) & 0x3) << 0);
-        let _memdesc = (((inst >> 71) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _test = (((inst >> 76) & 0xf) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let [lo, hi] = self.half2_compare(inst, false);
+        let sixteen = self.cached_const_u32(16);
+        let lanes = self.ir.emit_bit_field_insert(self.type_u32[1], lo, hi, sixteen, sixteen);
+        let truth = self.cached_const_u32(if inst >> 71 & 1 != 0 { 0x3c00 } else { 0xffff });
+        let word = self.ir.emit_imul(self.type_u32[1], lanes, truth);
+        self.store_register((inst >> 16 & 0xff) as u32, word);
     }
     pub fn hsetp2(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
-        let _sc_absolute = (((inst >> 62) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _bop = (((inst >> 69) & 0x3) << 0);
-        let _memdesc = (((inst >> 71) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _test = (((inst >> 76) & 0xf) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let [pu, pv] = self.half2_compare(inst, inst >> 71 & 1 != 0);
+        self.combine_and_set_predicate_bit((inst >> 81 & 7) as u32, 0, pu);
+        self.combine_and_set_predicate_bit((inst >> 84 & 7) as u32, 0, pv);
     }
     pub fn i2f(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2555,20 +2574,16 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn i2fp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _sz = (((inst >> 75) & 0x7) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _srcfmt = (((inst >> 84) & 0x3) << 1) | (((inst >> 74) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("I2FP requires f16 support");
+        assert!(inst >> 78 & 3 == 0, "I2FP.RZ is not implemented");
+        let b = self.alu_src(inst);
+        let val = if inst >> 74 & 1 != 0 {
+            let b = self.ir.emit_bitcast(self.type_s32[1], b);
+            self.ir.emit_convert_s_to_f(self.type_f32[1], b)
+        } else {
+            self.ir.emit_convert_u_to_f(self.type_f32[1], b)
+        };
+        let bits = self.bitcast_u32(val);
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn i2i(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2602,22 +2617,24 @@ impl<'a> Decoder<'a> {
         self.store_register(rd, result);
     }
     pub fn i2ip(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _num = (((inst >> 72) & 0x3) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _dstfmt = (((inst >> 76) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("I2IP requires f16 support");
+        let dstfmt = (inst >> 76 & 7) as usize;
+        let bits = [8, 8, 16, 16, 2, 2, 4, 4][dstfmt];
+        let signed = dstfmt & 1 != 0;
+        let (b, c) = self.srcs_bc(inst);
+        let a = self.load_register((inst >> 24 & 0xff) as u32);
+        // Bits 75:74 are .SAT (0), plain truncation (1) or .SATRELU (2).
+        let satrelu = inst >> 74 & 3;
+        let [a, b] = if satrelu == 1 {
+            [a, b]
+        } else {
+            let lo = if signed && satrelu == 0 { -(1 << (bits - 1)) } else { 0 };
+            let hi = if signed { (1 << (bits - 1)) - 1 } else { (1 << bits) - 1 };
+            let [lo, hi] = [lo, hi].map(|c: i32| self.cached_const_u32(c as u32));
+            [a, b].map(|x| self.glsl(spirv::glsl::S_CLAMP, self.type_u32[1], &[x, lo, hi]))
+        };
+        let c = self.high_half_if(c, inst >> 72 & 3 == 1);
+        let word = self.pack_narrow(a, b, c, bits);
+        self.store_register((inst >> 16 & 0xff) as u32, word);
     }
     pub fn iabs(&mut self, inst: u128) {
         let value = self.alu_src(inst);

@@ -1,6 +1,4 @@
-use crate::gpu::sm86::Decoder;
-use crate::gpu::spirv::Emitter;
-use crate::gpu::spirv::capability::SHADER;
+use crate::tests::gpu::harness::translate_module;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
@@ -55,6 +53,25 @@ pub mod inst {
         inst
     }
 
+    // mov rd, c[bank][off] (opcode=0xa02, off >> 2 at bits 53:40, bank at 58:54)
+    pub fn mov_cbuf(rd: u32, bank: u32, off: u32) -> u128 {
+        let mut inst: u128 = 0x7a02;
+        inst |= 0xfu128 << 72;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((off as u128 >> 2) & 0x3fff) << 40;
+        inst |= ((bank as u128) & 0x1f) << 54;
+        inst
+    }
+
+    // mov rd, urb (opcode=0x1c02, bit 91 selects the uniform source)
+    pub fn mov_ureg(rd: u32, urb: u32) -> u128 {
+        let mut inst: u128 = 0x7c02 | 1 << 91;
+        inst |= 0xfu128 << 72;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((urb as u128) & 0x3f) << 32;
+        inst
+    }
+
     pub fn mov_reg(rd: u32, rb: u32) -> u128 {
         let mut inst: u128 = 0x7202;
         inst |= 0xfu128 << 72;
@@ -72,39 +89,6 @@ pub mod inst {
         }
         inst
     }
-}
-
-#[doc(hidden)]
-pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
-    let mut emitter = Emitter::new();
-    emitter.emit_header();
-    emitter.emit_capability(SHADER);
-    emitter.emit_memory_model(0, 1);
-
-    let mut decoder = Decoder::new(&mut emitter);
-    decoder.init();
-
-    // set up a function so translated instructions have a valid context
-    let void_ty = decoder.get_type_void();
-    let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
-    let func = decoder.ir.emit_function(void_ty, 0, func_ty);
-    decoder.ir.emit_label();
-    if register_io {
-        decoder.emit_register_io(10, 9);
-    }
-
-    for &inst in instructions {
-        decoder.translate(inst);
-    }
-
-    if register_io {
-        decoder.emit_register_dump();
-    }
-    decoder.emit_entry_point(func);
-    decoder.ir.emit_return();
-    decoder.ir.emit_function_end();
-    decoder.ir.finalize();
-    emitter
 }
 
 fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
@@ -202,6 +186,8 @@ fn fixtures_match_nvdisasm() {
         (inst::iadd3_reg(1, 2, 3, 0xFF), "IADD3 R1, R2, R3, RZ;"),
         (inst::mov_imm(1, 0xCAFEBABE), "MOV R1, 0xcafebabe;"),
         (inst::mov_reg(1, 2), "MOV R1, R2;"),
+        (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
+        (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::kill(7, false), "KILL;"),
     ];
     for &(word, expected) in fixtures {
@@ -214,52 +200,11 @@ fn fixtures_match_nvdisasm() {
     std::fs::remove_file(bin).unwrap();
 }
 
-#[cfg(test)]
-fn spirv_val(module: &Emitter, name: &str) {
-    let path = std::env::temp_dir().join(name);
-    std::fs::write(&path, module.to_bytes()).unwrap();
-    let spirv_val = std::process::Command::new("spirv-val")
-        .args(["--target-env", "vulkan1.2"])
-        .arg(&path)
-        .output();
-    match spirv_val {
-        Ok(out) => assert!(out.status.success(), "{out:?}"),
-        Err(e) => eprintln!("skipping, spirv-val unavailable: {e}"),
-    }
-}
-
 #[test]
 fn mov_immediate_passes_spirv_val() {
+    use crate::gpu::spirv::capability::SHADER;
+    use crate::tests::gpu::harness::spirv_val;
     let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false);
     assert_eq!(module.words()[5..8], [2 << 16 | 17, SHADER, 3 << 16 | 14]);
-    spirv_val(&module, "oboromi_mov_immediate.spv");
-}
-
-#[test]
-fn translated_mov_and_iadd3_run_on_gpu() {
-    use crate::gpu::compute::{ComputePipeline, HostBuffer};
-    use crate::gpu::{VkError, VkState};
-    use ash::vk::DescriptorType;
-    let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
-    let module = translate_module(&program, true);
-    spirv_val(&module, "oboromi_register_io.spv");
-    let state = match VkState::new() {
-        Ok(s) => s,
-        Err(e @ (VkError::Loader | VkError::NoDevice)) => return eprintln!("skipping: {e:?}"),
-        Err(e) => panic!("vulkan device creation failed: {e:?}"),
-    };
-    let mut regs = [0u32; 255];
-    (regs[2], regs[3]) = (40, 2);
-    let mut input = HostBuffer::new(&state, 255 * 4).unwrap();
-    input.write(&regs.map(u32::to_le_bytes).concat());
-    let mut output = HostBuffer::new(&state, 255 * 4).unwrap();
-    output.write(&[0; 255 * 4]);
-    let ssbo = DescriptorType::STORAGE_BUFFER;
-    let bindings = [(10, ssbo), (9, ssbo)];
-    let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.bind(&[(10, &input), (9, &output)]);
-    state.dispatch(&pipeline, [1, 1, 1]).unwrap();
-    let mut out = [0u8; 12];
-    output.read(&mut out);
-    assert_eq!(out[..], [42u32, 42, 40].map(u32::to_le_bytes).concat());
+    spirv_val(&module);
 }

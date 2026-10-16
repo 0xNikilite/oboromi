@@ -4,6 +4,7 @@ mod tests {
     use crate::tests::gpu_test::inst;
 
     const IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
+    const IADD3_NEG_C: u128 = 0x004fe2000791e8050000000004077210;
     const IADD3_CARRY_OBSERVER: u128 = 0x008fc600007e24ff000000ffff097210;
     const IADD3_X: u128 = 0x004fc80003fee4090000000700077210;
     const IABS: u128 = 0x004fc800000000000000000200017213;
@@ -118,6 +119,13 @@ mod tests {
             };
             assert_eq!([regs[7], regs[9]], expected);
         }
+
+        let mut seed = vec![0; 10];
+        seed[4] = 1;
+        let Some((regs, _)) = run_regs(&[IADD3_NEG_C, IADD3_CARRY_OBSERVER], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!([regs[7], regs[9]], [1, 1]);
 
         let mut seed = vec![0; 10];
         seed[0] = 1;

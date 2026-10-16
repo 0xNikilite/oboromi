@@ -556,6 +556,7 @@ fn fixtures_match_nvdisasm() {
     const W1D_IMNMX_S32: u128 = 0x004fc800000002000000000302017217;
     const W1D_IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
     const W1D_IADD3_OBSERVER: u128 = 0x008fc600007e24ff000000ffff097210;
+    const W1D_IADD3_NEG_C: u128 = 0x004fe2000791e8050000000004077210;
     const W1D_IADD3_X: u128 = 0x004fc80003fee4090000000700077210;
     let bin = std::env::temp_dir().join(format!("oboromi-fixture-{}.bin", std::process::id()));
     let fixtures: &[(u128, &str)] = &[
@@ -640,6 +641,7 @@ fn fixtures_match_nvdisasm() {
         (W1D_IMNMX_U32, "IMNMX.U32 R1, R2, R3, P0 ;"),
         (W1D_IMNMX_S32, "IMNMX R1, R2, R3, P0 ;"),
         (W1D_IADD3_CARRY, "IADD3 R7, P0, P1, R4, R0, R5 ;"),
+        (W1D_IADD3_NEG_C, "IADD3 R7, P0, P1, R4, R0, -R5 ;"),
         (W1D_IADD3_OBSERVER, "IADD3.X R9, RZ, RZ, RZ, P0, P1 ;"),
         (W1D_IADD3_X, "IADD3.X R7, R0, R7, R9, PT, PT ;"),
         (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),

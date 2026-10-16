@@ -2798,90 +2798,7 @@ impl<'a> Decoder<'a> {
         self.store_register((inst >> 16 & 0xff) as u32, value);
     }
     pub fn iadd3(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
-        let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let rc = if inst >> 91 & 1 != 0 { (inst >> 32) as u32 & 0xff } else { (inst >> 64) as u32 & 0xff };
-        let negate_a = (((inst >> 72) & 0x1) << 0);
-        let x = (((inst >> 74) & 0x1) << 0);
-        let negate_c = (((inst >> 75) & 0x1) << 0);
-        let pq = (((inst >> 77) & 0x7) << 0) as u32;
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let pu = (((inst >> 81) & 0x7) << 0) as u32;
-        let pv = (((inst >> 84) & 0x7) << 0) as u32;
-        let pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-
-        let mut a = self.load_register(ra);
-        if negate_a != 0 {
-            a = self.neg(a);
-        }
-
-        // Determine source encoding from opcode bits 9-11:
-        //   4 (100) = immediate (ra_offset, bits 32-63)
-        //   1 (001) = register  (rb, bits 32-39)
-        //   5 (101) = constant bank (sc_addr + sc_bank)
-        //   6 (110) = uniform register bank
-        let src_type = ((inst >> 9) & 0x7) as u32;
-        let b = match src_type {
-            4 => {
-                let ra_offset = (((inst >> 32) & 0xffffffff) << 0) as u32;
-                self.cached_const_u32(ra_offset)
-            }
-            1 => {
-                let rb = (((inst >> 32) & 0xff) << 0) as u32;
-                let negate_b = (((inst >> 63) & 0x1) << 0);
-                assert!(negate_a == 0 || negate_b == 0, "IADD3: -Ra with -Rb");
-                let b = self.load_register(rb);
-                if negate_b != 0 {
-                    self.neg(b)
-                } else {
-                    b
-                }
-            }
-            5 => {
-                todo!("IADD3: constant bank source not yet implemented")
-            }
-            6 => {
-                todo!("IADD3: uniform register bank source not yet implemented")
-            }
-            _ => panic!("IADD3: unknown source encoding type {}", src_type),
-        };
-
-        let mut c = self.load_register(rc);
-        if negate_c != 0 {
-            c = self.neg(c);
-        }
-
-        let ab = self.ir.emit_iadd(self.type_u32[1], a, b);
-        if x == 0 {
-            let carry = self.ir.emit_uless_than(self.type_bool[1], ab, a);
-            let carry = self.ir.emit_select(self.type_u32[1], carry, self.const_u32_1, self.const_u32_0);
-            self.combine_and_set_predicate_bit(pu, 0, carry);
-        }
-        let ab = if x != 0 {
-            let p = self.load_predicate_mask(pp, false);
-            let q = self.load_predicate_mask(pq, false);
-            let p = self.ir.emit_bitwise_and(self.type_u32[1], p, self.const_u32_1);
-            let q = self.ir.emit_bitwise_and(self.type_u32[1], q, self.const_u32_1);
-            let ab = self.ir.emit_iadd(self.type_u32[1], ab, p);
-            self.ir.emit_iadd(self.type_u32[1], ab, q)
-        } else {
-            ab
-        };
-        let res = self.ir.emit_iadd(self.type_u32[1], ab, c);
-        if x == 0 {
-            let carry = self.ir.emit_uless_than(self.type_bool[1], res, ab);
-            let carry = self.ir.emit_select(self.type_u32[1], carry, self.const_u32_1, self.const_u32_0);
-            self.combine_and_set_predicate_bit(pv, 0, carry);
-        }
-
-        self.store_register_predicated(rd, pg, pg_not != 0, res);
+        self.add3(inst, false)
     }
     pub fn ide(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4493,6 +4410,9 @@ impl<'a> Decoder<'a> {
         self.flo(inst)
     }
     pub fn uiadd3(&mut self, inst: u128) {
+        self.add3(inst, true)
+    }
+    fn add3(&mut self, inst: u128, uniform_preds: bool) {
         let wide = inst & 7 == 7;
         let ty = if wide { self.type_u64() } else { self.type_u32[1] };
         let srcs = if wide {
@@ -4511,8 +4431,8 @@ impl<'a> Decoder<'a> {
         let [a, b, c] = [0, 1, 2].map(|i| if negated[i] { self.ir.emit_not(ty, srcs[i]) } else { srcs[i] });
         // -x is ~x + 1, so without .X every negated operand adds one; .X adds the carry predicates instead.
         let carry_in = if inst >> 74 & 1 != 0 {
-            let p = self.pred_bit(true, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-            let q = self.pred_bit(true, (inst >> 77 & 7) as u32, inst >> 80 & 1 != 0);
+            let p = self.pred_bit(uniform_preds, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+            let q = self.pred_bit(uniform_preds, (inst >> 77 & 7) as u32, inst >> 80 & 1 != 0);
             self.ir.emit_iadd(self.type_u32[1], p, q)
         } else {
             self.cached_const_u32(negated.iter().filter(|&&n| n).count() as u32)
@@ -4531,7 +4451,7 @@ impl<'a> Decoder<'a> {
             let carried = self.cached_const_u32(carried);
             let set = self.ir.emit_ugreater_than(self.type_bool[1], carries, carried);
             let set = self.ir.emit_select(self.type_u32[1], set, self.const_u32_1, self.const_u32_0);
-            self.store_pred_bit(true, pred as u32, set);
+            self.store_pred_bit(uniform_preds, pred as u32, set);
         }
     }
     pub fn uiadd3_64(&mut self, inst: u128) {

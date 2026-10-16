@@ -1,5 +1,5 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer};
-use crate::gpu::sm86::{Decoder, STATE_WORDS};
+use crate::gpu::sm86::{CBUF_BINDING, Decoder, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::spirv::capability::SHADER;
 use crate::gpu::{VkError, VkState};
@@ -91,9 +91,9 @@ pub fn run_regs(
     let mut support = HostBuffer::new(&state, 16).unwrap();
     support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
-    let bindings = [(10, ssbo), (11, ssbo), (9, ssbo), (0, ubo), (1, ubo)];
+    let bindings = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output), (9, &memory), (0, &support), (1, &cbuf)]);
+    pipeline.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| {
         let mut out = vec![0u8; len * 4];

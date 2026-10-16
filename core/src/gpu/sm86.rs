@@ -8,6 +8,21 @@ use crate::gpu::spirv::{self, storage_class};
 const MAX_REG_COUNT: usize = 254;
 const MAX_UNIFORM_REG_COUNT: usize = 63;
 pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1;
+pub const SUPPORT_BINDING: u32 = 0;
+pub const CBUF_BINDING: u32 = 1;
+pub const GLOBAL_BINDING: u32 = 9;
+const RZ: u32 = 255;
+const URZ: u32 = 63;
+const SRZ: u32 = 255;
+const PT: u32 = 7;
+const OPCODE: u128 = 0x1ff;
+const OPCODE_KEY: u128 = 1 << 91 | 0xfff;
+const BRA: u128 = 0x947;
+const EXIT: u128 = 0x94d;
+const KILL: u128 = 0x95b;
+const VOTEU: u128 = 0x086;
+const S2UR: u128 = 0x1c3;
+const GLSL_FABS: u32 = 4;
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
 
@@ -298,7 +313,7 @@ pub struct Decoder<'a> {
 
 fn branch_target(pc: u32, inst: u128) -> Option<u32> {
     let offset = ((inst >> 34) as i64) << 16 >> 18;
-    (inst & (1 << 91 | 0xfff) == 0x947).then_some((pc as i64 + 1 + offset) as u32)
+    (inst & OPCODE_KEY == BRA).then_some((pc as i64 + 1 + offset) as u32)
 }
 
 fn nth_reg(reg: u32, zero: u32, i: u32) -> u32 {
@@ -447,7 +462,7 @@ impl<'a> Decoder<'a> {
         let mut leaders = vec![0, len];
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));
-            if matches!(inst & (1 << 91 | 0xfff), 0x947 | 0x94d | 0x95b) {
+            if matches!(inst & OPCODE_KEY, BRA | EXIT | KILL) {
                 leaders.push(pc + 1);
             }
         }
@@ -487,14 +502,14 @@ impl<'a> Decoder<'a> {
 
     fn translate_guarded(&mut self, inst: u128) {
         let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
-        if pg == 7 {
+        if pg == PT {
             if !pg_not {
                 self.translate(inst);
             }
             return;
         }
         // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
-        let uniform = matches!(inst & 0x1ff, 0x80..=0xbf | 0x1c3) && inst & 0x1ff != 0x86;
+        let uniform = matches!(inst & OPCODE, 0x80..=0xbf | S2UR) && inst & OPCODE != VOTEU;
         let predicates = if uniform { self.load_upredicate() } else { self.load_predicate() };
         let shift = self.cached_const_u32(pg);
         let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], predicates, shift);
@@ -533,9 +548,8 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    // URZ is index 63: reads zero, writes are dropped.
     fn load_ureg(&mut self, ur: u32) -> u32 {
-        if ur == 63 {
+        if ur == URZ {
             return self.const_u32_0;
         }
         let ptr = self.state_ptr(&[2, ur]);
@@ -543,7 +557,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_ureg(&mut self, ur: u32, val: u32) {
-        if ur != 63 {
+        if ur != URZ {
             let ptr = self.state_ptr(&[2, ur]);
             self.ir.emit_store(ptr, val);
         }
@@ -592,8 +606,8 @@ impl<'a> Decoder<'a> {
     fn declare_cbuf(&mut self, kind: ResourceKind) -> u32 {
         use spirv::{decoration as deco, storage_class::UNIFORM};
         let binding = match kind {
-            ResourceKind::Cbuf(slot) if slot < 8 => 1 + slot,
-            ResourceKind::Support => 0,
+            ResourceKind::Cbuf(slot) if slot < 8 => CBUF_BINDING + slot,
+            ResourceKind::Support => SUPPORT_BINDING,
             _ => panic!("{kind:?} has no compute uniform binding"),
         };
         if self.type_ptr_cbuf == 0 {
@@ -619,7 +633,7 @@ impl<'a> Decoder<'a> {
         assert!(inst >> 91 & 1 == 0 || inst >> 76 & 1 == 1, "uniform register in a global address");
         let var = match self.resource(ResourceKind::Global) {
             Some(var) => var,
-            None => self.declare_ssbo(ResourceKind::Global, 9),
+            None => self.declare_ssbo(ResourceKind::Global, GLOBAL_BINDING),
         };
         let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
         let offset = (((inst >> 40) as i32) << 8 >> 8) as u32;
@@ -643,14 +657,14 @@ impl<'a> Decoder<'a> {
 
     // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
     fn load_pair(&mut self, reg: u32) -> u32 {
-        let words = [self.load_register(reg), self.load_register(nth_reg(reg, 255, 1))];
+        let words = [self.load_register(reg), self.load_register(nth_reg(reg, RZ, 1))];
         let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
         let ty = self.type_u64();
         self.ir.emit_bitcast(ty, pair)
     }
 
     fn store_pair(&mut self, reg: u32, val: u32) {
-        if reg == 255 {
+        if reg == RZ {
             return;
         }
         let pair = self.ir.emit_bitcast(self.type_u32[2], val);
@@ -710,7 +724,7 @@ impl<'a> Decoder<'a> {
                 let ctaid = builtin(self, BuiltIn::WorkgroupId);
                 self.ir.emit_composite_extract(self.type_u32[1], ctaid, &[index - 37])
             }
-            1 | 2 | 4..=31 | 36 | 40..=133 | 255 => self.const_u32_0,
+            1 | 2 | 4..=31 | 36 | 40..=133 | SRZ => self.const_u32_0,
             _ => panic!("unknown special register {index}"),
         }
     }
@@ -730,9 +744,8 @@ impl<'a> Decoder<'a> {
         self.ir.emit_ext_inst(ty, self.glsl_ext, op, args)
     }
 
-    // Hardware applies |x| before negation; 4 is GLSL.std.450 FAbs.
     fn fp_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
-        let val = if abs { self.glsl(4, self.type_f32[1], &[val]) } else { val };
+        let val = if abs { self.glsl(GLSL_FABS, self.type_f32[1], &[val]) } else { val };
         if neg { self.ir.emit_fnegate(self.type_f32[1], val) } else { val }
     }
 
@@ -762,7 +775,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn load_register(&mut self, reg: u32) -> u32 {
-        if reg == 255 { // RZ (Zero Register)
+        if reg == RZ {
             return self.const_u32_0;
         }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
@@ -773,7 +786,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_register(&mut self, reg: u32, val: u32) {
-        if reg == 255 { return; }
+        if reg == RZ { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
         let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
         let idx = self.cached_const_u32(reg);
@@ -795,7 +808,7 @@ impl<'a> Decoder<'a> {
     ///   mask = 0 - bit            -> 0x00000000 or 0xFFFFFFFF
     /// used to avoid non-uniform control flow (branchless predication).
     fn load_predicate_mask(&mut self, pred: u32, invert: bool) -> u32 {
-        if pred == 0x07 {
+        if pred == PT {
             let all_ones = self.cached_const_u32(0xffff_ffff);
             if invert {
                 self.ir.emit_not(self.type_u32[1], all_ones)
@@ -831,7 +844,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_register_predicated(&mut self, reg: u32, pred: u32, invert: bool, value: u32) {
-        if reg == 255 { return; } // Write to RZ is always a no-op
+        if reg == RZ { return; }
         let mask = self.load_predicate_mask(pred, invert);
         let v_orig = self.load_register(reg);
         let v_store = self.select_masked(mask, value, v_orig);
@@ -882,8 +895,8 @@ impl<'a> Decoder<'a> {
     fn combine_and_set_predicate_bit(&mut self, pred_idx: u32, pp: u32, val: u32) {
         // val is a SPIR-V u32 id containing 0 or 1 (the comparison result)
         // pp: 0=SET, 1=AND, 2=OR, 3=XOR with existing predicate bit
-        if pred_idx == 7 {
-            return; // PT cannot be modified
+        if pred_idx == PT {
+            return;
         }
 
         let combined = if pp == 0 {
@@ -1155,14 +1168,14 @@ impl<'a> Decoder<'a> {
         let _cond = (((inst >> 32) & 0x3) << 0);
         let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
         let _depth = (((inst >> 85) & 0x3) << 0);
-        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(pp == 7 && pp_not == 0, "BRA Pp not implemented");
+        assert!(pp == PT && pp_not == 0, "BRA Pp not implemented");
         let target = branch_target(self.pc, inst).expect("uniform BRA not implemented");
         let target = self.cached_const_u32(target);
         self.ir.emit_store(self.var_pc, target);
@@ -1334,8 +1347,8 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         for i in 0..=wide {
-            let val = self.special_register(nth_reg(sr, 255, i));
-            self.store_register(nth_reg(rd, 255, i), val);
+            let val = self.special_register(nth_reg(sr, SRZ, i));
+            self.store_register(nth_reg(rd, RZ, i), val);
         }
     }
     pub fn csmtest(&mut self, inst: u128) {
@@ -1491,14 +1504,14 @@ impl<'a> Decoder<'a> {
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _mode = (((inst >> 84) & 0x3) << 0);
         let _depth = (((inst >> 86) & 0x1) << 0);
-        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(pp == 7 && pp_not == 0, "EXIT Pp not implemented");
+        assert!(pp == PT && pp_not == 0, "EXIT Pp not implemented");
         let exit = self.cached_const_u32(u32::MAX);
         self.ir.emit_store(self.var_pc, exit);
     }
@@ -2500,7 +2513,7 @@ impl<'a> Decoder<'a> {
             let offset = self.cached_const_u32(ra_offset.wrapping_add(4 * i));
             let addr = self.ir.emit_iadd(self.type_u32[1], base, offset);
             let value = self.load_cbuf(ResourceKind::Cbuf(sc_bank), addr);
-            self.store_register(nth_reg(rd, 255, i), value);
+            self.store_register(nth_reg(rd, RZ, i), value);
         }
     }
     pub fn ldg(&mut self, inst: u128) {
@@ -2525,7 +2538,7 @@ impl<'a> Decoder<'a> {
         for i in 0..access_words(sz) {
             let ptr = self.global_word(inst, i);
             let value = self.ir.emit_load(self.type_u32[1], ptr);
-            self.store_register(nth_reg(rd, 255, i), value);
+            self.store_register(nth_reg(rd, RZ, i), value);
         }
     }
     pub fn ldgdepbar(&mut self, inst: u128) {
@@ -3234,7 +3247,7 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         for i in 0..access_words(sz) {
             let ptr = self.global_word(inst, i);
-            let value = self.load_register(nth_reg(rb, 255, i));
+            let value = self.load_register(nth_reg(rb, RZ, i));
             self.ir.emit_store(ptr, value);
         }
     }
@@ -3770,7 +3783,7 @@ impl<'a> Decoder<'a> {
         for i in 0..access_words(sz) {
             let offset = self.cached_const_u32(ra_offset + 4 * i);
             let value = self.load_cbuf(ResourceKind::Cbuf(sc_bank), offset);
-            self.store_ureg(nth_reg(urd, 63, i), value);
+            self.store_ureg(nth_reg(urd, URZ, i), value);
         }
     }
     pub fn ulea(&mut self, inst: u128) {

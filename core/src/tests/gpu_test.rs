@@ -20,11 +20,14 @@ pub mod inst {
     const MOV_RC: u128 = 0xa02;
     const MOV_RU: u128 = 0xc02 | 1 << 91;
     const KILL: u128 = 0x95b;
+    const BRA: u128 = 0x947;
+    const EXIT: u128 = 0x94d;
+    const GUARD: u128 = 0xf << 12;
     const PT_GUARD: u128 = 7 << 12;
     const RC_RZ: u128 = 0xff << 64;
     const PIXMASK_ALL: u128 = 0xf << 72;
     const IADD3_NO_CARRY: u128 = 0x3fff << 77;
-    const KILL_PP_PT: u128 = 7 << 87;
+    const PP_PT: u128 = 7 << 87;
     const NO_SCOREBOARD: u128 = 0x3f << 110;
     const LDG: u128 = 0x381;
     const STG: u128 = 0x386;
@@ -125,7 +128,7 @@ pub mod inst {
     }
 
     pub fn kill(pred: u32, invert: bool) -> u128 {
-        let mut inst = KILL | KILL_PP_PT | NO_SCOREBOARD;
+        let mut inst = KILL | PP_PT | NO_SCOREBOARD;
         inst |= ((pred as u128) & 0x7) << 12;
         if invert {
             inst |= 1 << 15;
@@ -135,16 +138,16 @@ pub mod inst {
 
     // bra (opcode=0x947), offset in bytes from the next instruction
     pub fn bra(offset: i64) -> u128 {
-        0x7947 | 0x7 << 87 | 0x3f << 110 | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
+        BRA | PT_GUARD | PP_PT | NO_SCOREBOARD | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
     }
 
     // exit (opcode=0x94d)
     pub fn exit() -> u128 {
-        0x794d | 0x7 << 87 | 0x3f << 110
+        EXIT | PT_GUARD | PP_PT | NO_SCOREBOARD
     }
 
     pub fn guard(inst: u128, pred: u32, invert: bool) -> u128 {
-        inst & !(0xf << 12) | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
+        inst & !GUARD | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
     }
 }
 

@@ -332,11 +332,11 @@ impl<'a> Decoder<'a> {
         self.const_cache.insert(1, self.const_u32_1);
         for i in 2..=4 {
             for type_sxx in [
-                self.type_u8, self.type_u16, self.type_u32, self.type_u64,
-                self.type_s8, self.type_s16, self.type_s32, self.type_s64,
-                self.type_f16, self.type_f32, self.type_f64, self.type_bool
+                &mut self.type_u8, &mut self.type_u16, &mut self.type_u32, &mut self.type_u64,
+                &mut self.type_s8, &mut self.type_s16, &mut self.type_s32, &mut self.type_s64,
+                &mut self.type_f16, &mut self.type_f32, &mut self.type_f64, &mut self.type_bool
             ] {
-                self.ir.emit_type_vector(type_sxx[i], i as u32);
+                type_sxx[i] = self.ir.emit_type_vector(type_sxx[1], i as u32);
             }
         }
 
@@ -348,17 +348,17 @@ impl<'a> Decoder<'a> {
                 ("pred", self.type_u8[1]),
             ];
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
-            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(7, type_regs_array);
+            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(6, type_regs_array);
         }
 
         // Define generic pointers
-        // Storage class 7 = Function
+        // Storage class 6 = Private
         for i in 1..=4 {
-            self.type_ptr_u8[i] = self.ir.emit_type_pointer(7, self.type_u8[i]);
-            self.type_ptr_u32[i] = self.ir.emit_type_pointer(7, self.type_u32[i]);
+            self.type_ptr_u8[i] = self.ir.emit_type_pointer(6, self.type_u8[i]);
+            self.type_ptr_u32[i] = self.ir.emit_type_pointer(6, self.type_u32[i]);
         }
-        let type_ptr_abstract_state = self.ir.emit_type_pointer(7, self.type_abstract_state);
-        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 7);
+        let type_ptr_abstract_state = self.ir.emit_type_pointer(6, self.type_abstract_state);
+        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 6);
 
 
     }

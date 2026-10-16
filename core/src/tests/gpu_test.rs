@@ -157,6 +157,8 @@ pub mod inst {
     pub const W2I_JMP: u128 = 0x000fc00003800000000000300000794a;
     pub const W2I_RPCMOV_LO: u128 = 0x000fc000000000000000000000027353;
     pub const W2I_RPCMOV_HI: u128 = W2I_RPCMOV_LO | 1 << 31 | 1 << 16;
+    pub const W2I_RPCMOV_SET_LO: u128 = 0x000fc000000000000000123400007952;
+    pub const W2I_RPCMOV_SET_HI: u128 = 0x000fc000000000000000567880007952;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -684,6 +686,8 @@ fn fixtures_match_nvdisasm() {
         (inst::W2I_JMP, "JMP 0x30;"),
         (inst::W2I_RPCMOV_LO, "RPCMOV.32 R2, Rpc.LO;"),
         (inst::W2I_RPCMOV_HI, "RPCMOV.32 R3, Rpc.HI;"),
+        (inst::W2I_RPCMOV_SET_LO, "RPCMOV.32 Rpc.LO, 0x1234;"),
+        (inst::W2I_RPCMOV_SET_HI, "RPCMOV.32 Rpc.HI, 0x5678;"),
         (inst::W2I_DEPBAR, "DEPBAR;"),
         (inst::W2I_YIELD, "YIELD;"),
         (inst::W2I_NANOSLEEP, "NANOSLEEP 0x0;"),

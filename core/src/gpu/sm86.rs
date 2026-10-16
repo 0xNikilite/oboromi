@@ -813,7 +813,7 @@ impl<'a> Decoder<'a> {
                 let array = self.ir.emit_type_array(self.type_u32[1], len);
                 let ptr = self.ir.emit_type_pointer(storage_class::PRIVATE, array);
                 let var = self.ir.emit_variable(ptr, storage_class::PRIVATE);
-                self.resources.push(Resource { kind: ResourceKind::Local, set: 0, binding: 0, var });
+                self.resources.push(Resource { kind: ResourceKind::Local, var });
                 var
             }
         };

@@ -1,5 +1,5 @@
-use crate::gpu::compute::{ComputePipeline, HostBuffer};
-use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING};
+use crate::gpu::compute::{ComputePipeline, HostBuffer, HostImage};
+use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::{VkError, VkState};
 use ash::vk::DescriptorType;
@@ -86,14 +86,25 @@ fn pad_to_warps(seeds: &[Vec<u32>]) -> Vec<u32> {
     words
 }
 
-/// Runs `body` as one workgroup of whole warps with an invocation per seed, the state words of invocation i seeded
-/// from `seeds[i]`, cbuf slot 0 holding `cbuf0` and global memory at `GLOBAL_BASE` holding `global`, returning every
-/// seeded invocation's state words and the global words, or `None` when there is no Vulkan device.
 pub fn run_body(
     body: impl FnOnce(&mut Decoder),
     seeds: &[Vec<u32>],
     cbuf0: &[u32],
     global: &[u32],
+) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
+    run_textured(body, seeds, cbuf0, global, &[])
+}
+
+/// Runs `body` as one workgroup of whole warps with an invocation per seed, the state words of invocation i seeded
+/// from `seeds[i]`, cbuf slot 0 holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and the (width, height,
+/// RGBA8 texels) of `textures[i]` at `TEXTURE_BINDING + i`, returning every seeded invocation's state words and the
+/// global words, or `None` when there is no Vulkan device.
+pub fn run_textured(
+    body: impl FnOnce(&mut Decoder),
+    seeds: &[Vec<u32>],
+    cbuf0: &[u32],
+    global: &[u32],
+    textures: &[(u32, u32, &[u8])],
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
     let state = match VkState::new() {
         Ok(s) => s,
@@ -128,9 +139,14 @@ pub fn run_body(
     let mut support = HostBuffer::new(&state, 16).unwrap();
     support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
-    let bindings = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
+    let images: Vec<HostImage> = textures.iter().map(|&(w, h, texels)| HostImage::new(&state, w, h, texels).unwrap()).collect();
+    let images: Vec<(u32, &HostImage)> = (TEXTURE_BINDING..).zip(&images).collect();
+    let sampler = DescriptorType::COMBINED_IMAGE_SAMPLER;
+    let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
+    let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, _)| (binding, sampler))).collect();
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
     pipeline.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
+    pipeline.bind_images(&images);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {
         let mut out = vec![0u8; len * 4];

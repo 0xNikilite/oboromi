@@ -19,9 +19,11 @@ pub struct HostBuffer<'a> {
 impl<'a> HostBuffer<'a> {
     pub fn new(state: &'a VkState, size: u64) -> Result<Self, VkError> {
         let d = &state.device;
-        let info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::UNIFORM_BUFFER);
+        let info = vk::BufferCreateInfo::default().size(size).usage(
+            vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::UNIFORM_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_SRC,
+        );
         let mut buf = Self {
             device: d,
             buffer: unsafe { d.create_buffer(&info, None)? },
@@ -95,6 +97,121 @@ impl Drop for HostBuffer<'_> {
     }
 }
 
+pub struct HostImage<'a> {
+    device: &'a ash::Device,
+    pub image: vk::Image,
+    pub memory: vk::DeviceMemory,
+    pub view: vk::ImageView,
+}
+
+impl<'a> HostImage<'a> {
+    /// A 2D RGBA8_UNORM image with one mip, uploaded from `texels` and left in SHADER_READ_ONLY_OPTIMAL.
+    pub fn new(
+        state: &'a VkState,
+        width: u32,
+        height: u32,
+        texels: &[u8],
+    ) -> Result<Self, VkError> {
+        let d = &state.device;
+        let format = vk::Format::R8G8B8A8_UNORM;
+        let extent = vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        };
+        let info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(extent)
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST);
+        let mut img = Self {
+            device: d,
+            image: unsafe { d.create_image(&info, None)? },
+            memory: vk::DeviceMemory::null(),
+            view: vk::ImageView::null(),
+        };
+        let req = unsafe { d.get_image_memory_requirements(img.image) };
+        let alloc = vk::MemoryAllocateInfo::default()
+            .allocation_size(req.size)
+            .memory_type_index(req.memory_type_bits.trailing_zeros());
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+        let mut staging = HostBuffer::new(state, texels.len() as u64)?;
+        staging.write(texels)?;
+        let layers = vk::ImageSubresourceLayers::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .layer_count(1);
+        let copy = [vk::BufferImageCopy::default()
+            .image_subresource(layers)
+            .image_extent(extent)];
+        let to_transfer = vk::ImageMemoryBarrier::default()
+            .image(img.image)
+            .subresource_range(range)
+            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+        let to_shader = to_transfer
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        use vk::PipelineStageFlags as Stage;
+        let none = vk::DependencyFlags::empty();
+        unsafe {
+            img.memory = d.allocate_memory(&alloc, None)?;
+            d.bind_image_memory(img.image, img.memory, 0)?;
+            state.submit_and_wait(|cmd| {
+                d.cmd_pipeline_barrier(
+                    cmd,
+                    Stage::TOP_OF_PIPE,
+                    Stage::TRANSFER,
+                    none,
+                    &[],
+                    &[],
+                    &[to_transfer],
+                );
+                d.cmd_copy_buffer_to_image(
+                    cmd,
+                    staging.buffer,
+                    img.image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &copy,
+                );
+                d.cmd_pipeline_barrier(
+                    cmd,
+                    Stage::TRANSFER,
+                    Stage::COMPUTE_SHADER,
+                    none,
+                    &[],
+                    &[],
+                    &[to_shader],
+                );
+            })?;
+            let view = vk::ImageViewCreateInfo::default()
+                .image(img.image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format)
+                .subresource_range(range);
+            img.view = d.create_image_view(&view, None)?;
+        }
+        Ok(img)
+    }
+}
+
+impl Drop for HostImage<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_image_view(self.view, None);
+            self.device.destroy_image(self.image, None);
+            self.device.free_memory(self.memory, None);
+        }
+    }
+}
+
 pub struct ComputePipeline<'a> {
     device: &'a ash::Device,
     types: Vec<(u32, vk::DescriptorType)>,
@@ -104,10 +221,11 @@ pub struct ComputePipeline<'a> {
     pub pipeline: vk::Pipeline,
     pub pool: vk::DescriptorPool,
     pub set: vk::DescriptorSet,
+    sampler: vk::Sampler,
 }
 
 impl<'a> ComputePipeline<'a> {
-    // All bindings live in set 0: 0 host support UBO, 1-8 guest cbufs, storage buffers from 9.
+    // All bindings live in set 0: 0 host support UBO, 1-8 guest cbufs, storage buffers 9-11, textures from 12.
     pub fn new(
         state: &'a VkState,
         spirv: &[u32],
@@ -136,6 +254,7 @@ impl<'a> ComputePipeline<'a> {
             pipeline: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             set: vk::DescriptorSet::null(),
+            sampler: vk::Sampler::null(),
         };
         let set_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&layout_bindings);
         p.set_layout = unsafe { d.create_descriptor_set_layout(&set_info, None)? };
@@ -155,6 +274,10 @@ impl<'a> ComputePipeline<'a> {
             .max_sets(1)
             .pool_sizes(&sizes);
         p.pool = unsafe { d.create_descriptor_pool(&pool_info, None)? };
+        let nearest = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::NEAREST)
+            .min_filter(vk::Filter::NEAREST);
+        p.sampler = unsafe { d.create_sampler(&nearest, None)? };
         let alloc = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(p.pool)
             .set_layouts(&set_layouts);
@@ -176,12 +299,28 @@ impl<'a> ComputePipeline<'a> {
             unsafe { self.device.update_descriptor_sets(&[write], &[]) };
         }
     }
+
+    pub fn bind_images(&mut self, images: &[(u32, &HostImage)]) {
+        for &(binding, img) in images {
+            let info = [vk::DescriptorImageInfo::default()
+                .sampler(self.sampler)
+                .image_view(img.view)
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+            let write = vk::WriteDescriptorSet::default()
+                .dst_set(self.set)
+                .dst_binding(binding)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&info);
+            unsafe { self.device.update_descriptor_sets(&[write], &[]) };
+        }
+    }
 }
 
 impl Drop for ComputePipeline<'_> {
     fn drop(&mut self) {
         let d = self.device;
         unsafe {
+            d.destroy_sampler(self.sampler, None);
             d.destroy_pipeline(self.pipeline, None);
             d.destroy_pipeline_layout(self.layout, None);
             d.destroy_descriptor_pool(self.pool, None);
@@ -192,28 +331,35 @@ impl Drop for ComputePipeline<'_> {
 }
 
 impl VkState {
-    // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
     pub fn dispatch(&self, pipeline: &ComputePipeline, groups: [u32; 3]) -> Result<(), VkError> {
-        let submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
-        let (d, cmd, fence) = (&self.device, submit.command_buffer, submit.fence);
         let compute = vk::PipelineBindPoint::COMPUTE;
         let src = vk::PipelineStageFlags::COMPUTE_SHADER;
         let dst = vk::PipelineStageFlags::HOST;
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         // Shader writes are not visible to host reads after the fence wait without this barrier.
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::HOST_READ);
+        let d = &self.device;
+        self.submit_and_wait(|cmd| unsafe {
+            d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
+            d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.set], &[]);
+            d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
+            d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
+        })
+    }
+
+    // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
+    fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
+        let submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
+        let (d, cmd, fence) = (&self.device, submit.command_buffer, submit.fence);
+        let begin = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         let cmds = [cmd];
         let submit_info = [vk::SubmitInfo::default().command_buffers(&cmds)];
         unsafe {
             d.reset_fences(&[fence])?;
             d.begin_command_buffer(cmd, &begin)?;
-            d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
-            d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.set], &[]);
-            d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
-            d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
+            record(cmd);
             d.end_command_buffer(cmd)?;
             d.queue_submit(self.queue, &submit_info, fence)?;
             d.wait_for_fences(&[fence], true, u64::MAX)?;

@@ -110,6 +110,9 @@ pub mod inst {
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
     const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
+    const TLD: u128 = 0xb66;
+    const TEX_2D: u128 = 1 << 61;
+    const TLD_LZ: u128 = 1 << 87;
     const LDS: u128 = 0x984;
     const STS: u128 = 0x388;
     const ATOMS_ADD: u128 = 0x38c;
@@ -138,6 +141,27 @@ pub mod inst {
     const I2F_64: u128 = 0x312;
     const I2I: u128 = 0x238;
     const RET_NODEC: u128 = 1 << 86;
+    pub const W2I_DEPBAR: u128 = 0x000fc00000000000000000000000791a;
+    pub const W2I_YIELD: u128 = 0x000fc000038000000000000000007946;
+    pub const W2I_NANOSLEEP: u128 = 0x000fc00003800000000000000000795d;
+    pub const W2I_PMTRIG: u128 = 0x000fc000038000000000000000007801;
+    pub const W2I_ERRBAR: u128 = 0x000fc0000000000000000000000079ab;
+    pub const W2I_CSMTEST: u128 = 0x000fc00003800000000000000000780d;
+    pub const W2I_CCTLT: u128 = 0x000fc00000400000000000ff00007391;
+    pub const W2I_IDE: u128 = 0x000fc0000000000000000c1000007951;
+    pub const W2I_RTT: u128 = 0x000fc00000000000000000000000794f;
+    pub const W2I_QSPC: u128 = 0x000fc000000e000000000000ff0073aa;
+    pub const W2I_R2B: u128 = 0x000fc00000000000000000020000731e;
+    pub const W2I_BMOV: u128 = 0x000fc000000000000000000000007355;
+    pub const W2I_ARRIVES: u128 = 0x000fc0000800000000000000ff0079b0;
+    pub const W2I_BREAK: u128 = 0x000fc000038000000000000000007942;
+    pub const W2I_SETLMEMBASE: u128 = 0x000fc0000000000000000000ff0073c1;
+    pub const W2I_LEPC: u128 = 0x000fc00000000000000000000002734e;
+    pub const W2I_JMP: u128 = 0x000fc00003800000000000300000794a;
+    pub const W2I_RPCMOV_LO: u128 = 0x000fc000000000000000000000027353;
+    pub const W2I_RPCMOV_HI: u128 = W2I_RPCMOV_LO | 1 << 31 | 1 << 16;
+    pub const W2I_RPCMOV_SET_LO: u128 = 0x000fc000000000000000123400007952;
+    pub const W2I_RPCMOV_SET_HI: u128 = 0x000fc000000000000000567880007952;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -203,6 +227,14 @@ pub mod inst {
         inst |= ((rb as u128) & 0xff) << 32;
         inst |= ((off as u128) & 0xff_ffff) << 40;
         inst
+    }
+
+    pub fn tld_lz(rd: u32, rd2: u32, ra: u32, bank: u32, byte_offset: u32, mask: u32) -> u128 {
+        alu(TLD | TEX_2D | TLD_LZ | LDG_PU_PT | COP_EN, rd, ra, 0xff)
+            | (rd2 as u128) << 64
+            | (byte_offset as u128 / 4) << 40
+            | (bank as u128) << 54
+            | (mask as u128) << 72
     }
 
     pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
@@ -661,6 +693,27 @@ fn fixtures_match_nvdisasm() {
         (inst::bra_upred(0, true, 0x10), "BRA.U !UP0, 0x20;"),
         (inst::bra_div(0x10), "BRA.DIV ~URZ, 0x20;"),
         (inst::bra_conv(0x10), "BRA.CONV ~URZ, 0x20;"),
+        (inst::W2I_LEPC, "LEPC R2;"),
+        (inst::W2I_JMP, "JMP 0x30;"),
+        (inst::W2I_RPCMOV_LO, "RPCMOV.32 R2, Rpc.LO;"),
+        (inst::W2I_RPCMOV_HI, "RPCMOV.32 R3, Rpc.HI;"),
+        (inst::W2I_RPCMOV_SET_LO, "RPCMOV.32 Rpc.LO, 0x1234;"),
+        (inst::W2I_RPCMOV_SET_HI, "RPCMOV.32 Rpc.HI, 0x5678;"),
+        (inst::W2I_DEPBAR, "DEPBAR;"),
+        (inst::W2I_YIELD, "YIELD;"),
+        (inst::W2I_NANOSLEEP, "NANOSLEEP 0x0;"),
+        (inst::W2I_PMTRIG, "PMTRIG 0x0;"),
+        (inst::W2I_ERRBAR, "ERRBAR;"),
+        (inst::W2I_CSMTEST, "CSMTEST.INVALID0.F.AND P0, P0, 0x0, PT;"),
+        (inst::W2I_CCTLT, "CCTLT.IVALL;"),
+        (inst::W2I_IDE, ""),
+        (inst::W2I_RTT, "__HIR0X1E0;"),
+        (inst::W2I_QSPC, "QSPC.G PT, R0, [RZ];"),
+        (inst::W2I_R2B, ""),
+        (inst::W2I_BMOV, "BMOV.32 R0, B0;"),
+        (inst::W2I_ARRIVES, "ARRIVES.LDGSTSBAR.???0 [UR0];"),
+        (inst::W2I_BREAK, "BREAK B0;"),
+        (inst::W2I_SETLMEMBASE, "SETLMEMBASE RZ;"),
         (inst::fadd(1, 2, 3), "FADD R1, R2, R3;"),
         (inst::fadd(1, 2, 3) | inst::FP_ABS_A | inst::FP_NEG_A | inst::FP_NEG_B, "FADD R1, -|R2|, -R3;"),
         (inst::fadd(1, 2, 3) | inst::FP_ABS_B | inst::FP_SAT | inst::FP_FTZ, "FADD.FTZ.SAT R1, R2, |R3|;"),
@@ -819,6 +872,8 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::MATCH | inst::MATCH_ANY | inst::MATCH_U64, 10, 12, 0), "MATCH.ANY.U64 R10, R12 ;"),
         (inst::alu3(inst::FSWZADD, 6, 5, 0x66, 4), "FSWZADD R6, R5, R4, PNNPPNNP;"),
         (inst::s2r(8, 57), "S2R R8, SR_LTMASK ;"),
+        (inst::tld_lz(4, 6, 2, 3, 0x10, 0xf), "TLD.LZ R6, R4, R2, 0x3, 0x4, 2D ;"),
+        (inst::tld_lz(8, 0xff, 2, 3, 0x10, 0xa), "TLD.LZ RZ, R8, R2, 0x3, 0x4, 2D, 0xa ;"),
         (inst::s2r(11, 60), "S2R R11, SR_GEMASK ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;

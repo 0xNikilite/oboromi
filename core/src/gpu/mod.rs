@@ -21,7 +21,6 @@ pub struct VkState {
     pub instance: ash::Instance,
     pub physical_device: vk::PhysicalDevice,
     pub device: ash::Device,
-    pub queue_family: u32,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
 }
@@ -43,7 +42,6 @@ impl VkState {
                 instance,
                 physical_device,
                 device,
-                queue_family,
                 command_pool,
             }),
             Err(e) => {
@@ -90,7 +88,6 @@ impl VkState {
 
 impl Drop for VkState {
     fn drop(&mut self) {
-        // Children before parents, and nothing may still be executing on the queue.
         unsafe {
             let _ = self.device.device_wait_idle();
             self.device.destroy_command_pool(self.command_pool, None);

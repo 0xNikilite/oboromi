@@ -83,7 +83,7 @@ pub fn run_regs(instructions: &[u128], seed: &[u32], cbuf0: &[u32]) -> Option<Ve
     cbuf.write(&bytes(cbuf0));
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (9, ssbo), (1, DescriptorType::UNIFORM_BUFFER)];
-    let pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
+    let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
     pipeline.bind(&[(10, &input), (9, &output), (1, &cbuf)]);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let mut out = vec![0u8; STATE_WORDS * 4];

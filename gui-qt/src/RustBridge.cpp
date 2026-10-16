@@ -28,4 +28,8 @@ std::vector<std::string> runGpuTests() {
     return std::move(g_collected);
 }
 
+bool renderTestFrame() {
+    return oboromi_render_test_frame();
+}
+
 }

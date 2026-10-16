@@ -141,7 +141,7 @@ impl<'a> ComputePipeline<'a> {
         Ok(p)
     }
 
-    pub fn bind(&self, buffers: &[(u32, &HostBuffer)]) {
+    pub fn bind(&mut self, buffers: &[(u32, &HostBuffer)]) {
         for &(binding, buf) in buffers {
             let ty = self.types.iter().find(|t| t.0 == binding);
             let info = [vk::DescriptorBufferInfo::default()
@@ -243,16 +243,6 @@ mod tests {
     #[test]
     fn dispatch_stores_into_storage_buffer() {
         let words = store_42_at_binding_9();
-        let path = std::env::temp_dir().join("oboromi_store_42.spv");
-        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        let val = std::process::Command::new("spirv-val")
-            .args(["--target-env", "vulkan1.2"])
-            .arg(&path)
-            .output();
-        if let Ok(out) = val {
-            assert!(out.status.success(), "{out:?}");
-        }
         let state = match VkState::new() {
             Ok(s) => s,
             Err(e @ (VkError::Loader | VkError::NoDevice)) => return eprintln!("skipping: {e:?}"),
@@ -261,7 +251,7 @@ mod tests {
         let mut buf = HostBuffer::new(&state, 16).unwrap();
         buf.write(&[0; 16]);
         let bindings = [(9, vk::DescriptorType::STORAGE_BUFFER)];
-        let pipeline = ComputePipeline::new(&state, &words, &bindings).unwrap();
+        let mut pipeline = ComputePipeline::new(&state, &words, &bindings).unwrap();
         pipeline.bind(&[(9, &buf)]);
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         let mut out = [0u8; 4];

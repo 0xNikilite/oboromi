@@ -5,7 +5,11 @@ use crate::gpu::spirv::capability::SHADER;
 use crate::gpu::{VkError, VkState};
 use ash::vk::DescriptorType;
 
-pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
+pub fn translate_module(
+    instructions: &[u128],
+    register_io: bool,
+    device: Option<&VkState>,
+) -> Emitter {
     let mut emitter = Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(SHADER);
@@ -28,7 +32,7 @@ pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
     if register_io {
         decoder.emit_register_dump();
     }
-    decoder.emit_entry_point(func);
+    decoder.emit_entry_point(func, device);
     decoder.ir.emit_return();
     decoder.ir.emit_function_end();
     decoder.ir.finalize();
@@ -62,8 +66,6 @@ pub fn run_regs(
     cbuf0: &[u32],
     global: &[u32],
 ) -> Option<(Vec<u32>, Vec<u32>)> {
-    let module = translate_module(instructions, true);
-    spirv_val(&module);
     let state = match VkState::new() {
         Ok(s) => s,
         Err(e @ (VkError::Loader | VkError::NoDevice)) => {
@@ -72,6 +74,8 @@ pub fn run_regs(
         }
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     };
+    let module = translate_module(instructions, true, Some(&state));
+    spirv_val(&module);
     let bytes = |words: &[u32]| {
         words
             .iter()

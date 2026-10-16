@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use crate::gpu::VkState;
 use crate::gpu::spirv::{self, storage_class};
 
 const MAX_REG_COUNT: usize = 254;
@@ -348,7 +349,7 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
-    pub fn emit_entry_point(&mut self, func: u32) {
+    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
         let interface: Vec<u32> = [self.var_abstract_state, self.var_pc].into_iter().chain(resources).collect();
@@ -356,6 +357,15 @@ impl<'a> Decoder<'a> {
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
             .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[1, 1, 1]);
+        use spirv::{capability as cap, execution_mode as mode};
+        if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
+            self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);
+            self.ir.emit_execution_mode(func, mode::SIGNED_ZERO_INF_NAN_PRESERVE, &[32]);
+        }
+        if device.is_some_and(|d| d.denorm_preserve) {
+            self.ir.emit_capability(cap::DENORM_PRESERVE);
+            self.ir.emit_execution_mode(func, mode::DENORM_PRESERVE, &[32]);
+        }
     }
 
     pub fn init(&mut self) {

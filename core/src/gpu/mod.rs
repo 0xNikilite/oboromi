@@ -26,6 +26,8 @@ pub struct VkState {
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub submit: std::sync::Mutex<compute::Submit>,
+    pub signed_zero_inf_nan_preserve: bool,
+    pub denorm_preserve: bool,
 }
 
 pub fn device() -> Result<&'static VkState, VkError> {
@@ -49,6 +51,10 @@ impl VkState {
             })?;
         match Self::open_device(&instance) {
             Ok((physical_device, queue_family, device, command_pool)) => {
+                let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
+                let mut props =
+                    vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
+                unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
                 let mut state = Self {
                     queue: unsafe { device.get_device_queue(queue_family, 0) },
                     entry,
@@ -57,6 +63,13 @@ impl VkState {
                     device,
                     command_pool,
                     submit: Default::default(),
+                    signed_zero_inf_nan_preserve: float_controls
+                        .shader_signed_zero_inf_nan_preserve_float32
+                        == vk::TRUE,
+                    // The entry point only sets the 32-bit mode, which NONE forbids.
+                    denorm_preserve: float_controls.shader_denorm_preserve_float32 == vk::TRUE
+                        && float_controls.denorm_behavior_independence
+                            != vk::ShaderFloatControlsIndependence::NONE,
                 };
                 let alloc = vk::CommandBufferAllocateInfo::default()
                     .command_pool(command_pool)

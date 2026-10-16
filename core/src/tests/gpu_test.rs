@@ -274,7 +274,7 @@ fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
     let start = Instant::now();
     println!("Running test: {} ({} instructions)", name, instructions.len());
     let result = catch_unwind(AssertUnwindSafe(|| {
-        translate_module(instructions, false).validate()
+        translate_module(instructions, false, None).validate()
     }));
 
     let duration = start.elapsed();
@@ -431,7 +431,7 @@ fn fixtures_match_nvdisasm() {
 fn mov_immediate_passes_spirv_val() {
     use crate::gpu::spirv::capability::SHADER;
     use crate::tests::gpu::harness::spirv_val;
-    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false);
+    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None);
     assert_eq!(module.words()[5..8], [2 << 16 | 17, SHADER, 3 << 16 | 14]);
     spirv_val(&module);
 }

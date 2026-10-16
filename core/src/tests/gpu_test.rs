@@ -26,6 +26,33 @@ pub mod inst {
     const IADD3_NO_CARRY: u128 = 0x3fff << 77;
     const PP_PT: u128 = 7 << 87;
     const NO_SCOREBOARD: u128 = 0x3f << 110;
+    const FADD_RR: u128 = 0x221;
+    const FADD_RI: u128 = 0x421;
+    const FMUL_RR: u128 = 0x220;
+    const FMUL_RI: u128 = 0x820;
+    const FMUL_NOSCALE: u128 = 4 << 84;
+    const FFMA_RRR: u128 = 0x223;
+    const FFMA_RRI: u128 = 0x423;
+    const FFMA_RIR: u128 = 0x823;
+    const FMNMX_RR: u128 = 0x209;
+    const MUFU_R: u128 = 0x308;
+    pub const FP_ABS_B: u128 = 1 << 62;
+    pub const FP_NEG_B: u128 = 1 << 63;
+    pub const FP_NEG_A: u128 = 1 << 72;
+    pub const FP_ABS_A: u128 = 1 << 73;
+    pub const FP_ABS_C: u128 = 1 << 74;
+    pub const FP_NEG_C: u128 = 1 << 75;
+    pub const FP_FMZ: u128 = 1 << 76;
+    pub const FP_SAT: u128 = 1 << 77;
+    pub const FP_FTZ: u128 = 1 << 80;
+    pub const MUFU_COS: u32 = 0;
+    pub const MUFU_SIN: u32 = 1;
+    pub const MUFU_EX2: u32 = 2;
+    pub const MUFU_LG2: u32 = 3;
+    pub const MUFU_RCP: u32 = 4;
+    pub const MUFU_RSQ: u32 = 5;
+    pub const MUFU_SQRT: u32 = 8;
+    pub const MUFU_TANH: u32 = 9;
     const LDG: u128 = 0x381;
     const STG: u128 = 0x386;
     const LDC: u128 = 0xb82;
@@ -198,6 +225,46 @@ pub mod inst {
         control(EXIT, 0, 0)
     }
 
+    fn alu(op: u128, rd: u32, ra: u32, b: u32) -> u128 {
+        op | PT_GUARD | (rd as u128) << 16 | (ra as u128) << 24 | (b as u128) << 32
+    }
+
+    pub fn fadd(rd: u32, ra: u32, rb: u32) -> u128 {
+        alu(FADD_RR, rd, ra, rb)
+    }
+
+    pub fn fadd_imm(rd: u32, ra: u32, imm: f32) -> u128 {
+        alu(FADD_RI, rd, ra, imm.to_bits()) | RC_RZ
+    }
+
+    pub fn fmul(rd: u32, ra: u32, rb: u32) -> u128 {
+        alu(FMUL_RR, rd, ra, rb) | FMUL_NOSCALE
+    }
+
+    pub fn fmul_imm(rd: u32, ra: u32, imm: f32) -> u128 {
+        alu(FMUL_RI, rd, ra, imm.to_bits()) | FMUL_NOSCALE
+    }
+
+    pub fn ffma(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
+        alu(FFMA_RRR, rd, ra, rb) | (rc as u128) << 64
+    }
+
+    pub fn ffma_imm_b(rd: u32, ra: u32, imm: f32, rc: u32) -> u128 {
+        alu(FFMA_RIR, rd, ra, imm.to_bits()) | (rc as u128) << 64
+    }
+
+    pub fn ffma_imm_c(rd: u32, ra: u32, rb: u32, imm: f32) -> u128 {
+        alu(FFMA_RRI, rd, ra, imm.to_bits()) | (rb as u128) << 64
+    }
+
+    pub fn fmnmx(rd: u32, ra: u32, rb: u32, pp: u32, pp_not: bool) -> u128 {
+        alu(FMNMX_RR, rd, ra, rb) | (pp as u128) << 87 | (pp_not as u128) << 90
+    }
+
+    pub fn mufu(rd: u32, op: u32, rb: u32) -> u128 {
+        alu(MUFU_R, rd, 0, rb) | (op as u128) << 74
+    }
+
     pub fn guard(inst: u128, pred: u32, invert: bool) -> u128 {
         inst & !(0xf << 12) | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
     }
@@ -314,6 +381,37 @@ fn fixtures_match_nvdisasm() {
         (inst::bra_upred(0, true, 0x10), "BRA.U !UP0, 0x20;"),
         (inst::bra_div(0x10), "BRA.DIV ~URZ, 0x20;"),
         (inst::bra_conv(0x10), "BRA.CONV ~URZ, 0x20;"),
+        (inst::fadd(1, 2, 3), "FADD R1, R2, R3;"),
+        (inst::fadd(1, 2, 3) | inst::FP_ABS_A | inst::FP_NEG_A | inst::FP_NEG_B, "FADD R1, -|R2|, -R3;"),
+        (inst::fadd(1, 2, 3) | inst::FP_ABS_B | inst::FP_SAT | inst::FP_FTZ, "FADD.FTZ.SAT R1, R2, |R3|;"),
+        (inst::fadd_imm(1, 2, 0.5), "FADD R1, R2, 0.5;"),
+        (inst::fmul(1, 2, 3), "FMUL R1, R2, R3;"),
+        (inst::fmul(1, 2, 3) | inst::FP_FMZ, "FMUL.FMZ R1, R2, R3;"),
+        (inst::fmul(1, 2, 3) | inst::FP_FTZ | inst::FP_SAT, "FMUL.FTZ.SAT R1, R2, R3;"),
+        (inst::fmul_imm(1, 2, 3.0), "FMUL R1, R2, 3;"),
+        (inst::ffma(1, 2, 3, 4), "FFMA R1, R2, R3, R4;"),
+        (inst::ffma(1, 2, 3, 4) | inst::FP_NEG_C | inst::FP_FMZ, "FFMA.FMZ R1, R2, R3, -R4;"),
+        (inst::ffma_imm_b(1, 2, 2.0, 4), "FFMA R1, R2, 2, R4;"),
+        (inst::ffma_imm_c(1, 2, 3, 0.5), "FFMA R1, R2, R3, 0.5;"),
+        (inst::fmnmx(1, 2, 3, 7, false), "FMNMX R1, R2, R3, PT;"),
+        (inst::fmnmx(1, 2, 3, 0, true) | inst::FP_NEG_A | inst::FP_ABS_B, "FMNMX R1, -R2, |R3|, !P0;"),
+        (inst::mufu(1, inst::MUFU_RCP, 3), "MUFU.RCP R1, R3 ;"),
+        (inst::mufu(1, inst::MUFU_TANH, 3), "MUFU.TANH R1, R3 ;"),
+        (0x004fc800078e02090000000700077224, "IMAD R7, R0, R7, R9 ;"),
+        (0x004fc800078e18ff0000000302017211, "LEA R1, R2, R3, 0x3 ;"),
+        (0x004fc80003906270000000030200720c, "ISETP.GE.AND P0, P1, R2, R3, PT ;"),
+        (0x004fc800078e00060000000302047225, "IMAD.WIDE.U32 R4, R2, R3, R6 ;"),
+        (0x004fc800078e02060000000302017227, "IMAD.HI R1, R2, R3, R6 ;"),
+        (0x004fc800000e06060000000302017224, "IMAD.X R1, R2, R3, R6, P0 ;"),
+        (0x004fc800000e0e060000000302017224, "IMAD.X R1, R2, R3, ~R6, P0 ;"),
+        (0x004fc800078e02060000000502017824, "IMAD R1, R2, 0x5, R6 ;"),
+        (0x004fc800078e02060000000002017a24, "IMAD R1, R2, c[0x0][0x0], R6 ;"),
+        (0x004fc8000f8e02060000000402017c24, "IMAD R1, R2, UR4, R6 ;"),
+        (0x004fc800078e02030000000502017424, "IMAD R1, R2, R3, 0x5 ;"),
+        (0x004fc80003902270000000050200780c, "ISETP.EQ.AND P0, P1, R2, 0x5, PT ;"),
+        (0x004fc800039022700000000002007a0c, "ISETP.EQ.AND P0, P1, R2, c[0x0][0x0], PT ;"),
+        (0x004fc8000b9022700000000402007c0c, "ISETP.EQ.AND P0, P1, R2, UR4, PT ;"),
+        (0x004fc80003906320000000030200720c, "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;"),
         (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
         (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),

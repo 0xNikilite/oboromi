@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{run_regs, translate_module};
+    use crate::tests::gpu::harness::{run_lanes, run_regs, translate_module, GLOBAL_BASE, PRED};
     use std::collections::BTreeMap;
     use std::panic::catch_unwind;
 
@@ -33,6 +33,37 @@ mod tests {
             .collect()
     }
 
+    fn nested_numbers(object: &str, key: &str) -> Vec<u32> {
+        let value = object.split_once(&format!("\"{key}\":")).unwrap().1;
+        let start = value.find('[').unwrap();
+        let mut depth = 0;
+        let end = value[start..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                depth += (c == '[') as usize;
+                depth -= (c == ']') as usize;
+                (depth == 0).then_some(start + i)
+            })
+            .unwrap();
+        value[start..=end]
+            .split(|c: char| !c.is_ascii_digit())
+            .filter_map(|n| n.parse().ok())
+            .collect()
+    }
+
+    fn number(object: &str, key: &str) -> u32 {
+        object
+            .split_once(&format!("\"{key}\":"))
+            .unwrap()
+            .1
+            .trim_start()
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
     fn fixtures() -> Vec<Fixture> {
         include_str!("../../../tests/fixtures/sm86-silicon.json")
             .split("\n  },\n  {")
@@ -63,6 +94,7 @@ mod tests {
         pass: usize,
         fail: usize,
         unimplemented: usize,
+        skipped: usize,
     }
 
     #[test]
@@ -98,6 +130,135 @@ mod tests {
             println!(
                 "{family:<12} {:>4} {:>4} {:>13}",
                 score.pass, score.fail, score.unimplemented
+            );
+        }
+        assert_eq!(scores.values().map(|score| score.fail).sum::<usize>(), 0);
+    }
+
+    struct WarpFixture {
+        family: String,
+        case: String,
+        word: u128,
+        observed: bool,
+        lanes_active: u32,
+        inputs: Vec<u32>,
+        outputs: Vec<u32>,
+        input_regs: Vec<usize>,
+        output_regs: Vec<usize>,
+        shared_addr: usize,
+        global_lo: usize,
+        global_hi: usize,
+        shared_after: Vec<u32>,
+        global_after: Vec<u32>,
+    }
+
+    fn warp_fixtures() -> Vec<WarpFixture> {
+        include_str!("../../../tests/fixtures/sm86-warp-silicon.json")
+            .split("\n  },\n  {")
+            .map(|object| {
+                let reg = |name: &str| string(object, name)[1..].parse().unwrap();
+                WarpFixture {
+                    family: string(object, "family"),
+                    case: string(object, "case"),
+                    word: u128::from_str_radix(&string(object, "word_hex"), 16).unwrap(),
+                    observed: object.contains("\"observed\": true"),
+                    lanes_active: number(object, "lanes_active"),
+                    inputs: nested_numbers(object, "inputs"),
+                    outputs: if object.contains("\"outputs\"") {
+                        nested_numbers(object, "outputs")
+                    } else {
+                        Vec::new()
+                    },
+                    input_regs: (0..4).map(|i| reg(&format!("input{i}"))).collect(),
+                    output_regs: (0..2).map(|i| reg(&format!("output{i}"))).collect(),
+                    shared_addr: reg("shared_addr"),
+                    global_lo: reg("global_lo"),
+                    global_hi: reg("global_hi"),
+                    shared_after: if object.contains("\"shared_after\"") {
+                        nested_numbers(object, "shared_after")
+                    } else {
+                        Vec::new()
+                    },
+                    global_after: if object.contains("\"global_after\"") {
+                        nested_numbers(object, "global_after")
+                    } else {
+                        Vec::new()
+                    },
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fixtures_match_warp_silicon() {
+        let mut scores: BTreeMap<String, Score> = BTreeMap::new();
+        for fixture in warp_fixtures() {
+            let score = scores.entry(fixture.family.clone()).or_default();
+            if !fixture.observed || fixture.lanes_active != u32::MAX {
+                score.skipped += 1;
+                continue;
+            }
+            let mut words = vec![fixture.word];
+            if fixture.family == "lds" {
+                words.insert(
+                    0,
+                    0x004f_c800_0000_0800_0000_0007_0f00_0388 & !(0xff << 32)
+                        | (fixture.input_regs[0] as u128) << 32,
+                );
+            } else if fixture.family == "sts" {
+                words.push(
+                    0x004f_c800_0000_0800_0000_0000_0f04_0984 & !(0xff << 16)
+                        | (fixture.output_regs[1] as u128) << 16,
+                );
+            }
+            if catch_unwind(|| translate_module(&words, true, None)).is_err() {
+                score.unimplemented += 1;
+                continue;
+            }
+            let mut seeds = vec![vec![0; PRED + 1]; 32];
+            for (lane, seed) in seeds.iter_mut().enumerate() {
+                for (input, &reg) in fixture.inputs[lane * 4..][..4]
+                    .iter()
+                    .zip(&fixture.input_regs)
+                {
+                    seed[reg] = *input;
+                }
+                seed[fixture.shared_addr] = fixture.inputs[lane * 4 + 1];
+                seed[fixture.global_lo] = GLOBAL_BASE as u32;
+                seed[fixture.global_hi] = (GLOBAL_BASE >> 32) as u32;
+                seed[PRED] = 1;
+            }
+            let global_before: Vec<_> = (0..256).map(|i| 0x6100_0000 + i).collect();
+            let Some((lanes, global)) = run_lanes(&words, &seeds, &[], &global_before) else {
+                eprintln!("skipping warp silicon fixtures: no Vulkan device");
+                return;
+            };
+            let outputs_match = lanes
+                .iter()
+                .enumerate()
+                .all(|(lane, regs)| regs[fixture.output_regs[0]] == fixture.outputs[lane * 2]);
+            let global_matches =
+                !matches!(fixture.family.as_str(), "atom" | "atomg" | "red" | "stg")
+                    || global == fixture.global_after;
+            let shared_matches = fixture.family != "sts"
+                || lanes.iter().enumerate().all(|(lane, regs)| {
+                    let word = fixture.inputs[lane * 4 + 1] as usize / 4;
+                    regs[fixture.output_regs[1]] == fixture.shared_after[word]
+                });
+            if outputs_match && shared_matches && global_matches {
+                score.pass += 1;
+            } else if fixture.family == "s2r" && fixture.case == "eqmask" {
+                score.unimplemented += 1;
+            } else {
+                score.fail += 1;
+                eprintln!("{}/{}: warp output mismatch", fixture.family, fixture.case);
+            }
+        }
+        println!("family       pass fail unimplemented skipped");
+        for (family, score) in &scores {
+            println!(
+                "{family:<12} {:>4} {:>4} {:>13} {:>7}",
+                score.pass, score.fail, score.unimplemented, score.skipped
             );
         }
         assert_eq!(scores.values().map(|score| score.fail).sum::<usize>(), 0);

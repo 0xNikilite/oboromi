@@ -1044,14 +1044,17 @@ impl<'a> Decoder<'a> {
         let _cond = (((inst >> 32) & 0x3) << 0);
         let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
         let _depth = (((inst >> 85) & 0x3) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(pp == 7 && pp_not == 0, "BRA Pp not implemented");
+        let target = branch_target(self.pc, inst).expect("uniform BRA not implemented");
+        let target = self.cached_const_u32(target);
+        self.ir.emit_store(self.var_pc, target);
     }
     pub fn break_(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -1374,14 +1377,16 @@ impl<'a> Decoder<'a> {
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _mode = (((inst >> 84) & 0x3) << 0);
         let _depth = (((inst >> 86) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        self.ir.emit_kill();
+        assert!(pp == 7 && pp_not == 0, "EXIT Pp not implemented");
+        let exit = self.cached_const_u32(u32::MAX);
+        self.ir.emit_store(self.var_pc, exit);
     }
     pub fn f2f(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

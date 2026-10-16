@@ -90,6 +90,16 @@ pub mod inst {
         inst
     }
 
+    // bra (opcode=0x947), offset in bytes from the next instruction
+    pub fn bra(offset: i64) -> u128 {
+        0x7947 | 0x7 << 87 | 0x3f << 110 | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
+    }
+
+    // exit (opcode=0x94d)
+    pub fn exit() -> u128 {
+        0x794d | 0x7 << 87 | 0x3f << 110
+    }
+
     pub fn guard(inst: u128, pred: u32, invert: bool) -> u128 {
         inst & !(0xf << 12) | (pred as u128 & 0x7) << 12 | (invert as u128) << 15
     }
@@ -194,6 +204,9 @@ fn fixtures_match_nvdisasm() {
         (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::kill(7, false), "KILL;"),
         (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
+        (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
+        (inst::bra(-80), "BRA -0x40;"),
+        (inst::exit(), "EXIT;"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

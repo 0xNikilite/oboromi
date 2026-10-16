@@ -88,6 +88,18 @@ pub mod storage_class {
     pub const PHYSICAL_STORAGE_BUFFER: u32 = 5349;
 }
 
+pub mod scope {
+    pub const DEVICE: u32 = 1;
+    pub const WORKGROUP: u32 = 2;
+}
+
+pub mod memory_semantics {
+    pub const RELAXED: u32 = 0;
+    pub const ACQUIRE_RELEASE: u32 = 0x8;
+    pub const UNIFORM_MEMORY: u32 = 0x40;
+    pub const WORKGROUP_MEMORY: u32 = 0x100;
+}
+
 pub mod execution_model {
     pub const VERTEX: u32 = 0;
     pub const FRAGMENT: u32 = 4;

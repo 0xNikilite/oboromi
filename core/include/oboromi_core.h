@@ -179,6 +179,8 @@ constexpr static const uint32_t FIND_U_MSB = 75;
 /// called once per output line. the pointer is only valid during the call.
 using LineCallback = void(*)(const char*);
 
+using FrameCallback = void(*)(void*);
+
 extern "C" {
 
 /// runs the arm64 cpu test suite. blocks the calling thread, so call it from
@@ -188,5 +190,20 @@ void oboromi_run_cpu_tests(LineCallback cb);
 /// runs the sm86 gpu decoder/translation test suite. same threading rules
 /// as "oboromi_run_cpu_tests"
 void oboromi_run_gpu_tests(LineCallback cb);
+
+/// generation of the last presented frame, 0 until the guest presents one.
+uint64_t oboromi_frame_generation();
+
+/// writes the frame size and copies its pixels into `dst` if `cap` is large
+/// enough. returns the number of bytes the frame needs. pixels are linear
+/// rgba8, stride `width * 4`.
+///
+/// # Safety
+/// `dst` must be null or valid for `cap` bytes, `width` and `height` must be
+/// valid for writes.
+uintptr_t oboromi_frame_read(uint8_t *dst, uintptr_t cap, uint32_t *width, uint32_t *height);
+
+/// `callback` runs on the presenting thread after every frame, null clears it.
+void oboromi_frame_set_callback(FrameCallback callback, void *user);
 
 }  // extern "C"

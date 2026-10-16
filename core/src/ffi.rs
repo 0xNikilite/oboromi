@@ -1,7 +1,8 @@
 //! ffi bridge for the qt/c++ gui. panics are caught and forwarded to the
 //! log callback to avoid unwinding across the c boundary.
 
-use std::ffi::CString;
+use crate::display::{CALLBACK, DISPLAY, FrameCallback};
+use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -61,4 +62,42 @@ pub extern "C" fn oboromi_run_gpu_tests(cb: LineCallback) {
             );
         }
     }
+}
+
+/// generation of the last presented frame, 0 until the guest presents one.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_frame_generation() -> u64 {
+    DISPLAY.lock().unwrap().generation
+}
+
+/// writes the frame size and copies its pixels into `dst` if `cap` is large
+/// enough. returns the number of bytes the frame needs. pixels are linear
+/// rgba8, stride `width * 4`.
+///
+/// # Safety
+/// `dst` must be null or valid for `cap` bytes, `width` and `height` must be
+/// valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_frame_read(
+    dst: *mut u8,
+    cap: usize,
+    width: *mut u32,
+    height: *mut u32,
+) -> usize {
+    let frame = DISPLAY.lock().unwrap();
+    let len = frame.pixels.len();
+    unsafe {
+        if !dst.is_null() && len <= cap {
+            std::ptr::copy_nonoverlapping(frame.pixels.as_ptr(), dst, len);
+        }
+        *width = frame.width;
+        *height = frame.height;
+    }
+    len
+}
+
+/// `callback` runs on the presenting thread after every frame, null clears it.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_frame_set_callback(callback: FrameCallback, user: *mut c_void) {
+    *CALLBACK.lock().unwrap() = (callback, user as usize);
 }

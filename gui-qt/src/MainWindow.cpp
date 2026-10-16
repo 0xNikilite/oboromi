@@ -13,6 +13,7 @@
 #include <QWidget>
 #include <QtConcurrent/QtConcurrent>
 
+#include "DisplayWidget.h"
 #include "RustBridge.h"
 
 namespace {
@@ -78,6 +79,8 @@ void MainWindow::buildUi() {
     buttons->addWidget(m_gpuButton);
     buttons->addStretch();
     layout->addLayout(buttons);
+
+    layout->addWidget(new DisplayWidget(central), /*stretch=*/3);
 
     auto *resultsLabel = new QLabel("Results:", central);
     resultsLabel->setStyleSheet("color: rgb(200, 200, 200);");

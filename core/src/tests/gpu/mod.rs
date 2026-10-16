@@ -1,5 +1,6 @@
 pub mod harness;
 
+mod atomics;
 mod compare;
 mod control;
 mod convert;

@@ -105,7 +105,7 @@ pub mod inst {
     const LDC: u128 = 0xb82;
     const ULDC: u128 = 0xab9;
     const ADDR_64: u128 = 1 << 72;
-    const SZ_32: u128 = 4 << 73;
+    pub const SZ_32: u128 = 4 << 73;
     const SZ_64: u128 = 5 << 73;
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
@@ -141,6 +141,27 @@ pub mod inst {
     const I2F_64: u128 = 0x312;
     const I2I: u128 = 0x238;
     const RET_NODEC: u128 = 1 << 86;
+    pub const W2I_DEPBAR: u128 = 0x000fc00000000000000000000000791a;
+    pub const W2I_YIELD: u128 = 0x000fc000038000000000000000007946;
+    pub const W2I_NANOSLEEP: u128 = 0x000fc00003800000000000000000795d;
+    pub const W2I_PMTRIG: u128 = 0x000fc000038000000000000000007801;
+    pub const W2I_ERRBAR: u128 = 0x000fc0000000000000000000000079ab;
+    pub const W2I_CSMTEST: u128 = 0x000fc00003800000000000000000780d;
+    pub const W2I_CCTLT: u128 = 0x000fc00000400000000000ff00007391;
+    pub const W2I_IDE: u128 = 0x000fc0000000000000000c1000007951;
+    pub const W2I_RTT: u128 = 0x000fc00000000000000000000000794f;
+    pub const W2I_QSPC: u128 = 0x000fc000000e000000000000ff0073aa;
+    pub const W2I_R2B: u128 = 0x000fc00000000000000000020000731e;
+    pub const W2I_BMOV: u128 = 0x000fc000000000000000000000007355;
+    pub const W2I_ARRIVES: u128 = 0x000fc0000800000000000000ff0079b0;
+    pub const W2I_BREAK: u128 = 0x000fc000038000000000000000007942;
+    pub const W2I_SETLMEMBASE: u128 = 0x000fc0000000000000000000ff0073c1;
+    pub const W2I_LEPC: u128 = 0x000fc00000000000000000000002734e;
+    pub const W2I_JMP: u128 = 0x000fc00003800000000000300000794a;
+    pub const W2I_RPCMOV_LO: u128 = 0x000fc000000000000000000000027353;
+    pub const W2I_RPCMOV_HI: u128 = W2I_RPCMOV_LO | 1 << 31 | 1 << 16;
+    pub const W2I_RPCMOV_SET_LO: u128 = 0x000fc000000000000000123400007952;
+    pub const W2I_RPCMOV_SET_HI: u128 = 0x000fc000000000000000567880007952;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -445,6 +466,18 @@ pub mod inst {
     pub const SHF_R: u128 = 1 << 76;
     pub const SHF_HI: u128 = 1 << 80;
 
+    const STRONG_GPU: u128 = 7 << 77;
+    const ATOMIC: u128 = ADDR_64 | STRONG_GPU | PU_PT | COP_EN | NO_WRITE_SCOREBOARD;
+    pub const ATOM: u128 = 0x38a | ATOMIC;
+    pub const ATOMG: u128 = 0x3a8 | ATOMIC;
+    pub const ATOMG_CAS: u128 = 0x3a9 | ATOMIC;
+    pub const RED: u128 = 0x98e | ATOMIC;
+    pub const RED_UR_64: u128 = UNIFORM | 1 << 90;
+    pub const ATOM_MIN: u128 = 1 << 87;
+    pub const ATOM_MAX: u128 = 2 << 87;
+    pub const ATOM_INC: u128 = 3 << 87;
+    pub const ATOM_DEC: u128 = 4 << 87;
+
     pub fn alu3(op: u128, rd: u32, ra: u32, b: u32, rc: u32) -> u128 {
         alu(op, rd, ra, b) | (rc as u128) << 64
     }
@@ -660,6 +693,27 @@ fn fixtures_match_nvdisasm() {
         (inst::bra_upred(0, true, 0x10), "BRA.U !UP0, 0x20;"),
         (inst::bra_div(0x10), "BRA.DIV ~URZ, 0x20;"),
         (inst::bra_conv(0x10), "BRA.CONV ~URZ, 0x20;"),
+        (inst::W2I_LEPC, "LEPC R2;"),
+        (inst::W2I_JMP, "JMP 0x30;"),
+        (inst::W2I_RPCMOV_LO, "RPCMOV.32 R2, Rpc.LO;"),
+        (inst::W2I_RPCMOV_HI, "RPCMOV.32 R3, Rpc.HI;"),
+        (inst::W2I_RPCMOV_SET_LO, "RPCMOV.32 Rpc.LO, 0x1234;"),
+        (inst::W2I_RPCMOV_SET_HI, "RPCMOV.32 Rpc.HI, 0x5678;"),
+        (inst::W2I_DEPBAR, "DEPBAR;"),
+        (inst::W2I_YIELD, "YIELD;"),
+        (inst::W2I_NANOSLEEP, "NANOSLEEP 0x0;"),
+        (inst::W2I_PMTRIG, "PMTRIG 0x0;"),
+        (inst::W2I_ERRBAR, "ERRBAR;"),
+        (inst::W2I_CSMTEST, "CSMTEST.INVALID0.F.AND P0, P0, 0x0, PT;"),
+        (inst::W2I_CCTLT, "CCTLT.IVALL;"),
+        (inst::W2I_IDE, ""),
+        (inst::W2I_RTT, "__HIR0X1E0;"),
+        (inst::W2I_QSPC, "QSPC.G PT, R0, [RZ];"),
+        (inst::W2I_R2B, ""),
+        (inst::W2I_BMOV, "BMOV.32 R0, B0;"),
+        (inst::W2I_ARRIVES, "ARRIVES.LDGSTSBAR.???0 [UR0];"),
+        (inst::W2I_BREAK, "BREAK B0;"),
+        (inst::W2I_SETLMEMBASE, "SETLMEMBASE RZ;"),
         (inst::fadd(1, 2, 3), "FADD R1, R2, R3;"),
         (inst::fadd(1, 2, 3) | inst::FP_ABS_A | inst::FP_NEG_A | inst::FP_NEG_B, "FADD R1, -|R2|, -R3;"),
         (inst::fadd(1, 2, 3) | inst::FP_ABS_B | inst::FP_SAT | inst::FP_FTZ, "FADD.FTZ.SAT R1, R2, |R3|;"),
@@ -797,6 +851,14 @@ fn fixtures_match_nvdisasm() {
         (inst::i2f(6, 7, inst::cvt::F32, inst::cvt::S32), "I2F R6, R7 ;"),
         (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
         (inst::i2i(8, 9, inst::cvt::U8), "I2I.U8.S32.SAT R8, R9;"),
+        (inst::alu(inst::ATOM, 4, 2, 5), "ATOM.E.ADD.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::stg(10, 0, 6) ^ inst::SZ_32, "STG.E.U8 [R10], R6 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_MAX, 4, 2, 5), "ATOMG.E.MAX.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_MIN | inst::S32, 6, 8, 5), "ATOMG.E.MIN.S32.STRONG.GPU PT, R6, [R8], R5 ;"),
+        (inst::alu3(inst::ATOMG_CAS, 4, 2, 5, 6), "ATOMG.E.CAS.STRONG.GPU PT, R4, [R2], R5, R6 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_INC, 4, 2, 5), "ATOMG.E.INC.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOMG | inst::ATOM_DEC, 6, 8, 5), "ATOMG.E.DEC.STRONG.GPU PT, R6, [R8], R5 ;"),
+        (inst::alu3(inst::RED | inst::RED_UR_64, 0, 2, 5, 4), "RED.E.ADD.STRONG.GPU [R2.64+UR4], R5 ;"),
         (inst::alu(inst::VOTE | inst::preds(1, 0, 0, 0), 8, 0, 0), "VOTE.ALL R8, P1, P0;"),
         (inst::alu(inst::VOTE | inst::VOTE_ANY | inst::preds(7, 0, 0, 0), 4, 0, 0), "VOTE.ANY R4, PT, P0;"),
         (inst::alu(inst::VOTEU | inst::VOTE_EQ | inst::preds(2, 0, 0, 0), 5, 0, 0), "VOTEU.EQ UR5, UP2, P0;"),

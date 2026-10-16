@@ -33,10 +33,9 @@ mod inst {
         inst
     }
 
-    // iadd3 rd, ra, rb, rc (opcode=0x510, variant 0x1510 via bit91)
+    // iadd3 rd, ra, rb, rc (register form, key 0x210; rc must be 0xFF)
     pub fn iadd3_reg(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
-        let mut inst: u128 = 0x510;
-        inst |= 1u128 << 91; // use 0x1510 variant to avoid iadd overlap
+        let mut inst: u128 = 0x210;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
@@ -128,7 +127,7 @@ pub fn run_gpu_tests() -> Vec<String> {
     let tests = vec![
         run_translation_test("IADD Immediate", &[inst::iadd_imm(1, 2, 42)]),
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
-        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 4)]),
+        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 0xFF)]),
         run_translation_test("MOV immediate", &[inst::mov_imm(1, 0xCAFEBABE)]),
         run_translation_test("KILL PT", &[inst::kill(7, false)]),
     ];

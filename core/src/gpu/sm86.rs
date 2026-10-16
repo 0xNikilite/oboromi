@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use crate::gpu::spirv;
+use crate::gpu::spirv::capability;
 
 static MAX_REG_COUNT: usize = 254;
 static MAX_UNIFORM_REG_COUNT: usize = 63;
@@ -256,7 +257,6 @@ pub struct Decoder<'a> {
     type_void: u32,
     // Pointers
     type_ptr_u32: [u32; 5],
-    type_ptr_u8: [u32; 5],
     // Declared types for headers
     type_u8: [u32; 5],
     type_u16: [u32; 5],
@@ -285,7 +285,6 @@ impl<'a> Decoder<'a> {
             ir,
             type_void: 0,
             type_ptr_u32: [0; 5],
-            type_ptr_u8: [0; 5],
             type_u8: [0; 5],
             type_u16: [0; 5],
             type_u32: [0; 5],
@@ -324,17 +323,9 @@ impl<'a> Decoder<'a> {
 
     pub fn init(&mut self) {
         self.type_void = self.ir.emit_type_void();
-        self.type_u8[1] = self.ir.emit_type_int(8, 0);
-        self.type_u16[1] = self.ir.emit_type_int(16, 0);
         self.type_u32[1] = self.ir.emit_type_int(32, 0);
-        self.type_u64[1] = self.ir.emit_type_int(64, 0);
-        self.type_s8[1] = self.ir.emit_type_int(8, 1);
-        self.type_s16[1] = self.ir.emit_type_int(16, 1);
         self.type_s32[1] = self.ir.emit_type_int(32, 1);
-        self.type_s64[1] = self.ir.emit_type_int(64, 1);
-        self.type_f16[1] = self.ir.emit_type_float(16);
         self.type_f32[1] = self.ir.emit_type_float(32);
-        self.type_f64[1] = self.ir.emit_type_float(64);
         self.type_bool[1] = self.ir.emit_type_bool();
         self.const_cache = HashMap::new();
         self.const_u32_0 = self.ir.emit_constant_typed(self.type_u32[1], 0u32);
@@ -343,9 +334,7 @@ impl<'a> Decoder<'a> {
         self.const_cache.insert(1, self.const_u32_1);
         for i in 2..=4 {
             for type_sxx in [
-                &mut self.type_u8, &mut self.type_u16, &mut self.type_u32, &mut self.type_u64,
-                &mut self.type_s8, &mut self.type_s16, &mut self.type_s32, &mut self.type_s64,
-                &mut self.type_f16, &mut self.type_f32, &mut self.type_f64, &mut self.type_bool
+                &mut self.type_u32, &mut self.type_s32, &mut self.type_f32, &mut self.type_bool
             ] {
                 type_sxx[i] = self.ir.emit_type_vector(type_sxx[1], i as u32);
             }
@@ -356,7 +345,7 @@ impl<'a> Decoder<'a> {
             let type_regs_array = self.ir.emit_type_array(self.type_u32[1], length_const);
             let members = &[
                 ("regs", type_regs_array),
-                ("pred", self.type_u8[1]),
+                ("pred", self.type_u32[1]),
             ];
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
             self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(6, type_regs_array);
@@ -365,7 +354,6 @@ impl<'a> Decoder<'a> {
         // Define generic pointers
         // Storage class 6 = Private
         for i in 1..=4 {
-            self.type_ptr_u8[i] = self.ir.emit_type_pointer(6, self.type_u8[i]);
             self.type_ptr_u32[i] = self.ir.emit_type_pointer(6, self.type_u32[i]);
         }
         let type_ptr_abstract_state = self.ir.emit_type_pointer(6, self.type_abstract_state);
@@ -374,6 +362,62 @@ impl<'a> Decoder<'a> {
 
     }
     
+
+    fn lazy_type(
+        &mut self,
+        field: fn(&mut Self) -> &mut [u32; 5],
+        cap: u32,
+        bits: u32,
+        sign: Option<u32>,
+        n: usize,
+    ) -> u32 {
+        if field(self)[n] == 0 {
+            let id = if n == 1 {
+                self.ir.emit_capability(cap);
+                match sign {
+                    Some(sign) => self.ir.emit_type_int(bits, sign),
+                    None => self.ir.emit_type_float(bits),
+                }
+            } else {
+                let scalar = self.lazy_type(field, cap, bits, sign, 1);
+                self.ir.emit_type_vector(scalar, n as u32)
+            };
+            field(self)[n] = id;
+        }
+        field(self)[n]
+    }
+
+    fn type_u8(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_u8, capability::INT8, 8, Some(0), n)
+    }
+
+    fn type_u16(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_u16, capability::INT16, 16, Some(0), n)
+    }
+
+    fn type_u64(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_u64, capability::INT64, 64, Some(0), n)
+    }
+
+    fn type_s8(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_s8, capability::INT8, 8, Some(1), n)
+    }
+
+    fn type_s16(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_s16, capability::INT16, 16, Some(1), n)
+    }
+
+    fn type_s64(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_s64, capability::INT64, 64, Some(1), n)
+    }
+
+    fn type_f16(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_f16, capability::FLOAT16, 16, None, n)
+    }
+
+    fn type_f64(&mut self, n: usize) -> u32 {
+        self.lazy_type(|d| &mut d.type_f64, capability::FLOAT64, 64, None, n)
+    }
 
     /// Return the SPIR-V id for an OpConstant(u32, value).
     /// Reuses a previously emitted constant if one exists.
@@ -411,9 +455,8 @@ impl<'a> Decoder<'a> {
     /// %mask = 0 - ((%pred >> N) & 1)    -> 0x00000000 or 0xFFFFFFFF
     /// <do some things>
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
-        let res = self.ir.emit_load(self.type_u8[1], ptr);
-        self.ir.emit_u_convert(self.type_u32[1], res)
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
+        self.ir.emit_load(self.type_u32[1], ptr)
     }
 
     /// produces a full bitmask from a single predicate bit:
@@ -445,7 +488,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
         self.ir.emit_store(ptr, val)
     }
 

@@ -10,3 +10,4 @@ mod int_alu;
 mod logic;
 mod memory;
 mod special;
+mod uniform;

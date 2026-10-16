@@ -366,6 +366,39 @@ pub mod inst {
     pub fn prmt_mode(mode: u32) -> u128 {
         (mode as u128) << 72
     }
+
+    pub const UIADD3: u128 = 0x290 | UNIFORM;
+    pub const UIADD3_64: u128 = 0x297 | UNIFORM;
+    pub const UIMAD: u128 = 0x2a4 | UNIFORM;
+    pub const UIMAD_WIDE: u128 = 0x2a5 | UNIFORM;
+    pub const UISETP: u128 = 0x28c | UNIFORM;
+    pub const ULEA: u128 = 0x291 | UNIFORM;
+    pub const USEL: u128 = 0x287 | UNIFORM;
+    pub const UMOV: u128 = 0xc82 | UNIFORM;
+    pub const UMOV_IMM: u128 = 0x882;
+    pub const UP2UR_IMM: u128 = 0x883 | UNIFORM;
+    pub const UR2UP_IMM: u128 = 0x884 | UNIFORM;
+    pub const UPLOP3: u128 = 0x89c;
+    pub const R2UR: u128 = 0x3c2 | PU_PT;
+    pub const NEG_A: u128 = 1 << 72;
+    pub const EXTENDED: u128 = 1 << 74;
+    pub const ICMP_LT: u128 = 1 << 76;
+
+    pub fn preds(pu: u32, pv: u32, pp: u32, pq: u32) -> u128 {
+        (pu as u128) << 81 | (pv as u128) << 84 | (pp as u128) << 87 | (pq as u128) << 77
+    }
+
+    pub fn plop3_fields(lut0: u8, lut1: u8, pr: u32) -> u128 {
+        (lut0 as u128 >> 3) << 72 | (lut0 as u128 & 7) << 64 | (lut1 as u128) << 16 | (pr as u128) << 68
+    }
+
+    pub fn lea_shift(scale: u32) -> u128 {
+        (scale as u128) << 75
+    }
+
+    pub fn byte_select(byte: u32) -> u128 {
+        (byte as u128) << 76
+    }
 }
 
 fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
@@ -609,6 +642,23 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::UBREV, 15, 0, 1), "UBREV UR15, UR1;"),
         (inst::alu(inst::UBMSK ^ inst::IMM_B, 16, 4, 8), "UBMSK UR16, UR4, 0x8;"),
         (inst::alu(inst::USGXT ^ inst::IMM_B | inst::S32, 17, 3, 16), "USGXT UR17, UR3, 0x10;"),
+        (inst::guard(inst::alu3(inst::UIADD3 ^ inst::IMM_B | inst::preds(7, 7, 7, 7), 6, 63, 1, 63), 0, true), "@!UP0 UIADD3 UR6, URZ, 0x1, URZ;"),
+        (inst::alu3(inst::UIADD3 | inst::preds(0, 1, 7, 7), 12, 0, 7, 9), "UIADD3 UR12, UP0, UP1, UR0, UR7, UR9;"),
+        (inst::alu3(inst::UIADD3 | inst::NEG_A | inst::preds(7, 7, 7, 7), 10, 0, 7, 9), "UIADD3 UR10, -UR0, UR7, UR9;"),
+        (inst::alu3(inst::UIADD3 | inst::EXTENDED | inst::preds(7, 7, 7, 7), 11, 0, 7, 9), "UIADD3.X UR11, UR0, UR7, UR9, UPT, UPT;"),
+        (inst::alu3(inst::UIMAD | inst::S32, 7, 0, 7, 9), "UIMAD UR7, UR0, UR7, UR9;"),
+        (inst::alu(inst::UMOV_IMM, 1, 0, 0xdead_beef), "UMOV UR1, 0xdeadbeef;"),
+        (inst::alu(inst::UMOV, 2, 0, 1), "UMOV UR2, UR1;"),
+        (inst::alu(inst::R2UR, 3, 5, 0), "R2UR UR3, R5 ;"),
+        (inst::alu(inst::USEL ^ inst::IMM_B | inst::preds(0, 0, 1, 0), 4, 3, 7), "USEL UR4, UR3, 0x7, UP1;"),
+        (inst::alu3(inst::ULEA | inst::lea_shift(3) | inst::preds(7, 0, 0, 0), 6, 3, 1, 63), "ULEA UR6, UR3, UR1, 0x3;"),
+        (inst::alu3(inst::UIMAD_WIDE ^ inst::IMM_B | inst::preds(7, 0, 0, 0), 8, 3, 0x10, 10), "UIMAD.WIDE.U32 UR8, UR3, 0x10, UR10;"),
+        (inst::alu3(inst::UIADD3_64 ^ inst::IMM_B | inst::preds(7, 7, 7, 7), 12, 10, u32::MAX, 63), "UIADD3.64 UR12, UR10, -0x1, URZ;"),
+        (inst::alu(inst::UISETP | inst::ICMP_LT | inst::preds(0, 1, 7, 0), 0, 5, 6), "UISETP.LT.U32.AND UP0, UP1, UR5, UR6, UPT;"),
+        (inst::alu(inst::UISETP | inst::ICMP_LT | inst::S32 | inst::preds(2, 3, 7, 0), 0, 6, 5), "UISETP.LT.AND UP2, UP3, UR6, UR5, UPT;"),
+        (inst::alu(inst::UPLOP3 | inst::preds(4, 5, 0, 1) | inst::plop3_fields(0xe8, 0x96, 2), 0, 0, 0), "UPLOP3.LUT UP4, UP5, UP0, UP1, UP2, 0xe8, 0x96;"),
+        (inst::alu(inst::UP2UR_IMM | inst::byte_select(1), 7, 8, 0xff), "UP2UR.B1 UR7, UPR, UR8, 0xff;"),
+        (inst::alu(inst::UR2UP_IMM | inst::byte_select(2), 0, 9, 0xf), "UR2UP UPR, UR9.B2, 0xf;"),
         (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),

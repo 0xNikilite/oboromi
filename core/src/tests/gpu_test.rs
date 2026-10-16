@@ -48,6 +48,50 @@ pub mod inst {
     pub const FP_FMZ: u128 = 1 << 76;
     pub const FP_SAT: u128 = 1 << 77;
     pub const FP_FTZ: u128 = 1 << 80;
+    pub const HADD2: u128 = 0x230;
+    pub const HMUL2: u128 = 0x232;
+    pub const HFMA2: u128 = 0x231;
+    pub const HFMA2_MMA: u128 = 0x235;
+    pub const HSET2: u128 = 0x233 | PP_PT;
+    pub const HSETP2: u128 = 0x234 | PP_PT;
+    pub const HMNMX2: u128 = 0x240;
+    pub const F2FP: u128 = 0x23e;
+    pub const F2IP: u128 = 0x243;
+    pub const I2FP_F32_U32: u128 = 0x245 | 2 << 75 | 2 << 84;
+    pub const I2IP: u128 = 0x239;
+    pub const H_F32: u128 = 1 << 78;
+    pub const H_ABS_C: u128 = 1 << 83;
+    pub const H_NEG_C: u128 = 1 << 84;
+    pub const H_RELU: u128 = 1 << 79 | PP_PT;
+    pub const H_NAN: u128 = 1 << 81;
+    pub const H_BF: u128 = 1 << 71;
+    pub const H_AND: u128 = 1 << 71;
+    pub const MERGE_C: u128 = 1 << 78;
+    pub const MERGE_H1: u128 = 1 << 72;
+    pub const PACK_S32: u128 = 1 << 74;
+    pub const F2IP_TRUNC: u128 = 3 << 78;
+    pub const I2IP_NOSAT: u128 = 1 << 74;
+    pub const I2IP_SATRELU: u128 = 2 << 74;
+    pub const H0_H0: u32 = 2;
+    pub const H1_H1: u32 = 3;
+    pub const F32_SWIZZLE: u32 = 1;
+
+    pub fn iswz(a: u32, b: u32, c: u32) -> u128 {
+        (a as u128) << 74 | (b as u128) << 60 | (c as u128) << 81
+    }
+
+    pub fn fcmp(cmp: u32, pu: u32, pv: u32) -> u128 {
+        (cmp as u128) << 76 | (pu as u128) << 81 | (pv as u128) << 84
+    }
+
+    pub fn pp(pred: u32, invert: bool) -> u128 {
+        (pred as u128) << 87 | (invert as u128) << 90
+    }
+
+    pub fn pack_fmt(dstfmt: u32, c_bits: u32) -> u128 {
+        (dstfmt as u128) << 76 | (c_bits as u128) << 72
+    }
+
     pub const MUFU_COS: u32 = 0;
     pub const MUFU_SIN: u32 = 1;
     pub const MUFU_EX2: u32 = 2;
@@ -66,6 +110,11 @@ pub mod inst {
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
     const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
+    const LDS: u128 = 0x984;
+    const STS: u128 = 0x388;
+    const ATOMS_ADD: u128 = 0x38c;
+    const ATOMS_CAS: u128 = 0x38d;
+    const BAR_SYNC: u128 = 0xb1d;
     const BRA: u128 = 0x947;
     const BRA_UREG: u128 = 0x947 | 1 << 91;
     const BRA_UPRED: u128 = 0x547 | 1 << 91;
@@ -171,6 +220,36 @@ pub mod inst {
         inst |= ((off as u128) & 0xffff) << 38;
         inst |= ((bank as u128) & 0x1f) << 54;
         inst
+    }
+
+    // op rd, [ra], rb, rc
+    fn shared(op: u128, rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
+        let mut inst = op | PT_GUARD;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((ra as u128) & 0xff) << 24;
+        inst |= ((rb as u128) & 0xff) << 32;
+        inst |= ((rc as u128) & 0xff) << 64;
+        inst
+    }
+
+    pub fn lds(rd: u32, ra: u32) -> u128 {
+        shared(LDS | SZ_32, rd, ra, 0, 0)
+    }
+
+    pub fn sts(ra: u32, rb: u32) -> u128 {
+        shared(STS | SZ_32 | NO_WRITE_SCOREBOARD, 0, ra, rb, 0)
+    }
+
+    pub fn atoms_add(rd: u32, ra: u32, rb: u32) -> u128 {
+        shared(ATOMS_ADD, rd, ra, rb, 0)
+    }
+
+    pub fn atoms_cas(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
+        shared(ATOMS_CAS, rd, ra, rb, rc)
+    }
+
+    pub fn bar_sync() -> u128 {
+        BAR_SYNC | PT_GUARD | NO_WRITE_SCOREBOARD
     }
 
     pub fn s2r(rd: u32, sr: u32) -> u128 {
@@ -545,6 +624,7 @@ fn fixtures_match_nvdisasm() {
     const W1D_IMNMX_S32: u128 = 0x004fc800000002000000000302017217;
     const W1D_IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
     const W1D_IADD3_OBSERVER: u128 = 0x008fc600007e24ff000000ffff097210;
+    const W1D_IADD3_NEG_C: u128 = 0x004fe2000791e8050000000004077210;
     const W1D_IADD3_X: u128 = 0x004fc80003fee4090000000700077210;
     let bin = std::env::temp_dir().join(format!("oboromi-fixture-{}.bin", std::process::id()));
     let fixtures: &[(u128, &str)] = &[
@@ -629,6 +709,7 @@ fn fixtures_match_nvdisasm() {
         (W1D_IMNMX_U32, "IMNMX.U32 R1, R2, R3, P0 ;"),
         (W1D_IMNMX_S32, "IMNMX R1, R2, R3, P0 ;"),
         (W1D_IADD3_CARRY, "IADD3 R7, P0, P1, R4, R0, R5 ;"),
+        (W1D_IADD3_NEG_C, "IADD3 R7, P0, P1, R4, R0, -R5 ;"),
         (W1D_IADD3_OBSERVER, "IADD3.X R9, RZ, RZ, RZ, P0, P1 ;"),
         (W1D_IADD3_X, "IADD3.X R7, R0, R7, R9, PT, PT ;"),
         (inst::ldg(4, 2, 8), "LDG.E R4, [R2+0x8] ;"),
@@ -686,6 +767,13 @@ fn fixtures_match_nvdisasm() {
         (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
+        (inst::sts(15, 4), "STS [R15], R4 ;"),
+        (inst::sts(255, 255), "STS [RZ], RZ ;"),
+        (inst::lds(13, 16), "LDS R13, [R16] ;"),
+        (inst::lds(6, 255), "LDS R6, [RZ] ;"),
+        (inst::atoms_add(4, 255, 5), "ATOMS.ADD R4, [RZ], R5 ;"),
+        (inst::atoms_cas(7, 255, 8, 9), "ATOMS.CAS R7, [RZ], R8, R9 ;"),
+        (inst::bar_sync(), "BAR.SYNC 0x0 ;"),
         (inst::s2r(1, 33), "S2R R1, SR_TID.X ;"),
         (inst::cs2r(4, 80, false), "CS2R.32 R4, SR_CLOCKLO;"),
         (inst::cs2r(4, 80, true), "CS2R R4, SR_CLOCKLO;"),
@@ -713,7 +801,8 @@ fn fixtures_match_nvdisasm() {
         (inst::s2r(8, 57), "S2R R8, SR_LTMASK ;"),
         (inst::s2r(11, 60), "S2R R11, SR_GEMASK ;"),
     ];
-    for &(word, expected) in fixtures {
+    use crate::tests::gpu::fp16::tests as fp16;
+    for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();
         let out = std::process::Command::new(&nvdisasm).args(["--binary", "SM86"]).arg(&bin).output().unwrap();
         let text = String::from_utf8_lossy(&out.stdout);

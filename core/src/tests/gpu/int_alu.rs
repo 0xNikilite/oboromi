@@ -8,6 +8,19 @@ mod tests {
     const IADD3_X: u128 = 0x004fc80003fee4090000000700077210;
     const IABS: u128 = 0x004fc800000000000000000200017213;
     const IMNMX_U32: u128 = 0x004fc800000000000000000302017217;
+    const IDP4A_S8: u128 = 0x004fc800000006040000000302017226;
+    const IDP2A_LO_S16_S8: u128 = 0x004fc800000016040000000302017226;
+    const IDP2A_HI_S16_S8: u128 = 0x004fc800000036040000000302017226;
+    const IADD3_CBUF: u128 = 0x004fc80007ffe0030000000002017a10;
+    const IADD3_UREG: u128 = 0x004fc8000fffe0030000000402057c10;
+    const VABSDIFF_S32: u128 = 0x004fc800000e02040000000302017214;
+    const VABSDIFF4_S8: u128 = 0x004fc800000e00040000000302017215;
+    const VABSDIFF4_S8_ACC: u128 = 0x004fc800000e08040000000302017215;
+    const CLMAD_LO: u128 = 0x004fc80000000008000000060402722c;
+    const LEA_HI: u128 = 0x004fc800078f18040000000302017211;
+    const LEA_HI_SX32: u128 = 0x004fc800078f1aff0000000302017211;
+    const LEA_X: u128 = 0x004fc800038e1cff0000000302017211;
+    const LEA_CARRY: u128 = 0x004fc800078000ff0000000302017211;
 
     #[test]
     fn translated_mov_and_iadd3_run_on_gpu() {
@@ -65,6 +78,35 @@ mod tests {
             return;
         };
         assert_eq!(regs[1], 29);
+    }
+
+    #[test]
+    fn lea_high_sign_extension_and_carry_input() {
+        let mut seed = vec![0; 5];
+        seed[2] = 0x4000_0000;
+        seed[3] = 5;
+        seed[4] = 2;
+        let Some((regs, _)) = run_regs(&[LEA_HI], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], 0x17);
+        let Some((regs, _)) = run_regs(&[LEA_HI_SX32], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], 7);
+        seed[2] = 3;
+        let Some((regs, _)) = run_regs(&[LEA_X], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], 30);
+        seed.resize(255, 0);
+        seed[2] = u32::MAX;
+        seed[3] = 1;
+        let Some((regs, _)) = run_regs(&[LEA_CARRY, IADD3_CARRY_OBSERVER], &seed, &[], &[])
+        else {
+            return;
+        };
+        assert_eq!([regs[1], regs[9]], [0, 1]);
     }
 
     #[test]
@@ -182,5 +224,102 @@ mod tests {
             return;
         };
         assert_eq!(regs[1], 2);
+    }
+
+    #[test]
+    fn idp_and_vabsdiff_cover_packed_and_scalar_forms() {
+        let mut seed = vec![0; 10];
+        seed[2] = 0xfc03_fe01;
+        seed[3] = 0xf8f9_0605;
+        seed[4] = 10;
+        let Some((regs, _)) = run_regs(&[IDP4A_S8], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], 14);
+
+        seed[2] = 0xfffe_0001;
+        seed[3] = 0x0403_0201;
+        seed[4] = 10;
+        let Some((regs, _)) = run_regs(&[IDP2A_LO_S16_S8, IDP2A_HI_S16_S8], &seed, &[], &[])
+        else {
+            return;
+        };
+        assert_eq!(regs[1], 5);
+
+        seed[2] = 0x8000_0000;
+        seed[3] = 1;
+        seed[4] = 2;
+        let Some((regs, _)) = run_regs(&[VABSDIFF_S32], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1], 0x8000_0003);
+
+        seed[2] = 0xff1e_1401;
+        seed[3] = 0x0028_0a05;
+        seed[4] = 7;
+        let Some((regs, _)) = run_regs(&[VABSDIFF4_S8, VABSDIFF4_S8_ACC], &seed, &[], &[])
+        else {
+            return;
+        };
+        assert_eq!(regs[1], 286);
+    }
+
+    #[test]
+    fn clmad_carryless_multiplies_and_accumulates() {
+        let mut seed = vec![0; 10];
+        seed[4] = 3;
+        seed[6] = 5;
+        seed[8] = 1;
+        let Some((regs, _)) = run_regs(&[CLMAD_LO], &seed, &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[2..4], [14, 0]);
+    }
+
+    #[test]
+    fn iadd3_reads_cbuf_and_uniform_sources() {
+        let ur4 = 254 + 1 + 4;
+        let mut seed = vec![0; ur4 + 1];
+        seed[2] = 3;
+        seed[3] = 5;
+        seed[ur4] = 7;
+        let Some((regs, _)) = run_regs(&[IADD3_CBUF, IADD3_UREG], &seed, &[11], &[]) else {
+            return;
+        };
+        assert_eq!([regs[1], regs[5]], [19, 15]);
+    }
+
+    #[test]
+    fn alu_remainder_words_match_nvdisasm() {
+        let fixtures = [
+            (IDP4A_S8, "IDP.4A.S8.S8 R1, R2, R3, R4 ;"),
+            (IDP2A_LO_S16_S8, "IDP.2A.LO.S16.S8 R1, R2, R3, R4 ;"),
+            (IDP2A_HI_S16_S8, "IDP.2A.HI.S16.S8 R1, R2, R3, R4 ;"),
+            (IADD3_CBUF, "IADD3 R1, R2, c[0x0][0x0], R3 ;"),
+            (IADD3_UREG, "IADD3 R5, R2, UR4, R3 ;"),
+            (LEA_HI, "LEA.HI R1, R2, R3, R4, 0x3 ;"),
+            (LEA_HI_SX32, "LEA.HI.SX32 R1, R2, R3, 0x3 ;"),
+            (LEA_X, "LEA.X R1, R2, R3, 0x3, PT ;"),
+            (LEA_CARRY, "LEA R1, P0, R2, R3, 0x0 ;"),
+            (VABSDIFF_S32, "VABSDIFF R1, R2, R3, R4 ;"),
+            (VABSDIFF4_S8, "VABSDIFF4.U8 R1, R2, R3, R4 ;"),
+            (VABSDIFF4_S8_ACC, "VABSDIFF4.U8.ACC R1, R2, R3, R4 ;"),
+        ];
+        let path = std::env::temp_dir().join(format!("oboromi-int-alu-{}.bin", std::process::id()));
+        for (word, expected) in fixtures {
+            std::fs::write(&path, word.to_le_bytes()).unwrap();
+            let output = std::process::Command::new("/usr/local/cuda-13.1/bin/nvdisasm")
+                .args(["--binary", "SM86"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&output.stdout);
+            let disasm = text
+                .lines()
+                .find_map(|line| line.split("/*0000*/").nth(1))
+                .unwrap_or_else(|| panic!("nvdisasm rejected {word:032x}: {text}"));
+            assert_eq!(disasm.trim(), expected);
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }

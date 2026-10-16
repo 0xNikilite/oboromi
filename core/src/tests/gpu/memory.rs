@@ -8,8 +8,7 @@ mod tests {
     #[test]
     fn ldg_reads_global_word() {
         let seed = [0, 0, BASE[0], BASE[1]];
-        let Some((regs, _)) = run_regs(&[inst::ldg(4, 2, 8)], &seed, &[], &[1, 2, 0xdead_beef])
-        else {
+        let Some((regs, _)) = run_regs(&[inst::ldg(4, 2, 8)], &seed, &[], &[1, 2, 0xdead_beef]) else {
             return;
         };
         assert_eq!(regs[4], 0xdead_beef);
@@ -27,8 +26,7 @@ mod tests {
     #[test]
     fn ldc_and_uldc_read_cbuf() {
         let program = [inst::ldc(6, 0, 3, 4), inst::uldc64(4, 0, 0x10)];
-        let Some((regs, _)) = run_regs(&program, &[0, 0, 0, 8], &[10, 11, 12, 13, 14, 15], &[])
-        else {
+        let Some((regs, _)) = run_regs(&program, &[0, 0, 0, 8], &[10, 11, 12, 13, 14, 15], &[]) else {
             return;
         };
         let ur4 = 254 + 1 + 4;

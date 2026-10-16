@@ -1,9 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::sm86::STATE_WORDS;
-    use crate::tests::gpu::harness::{
-        GLOBAL_BASE, run_lanes, run_regs, spirv_val, translate_module,
-    };
+    use crate::tests::gpu::harness::{GLOBAL_BASE, run_lanes, run_regs, spirv_val, translate_module};
     use crate::tests::gpu_test::inst;
 
     fn s2r(rd: u32, sr: u32) -> u128 {

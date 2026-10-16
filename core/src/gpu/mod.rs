@@ -43,13 +43,8 @@ pub fn device() -> Result<&'static VkState, VkError> {
 
 impl VkState {
     pub fn is_llvmpipe(&self) -> bool {
-        let props = unsafe {
-            self.instance
-                .get_physical_device_properties(self.physical_device)
-        };
-        props
-            .device_name_as_c_str()
-            .is_ok_and(|n| n.to_bytes().starts_with(b"llvmpipe"))
+        let props = unsafe { self.instance.get_physical_device_properties(self.physical_device) };
+        props.device_name_as_c_str().is_ok_and(|n| n.to_bytes().starts_with(b"llvmpipe"))
     }
 
     pub fn new() -> Result<Self, VkError> {

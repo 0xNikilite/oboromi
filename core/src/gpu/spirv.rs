@@ -7,63 +7,43 @@ pub trait Literal {
 
 impl Literal for u8 {
     type Words = iter::Once<u32>;
-    fn to_words(self) -> Self::Words {
-        iter::once(self as u32)
-    }
+    fn to_words(self) -> Self::Words { iter::once(self as u32) }
 }
 impl Literal for i8 {
     type Words = iter::Once<u32>;
-    fn to_words(self) -> Self::Words {
-        iter::once(self as u8 as u32)
-    }
+    fn to_words(self) -> Self::Words { iter::once(self as u8 as u32) }
 }
 impl Literal for u16 {
     type Words = iter::Once<u32>;
-    fn to_words(self) -> Self::Words {
-        iter::once(self as u32)
-    }
+    fn to_words(self) -> Self::Words { iter::once(self as u32) }
 }
 impl Literal for i16 {
     type Words = iter::Once<u32>;
-    fn to_words(self) -> Self::Words {
-        iter::once(self as u16 as u32)
-    }
+    fn to_words(self) -> Self::Words { iter::once(self as u16 as u32) }
 }
 impl Literal for u32 {
     type Words = iter::Once<u32>;
-    fn to_words(self) -> Self::Words {
-        iter::once(self)
-    }
+    fn to_words(self) -> Self::Words { iter::once(self) }
 }
 impl Literal for i32 {
     type Words = iter::Once<u32>;
-    fn to_words(self) -> Self::Words {
-        iter::once(self as u32)
-    }
+    fn to_words(self) -> Self::Words { iter::once(self as u32) }
 }
 impl Literal for f32 {
     type Words = iter::Once<u32>;
-    fn to_words(self) -> Self::Words {
-        iter::once(self.to_bits())
-    }
+    fn to_words(self) -> Self::Words { iter::once(self.to_bits()) }
 }
 impl Literal for u64 {
     type Words = std::array::IntoIter<u32, 2>;
-    fn to_words(self) -> Self::Words {
-        [self as u32, (self >> 32) as u32].into_iter()
-    }
+    fn to_words(self) -> Self::Words { [self as u32, (self >> 32) as u32].into_iter() }
 }
 impl Literal for i64 {
     type Words = std::array::IntoIter<u32, 2>;
-    fn to_words(self) -> Self::Words {
-        (self as u64).to_words()
-    }
+    fn to_words(self) -> Self::Words { (self as u64).to_words() }
 }
 impl Literal for f64 {
     type Words = std::array::IntoIter<u32, 2>;
-    fn to_words(self) -> Self::Words {
-        self.to_bits().to_words()
-    }
+    fn to_words(self) -> Self::Words { self.to_bits().to_words() }
 }
 
 fn encode_string(buf: &mut Vec<u32>, s: &str) {
@@ -182,9 +162,7 @@ fn section(opcode: u32, operands: &[u32]) -> usize {
 }
 
 impl Default for Emitter {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl Emitter {
@@ -204,15 +182,9 @@ impl Emitter {
     }
 
     /// Access the emitted word stream
-    pub fn words(&self) -> Vec<u32> {
-        self.sections.concat()
-    }
-    pub fn len(&self) -> usize {
-        self.sections.iter().map(Vec::len).sum()
-    }
-    pub fn id_bound(&self) -> u32 {
-        self.next_id
-    }
+    pub fn words(&self) -> Vec<u32> { self.sections.concat() }
+    pub fn len(&self) -> usize { self.sections.iter().map(Vec::len).sum() }
+    pub fn id_bound(&self) -> u32 { self.next_id }
 
     fn inst(&mut self, opcode: u32, operands: &[u32]) {
         let wc = (1 + operands.len()) as u32;
@@ -289,11 +261,7 @@ impl Emitter {
         self.inst(43, &data);
         r
     }
-    pub fn emit_constant_composite_typed<T: Literal + Copy>(
-        &mut self,
-        ty: u32,
-        constituents: &[T],
-    ) -> u32 {
+    pub fn emit_constant_composite_typed<T: Literal + Copy>(&mut self, ty: u32, constituents: &[T]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r];
         for e in constituents.iter() {
@@ -338,13 +306,7 @@ impl Emitter {
         self.inst(71, &data);
     }
 
-    pub fn emit_member_decorate(
-        &mut self,
-        struct_type: u32,
-        member: u32,
-        deco: u32,
-        literals: &[u32],
-    ) {
+    pub fn emit_member_decorate(&mut self, struct_type: u32, member: u32, deco: u32, literals: &[u32]) {
         let mut data = vec![struct_type, member, deco];
         data.extend_from_slice(literals);
         self.inst(72, &data);
@@ -404,20 +366,11 @@ impl Emitter {
     }
 
     pub fn emit_type_image(
-        &mut self,
-        sampled_type: u32,
-        dim: u32,
-        depth: u32,
-        arrayed: u32,
-        ms: u32,
-        sampled: u32,
-        format: u32,
+        &mut self, sampled_type: u32, dim: u32, depth: u32,
+        arrayed: u32, ms: u32, sampled: u32, format: u32,
     ) -> u32 {
         let r = self.alloc_id();
-        self.inst(
-            25,
-            &[r, sampled_type, dim, depth, arrayed, ms, sampled, format],
-        );
+        self.inst(25, &[r, sampled_type, dim, depth, arrayed, ms, sampled, format]);
         r
     }
 
@@ -593,13 +546,7 @@ impl Emitter {
         r
     }
 
-    pub fn emit_composite_insert(
-        &mut self,
-        ty: u32,
-        object: u32,
-        composite: u32,
-        indexes: &[u32],
-    ) -> u32 {
+    pub fn emit_composite_insert(&mut self, ty: u32, object: u32, composite: u32, indexes: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r, object, composite];
         data.extend_from_slice(indexes);
@@ -611,225 +558,84 @@ impl Emitter {
         self.typed_un(83, ty, operand)
     }
 
-    pub fn emit_convert_f_to_u(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(109, ty, val)
-    }
-    pub fn emit_convert_f_to_s(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(110, ty, val)
-    }
-    pub fn emit_convert_s_to_f(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(111, ty, val)
-    }
-    pub fn emit_convert_u_to_f(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(112, ty, val)
-    }
-    pub fn emit_u_convert(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(113, ty, val)
-    }
-    pub fn emit_s_convert(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(114, ty, val)
-    }
-    pub fn emit_f_convert(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(115, ty, val)
-    }
-    pub fn emit_bitcast(&mut self, ty: u32, val: u32) -> u32 {
-        self.typed_un(124, ty, val)
-    }
+    pub fn emit_convert_f_to_u(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(109, ty, val) }
+    pub fn emit_convert_f_to_s(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(110, ty, val) }
+    pub fn emit_convert_s_to_f(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(111, ty, val) }
+    pub fn emit_convert_u_to_f(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(112, ty, val) }
+    pub fn emit_u_convert(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(113, ty, val) }
+    pub fn emit_s_convert(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(114, ty, val) }
+    pub fn emit_f_convert(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(115, ty, val) }
+    pub fn emit_bitcast(&mut self, ty: u32, val: u32) -> u32 { self.typed_un(124, ty, val) }
 
-    pub fn emit_snegate(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(126, ty, a)
-    }
-    pub fn emit_fnegate(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(127, ty, a)
-    }
-    pub fn emit_iadd(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(128, ty, a, b)
-    }
-    pub fn emit_fadd(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(129, ty, a, b)
-    }
-    pub fn emit_isub(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(130, ty, a, b)
-    }
-    pub fn emit_fsub(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(131, ty, a, b)
-    }
-    pub fn emit_imul(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(132, ty, a, b)
-    }
-    pub fn emit_fmul(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(133, ty, a, b)
-    }
-    pub fn emit_udiv(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(134, ty, a, b)
-    }
-    pub fn emit_sdiv(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(135, ty, a, b)
-    }
-    pub fn emit_fdiv(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(136, ty, a, b)
-    }
-    pub fn emit_umod(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(137, ty, a, b)
-    }
-    pub fn emit_srem(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(138, ty, a, b)
-    }
-    pub fn emit_smod(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(139, ty, a, b)
-    }
-    pub fn emit_frem(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(140, ty, a, b)
-    }
-    pub fn emit_fmod(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(141, ty, a, b)
-    }
+    pub fn emit_snegate(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(126, ty, a) }
+    pub fn emit_fnegate(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(127, ty, a) }
+    pub fn emit_iadd(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(128, ty, a, b) }
+    pub fn emit_fadd(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(129, ty, a, b) }
+    pub fn emit_isub(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(130, ty, a, b) }
+    pub fn emit_fsub(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(131, ty, a, b) }
+    pub fn emit_imul(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(132, ty, a, b) }
+    pub fn emit_fmul(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(133, ty, a, b) }
+    pub fn emit_udiv(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(134, ty, a, b) }
+    pub fn emit_sdiv(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(135, ty, a, b) }
+    pub fn emit_fdiv(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(136, ty, a, b) }
+    pub fn emit_umod(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(137, ty, a, b) }
+    pub fn emit_srem(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(138, ty, a, b) }
+    pub fn emit_smod(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(139, ty, a, b) }
+    pub fn emit_frem(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(140, ty, a, b) }
+    pub fn emit_fmod(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(141, ty, a, b) }
 
-    pub fn emit_logical_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(164, ty, a, b)
-    }
-    pub fn emit_logical_not_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(165, ty, a, b)
-    }
-    pub fn emit_logical_or(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(166, ty, a, b)
-    }
-    pub fn emit_logical_and(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(167, ty, a, b)
-    }
-    pub fn emit_logical_not(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(168, ty, a)
-    }
-    pub fn emit_select(&mut self, ty: u32, cond: u32, a: u32, b: u32) -> u32 {
-        self.typed_tri(169, ty, cond, a, b)
-    }
+    pub fn emit_logical_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(164, ty, a, b) }
+    pub fn emit_logical_not_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(165, ty, a, b) }
+    pub fn emit_logical_or(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(166, ty, a, b) }
+    pub fn emit_logical_and(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(167, ty, a, b) }
+    pub fn emit_logical_not(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(168, ty, a) }
+    pub fn emit_select(&mut self, ty: u32, cond: u32, a: u32, b: u32) -> u32 { self.typed_tri(169, ty, cond, a, b) }
 
-    pub fn emit_iequal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(170, ty, a, b)
-    }
-    pub fn emit_inot_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(171, ty, a, b)
-    }
-    pub fn emit_ugreater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(172, ty, a, b)
-    }
-    pub fn emit_sgreater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(173, ty, a, b)
-    }
-    pub fn emit_ugreater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(174, ty, a, b)
-    }
-    pub fn emit_sgreater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(175, ty, a, b)
-    }
-    pub fn emit_uless_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(176, ty, a, b)
-    }
-    pub fn emit_sless_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(177, ty, a, b)
-    }
-    pub fn emit_uless_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(178, ty, a, b)
-    }
-    pub fn emit_sless_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(179, ty, a, b)
-    }
+    pub fn emit_iequal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(170, ty, a, b) }
+    pub fn emit_inot_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(171, ty, a, b) }
+    pub fn emit_ugreater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(172, ty, a, b) }
+    pub fn emit_sgreater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(173, ty, a, b) }
+    pub fn emit_ugreater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(174, ty, a, b) }
+    pub fn emit_sgreater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(175, ty, a, b) }
+    pub fn emit_uless_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(176, ty, a, b) }
+    pub fn emit_sless_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(177, ty, a, b) }
+    pub fn emit_uless_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(178, ty, a, b) }
+    pub fn emit_sless_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(179, ty, a, b) }
 
-    pub fn emit_ford_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(180, ty, a, b)
-    }
-    pub fn emit_funord_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(181, ty, a, b)
-    }
-    pub fn emit_ford_not_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(182, ty, a, b)
-    }
-    pub fn emit_funord_not_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(183, ty, a, b)
-    }
-    pub fn emit_ford_less_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(184, ty, a, b)
-    }
-    pub fn emit_funord_less_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(185, ty, a, b)
-    }
-    pub fn emit_ford_greater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(186, ty, a, b)
-    }
-    pub fn emit_funord_greater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(187, ty, a, b)
-    }
-    pub fn emit_ford_less_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(188, ty, a, b)
-    }
-    pub fn emit_funord_less_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(189, ty, a, b)
-    }
-    pub fn emit_ford_greater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(190, ty, a, b)
-    }
-    pub fn emit_funord_greater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(191, ty, a, b)
-    }
-    pub fn emit_f_is_nan(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(156, ty, a)
-    }
-    pub fn emit_f_is_inf(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(157, ty, a)
-    }
-    pub fn emit_is_nan(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(156, ty, a)
-    }
-    pub fn emit_is_inf(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(157, ty, a)
-    }
+    pub fn emit_ford_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(180, ty, a, b) }
+    pub fn emit_funord_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(181, ty, a, b) }
+    pub fn emit_ford_not_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(182, ty, a, b) }
+    pub fn emit_funord_not_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(183, ty, a, b) }
+    pub fn emit_ford_less_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(184, ty, a, b) }
+    pub fn emit_funord_less_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(185, ty, a, b) }
+    pub fn emit_ford_greater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(186, ty, a, b) }
+    pub fn emit_funord_greater_than(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(187, ty, a, b) }
+    pub fn emit_ford_less_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(188, ty, a, b) }
+    pub fn emit_funord_less_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(189, ty, a, b) }
+    pub fn emit_ford_greater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(190, ty, a, b) }
+    pub fn emit_funord_greater_than_equal(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(191, ty, a, b) }
+    pub fn emit_f_is_nan(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(156, ty, a) }
+    pub fn emit_f_is_inf(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(157, ty, a) }
+    pub fn emit_is_nan(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(156, ty, a) }
+    pub fn emit_is_inf(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(157, ty, a) }
 
-    pub fn emit_shift_right_logical(&mut self, ty: u32, base: u32, shift: u32) -> u32 {
-        self.typed_bin(194, ty, base, shift)
-    }
-    pub fn emit_shift_right_arithmetic(&mut self, ty: u32, base: u32, shift: u32) -> u32 {
-        self.typed_bin(195, ty, base, shift)
-    }
-    pub fn emit_shift_left_logical(&mut self, ty: u32, base: u32, shift: u32) -> u32 {
-        self.typed_bin(196, ty, base, shift)
-    }
-    pub fn emit_bitwise_or(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(197, ty, a, b)
-    }
-    pub fn emit_bitwise_xor(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(198, ty, a, b)
-    }
-    pub fn emit_bitwise_and(&mut self, ty: u32, a: u32, b: u32) -> u32 {
-        self.typed_bin(199, ty, a, b)
-    }
-    pub fn emit_not(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(200, ty, a)
-    }
+    pub fn emit_shift_right_logical(&mut self, ty: u32, base: u32, shift: u32) -> u32 { self.typed_bin(194, ty, base, shift) }
+    pub fn emit_shift_right_arithmetic(&mut self, ty: u32, base: u32, shift: u32) -> u32 { self.typed_bin(195, ty, base, shift) }
+    pub fn emit_shift_left_logical(&mut self, ty: u32, base: u32, shift: u32) -> u32 { self.typed_bin(196, ty, base, shift) }
+    pub fn emit_bitwise_or(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(197, ty, a, b) }
+    pub fn emit_bitwise_xor(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(198, ty, a, b) }
+    pub fn emit_bitwise_and(&mut self, ty: u32, a: u32, b: u32) -> u32 { self.typed_bin(199, ty, a, b) }
+    pub fn emit_not(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(200, ty, a) }
 
-    pub fn emit_bit_field_insert(
-        &mut self,
-        ty: u32,
-        base: u32,
-        insert: u32,
-        offset: u32,
-        count: u32,
-    ) -> u32 {
+    pub fn emit_bit_field_insert(&mut self, ty: u32, base: u32, insert: u32, offset: u32, count: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(201, &[ty, r, base, insert, offset, count]);
         r
     }
-    pub fn emit_bit_field_s_extract(&mut self, ty: u32, base: u32, offset: u32, count: u32) -> u32 {
-        self.typed_tri(202, ty, base, offset, count)
-    }
-    pub fn emit_bit_field_u_extract(&mut self, ty: u32, base: u32, offset: u32, count: u32) -> u32 {
-        self.typed_tri(203, ty, base, offset, count)
-    }
-    pub fn emit_bit_reverse(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(204, ty, a)
-    }
-    pub fn emit_bit_count(&mut self, ty: u32, a: u32) -> u32 {
-        self.typed_un(205, ty, a)
-    }
+    pub fn emit_bit_field_s_extract(&mut self, ty: u32, base: u32, offset: u32, count: u32) -> u32 { self.typed_tri(202, ty, base, offset, count) }
+    pub fn emit_bit_field_u_extract(&mut self, ty: u32, base: u32, offset: u32, count: u32) -> u32 { self.typed_tri(203, ty, base, offset, count) }
+    pub fn emit_bit_reverse(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(204, ty, a) }
+    pub fn emit_bit_count(&mut self, ty: u32, a: u32) -> u32 { self.typed_un(205, ty, a) }
 
     pub fn emit_phi(&mut self, ty: u32, sources: &[(u32, u32)]) -> u32 {
         let r = self.alloc_id();
@@ -910,13 +716,7 @@ impl Emitter {
         self.typed_bin(86, ty, image, sampler)
     }
 
-    pub fn emit_image_sample_implicit_lod(
-        &mut self,
-        ty: u32,
-        sampled_image: u32,
-        coord: u32,
-        operands: &[u32],
-    ) -> u32 {
+    pub fn emit_image_sample_implicit_lod(&mut self, ty: u32, sampled_image: u32, coord: u32, operands: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r, sampled_image, coord];
         data.extend_from_slice(operands);
@@ -924,14 +724,7 @@ impl Emitter {
         r
     }
 
-    pub fn emit_image_sample_explicit_lod(
-        &mut self,
-        ty: u32,
-        sampled_image: u32,
-        coord: u32,
-        image_ops: u32,
-        operands: &[u32],
-    ) -> u32 {
+    pub fn emit_image_sample_explicit_lod(&mut self, ty: u32, sampled_image: u32, coord: u32, image_ops: u32, operands: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r, sampled_image, coord, image_ops];
         data.extend_from_slice(operands);
@@ -983,190 +776,81 @@ impl Emitter {
         self.inst(228, &[pointer, scope, semantics, value]);
     }
 
-    pub fn emit_atomic_exchange(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_exchange(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(229, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_compare_exchange(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        equal_sem: u32,
-        unequal_sem: u32,
-        value: u32,
-        comparator: u32,
-    ) -> u32 {
+    pub fn emit_atomic_compare_exchange(&mut self, ty: u32, pointer: u32, scope: u32, equal_sem: u32, unequal_sem: u32, value: u32, comparator: u32) -> u32 {
         let r = self.alloc_id();
-        self.inst(
-            230,
-            &[
-                ty,
-                r,
-                pointer,
-                scope,
-                equal_sem,
-                unequal_sem,
-                value,
-                comparator,
-            ],
-        );
+        self.inst(230, &[ty, r, pointer, scope, equal_sem, unequal_sem, value, comparator]);
         r
     }
 
-    pub fn emit_atomic_iadd(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_iadd(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(234, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_isub(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_isub(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(235, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_smin(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_smin(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(236, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_umin(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_umin(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(237, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_smax(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_smax(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(238, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_umax(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_umax(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(239, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_and(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_and(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(240, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_or(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_or(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(241, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_atomic_xor(
-        &mut self,
-        ty: u32,
-        pointer: u32,
-        scope: u32,
-        semantics: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_atomic_xor(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(242, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 
-    pub fn emit_dpdx(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(207, ty, p)
-    }
-    pub fn emit_dpdy(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(208, ty, p)
-    }
-    pub fn emit_fwidth(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(209, ty, p)
-    }
-    pub fn emit_dpdx_fine(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(210, ty, p)
-    }
-    pub fn emit_dpdy_fine(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(211, ty, p)
-    }
-    pub fn emit_fwidth_fine(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(212, ty, p)
-    }
-    pub fn emit_dpdx_coarse(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(213, ty, p)
-    }
-    pub fn emit_dpdy_coarse(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(214, ty, p)
-    }
-    pub fn emit_fwidth_coarse(&mut self, ty: u32, p: u32) -> u32 {
-        self.typed_un(215, ty, p)
-    }
+    pub fn emit_dpdx(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(207, ty, p) }
+    pub fn emit_dpdy(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(208, ty, p) }
+    pub fn emit_fwidth(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(209, ty, p) }
+    pub fn emit_dpdx_fine(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(210, ty, p) }
+    pub fn emit_dpdy_fine(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(211, ty, p) }
+    pub fn emit_fwidth_fine(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(212, ty, p) }
+    pub fn emit_dpdx_coarse(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(213, ty, p) }
+    pub fn emit_dpdy_coarse(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(214, ty, p) }
+    pub fn emit_fwidth_coarse(&mut self, ty: u32, p: u32) -> u32 { self.typed_un(215, ty, p) }
 
     pub fn emit_group_non_uniform_elect(&mut self, ty: u32, scope: u32) -> u32 {
         let r = self.alloc_id();
@@ -1174,24 +858,13 @@ impl Emitter {
         r
     }
 
-    pub fn emit_group_non_uniform_broadcast(
-        &mut self,
-        ty: u32,
-        scope: u32,
-        value: u32,
-        id: u32,
-    ) -> u32 {
+    pub fn emit_group_non_uniform_broadcast(&mut self, ty: u32, scope: u32, value: u32, id: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(337, &[ty, r, scope, value, id]);
         r
     }
 
-    pub fn emit_group_non_uniform_broadcast_first(
-        &mut self,
-        ty: u32,
-        scope: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_group_non_uniform_broadcast_first(&mut self, ty: u32, scope: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(338, &[ty, r, scope, value]);
         r
@@ -1203,25 +876,13 @@ impl Emitter {
         r
     }
 
-    pub fn emit_group_non_uniform_shuffle(
-        &mut self,
-        ty: u32,
-        scope: u32,
-        value: u32,
-        id: u32,
-    ) -> u32 {
+    pub fn emit_group_non_uniform_shuffle(&mut self, ty: u32, scope: u32, value: u32, id: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(345, &[ty, r, scope, value, id]);
         r
     }
 
-    pub fn emit_group_non_uniform_shuffle_xor(
-        &mut self,
-        ty: u32,
-        scope: u32,
-        value: u32,
-        mask: u32,
-    ) -> u32 {
+    pub fn emit_group_non_uniform_shuffle_xor(&mut self, ty: u32, scope: u32, value: u32, mask: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(346, &[ty, r, scope, value, mask]);
         r
@@ -1275,37 +936,19 @@ impl Emitter {
         r
     }
 
-    pub fn emit_group_non_uniform_bitwise_and(
-        &mut self,
-        ty: u32,
-        scope: u32,
-        op: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_group_non_uniform_bitwise_and(&mut self, ty: u32, scope: u32, op: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(359, &[ty, r, scope, op, value]);
         r
     }
 
-    pub fn emit_group_non_uniform_bitwise_or(
-        &mut self,
-        ty: u32,
-        scope: u32,
-        op: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_group_non_uniform_bitwise_or(&mut self, ty: u32, scope: u32, op: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(360, &[ty, r, scope, op, value]);
         r
     }
 
-    pub fn emit_group_non_uniform_bitwise_xor(
-        &mut self,
-        ty: u32,
-        scope: u32,
-        op: u32,
-        value: u32,
-    ) -> u32 {
+    pub fn emit_group_non_uniform_bitwise_xor(&mut self, ty: u32, scope: u32, op: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(361, &[ty, r, scope, op, value]);
         r
@@ -1336,10 +979,7 @@ impl Emitter {
             let wc = (header >> 16) as usize;
             let opcode = header & 0xFFFF;
             assert!(wc > 0, "Instruction with zero word count");
-            assert!(
-                pos + wc <= words.len(),
-                "Instruction extends beyond module end"
-            );
+            assert!(pos + wc <= words.len(), "Instruction extends beyond module end");
             // OpNop is valid with wc=1
             assert!(opcode != 0 || wc == 1, "OpNop must have word count 1");
             pos += wc;
@@ -1348,11 +988,7 @@ impl Emitter {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.sections
-            .iter()
-            .flatten()
-            .flat_map(|e| e.to_le_bytes())
-            .collect()
+        self.sections.iter().flatten().flat_map(|e| e.to_le_bytes()).collect()
     }
 }
 
@@ -1456,10 +1092,7 @@ mod tests {
     fn literal_encoding() {
         assert_eq!(42u8.to_words().collect::<Vec<_>>(), vec![42]);
         assert_eq!(1000u16.to_words().collect::<Vec<_>>(), vec![1000]);
-        assert_eq!(
-            0xDEADBEEFu32.to_words().collect::<Vec<_>>(),
-            vec![0xDEADBEEF]
-        );
+        assert_eq!(0xDEADBEEFu32.to_words().collect::<Vec<_>>(), vec![0xDEADBEEF]);
         let f: f32 = 1.0;
         assert_eq!(f.to_words().collect::<Vec<_>>(), vec![f.to_bits()]);
         let big: u64 = 0x0102030405060708;

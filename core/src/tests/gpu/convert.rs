@@ -177,12 +177,7 @@ mod tests {
         let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
             return;
         };
-        let expected = [
-            if skip_nearest { 1 } else { 2i64 } as u64,
-            i64::MAX as u64,
-            0,
-            i64::MIN as u64,
-        ];
+        let expected = [if skip_nearest { 1 } else { 2i64 } as u64, i64::MAX as u64, 0, i64::MIN as u64];
         for (i, value) in expected.into_iter().enumerate() {
             assert_eq!(
                 [regs[16 + i * 2], regs[17 + i * 2]],

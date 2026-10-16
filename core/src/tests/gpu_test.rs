@@ -13,7 +13,8 @@ pub struct TestResult {
 }
 
 // helpers to build sm86 instructions
-mod inst {
+#[doc(hidden)]
+pub mod inst {
     // iadd rd, ra, imm32 (src_type=4, opcode=0x810)
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst: u128 = 0x7810;
@@ -73,7 +74,8 @@ mod inst {
     }
 }
 
-fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
+#[doc(hidden)]
+pub fn translate_module(instructions: &[u128], register_io: bool) -> Emitter {
     let mut emitter = Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(SHADER);

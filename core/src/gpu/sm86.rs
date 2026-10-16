@@ -295,6 +295,8 @@ pub struct Decoder<'a> {
     type_u64: u32,
     type_s64: u32,
     type_f64: u32,
+    type_f16: u32,
+    type_f16x2: u32,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
@@ -348,6 +350,8 @@ impl<'a> Decoder<'a> {
             type_u64: 0,
             type_s64: 0,
             type_f64: 0,
+            type_f16: 0,
+            type_f16x2: 0,
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
@@ -763,6 +767,41 @@ impl<'a> Decoder<'a> {
             self.type_f64 = self.ir.emit_type_float(64);
         }
         self.type_f64
+    }
+
+    // Float16 is declared on first use so fp32 shaders still run on devices without shaderFloat16.
+    fn type_f16(&mut self) -> u32 {
+        if self.type_f16 == 0 {
+            self.ir.emit_capability(spirv::capability::FLOAT16);
+            self.type_f16 = self.ir.emit_type_float(16);
+        }
+        self.type_f16
+    }
+
+    fn type_f16x2(&mut self) -> u32 {
+        if self.type_f16x2 == 0 {
+            let half = self.type_f16();
+            self.type_f16x2 = self.ir.emit_type_vector(half, 2);
+        }
+        self.type_f16x2
+    }
+
+    // Component 0 is bits 15:0 (H0), so bitcast_u32 is the inverse.
+    fn unpack_half2(&mut self, word: u32) -> u32 {
+        let ty = self.type_f16x2();
+        self.ir.emit_bitcast(ty, word)
+    }
+
+    // ISWZ: 0 = H1_H0, 2 = H0_H0, 3 = H1_H1; 1 (F32) reads a whole f32 and is not a swizzle.
+    fn half2_swizzle(&mut self, half2: u32, iswz: u32) -> u32 {
+        let lanes = match iswz {
+            0 => return half2,
+            2 => [0, 0],
+            3 => [1, 1],
+            _ => panic!("ISWZ {iswz} is not a half2 swizzle"),
+        };
+        let ty = self.type_f16x2();
+        self.ir.emit_vector_shuffle(ty, half2, half2, &lanes)
     }
 
     // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
@@ -4594,3 +4633,30 @@ impl<'a> Decoder<'a> {
 }
 
 include!("sm86_decoder_generated.rs");
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::gpu::harness::run_body;
+
+    #[test]
+    fn half2_lanes_round_trip_through_a_register() {
+        if !crate::gpu::device().is_ok_and(|d| d.shader_float16) {
+            return eprintln!("skipping: no shaderFloat16");
+        }
+        let program = |d: &mut super::Decoder| {
+            let half2 = d.load_register(0);
+            let half2 = d.unpack_half2(half2);
+            let ty = d.type_f16x2();
+            let sum = d.ir.emit_fadd(ty, half2, half2);
+            let packed = d.bitcast_u32(sum);
+            d.store_register(1, packed);
+            let hi = d.half2_swizzle(sum, 3);
+            let hi = d.bitcast_u32(hi);
+            d.store_register(2, hi);
+        };
+        let Some((regs, _)) = run_body(program, &[0xC000_3E00], &[], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1..3], [0xC400_4200, 0xC400_C400]);
+    }
+}

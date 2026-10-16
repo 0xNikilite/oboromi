@@ -44,7 +44,6 @@ pub mod inst {
     pub const FP_NEG_B: u128 = 1 << 63;
     pub const FP_NEG_A: u128 = 1 << 72;
     pub const FP_ABS_A: u128 = 1 << 73;
-    pub const FP_ABS_C: u128 = 1 << 74;
     pub const FP_NEG_C: u128 = 1 << 75;
     pub const FP_FMZ: u128 = 1 << 76;
     pub const FP_SAT: u128 = 1 << 77;
@@ -82,6 +81,13 @@ pub mod inst {
     const COND_CONV: u128 = 3 << 32;
     const URB_INVERT: u128 = 1 << 30;
     const URZ: u32 = 63;
+    const F2F: u128 = 0x310;
+    const F2I: u128 = 0x305;
+    const F2I_64: u128 = 0x311;
+    const FRND: u128 = 0x307;
+    const I2F: u128 = 0x306;
+    const I2F_64: u128 = 0x312;
+    const I2I: u128 = 0x238;
     const RET_NODEC: u128 = 1 << 86;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
@@ -188,7 +194,6 @@ pub mod inst {
         inst
     }
 
-    // offset in bytes, from the next instruction for relative forms; ra is Ra, URb or UPq
     fn control(op: u128, ra: u32, offset: i64) -> u128 {
         op | PT_GUARD | PP_PT | NO_SCOREBOARD | (ra as u128 & 0xff) << 24 | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
     }
@@ -275,6 +280,43 @@ pub mod inst {
 
     pub fn mufu(rd: u32, op: u32, rb: u32) -> u128 {
         alu(MUFU_R, rd, 0, rb) | (op as u128) << 74
+    }
+
+    pub mod cvt {
+        pub const F32: u32 = 2;
+        pub const F64: u32 = 3;
+        pub const U8: u32 = 0;
+        pub const S8: u32 = 1;
+        pub const U32: u32 = 4;
+        pub const S32: u32 = 5;
+        pub const U64: u32 = 6;
+        pub const S64: u32 = 7;
+        pub const RN: u32 = 0;
+        pub const RM: u32 = 1;
+        pub const RP: u32 = 2;
+        pub const RZ: u32 = 3;
+    }
+
+    pub fn f2f(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32, ftz: bool) -> u128 {
+        alu(F2F, rd, 0, rb) | (dst as u128) << 75 | (src as u128) << 84 | (rnd as u128) << 78 | (ftz as u128) << 80
+    }
+
+    pub fn f2i(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32) -> u128 {
+        let op = if src == cvt::F64 { F2I_64 } else { F2I };
+        alu(op, rd, 0, rb) | (dst as u128 & 1) << 72 | (dst as u128 >> 1) << 75 | (src as u128) << 84 | (rnd as u128) << 78
+    }
+
+    pub fn frnd(rd: u32, rb: u32, rnd: u32) -> u128 {
+        alu(FRND, rd, 0, rb) | (cvt::F32 as u128) << 75 | (cvt::F32 as u128) << 84 | (rnd as u128) << 78
+    }
+
+    pub fn i2f(rd: u32, rb: u32, dst: u32, src: u32) -> u128 {
+        let op = if dst == cvt::F64 || src >= cvt::U64 { I2F_64 } else { I2F };
+        alu(op, rd, 0, rb) | (dst as u128) << 75 | (src as u128 & 1) << 74 | (src as u128 >> 1) << 84
+    }
+
+    pub fn i2i(rd: u32, rb: u32, dst: u32) -> u128 {
+        alu(I2I, rd, 0, rb) | (dst as u128) << 76
     }
 
     pub fn guard(inst: u128, pred: u32, invert: bool) -> u128 {
@@ -510,6 +552,14 @@ fn fixtures_match_nvdisasm() {
         (inst::cs2r(4, 80, false), "CS2R.32 R4, SR_CLOCKLO;"),
         (inst::cs2r(4, 80, true), "CS2R R4, SR_CLOCKLO;"),
         (inst::s2ur(5, 37), "S2UR UR5, SR_CTAID.X ;"),
+        (inst::f2f(0, 2, inst::cvt::F64, inst::cvt::F32, inst::cvt::RN, false), "F2F.F64.F32 R0, R2 ;"),
+        (inst::f2f(13, 14, inst::cvt::F32, inst::cvt::F64, inst::cvt::RP, false), "F2F.F32.F64.RP R13, R14 ;"),
+        (inst::f2i(1, 3, inst::cvt::S32, inst::cvt::F32, inst::cvt::RN), "F2I R1, R3 ;"),
+        (inst::f2i(10, 12, inst::cvt::S64, inst::cvt::F64, inst::cvt::RN), "F2I.S64.F64 R10, R12 ;"),
+        (inst::frnd(4, 5, inst::cvt::RN), "FRND R4, R5 ;"),
+        (inst::i2f(6, 7, inst::cvt::F32, inst::cvt::S32), "I2F R6, R7 ;"),
+        (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
+        (inst::i2i(8, 9, inst::cvt::U8), "I2I.U8.S32.SAT R8, R9;"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

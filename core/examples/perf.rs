@@ -84,9 +84,9 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
         1.0,
         "dispatch/s",
         || {
-            input.write(&[0; 255 * 4]);
+            input.write(&[0; 255 * 4]).unwrap();
             state.dispatch(&pipeline, [1, 1, 1]).unwrap();
-            output.read(black_box(&mut out));
+            output.read(black_box(&mut out)).unwrap();
         },
     ));
     drop((input, output, pipeline));

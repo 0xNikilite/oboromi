@@ -77,7 +77,7 @@ pub fn render_test_frame() -> Result<(), VkError> {
     // Round up so 1080 rows get a partial last group; the shader guard drops the overhang.
     state.dispatch(&pipeline, [WIDTH.div_ceil(16), HEIGHT.div_ceil(16), 1])?;
     let mut pixels = vec![0; size as usize];
-    buffer.read(&mut pixels);
+    buffer.read(&mut pixels)?;
     crate::display::present(WIDTH, HEIGHT, &pixels);
     Ok(())
 }

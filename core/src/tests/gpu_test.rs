@@ -251,15 +251,15 @@ fn translated_mov_and_iadd3_run_on_gpu() {
     let mut regs = [0u32; 255];
     (regs[2], regs[3]) = (40, 2);
     let mut input = HostBuffer::new(&state, 255 * 4).unwrap();
-    input.write(&regs.map(u32::to_le_bytes).concat());
+    input.write(&regs.map(u32::to_le_bytes).concat()).unwrap();
     let mut output = HostBuffer::new(&state, 255 * 4).unwrap();
-    output.write(&[0; 255 * 4]);
+    output.write(&[0; 255 * 4]).unwrap();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (9, ssbo)];
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
     pipeline.bind(&[(10, &input), (9, &output)]);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let mut out = [0u8; 12];
-    output.read(&mut out);
+    output.read(&mut out).unwrap();
     assert_eq!(out[..], [42u32, 42, 40].map(u32::to_le_bytes).concat());
 }

@@ -25,8 +25,7 @@ pub struct VkState {
     pub queue_family: u32,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
-    pub command_buffer: vk::CommandBuffer,
-    pub fence: vk::Fence,
+    pub submit: std::sync::Mutex<compute::Submit>,
 }
 
 impl VkState {
@@ -49,14 +48,15 @@ impl VkState {
                     device,
                     queue_family,
                     command_pool,
-                    command_buffer: vk::CommandBuffer::null(),
-                    fence: vk::Fence::null(),
+                    submit: Default::default(),
                 };
                 let alloc = vk::CommandBufferAllocateInfo::default()
                     .command_pool(command_pool)
                     .command_buffer_count(1);
-                state.command_buffer = unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
-                state.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
+                let submit = state.submit.get_mut().unwrap();
+                submit.command_buffer =
+                    unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
+                submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
                 Ok(state)
             }
             Err(e) => {
@@ -106,7 +106,8 @@ impl Drop for VkState {
         // Children before parents, and nothing may still be executing on the queue.
         unsafe {
             let _ = self.device.device_wait_idle();
-            self.device.destroy_fence(self.fence, None);
+            let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());
+            self.device.destroy_fence(submit.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

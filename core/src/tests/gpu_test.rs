@@ -236,6 +236,7 @@ fn mov_immediate_passes_spirv_val() {
 #[test]
 fn translated_mov_and_iadd3_run_on_gpu() {
     use crate::gpu::compute::{ComputePipeline, HostBuffer};
+    use crate::gpu::sm86::STATE_WORDS;
     use crate::gpu::{VkError, VkState};
     use ash::vk::DescriptorType;
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
@@ -246,12 +247,12 @@ fn translated_mov_and_iadd3_run_on_gpu() {
         Err(e @ (VkError::Loader | VkError::NoDevice)) => return eprintln!("skipping: {e:?}"),
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     };
-    let mut regs = [0u32; 255];
+    let mut regs = [0u32; STATE_WORDS];
     (regs[2], regs[3]) = (40, 2);
-    let mut input = HostBuffer::new(&state, 255 * 4).unwrap();
+    let mut input = HostBuffer::new(&state, STATE_WORDS as u64 * 4).unwrap();
     input.write(&regs.map(u32::to_le_bytes).concat());
-    let mut output = HostBuffer::new(&state, 255 * 4).unwrap();
-    output.write(&[0; 255 * 4]);
+    let mut output = HostBuffer::new(&state, STATE_WORDS as u64 * 4).unwrap();
+    output.write(&[0; STATE_WORDS * 4]);
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (9, ssbo)];
     let pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();

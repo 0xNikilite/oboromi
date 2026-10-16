@@ -21,7 +21,7 @@ impl<'a> HostBuffer<'a> {
         let d = &state.device;
         let info = vk::BufferCreateInfo::default()
             .size(size)
-            .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
+            .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::UNIFORM_BUFFER);
         let mut buf = Self {
             device: d,
             buffer: unsafe { d.create_buffer(&info, None)? },

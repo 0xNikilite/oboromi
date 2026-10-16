@@ -855,6 +855,65 @@ impl<'a> Decoder<'a> {
         self.ir.emit_iadd(self.type_u32[1], address, offset)
     }
 
+    fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
+        const DEVICE: u32 = 1;
+        const ACQUIRE_RELEASE_UNIFORM: u32 = 0x48;
+        assert!(sz <= 1, "global atomic size {sz}: 64-bit and float atomics are not supported");
+        let address = self.global_address(inst, 64, 40);
+        let ptr = self.global_word_at(address);
+        let value = self.load_register(rb);
+        let (ty, scope, sem) = (self.type_u32[1], self.cached_const_u32(DEVICE), self.cached_const_u32(ACQUIRE_RELEASE_UNIFORM));
+        let signed = sz == 1;
+        if inst & 1 != 0 {
+            let swap = self.load_register((inst >> 64 & 0xff) as u32);
+            return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, self.const_u32_0, swap, value);
+        }
+        match op {
+            0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, value),
+            1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, value),
+            1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, value),
+            2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, value),
+            2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, value),
+            3 | 4 => self.atomic_wrapping_step(ptr, scope, sem, value, op == 3),
+            5 => self.ir.emit_atomic_and(ty, ptr, scope, sem, value),
+            6 => self.ir.emit_atomic_or(ty, ptr, scope, sem, value),
+            7 => self.ir.emit_atomic_xor(ty, ptr, scope, sem, value),
+            8 => self.ir.emit_atomic_exchange(ty, ptr, scope, sem, value),
+            _ => panic!("global atomic op {op} is not supported"),
+        }
+    }
+
+    // INC is old >= bound ? 0 : old + 1 and DEC is old == 0 || old > bound ? bound : old - 1, which SPIR-V has no
+    // atomic for, so the step retries a compare-exchange until no other invocation wrote in between.
+    fn atomic_wrapping_step(&mut self, ptr: u32, scope: u32, sem: u32, bound: u32, inc: bool) -> u32 {
+        let (ty, bool_ty, zero, one) = (self.type_u32[1], self.type_bool[1], self.const_u32_0, self.const_u32_1);
+        let [header, body, cont, merge] = [(); 4].map(|_| self.ir.alloc_id());
+        self.ir.emit_branch(header);
+        self.ir.emit_label_id(header);
+        self.ir.emit_loop_merge(merge, cont, 0);
+        self.ir.emit_branch(body);
+        self.ir.emit_label_id(body);
+        let old = self.ir.emit_atomic_load(ty, ptr, scope, zero);
+        let new = if inc {
+            let wraps = self.ir.emit_ugreater_than_equal(bool_ty, old, bound);
+            let next = self.ir.emit_iadd(ty, old, one);
+            self.ir.emit_select(ty, wraps, zero, next)
+        } else {
+            let is_zero = self.ir.emit_iequal(bool_ty, old, zero);
+            let above = self.ir.emit_ugreater_than(bool_ty, old, bound);
+            let wraps = self.ir.emit_logical_or(bool_ty, is_zero, above);
+            let prev = self.ir.emit_isub(ty, old, one);
+            self.ir.emit_select(ty, wraps, bound, prev)
+        };
+        let seen = self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, zero, new, old);
+        let done = self.ir.emit_iequal(bool_ty, seen, old);
+        self.ir.emit_branch(cont);
+        self.ir.emit_label_id(cont);
+        self.ir.emit_branch_conditional(done, merge, header);
+        self.ir.emit_label_id(merge);
+        old
+    }
+
     // Local memory is a lazy 4 KiB Private array per invocation.
     fn local_word_at(&mut self, address: u32) -> u32 {
         let var = match self.resource(ResourceKind::Local) {
@@ -1497,44 +1556,29 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn atom(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0xf) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert_ne!(opcode(inst) & 0xfff, 0xf8a, "ATOM.ARRIVE is not supported");
+        self.atomg(inst);
     }
     pub fn atomg(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
+        let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0xf) << 0);
+        let sz = (((inst >> 73) & 0xf) << 0) as u32;
         let _mem = (((inst >> 77) & 0xf) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
         let _cop = (((inst >> 84) & 0x7) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
+        let op = (((inst >> 87) & 0xf) << 0) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let old = self.global_atomic(inst, op, sz, rb);
+        self.store_register(rd, old);
     }
     pub fn atoms(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3742,20 +3786,20 @@ impl<'a> Decoder<'a> {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
+        let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let _memdesc = (((inst >> 71) & 0x1) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0xf) << 0);
+        let sz = (((inst >> 73) & 0xf) << 0) as u32;
         let _mem = (((inst >> 77) & 0xf) << 0);
         let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        self.global_atomic(inst, pp, sz, rb);
     }
     pub fn redux(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

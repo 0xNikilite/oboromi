@@ -15,13 +15,20 @@ const RZ: u32 = 255;
 const URZ: u32 = 63;
 const SRZ: u32 = 255;
 const PT: u32 = 7;
-const OPCODE: u128 = 0x1ff;
-const OPCODE_KEY: u128 = 1 << 91 | 0xfff;
-const BRA: u128 = 0x947;
-const EXIT: u128 = 0x94d;
-const KILL: u128 = 0x95b;
-const VOTEU: u128 = 0x086;
-const S2UR: u128 = 0x1c3;
+const CALL_ABS_R: u32 = 0x343;
+const CALL_REL_R: u32 = 0x344;
+const CALL_ABS: u32 = 0x943;
+const CALL_REL: u32 = 0x944;
+const BRA: u32 = 0x947;
+const BRA_UPRED: u32 = 0x1547;
+const BRA_UREG: u32 = 0x1947;
+const BRX: u32 = 0x949;
+const JMX: u32 = 0x94c;
+const EXIT: u32 = 0x94d;
+const RET: u32 = 0x950;
+const KILL: u32 = 0x95b;
+const VOTEU: u32 = 0x086;
+const S2UR: u32 = 0x1c3;
 const GLSL_FABS: u32 = 4;
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
@@ -325,8 +332,8 @@ fn branch_offset(inst: u128) -> i64 {
 fn branch_target(pc: u32, inst: u128) -> Option<u32> {
     let offset = branch_offset(inst);
     match opcode(inst) {
-        0x947 | 0x1947 | 0x1547 | 0x944 => Some((pc as i64 + 1 + offset) as u32),
-        0x943 => Some(offset as u32),
+        BRA | BRA_UREG | BRA_UPRED | CALL_REL => Some((pc as i64 + 1 + offset) as u32),
+        CALL_ABS => Some(offset as u32),
         _ => None,
     }
 }
@@ -476,13 +483,13 @@ impl<'a> Decoder<'a> {
     pub fn translate_program(&mut self, words: &[u128]) {
         let len = words.len() as u32;
         // BRX, JMX and CALL Ra only know their target at run time, so such a program dispatches on every pc; RET lands after a CALL.
-        let indirect = words.iter().any(|inst| matches!(opcode(*inst), 0x343 | 0x344 | 0x949 | 0x94c));
+        let indirect = words.iter().any(|inst| matches!(opcode(*inst), CALL_ABS_R | CALL_REL_R | BRX | JMX));
         let mut leaders: Vec<u32> = if indirect { (0..=len).collect() } else { vec![0, len] };
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));
             if matches!(
                 opcode(inst),
-                0x343 | 0x344 | 0x943 | 0x944 | 0x947 | 0x949 | 0x94c | 0x94d | 0x950 | 0x95b | 0x1547 | 0x1947
+                CALL_ABS_R | CALL_REL_R | CALL_ABS | CALL_REL | BRA | BRA_UPRED | BRA_UREG | BRX | JMX | EXIT | RET | KILL
             ) {
                 leaders.push(pc + 1);
             }
@@ -530,11 +537,10 @@ impl<'a> Decoder<'a> {
             return;
         }
         // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
-        let uniform = matches!(inst & OPCODE, 0x80..=0xbf | S2UR) && inst & OPCODE != VOTEU;
+        let op = opcode(inst) & 0x1ff;
+        let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
         let predicates = if uniform { self.load_upredicate() } else { self.load_predicate() };
-        let shift = self.cached_const_u32(pg);
-        let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], predicates, shift);
-        let bit = self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1);
+        let bit = self.predicate_bit(predicates, pg);
         let cond = if pg_not {
             self.ir.emit_iequal(self.type_bool[1], bit, self.const_u32_0)
         } else {
@@ -974,10 +980,7 @@ impl<'a> Decoder<'a> {
             }
         } else {
             let base = self.load_predicate();
-            let shift = self.cached_const_u32(pred);
-            // extract single bit: (%pred >> %shift) & 1 → 0 or 1
-            let srl_res = self.ir.emit_shift_right_logical(self.type_u32[1], base, shift);
-            let and_res = self.ir.emit_bitwise_and(self.type_u32[1], srl_res, self.const_u32_1);
+            let and_res = self.predicate_bit(base, pred);
             // broadcast to full mask: 0 - bit → 0x00000000 or 0xFFFFFFFF
             let res = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, and_res);
             if invert {
@@ -986,6 +989,12 @@ impl<'a> Decoder<'a> {
                 res
             }
         }
+    }
+
+    fn predicate_bit(&mut self, predicates: u32, pred: u32) -> u32 {
+        let shift = self.cached_const_u32(pred);
+        let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], predicates, shift);
+        self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1)
     }
 
     fn store_predicate(&mut self, val: u32) {
@@ -1334,20 +1343,18 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(pp == 7 && pp_not == 0, "BRA Pp not implemented");
+        assert!(pp == PT && pp_not == 0, "BRA Pp not implemented");
         // .DIV and .CONV test the warp for divergence, and one invocation per register file is always converged.
         if cond == 2 {
             return;
         }
         let mut target = self.cached_const_u32(branch_target(self.pc, inst).unwrap());
-        if opcode(inst) == 0x1547 {
-            let bit = if upq == 7 {
+        if opcode(inst) == BRA_UPRED {
+            let bit = if upq == PT {
                 self.const_u32_1
             } else {
                 let upred = self.load_upredicate();
-                let shift = self.cached_const_u32(upq);
-                let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], upred, shift);
-                self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1)
+                self.predicate_bit(upred, upq)
             };
             let invert = self.cached_const_u32(upq_not);
             let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, invert);
@@ -1388,14 +1395,14 @@ impl<'a> Decoder<'a> {
         let _ra = (((inst >> 24) & 0xff) << 0);
         let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
         let _depth = (((inst >> 85) & 0x3) << 0);
-        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(pp == 7 && pp_not == 0, "BRX Pp not implemented");
+        assert!(pp == PT && pp_not == 0, "BRX Pp not implemented");
         self.jump_to_register(inst, true);
     }
     pub fn brxu(&mut self, inst: u128) {
@@ -1446,16 +1453,16 @@ impl<'a> Decoder<'a> {
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let _depth = (((inst >> 86) & 0x1) << 0);
-        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(pp == 7 && pp_not == 0, "CALL Pp not implemented");
+        assert!(pp == PT && pp_not == 0, "CALL Pp not implemented");
         match opcode(inst) {
-            0x343 | 0x344 => self.jump_to_register(inst, inst & 0xfff == 0x344),
+            CALL_ABS_R | CALL_REL_R => self.jump_to_register(inst, opcode(inst) == CALL_REL_R),
             _ => {
                 let target = branch_target(self.pc, inst).expect("CALL through a constant or uniform register not implemented");
                 let target = self.cached_const_u32(target);
@@ -2901,14 +2908,14 @@ impl<'a> Decoder<'a> {
         let _ra = (((inst >> 24) & 0xff) << 0);
         let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
         let _depth = (((inst >> 85) & 0x3) << 0);
-        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(pp == 7 && pp_not == 0, "JMX Pp not implemented");
+        assert!(pp == PT && pp_not == 0, "JMX Pp not implemented");
         self.jump_to_register(inst, false);
     }
     pub fn jmxu(&mut self, inst: u128) {
@@ -2928,6 +2935,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn kill(&mut self, inst: u128) {
+        // KILL is pixel-only on hardware, so a compute invocation that reaches one just ends like at EXIT.
         self.exit(inst);
     }
     pub fn ld(&mut self, inst: u128) {
@@ -3497,14 +3505,14 @@ impl<'a> Decoder<'a> {
         let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
         let _warp = (((inst >> 85) & 0x1) << 0);
         let _depth = (((inst >> 86) & 0x1) << 0);
-        let pp = (((inst >> 87) & 0x7) << 0);
+        let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let pp_not = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(pp == 7 && pp_not == 0, "RET Pp not implemented");
+        assert!(pp == PT && pp_not == 0, "RET Pp not implemented");
         assert!(inst >> 91 & 1 == 0, "RET through a uniform register not implemented");
         self.jump_to_register(inst, inst >> 85 & 1 == 0);
     }

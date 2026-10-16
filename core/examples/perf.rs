@@ -66,7 +66,7 @@ fn gpu_rows(rows: &mut Vec<Row>) -> String {
             .get_physical_device_properties(state.physical_device)
     };
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
-    let words = translate_module(&program, true, Some(state)).words();
+    let words = translate_module(&program, true, Some(state), 1).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let t = Instant::now();
     let mut pipeline = ComputePipeline::new(state, &words, &[(10, ssbo), (11, ssbo)]).unwrap();
@@ -127,7 +127,7 @@ fn main() {
         1000.0,
         "inst/s",
         || {
-            black_box(translate_module(black_box(&program), true, None));
+            black_box(translate_module(black_box(&program), true, None, 1));
         },
     )];
     let (w, h) = (1920, 1080);

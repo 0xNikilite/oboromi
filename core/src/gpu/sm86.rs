@@ -405,6 +405,10 @@ impl<'a> Decoder<'a> {
         id
     }
 
+    fn neg(&mut self, x: u32) -> u32 {
+        self.ir.emit_isub(self.type_u32[1], self.const_u32_0, x)
+    }
+
     fn load_register(&mut self, reg: u32) -> u32 {
         if reg == 255 { // RZ (Zero Register)
             return self.const_u32_0;
@@ -1923,15 +1927,15 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn iadd(&mut self, inst: u128) {
+    pub fn iadd3(&mut self, inst: u128) {
         let pg = (((inst >> 12) & 0x7) << 0) as u32;
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
+        let rc = (((inst >> 64) & 0xff) << 0) as u32;
+        let negate_a = (((inst >> 72) & 0x1) << 0);
+        let x = (((inst >> 74) & 0x1) << 0);
+        let negate_c = (((inst >> 75) & 0x1) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
         let pu = (((inst >> 81) & 0x7) << 0) as u32;
@@ -1945,11 +1949,13 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
 
         // guards for unimplemented features
-        assert!(_rc == 0xFF, "IADD: rc (3rd source) not implemented");
-        assert!(_e == 0, "IADD: extended precision not implemented");
+        assert!(x == 0, "IADD3.X not implemented");
         // ftz is a no-op for integer operations
 
-        let a = self.load_register(ra);
+        let mut a = self.load_register(ra);
+        if negate_a != 0 {
+            a = self.neg(a);
+        }
 
         // Determine source encoding from opcode bits 9-11:
         //   4 (100) = immediate (ra_offset, bits 32-63)
@@ -1957,92 +1963,36 @@ impl<'a> Decoder<'a> {
         //   5 (101) = constant bank (sc_addr + sc_bank)
         //   6 (110) = uniform register bank
         let src_type = ((inst >> 9) & 0x7) as u32;
-        let mut b = match src_type {
+        let b = match src_type {
             4 => {
                 let ra_offset = (((inst >> 32) & 0xffffffff) << 0) as u32;
                 self.cached_const_u32(ra_offset)
             }
             1 => {
                 let rb = (((inst >> 32) & 0xff) << 0) as u32;
-                self.load_register(rb)
+                let negate_b = (((inst >> 63) & 0x1) << 0);
+                assert!(negate_a == 0 || negate_b == 0, "IADD3: -Ra with -Rb");
+                let b = self.load_register(rb);
+                if negate_b != 0 {
+                    self.neg(b)
+                } else {
+                    b
+                }
             }
             5 => {
-                todo!("IADD: constant bank source not yet implemented")
+                todo!("IADD3: constant bank source not yet implemented")
             }
             6 => {
-                todo!("IADD: uniform register bank source not yet implemented")
+                todo!("IADD3: uniform register bank source not yet implemented")
             }
-            _ => panic!("IADD: unknown source encoding type {}", src_type),
+            _ => panic!("IADD3: unknown source encoding type {}", src_type),
         };
 
-        // apply source modifiers
-        if _sc_absolute != 0 {
-            let shift = self.cached_const_u32(31);
-            let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
-            let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
-            let xor = self.ir.emit_bitwise_xor(self.type_u32[1], b, sign_mask);
-            b = self.ir.emit_isub(self.type_u32[1], xor, sign_mask);
-        }
-        if _sc_negate != 0 {
-            b = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, b);
+        let mut c = self.load_register(rc);
+        if negate_c != 0 {
+            c = self.neg(c);
         }
 
-        let res = self.ir.emit_iadd(self.type_u32[1], a, b);
-
-        // handle comparison op
-        if cop != 0 {
-            let cmp_result = self.emit_cmp_against_zero(cop, res);
-            self.combine_and_set_predicate_bit(pu, pp, cmp_result);
-        }
-
-        self.store_register_predicated(rd, pg, pg_not != 0, res);
-    }
-    pub fn iadd3(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
-        let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let rc = (((inst >> 64) & 0xff) << 0) as u32;
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _pq = (((inst >> 77) & 0x7) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let pu = (((inst >> 81) & 0x7) << 0) as u32;
-        let cop = (((inst >> 84) & 0x7) << 0) as u32;
-        let pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-
-        // guards for unimplemented features
-        assert!(_e == 0, "IADD3: extended precision not implemented");
-        // ftz is a no-op for integer operations
-
-        let a = self.load_register(ra);
-
-        // iadd3 always uses register source for B
-        let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let mut b = self.load_register(rb);
-
-        // apply source modifiers to B
-        if _sc_absolute != 0 {
-            let shift = self.cached_const_u32(31);
-            let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
-            let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
-            let xor = self.ir.emit_bitwise_xor(self.type_u32[1], b, sign_mask);
-            b = self.ir.emit_isub(self.type_u32[1], xor, sign_mask);
-        }
-        if _sc_negate != 0 {
-            b = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, b);
-        }
-
-        let c = self.load_register(rc);
-
-        // rd = ra + b + rc
         let ab = self.ir.emit_iadd(self.type_u32[1], a, b);
         let res = self.ir.emit_iadd(self.type_u32[1], ab, c);
 

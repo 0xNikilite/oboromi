@@ -1,19 +1,17 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::run_regs;
+    use crate::tests::gpu::harness::{PRED, UPRED, UREG, run_regs};
     use crate::tests::gpu_test::inst::{
-        bra, bra_conv, bra_div, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, ret_rel,
+        IMM_B, UIADD3, alu3, bra, bra_conv, bra_div, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, preds, ret_rel,
+        uldc64,
     };
-
-    const P0: usize = 254;
-    const UP0: usize = 318;
 
     #[test]
     fn predicate_guards_mov() {
         let program = [guard(mov_imm(0, 1), 0, false), guard(mov_imm(1, 2), 0, true)];
         for (p0, expected) in [(1, [1, 11]), (0, [10, 2])] {
             let mut seed = vec![10, 11];
-            seed.resize(P0, 0);
+            seed.resize(PRED, 0);
             seed.push(p0);
             let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
                 return;
@@ -23,11 +21,26 @@ mod tests {
     }
 
     #[test]
+    fn uniform_instruction_is_guarded_by_uniform_predicate() {
+        let program = [guard(uldc64(4, 0, 0), 0, false), guard(alu3(UIADD3 ^ IMM_B | preds(7, 7, 7, 7), 6, 63, 1, 63), 0, true)];
+        for (p0, up0, expected) in [(1, 0, [7, 7, 1]), (0, 1, [10, 11, 0])] {
+            let mut seed = vec![0; UPRED + 1];
+            seed[PRED] = p0;
+            seed[UREG + 4..UREG + 6].fill(7);
+            seed[UPRED] = up0;
+            let Some((regs, _)) = run_regs(&program, &seed, &[10, 11], &[]) else {
+                return;
+            };
+            assert_eq!(regs[UREG + 4..UREG + 7], expected, "P0 = {p0}, UP0 = {up0}");
+        }
+    }
+
+    #[test]
     fn predicated_bra_skips_mov() {
         let program = [guard(bra(16), 0, false), mov_imm(0, 1)];
         for (p0, expected) in [(1, 10), (0, 1)] {
             let mut seed = vec![10];
-            seed.resize(P0, 0);
+            seed.resize(PRED, 0);
             seed.push(p0);
             let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
                 return;
@@ -67,7 +80,7 @@ mod tests {
         ];
         for (p0, expected) in [(0, [1, 3]), (1, [2, 3])] {
             let mut seed = vec![10, 11];
-            seed.resize(P0, 0);
+            seed.resize(PRED, 0);
             seed.push(p0);
             let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
                 return;
@@ -117,7 +130,7 @@ mod tests {
         ];
         for (up0, expected) in [(1, [10, 2, 12]), (0, [1, 2, 12])] {
             let mut seed = vec![10, 11, 12];
-            seed.resize(UP0, 0);
+            seed.resize(UPRED, 0);
             seed.push(up0);
             let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
                 return;
@@ -131,7 +144,7 @@ mod tests {
         let program = [mov_imm(0, 1), kill(0, false), mov_imm(1, 2)];
         for (p0, expected) in [(1, [1, 11]), (0, [1, 2])] {
             let mut seed = vec![10, 11];
-            seed.resize(P0, 0);
+            seed.resize(PRED, 0);
             seed.push(p0);
             let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
                 return;

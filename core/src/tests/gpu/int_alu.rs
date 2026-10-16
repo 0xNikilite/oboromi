@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::run_regs;
+    use crate::tests::gpu::harness::{UREG, run_regs};
     use crate::tests::gpu_test::inst;
 
     const IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
@@ -20,9 +20,8 @@ mod tests {
 
     #[test]
     fn mov_reads_cbuf_and_uniform_register() {
-        let ur4 = 254 + 1 + 4;
-        let mut seed = vec![0; ur4 + 1];
-        seed[ur4] = 0x5678;
+        let mut seed = vec![0; UREG + 5];
+        seed[UREG + 4] = 0x5678;
         let program = [inst::mov_cbuf(5, 0, 0x10), inst::mov_ureg(6, 4)];
         let Some((regs, _)) = run_regs(&program, &seed, &[0, 0, 0, 0, 0x1234], &[]) else {
             return;

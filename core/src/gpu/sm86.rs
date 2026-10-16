@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use crate::gpu::spirv;
+use crate::gpu::spirv::{self, storage_class};
 
 static MAX_REG_COUNT: usize = 254;
 static MAX_UNIFORM_REG_COUNT: usize = 63;
@@ -256,19 +256,10 @@ pub struct Decoder<'a> {
     type_void: u32,
     // Pointers
     type_ptr_u32: [u32; 5],
-    type_ptr_u8: [u32; 5],
     // Declared types for headers
-    type_u8: [u32; 5],
-    type_u16: [u32; 5],
     type_u32: [u32; 5],
-    type_u64: [u32; 5],
-    type_s8: [u32; 5],
-    type_s16: [u32; 5],
     type_s32: [u32; 5],
-    type_s64: [u32; 5],
-    type_f16: [u32; 5],
     type_f32: [u32; 5],
-    type_f64: [u32; 5],
     type_bool: [u32; 5],
     // abstract state
     type_abstract_state: u32,
@@ -285,18 +276,9 @@ impl<'a> Decoder<'a> {
             ir,
             type_void: 0,
             type_ptr_u32: [0; 5],
-            type_ptr_u8: [0; 5],
-            type_u8: [0; 5],
-            type_u16: [0; 5],
             type_u32: [0; 5],
-            type_u64: [0; 5],
-            type_s8: [0; 5],
-            type_s16: [0; 5],
             type_s32: [0; 5],
-            type_s64: [0; 5],
-            type_f16: [0; 5],
             type_f32: [0; 5],
-            type_f64: [0; 5],
             type_bool: [0; 5],
             type_abstract_state: 0,
             type_ptr_abstract_state_regs: 0,
@@ -311,19 +293,22 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
+    pub fn emit_entry_point(&mut self, func: u32) {
+        self.ir.emit_entry_point(
+            spirv::execution_model::GLCOMPUTE,
+            func,
+            "main",
+            &[self.var_abstract_state],
+        );
+        self.ir
+            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[1, 1, 1]);
+    }
+
     pub fn init(&mut self) {
         self.type_void = self.ir.emit_type_void();
-        self.type_u8[1] = self.ir.emit_type_int(8, 0);
-        self.type_u16[1] = self.ir.emit_type_int(16, 0);
         self.type_u32[1] = self.ir.emit_type_int(32, 0);
-        self.type_u64[1] = self.ir.emit_type_int(64, 0);
-        self.type_s8[1] = self.ir.emit_type_int(8, 1);
-        self.type_s16[1] = self.ir.emit_type_int(16, 1);
         self.type_s32[1] = self.ir.emit_type_int(32, 1);
-        self.type_s64[1] = self.ir.emit_type_int(64, 1);
-        self.type_f16[1] = self.ir.emit_type_float(16);
         self.type_f32[1] = self.ir.emit_type_float(32);
-        self.type_f64[1] = self.ir.emit_type_float(64);
         self.type_bool[1] = self.ir.emit_type_bool();
         self.const_cache = HashMap::new();
         self.const_u32_0 = self.ir.emit_constant_typed(self.type_u32[1], 0u32);
@@ -332,11 +317,9 @@ impl<'a> Decoder<'a> {
         self.const_cache.insert(1, self.const_u32_1);
         for i in 2..=4 {
             for type_sxx in [
-                self.type_u8, self.type_u16, self.type_u32, self.type_u64,
-                self.type_s8, self.type_s16, self.type_s32, self.type_s64,
-                self.type_f16, self.type_f32, self.type_f64, self.type_bool
+                &mut self.type_u32, &mut self.type_s32, &mut self.type_f32, &mut self.type_bool
             ] {
-                self.ir.emit_type_vector(type_sxx[i], i as u32);
+                type_sxx[i] = self.ir.emit_type_vector(type_sxx[1], i as u32);
             }
         }
 
@@ -345,20 +328,18 @@ impl<'a> Decoder<'a> {
             let type_regs_array = self.ir.emit_type_array(self.type_u32[1], length_const);
             let members = &[
                 ("regs", type_regs_array),
-                ("pred", self.type_u8[1]),
+                ("pred", self.type_u32[1]),
             ];
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
-            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(7, type_regs_array);
+            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(storage_class::PRIVATE, type_regs_array);
         }
 
         // Define generic pointers
-        // Storage class 7 = Function
         for i in 1..=4 {
-            self.type_ptr_u8[i] = self.ir.emit_type_pointer(7, self.type_u8[i]);
-            self.type_ptr_u32[i] = self.ir.emit_type_pointer(7, self.type_u32[i]);
+            self.type_ptr_u32[i] = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_u32[i]);
         }
-        let type_ptr_abstract_state = self.ir.emit_type_pointer(7, self.type_abstract_state);
-        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 7);
+        let type_ptr_abstract_state = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_abstract_state);
+        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, storage_class::PRIVATE);
 
 
     }
@@ -400,9 +381,8 @@ impl<'a> Decoder<'a> {
     /// %mask = 0 - ((%pred >> N) & 1)    -> 0x00000000 or 0xFFFFFFFF
     /// <do some things>
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
-        let res = self.ir.emit_load(self.type_u8[1], ptr);
-        self.ir.emit_u_convert(self.type_u32[1], res)
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
+        self.ir.emit_load(self.type_u32[1], ptr)
     }
 
     /// produces a full bitmask from a single predicate bit:
@@ -434,7 +414,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
         self.ir.emit_store(ptr, val)
     }
 

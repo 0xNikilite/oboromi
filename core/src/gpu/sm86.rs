@@ -2708,10 +2708,10 @@ impl<'a> Decoder<'a> {
         // that real hardware disambiguates using bits inside the operand
         // field itself, not the opcode. Re-derive the same 13-bit selector
         // the dispatcher used to route here; only the register (key 0x202 /
-        // CLASS "mov__RR") and immediate (key 0x1a02 / CLASS "mov__RI") forms
+        // CLASS "mov__RR") and immediate (key 0x802 / CLASS "mov__RI") forms
         // are implemented so far.
         let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
-        if variant_key == 0x1a02 {
+        if variant_key == 0x802 {
             // Rd = imm32
             let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
             let val = self.cached_const_u32(imm32);

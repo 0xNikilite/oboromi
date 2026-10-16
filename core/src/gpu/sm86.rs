@@ -444,7 +444,6 @@ impl<'a> Decoder<'a> {
             let block = self.ir.emit_type_struct(&[array]);
             self.type_ptr_ssbo = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
             self.type_ptr_ssbo_u32 = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_u32[1]);
-            // std430 layout: a Block struct holding a stride-4 runtime array at offset 0.
             self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
             self.ir.emit_decorate(block, deco::BLOCK, &[]);
             self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
@@ -537,7 +536,6 @@ impl<'a> Decoder<'a> {
         self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &ids)
     }
 
-    // Register io word order: regs[254], pred, uregs[63], upred.
     fn state_slot(&mut self, slot: u32) -> u32 {
         let (regs, uregs) = (MAX_REG_COUNT as u32, MAX_UNIFORM_REG_COUNT as u32);
         match slot {
@@ -574,7 +572,7 @@ impl<'a> Decoder<'a> {
     }
 
     // Bits 11:9 say what bits 32..64 hold: Rb (1), imm32 (2, 4), c[bank][off] (3, 5), URb with bit 91 set (6, 7).
-    // Forms 2, 3 and 7 feed that operand to C and move B to Rc at 64..72. The immediate is the whole 32-bit operand.
+    // Forms 2, 3 and 7 feed that operand to C and move B to Rc at 64..72.
     fn alu_src(&mut self, inst: u128) -> u32 {
         let field = (inst >> 32) as u32;
         match ((inst >> 9) & 7, (inst >> 91) & 1) {
@@ -589,7 +587,6 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
     fn load_cbuf(&mut self, kind: ResourceKind, offset: u32) -> u32 {
         let var = match self.resource(kind) {
             Some(var) => var,
@@ -628,7 +625,7 @@ impl<'a> Decoder<'a> {
         var
     }
 
-    // Guest address A is word (A - base) / 4 of the binding 9 SSBO, base being support word 0; below 4 GiB the low words suffice.
+    // Global memory is a 4 GiB window above the base in support word 0, so the low address words suffice.
     fn global_word(&mut self, inst: u128, word: u32) -> u32 {
         assert!(inst >> 91 & 1 == 0 || inst >> 76 & 1 == 1, "uniform register in a global address");
         let var = match self.resource(ResourceKind::Global) {

@@ -90,7 +90,6 @@ pub mod inst {
         inst
     }
 
-    // ldg.e rd, [ra + off]
     pub fn ldg(rd: u32, ra: u32, off: u32) -> u128 {
         let mut inst = LDG | PT_GUARD | ADDR_64 | SZ_32 | LDG_PU_PT | COP_EN;
         inst |= ((rd as u128) & 0xff) << 16;
@@ -99,7 +98,6 @@ pub mod inst {
         inst
     }
 
-    // stg.e [ra + off], rb
     pub fn stg(ra: u32, off: u32, rb: u32) -> u128 {
         let mut inst = STG | PT_GUARD | ADDR_64 | SZ_32 | COP_EN | NO_WRITE_SCOREBOARD;
         inst |= ((ra as u128) & 0xff) << 24;
@@ -108,7 +106,6 @@ pub mod inst {
         inst
     }
 
-    // ldc rd, c[bank][ra + off]
     pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
         let mut inst = LDC | PT_GUARD | SZ_32;
         inst |= ((rd as u128) & 0xff) << 16;
@@ -118,7 +115,6 @@ pub mod inst {
         inst
     }
 
-    // uldc.64 urd, c[bank][off]
     pub fn uldc64(urd: u32, bank: u32, off: u32) -> u128 {
         let mut inst = ULDC | PT_GUARD | SZ_64;
         inst |= ((urd as u128) & 0x3f) << 16;
@@ -136,12 +132,10 @@ pub mod inst {
         inst
     }
 
-    // bra (opcode=0x947), offset in bytes from the next instruction
     pub fn bra(offset: i64) -> u128 {
         BRA | PT_GUARD | PP_PT | NO_SCOREBOARD | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
     }
 
-    // exit (opcode=0x94d)
     pub fn exit() -> u128 {
         EXIT | PT_GUARD | PP_PT | NO_SCOREBOARD
     }

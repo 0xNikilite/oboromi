@@ -1,5 +1,6 @@
 use ash::vk;
 
+pub mod compute;
 pub mod sm86;
 pub mod spirv;
 

@@ -23,6 +23,9 @@ pub mod inst {
     const BRA: u128 = 0x947;
     const EXIT: u128 = 0x94d;
     const GUARD: u128 = 0xf << 12;
+    const S2R: u128 = 0x919;
+    const CS2R: u128 = 0x805;
+    const S2UR: u128 = 0x9c3;
     const PT_GUARD: u128 = 7 << 12;
     const RC_RZ: u128 = 0xff << 64;
     const PIXMASK_ALL: u128 = 0xf << 72;
@@ -121,6 +124,18 @@ pub mod inst {
         inst |= ((off as u128) & 0xffff) << 38;
         inst |= ((bank as u128) & 0x1f) << 54;
         inst
+    }
+
+    pub fn s2r(rd: u32, sr: u32) -> u128 {
+        S2R | PT_GUARD | ((rd as u128) & 0xff) << 16 | ((sr as u128) & 0xff) << 72
+    }
+
+    pub fn cs2r(rd: u32, sr: u32, wide: bool) -> u128 {
+        CS2R | PT_GUARD | ((rd as u128) & 0xff) << 16 | ((sr as u128) & 0xff) << 72 | (wide as u128) << 80
+    }
+
+    pub fn s2ur(urd: u32, sr: u32) -> u128 {
+        S2UR | PT_GUARD | ((urd as u128) & 0x3f) << 16 | ((sr as u128) & 0xff) << 72
     }
 
     pub fn kill(pred: u32, invert: bool) -> u128 {
@@ -251,6 +266,10 @@ fn fixtures_match_nvdisasm() {
         (inst::stg(2, 0x10, 5), "STG.E [R2+0x10], R5 ;"),
         (inst::ldc(6, 0, 3, 4), "LDC R6, c[0x0][R3+0x4] ;"),
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
+        (inst::s2r(1, 33), "S2R R1, SR_TID.X ;"),
+        (inst::cs2r(4, 80, false), "CS2R.32 R4, SR_CLOCKLO;"),
+        (inst::cs2r(4, 80, true), "CS2R R4, SR_CLOCKLO;"),
+        (inst::s2ur(5, 37), "S2UR UR5, SR_CTAID.X ;"),
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();

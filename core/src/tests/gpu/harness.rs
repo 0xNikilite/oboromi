@@ -53,6 +53,9 @@ pub fn spirv_val(module: &Emitter) {
 }
 
 pub const GLOBAL_BASE: u64 = 0x2_0000_1000;
+pub const PRED: usize = 254;
+pub const UREG: usize = PRED + 1;
+pub const UPRED: usize = STATE_WORDS - 1;
 
 /// Runs `instructions` once with the state words seeded from `seed`, cbuf slot 0 holding `cbuf0` and global memory
 /// at `GLOBAL_BASE` holding `global`, returning every state word and global word, or `None` when there is no Vulkan device.

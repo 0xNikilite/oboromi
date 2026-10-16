@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{GLOBAL_BASE, run_regs};
+    use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_regs};
     use crate::tests::gpu_test::inst;
 
     const BASE: [u32; 2] = [GLOBAL_BASE as u32, (GLOBAL_BASE >> 32) as u32];
@@ -29,7 +29,6 @@ mod tests {
         let Some((regs, _)) = run_regs(&program, &[0, 0, 0, 8], &[10, 11, 12, 13, 14, 15], &[]) else {
             return;
         };
-        let ur4 = 254 + 1 + 4;
-        assert_eq!((regs[6], &regs[ur4..ur4 + 2]), (13, &[14, 15][..]));
+        assert_eq!((regs[6], &regs[UREG + 4..UREG + 6]), (13, &[14, 15][..]));
     }
 }

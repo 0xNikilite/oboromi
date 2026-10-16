@@ -95,6 +95,18 @@ mod tests {
         assert_f32(&regs[10..15], &[-2.0, 1.0, 1.0, -2.0, -1.0]);
     }
 
+    #[test]
+    fn fadd_of_inf_and_its_negation_is_nan() {
+        let program = [inst::fadd(1, 0, 0) | FP_NEG_B];
+        let Some((regs, _)) = run_regs(&program, &bits(&[f32::INFINITY]), &[], &[]) else {
+            return;
+        };
+        if !crate::gpu::device().unwrap().signed_zero_inf_nan_preserve {
+            return eprintln!("skipping: device lacks SignedZeroInfNanPreserve");
+        }
+        assert_f32(&regs[1..2], &[f32::NAN]);
+    }
+
     // MUFU approximates on hardware and Vulkan only bounds GLSL.std.450 loosely, so this checks 4 ULP.
     #[test]
     fn mufu_ops_match_std_within_4_ulp() {

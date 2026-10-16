@@ -31,7 +31,11 @@ impl VkState {
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
         let instance_info = vk::InstanceCreateInfo::default().application_info(&app);
-        let instance = unsafe { entry.create_instance(&instance_info, None)? };
+        let instance =
+            unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| match e {
+                vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
+                e => VkError::Vk(e),
+            })?;
         match Self::open_device(&instance) {
             Ok((physical_device, queue_family, device, command_pool)) => Ok(Self {
                 queue: unsafe { device.get_device_queue(queue_family, 0) },
@@ -130,19 +134,11 @@ mod tests {
     #[test]
     fn vk_state_new_or_skip() {
         match VkState::new() {
-            Ok(vk) => {
-                let props = unsafe {
-                    vk.instance
-                        .get_physical_device_properties(vk.physical_device)
-                };
-                eprintln!(
-                    "vulkan device: {:?}",
-                    props.device_name_as_c_str().unwrap_or_default()
-                );
+            Ok(s) => {
+                let p = unsafe { s.instance.get_physical_device_properties(s.physical_device) };
+                eprintln!("vulkan device: {:?}", p.device_name_as_c_str());
             }
-            Err(e @ (VkError::Loader | VkError::NoDevice)) => {
-                eprintln!("skipping, no vulkan: {e:?}")
-            }
+            Err(e @ (VkError::Loader | VkError::NoDevice)) => eprintln!("skipping: {e:?}"),
             Err(e) => panic!("vulkan device creation failed: {e:?}"),
         }
     }

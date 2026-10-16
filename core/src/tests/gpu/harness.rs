@@ -40,20 +40,21 @@ pub fn translate_module(
 }
 
 pub fn spirv_val(module: &Emitter) {
-    let name = std::thread::current()
-        .name()
-        .unwrap_or("main")
-        .replace("::", "_");
-    let path = std::env::temp_dir().join(format!("oboromi_{name}.spv"));
-    std::fs::write(&path, module.to_bytes()).unwrap();
-    let spirv_val = std::process::Command::new("spirv-val")
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let child = Command::new("spirv-val")
         .args(["--target-env", "vulkan1.2"])
-        .arg(&path)
-        .output();
-    match spirv_val {
-        Ok(out) => assert!(out.status.success(), "{out:?}"),
-        Err(e) => eprintln!("skipping, spirv-val unavailable: {e}"),
-    }
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => return eprintln!("skipping, spirv-val unavailable: {e}"),
+    };
+    child.stdin.take().unwrap().write_all(&module.to_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
 }
 
 pub const GLOBAL_BASE: u64 = 0x2_0000_1000;

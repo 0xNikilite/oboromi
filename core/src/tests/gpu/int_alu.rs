@@ -11,4 +11,16 @@ mod tests {
         };
         assert_eq!(regs[..3], [42, 42, 40]);
     }
+
+    #[test]
+    fn mov_reads_cbuf_and_uniform_register() {
+        let ur4 = 254 + 1 + 4;
+        let mut seed = vec![0; ur4 + 1];
+        seed[ur4] = 0x5678;
+        let program = [inst::mov_cbuf(5, 0, 0x10), inst::mov_ureg(6, 4)];
+        let Some(regs) = run_regs(&program, &seed, &[0, 0, 0, 0, 0x1234]) else {
+            return;
+        };
+        assert_eq!(regs[5..7], [0x1234, 0x5678]);
+    }
 }

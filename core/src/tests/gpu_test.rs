@@ -52,6 +52,25 @@ pub mod inst {
         inst
     }
 
+    // mov rd, c[bank][off] (opcode=0xa02, off >> 2 at bits 53:40, bank at 58:54)
+    pub fn mov_cbuf(rd: u32, bank: u32, off: u32) -> u128 {
+        let mut inst: u128 = 0x7a02;
+        inst |= 0xfu128 << 72;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((off as u128 >> 2) & 0x3fff) << 40;
+        inst |= ((bank as u128) & 0x1f) << 54;
+        inst
+    }
+
+    // mov rd, urb (opcode=0x1c02, bit 91 selects the uniform source)
+    pub fn mov_ureg(rd: u32, urb: u32) -> u128 {
+        let mut inst: u128 = 0x7c02 | 1 << 91;
+        inst |= 0xfu128 << 72;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((urb as u128) & 0x3f) << 32;
+        inst
+    }
+
     pub fn mov_reg(rd: u32, rb: u32) -> u128 {
         let mut inst: u128 = 0x7202;
         inst |= 0xfu128 << 72;
@@ -166,6 +185,8 @@ fn fixtures_match_nvdisasm() {
         (inst::iadd3_reg(1, 2, 3, 0xFF), "IADD3 R1, R2, R3, RZ;"),
         (inst::mov_imm(1, 0xCAFEBABE), "MOV R1, 0xcafebabe;"),
         (inst::mov_reg(1, 2), "MOV R1, R2;"),
+        (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
+        (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::kill(7, false), "KILL;"),
     ];
     for &(word, expected) in fixtures {

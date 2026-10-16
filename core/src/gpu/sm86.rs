@@ -2856,21 +2856,12 @@ impl<'a> Decoder<'a> {
         // variants (register, constant-bank, indexed constant-bank, immediate)
         // that real hardware disambiguates using bits inside the operand
         // field itself, not the opcode. Re-derive the same 13-bit selector
-        // the dispatcher used to route here; only the register (key 0x202 /
-        // CLASS "mov__RR") and immediate (key 0x802 / CLASS "mov__RI") forms
-        // are implemented so far.
+        // the dispatcher used to route here; every form but cx[UR] is the
+        // ALU source selector.
         let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
-        // scripts/sm_86_instructions.txt: 0x802 is CLASS "mov__RI", 0x1a02 is "mov__RCx" (cx[UR] bank).
-        if variant_key == 0x802 {
-            // Rd = imm32
-            let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
-            let val = self.cached_const_u32(imm32);
-            self.store_register_predicated(rd, pg, pg_not != 0, val);
-            return;
-        }
-        if variant_key == 0x202 {
-            let rb = ((inst >> 32) & 0xff) as u32;
-            let val = self.load_register(rb);
+        // scripts/sm_86_instructions.txt: 0x202 "mov__RR", 0x802 "mov__RI", 0xa02 "mov__RC", 0x1c02 "mov__RU", 0x1a02 "mov__RCx" (cx[UR] bank).
+        if matches!(variant_key, 0x202 | 0x802 | 0xa02 | 0x1c02) {
+            let val = self.alu_src(inst);
             self.store_register_predicated(rd, pg, pg_not != 0, val);
             return;
         }

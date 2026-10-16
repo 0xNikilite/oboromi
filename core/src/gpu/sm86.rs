@@ -282,6 +282,7 @@ pub enum ResourceKind {
     Ssbo(u32),
     Support,
     Global,
+    Shared,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -310,6 +311,7 @@ pub struct Decoder<'a> {
     const_u32_1: u32,
     type_ptr_ssbo: u32,
     type_ptr_ssbo_u32: u32,
+    type_ptr_shared_u32: u32,
     type_ptr_cbuf: u32,
     type_ptr_cbuf_u32: u32,
     type_u64: u32,
@@ -376,6 +378,7 @@ impl<'a> Decoder<'a> {
             const_u32_1: 0,
             type_ptr_ssbo: 0,
             type_ptr_ssbo_u32: 0,
+            type_ptr_shared_u32: 0,
             type_ptr_cbuf: 0,
             type_ptr_cbuf_u32: 0,
             type_u64: 0,
@@ -393,14 +396,14 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
-    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>) {
+    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, lanes: u32) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
         let interface: Vec<u32> = [self.var_abstract_state, self.var_pc].into_iter().chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
-            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[1, 1, 1]);
+            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[lanes, 1, 1]);
         use spirv::{capability as cap, execution_mode as mode};
         if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
             self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);
@@ -461,9 +464,10 @@ impl<'a> Decoder<'a> {
     pub fn emit_register_io(&mut self, in_binding: u32, out_binding: u32) {
         let input = self.declare_ssbo(ResourceKind::Ssbo(0), in_binding);
         self.declare_ssbo(ResourceKind::Ssbo(1), out_binding);
+        let base = self.invocation_state_base();
         // Every register is seeded because predicated stores read the old value.
         for slot in 0..STATE_WORDS as u32 {
-            let word = self.ssbo_word(input, slot);
+            let word = self.ssbo_word(input, base, slot);
             let value = self.ir.emit_load(self.type_u32[1], word);
             let ptr = self.state_slot(slot);
             self.ir.emit_store(ptr, value);
@@ -472,12 +476,36 @@ impl<'a> Decoder<'a> {
 
     pub fn emit_register_dump(&mut self) {
         let output = self.resource(ResourceKind::Ssbo(1)).unwrap();
+        let base = self.invocation_state_base();
         for slot in 0..STATE_WORDS as u32 {
             let ptr = self.state_slot(slot);
             let value = self.ir.emit_load(self.type_u32[1], ptr);
-            let word = self.ssbo_word(output, slot);
+            let word = self.ssbo_word(output, base, slot);
             self.ir.emit_store(word, value);
         }
+    }
+
+    fn invocation_state_base(&mut self) -> u32 {
+        let invocation = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
+        let stride = self.cached_const_u32(STATE_WORDS as u32);
+        self.ir.emit_imul(self.type_u32[1], invocation, stride)
+    }
+
+    fn shared_mem(&mut self, word: u32) -> u32 {
+        use spirv::storage_class::WORKGROUP;
+        let var = match self.resource(ResourceKind::Shared) {
+            Some(var) => var,
+            None => {
+                let len = self.cached_const_u32(256);
+                let array = self.ir.emit_type_array(self.type_u32[1], len);
+                let ptr = self.ir.emit_type_pointer(WORKGROUP, array);
+                self.type_ptr_shared_u32 = self.ir.emit_type_pointer(WORKGROUP, self.type_u32[1]);
+                let var = self.ir.emit_variable(ptr, WORKGROUP);
+                self.resources.push(Resource { kind: ResourceKind::Shared, var });
+                var
+            }
+        };
+        self.ir.emit_access_chain(self.type_ptr_shared_u32, var, &[word])
     }
 
     fn declare_ssbo(&mut self, kind: ResourceKind, binding: u32) -> u32 {
@@ -843,41 +871,43 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn special_register(&mut self, index: u32) -> u32 {
+    fn builtin(&mut self, builtin: spirv::BuiltIn) -> u32 {
         use spirv::{BuiltIn, decoration, storage_class::INPUT};
-        let builtin = |this: &mut Self, builtin: BuiltIn| {
-            let ty = match builtin {
-                BuiltIn::LocalInvocationIndex => this.type_u32[1],
-                _ => this.type_u32[3],
-            };
-            let builtin = builtin as u32;
-            let var = match this.resource(ResourceKind::BuiltIn(builtin)) {
-                Some(var) => var,
-                None => {
-                    let ptr = this.ir.emit_type_pointer(INPUT, ty);
-                    let var = this.ir.emit_variable(ptr, INPUT);
-                    this.ir.emit_decorate(var, decoration::BUILTIN, &[builtin]);
-                    this.resources.push(Resource { kind: ResourceKind::BuiltIn(builtin), var });
-                    var
-                }
-            };
-            this.ir.emit_load(ty, var)
+        let ty = match builtin {
+            BuiltIn::LocalInvocationIndex => self.type_u32[1],
+            _ => self.type_u32[3],
         };
+        let builtin = builtin as u32;
+        let var = match self.resource(ResourceKind::BuiltIn(builtin)) {
+            Some(var) => var,
+            None => {
+                let ptr = self.ir.emit_type_pointer(INPUT, ty);
+                let var = self.ir.emit_variable(ptr, INPUT);
+                self.ir.emit_decorate(var, decoration::BUILTIN, &[builtin]);
+                self.resources.push(Resource { kind: ResourceKind::BuiltIn(builtin), var });
+                var
+            }
+        };
+        self.ir.emit_load(ty, var)
+    }
+
+    fn special_register(&mut self, index: u32) -> u32 {
+        use spirv::BuiltIn;
         // SR_VIRTID holds the warp id at bit 8, SR_TID packs x, y and z at bits 0, 16 and 26.
         match index {
             0 => {
-                let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
+                let invocation = self.builtin(BuiltIn::LocalInvocationIndex);
                 let mask = self.cached_const_u32(31);
                 self.ir.emit_bitwise_and(self.type_u32[1], invocation, mask)
             }
             3 => {
-                let invocation = builtin(self, BuiltIn::LocalInvocationIndex);
+                let invocation = self.builtin(BuiltIn::LocalInvocationIndex);
                 let [five, eight] = [5, 8].map(|i| self.cached_const_u32(i));
                 let warp = self.ir.emit_shift_right_logical(self.type_u32[1], invocation, five);
                 self.ir.emit_shift_left_logical(self.type_u32[1], warp, eight)
             }
             32 => {
-                let tid = builtin(self, BuiltIn::LocalInvocationId);
+                let tid = self.builtin(BuiltIn::LocalInvocationId);
                 let x = self.ir.emit_composite_extract(self.type_u32[1], tid, &[0]);
                 let y = self.ir.emit_composite_extract(self.type_u32[1], tid, &[1]);
                 let z = self.ir.emit_composite_extract(self.type_u32[1], tid, &[2]);
@@ -886,11 +916,11 @@ impl<'a> Decoder<'a> {
                 self.ir.emit_bit_field_insert(self.type_u32[1], xy, z, o26, c6)
             }
             33..=35 => {
-                let tid = builtin(self, BuiltIn::LocalInvocationId);
+                let tid = self.builtin(BuiltIn::LocalInvocationId);
                 self.ir.emit_composite_extract(self.type_u32[1], tid, &[index - 33])
             }
             37..=39 => {
-                let ctaid = builtin(self, BuiltIn::WorkgroupId);
+                let ctaid = self.builtin(BuiltIn::WorkgroupId);
                 self.ir.emit_composite_extract(self.type_u32[1], ctaid, &[index - 37])
             }
             1 | 2 | 4..=31 | 36 | 40..=133 | SRZ => self.const_u32_0,
@@ -1045,8 +1075,9 @@ impl<'a> Decoder<'a> {
         if ftz { self.flush_subnormal(bits) } else { bits }
     }
 
-    fn ssbo_word(&mut self, var: u32, index: u32) -> u32 {
-        let index = self.cached_const_u32(index);
+    fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
+        let offset = self.cached_const_u32(offset);
+        let index = self.ir.emit_iadd(self.type_u32[1], base, offset);
         self.ir
             .emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
     }
@@ -4533,9 +4564,9 @@ mod tests {
             let hi = d.bitcast_u32(hi);
             d.store_register(2, hi);
         };
-        let Some((regs, _)) = run_body(program, &[0xC000_3E00], &[], &[]) else {
+        let Some((lanes, _)) = run_body(program, &[vec![0xC000_3E00]], &[], &[]) else {
             return;
         };
-        assert_eq!(regs[1..3], [0xC400_4200, 0xC400_C400]);
+        assert_eq!(lanes[0][1..3], [0xC400_4200, 0xC400_C400]);
     }
 }

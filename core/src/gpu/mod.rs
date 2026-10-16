@@ -23,10 +23,18 @@ pub struct VkState {
     pub instance: ash::Instance,
     pub physical_device: vk::PhysicalDevice,
     pub device: ash::Device,
-    pub queue_family: u32,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub submit: std::sync::Mutex<compute::Submit>,
+}
+
+pub fn device() -> Result<&'static VkState, VkError> {
+    static DEVICE: std::sync::OnceLock<VkState> = std::sync::OnceLock::new();
+    if let Some(state) = DEVICE.get() {
+        return Ok(state);
+    }
+    let state = VkState::new()?;
+    Ok(DEVICE.get_or_init(|| state))
 }
 
 impl VkState {
@@ -47,7 +55,6 @@ impl VkState {
                     instance,
                     physical_device,
                     device,
-                    queue_family,
                     command_pool,
                     submit: Default::default(),
                 };
@@ -104,7 +111,6 @@ impl VkState {
 
 impl Drop for VkState {
     fn drop(&mut self) {
-        // Children before parents, and nothing may still be executing on the queue.
         unsafe {
             let _ = self.device.device_wait_idle();
             let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());
@@ -123,7 +129,6 @@ pub struct State {
     pub shared_memory: *mut u8,
     pub global_memory: *mut u8,
     pub pc: u64,
-    pub vk: Option<VkState>,
 }
 
 impl State {
@@ -134,28 +139,6 @@ impl State {
             shared_memory: core::ptr::null_mut(),
             global_memory: core::ptr::null_mut(),
             pc: 0,
-            vk: None,
-        }
-    }
-    pub fn init(&mut self) -> Result<(), VkError> {
-        self.vk = Some(VkState::new()?);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vk_state_new_or_skip() {
-        match VkState::new() {
-            Ok(s) => {
-                let p = unsafe { s.instance.get_physical_device_properties(s.physical_device) };
-                eprintln!("vulkan device: {:?}", p.device_name_as_c_str());
-            }
-            Err(e @ (VkError::Loader | VkError::NoDevice)) => eprintln!("skipping: {e:?}"),
-            Err(e) => panic!("vulkan device creation failed: {e:?}"),
         }
     }
 }

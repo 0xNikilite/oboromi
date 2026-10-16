@@ -33,14 +33,21 @@ impl<'a> HostBuffer<'a> {
         let instance = &state.instance;
         let props =
             unsafe { instance.get_physical_device_memory_properties(state.physical_device) };
-        // Coherent memory stays mapped and needs no flush or invalidate around host access.
-        let flags = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        // Host reads from uncached memory are slow, so cached wins even when it is not coherent.
+        let host = vk::MemoryPropertyFlags::HOST_VISIBLE;
         let types = &props.memory_types[..props.memory_type_count as usize];
-        let memory_type = (0..)
-            .zip(types)
-            .find(|&(i, t)| req.memory_type_bits >> i & 1 == 1 && t.property_flags.contains(flags))
-            .ok_or(VkError::Vk(vk::Result::ERROR_FEATURE_NOT_PRESENT))?
-            .0;
+        let memory_type = [
+            vk::MemoryPropertyFlags::HOST_CACHED,
+            vk::MemoryPropertyFlags::HOST_COHERENT,
+        ]
+        .into_iter()
+        .find_map(|flags| {
+            (0..).zip(types).find(|&(i, t)| {
+                req.memory_type_bits >> i & 1 == 1 && t.property_flags.contains(host | flags)
+            })
+        })
+        .ok_or(VkError::Vk(vk::Result::ERROR_FEATURE_NOT_PRESENT))?
+        .0;
         let alloc = vk::MemoryAllocateInfo::default()
             .allocation_size(req.size)
             .memory_type_index(memory_type);
@@ -48,20 +55,34 @@ impl<'a> HostBuffer<'a> {
             buf.memory = d.allocate_memory(&alloc, None)?;
             d.bind_buffer_memory(buf.buffer, buf.memory, 0)?;
             buf.ptr = d
-                .map_memory(buf.memory, 0, size, vk::MemoryMapFlags::empty())?
+                .map_memory(buf.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())?
                 .cast();
         }
         Ok(buf)
     }
 
-    pub fn write(&mut self, data: &[u8]) {
-        assert!(data.len() as u64 <= self.size);
-        unsafe { self.ptr.copy_from_nonoverlapping(data.as_ptr(), data.len()) };
+    fn mapped(&self) -> [vk::MappedMemoryRange<'_>; 1] {
+        [vk::MappedMemoryRange::default()
+            .memory(self.memory)
+            .size(vk::WHOLE_SIZE)]
     }
 
-    pub fn read(&self, out: &mut [u8]) {
+    pub fn write(&mut self, data: &[u8]) -> Result<(), VkError> {
+        assert!(data.len() as u64 <= self.size);
+        unsafe {
+            self.ptr.copy_from_nonoverlapping(data.as_ptr(), data.len());
+            Ok(self.device.flush_mapped_memory_ranges(&self.mapped())?)
+        }
+    }
+
+    pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
         assert!(out.len() as u64 <= self.size);
-        unsafe { self.ptr.copy_to_nonoverlapping(out.as_mut_ptr(), out.len()) };
+        unsafe {
+            self.device
+                .invalidate_mapped_memory_ranges(&self.mapped())?;
+            self.ptr.copy_to_nonoverlapping(out.as_mut_ptr(), out.len());
+        }
+        Ok(())
     }
 }
 
@@ -249,13 +270,13 @@ mod tests {
             Err(e) => panic!("vulkan device creation failed: {e:?}"),
         };
         let mut buf = HostBuffer::new(&state, 16).unwrap();
-        buf.write(&[0; 16]);
+        buf.write(&[0; 16]).unwrap();
         let bindings = [(9, vk::DescriptorType::STORAGE_BUFFER)];
         let mut pipeline = ComputePipeline::new(&state, &words, &bindings).unwrap();
         pipeline.bind(&[(9, &buf)]);
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         let mut out = [0u8; 4];
-        buf.read(&mut out);
+        buf.read(&mut out).unwrap();
         assert_eq!(u32::from_le_bytes(out), 42);
     }
 }

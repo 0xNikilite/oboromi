@@ -925,17 +925,6 @@ impl<'a> Decoder<'a> {
         self.fp_src(ty, val, inst >> 62 & 1 != 0, inst >> 63 & 1 != 0)
     }
 
-    fn fp_ftz(&mut self, val: u32) -> u32 {
-        let bits = self.bitcast_u32(val);
-        let [magnitude_mask, normal_min, sign_mask] =
-            [0x7fff_ffff, 0x0080_0000, 0x8000_0000].map(|v| self.cached_const_u32(v));
-        let magnitude = self.ir.emit_bitwise_and(self.type_u32[1], bits, magnitude_mask);
-        let subnormal = self.ir.emit_uless_than(self.type_bool[1], magnitude, normal_min);
-        let sign = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign_mask);
-        let bits = self.ir.emit_select(self.type_u32[1], subnormal, sign, bits);
-        self.bitcast_f32(bits)
-    }
-
     fn fp_compare(&mut self, op: u32, a: u32, b: u32) -> u32 {
         let bool_ty = self.type_bool[1];
         let cmp = match op {
@@ -2100,17 +2089,9 @@ impl<'a> Decoder<'a> {
     }
     pub fn fsel(&mut self, inst: u128) {
         let rd = (inst >> 16 & 0xff) as u32;
-        let ra = (inst >> 24 & 0xff) as u32;
-        let a = self.load_register(ra);
-        let a = self.bitcast_f32(a);
-        let mut a = self.fp_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let b = self.alu_src(inst);
-        let b = self.bitcast_f32(b);
-        let mut b = self.fp_src(b, inst >> 62 & 1 != 0, inst >> 63 & 1 != 0);
-        if inst >> 80 & 1 != 0 {
-            a = self.fp_ftz(a);
-            b = self.fp_ftz(b);
-        }
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.fp_reg(inst, 24, 73, 72, ftz);
+        let b = self.fp_alu_src(inst, ftz);
         let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
         let a = self.bitcast_u32(a);
         let b = self.bitcast_u32(b);
@@ -2119,17 +2100,9 @@ impl<'a> Decoder<'a> {
     }
     pub fn fset(&mut self, inst: u128) {
         let rd = (inst >> 16 & 0xff) as u32;
-        let ra = (inst >> 24 & 0xff) as u32;
-        let a = self.load_register(ra);
-        let a = self.bitcast_f32(a);
-        let mut a = self.fp_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let b = self.alu_src(inst);
-        let b = self.bitcast_f32(b);
-        let mut b = self.fp_src(b, inst >> 62 & 1 != 0, inst >> 63 & 1 != 0);
-        if inst >> 80 & 1 != 0 {
-            a = self.fp_ftz(a);
-            b = self.fp_ftz(b);
-        }
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.fp_reg(inst, 24, 73, 72, ftz);
+        let b = self.fp_alu_src(inst, ftz);
         let comparison = self.fp_compare((inst >> 76 & 0xf) as u32, a, b);
         let p = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
         let p = self.ir.emit_bitwise_and(self.type_u32[1], p, self.const_u32_1);
@@ -2143,17 +2116,9 @@ impl<'a> Decoder<'a> {
         self.store_register(rd, mask);
     }
     pub fn fsetp(&mut self, inst: u128) {
-        let ra = (inst >> 24 & 0xff) as u32;
-        let a = self.load_register(ra);
-        let a = self.bitcast_f32(a);
-        let mut a = self.fp_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let b = self.alu_src(inst);
-        let b = self.bitcast_f32(b);
-        let mut b = self.fp_src(b, inst >> 62 & 1 != 0, inst >> 63 & 1 != 0);
-        if inst >> 80 & 1 != 0 {
-            a = self.fp_ftz(a);
-            b = self.fp_ftz(b);
-        }
+        let ftz = inst >> 80 & 1 != 0;
+        let a = self.fp_reg(inst, 24, 73, 72, ftz);
+        let b = self.fp_alu_src(inst, ftz);
         let comparison = self.fp_compare((inst >> 76 & 0xf) as u32, a, b);
         let inverse = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, comparison);
         let p = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);

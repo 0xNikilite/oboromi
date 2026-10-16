@@ -1,5 +1,6 @@
 use crate::gpu::sm86::Decoder;
 use crate::gpu::spirv::Emitter;
+use crate::gpu::spirv::capability::{FLOAT16, FLOAT64, INT16, INT64, INT8, SHADER};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
@@ -73,32 +74,39 @@ mod inst {
     }
 }
 
+fn translate_module(instructions: &[u128]) -> Emitter {
+    let mut emitter = Emitter::new();
+    emitter.emit_header();
+    for cap in [SHADER, INT8, INT16, INT64, FLOAT16, FLOAT64] {
+        emitter.emit_capability(cap);
+    }
+    emitter.emit_memory_model(0, 1);
+
+    let mut decoder = Decoder::new(&mut emitter);
+    decoder.init();
+
+    // set up a function so translated instructions have a valid context
+    let void_ty = decoder.get_type_void();
+    let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
+    let func = decoder.ir.emit_function(void_ty, 0, func_ty);
+    decoder.emit_entry_point(func);
+    decoder.ir.emit_label();
+
+    for &inst in instructions {
+        decoder.translate(inst);
+    }
+
+    decoder.ir.emit_return();
+    decoder.ir.emit_function_end();
+    decoder.ir.finalize();
+    emitter
+}
+
 fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
     let start = Instant::now();
     println!("Running test: {} ({} instructions)", name, instructions.len());
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut emitter = Emitter::new();
-        emitter.emit_header();
-        emitter.emit_capability(crate::gpu::spirv::capability::SHADER);
-        emitter.emit_memory_model(0, 1);
-
-        let mut decoder = Decoder::new(&mut emitter);
-        decoder.init();
-
-        // set up a function so translated instructions have a valid context
-        let void_ty = decoder.get_type_void();
-        let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
-        let _func = decoder.ir.emit_function(void_ty, 0, func_ty);
-        decoder.ir.emit_label();
-
-        for &inst in instructions {
-            decoder.translate(inst);
-        }
-
-        decoder.ir.emit_return();
-        decoder.ir.emit_function_end();
-        decoder.ir.finalize();
-        decoder.ir.validate();
+        translate_module(instructions).validate()
     }));
 
     let duration = start.elapsed();
@@ -170,4 +178,19 @@ pub fn run_gpu_tests() -> Vec<String> {
     results.push(summary);
 
     results
+}
+
+#[test]
+fn mov_immediate_passes_spirv_val() {
+    let path = std::env::temp_dir().join("oboromi_mov_immediate.spv");
+    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)]);
+    std::fs::write(&path, module.to_bytes()).unwrap();
+    let spirv_val = std::process::Command::new("spirv-val")
+        .args(["--target-env", "vulkan1.2"])
+        .arg(&path)
+        .output();
+    match spirv_val {
+        Ok(out) => assert!(out.status.success(), "{out:?}"),
+        Err(e) => eprintln!("skipping, spirv-val unavailable: {e}"),
+    }
 }

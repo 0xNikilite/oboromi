@@ -478,11 +478,23 @@ impl<'a> Decoder<'a> {
 
     fn translate_guarded(&mut self, inst: u128) {
         let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
-        if pg == 7 && !pg_not {
-            return self.translate(inst);
+        if pg == 7 {
+            if !pg_not {
+                self.translate(inst);
+            }
+            return;
         }
-        let mask = self.load_predicate_mask(pg, pg_not);
-        let cond = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+        // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
+        let uniform = matches!(inst & 0x1ff, 0x80..=0xbf | 0x1c3) && inst & 0x1ff != 0x86;
+        let predicates = if uniform { self.load_upredicate() } else { self.load_predicate() };
+        let shift = self.cached_const_u32(pg);
+        let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], predicates, shift);
+        let bit = self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1);
+        let cond = if pg_not {
+            self.ir.emit_iequal(self.type_bool[1], bit, self.const_u32_0)
+        } else {
+            self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0)
+        };
         let [then, after] = [(); 2].map(|_| self.ir.alloc_id());
         self.ir.emit_selection_merge(after, 0);
         self.ir.emit_branch_conditional(cond, then, after);
@@ -526,25 +538,6 @@ impl<'a> Decoder<'a> {
             let ptr = self.state_ptr(&[2, ur]);
             self.ir.emit_store(ptr, val);
         }
-    }
-
-    fn store_ureg_predicated(&mut self, ur: u32, pred: u32, invert: bool, val: u32) {
-        if ur == 63 {
-            return;
-        }
-        let bit = if pred == 7 {
-            self.const_u32_1
-        } else {
-            let upred = self.load_upredicate();
-            let shift = self.cached_const_u32(pred);
-            let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], upred, shift);
-            self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1)
-        };
-        let mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, bit);
-        let mask = if invert { self.ir.emit_not(self.type_u32[1], mask) } else { mask };
-        let old = self.load_ureg(ur);
-        let val = self.select_masked(mask, val, old);
-        self.store_ureg(ur, val);
     }
 
     fn load_upredicate(&mut self) -> u32 {
@@ -1323,8 +1316,8 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn cs2r(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) != 0;
+        let _pg = (((inst >> 12) & 0x7) << 0);
+        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _rd = (((inst >> 16) & 0xff) << 0);
         let _imm8 = (((inst >> 72) & 0xff) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
@@ -1337,13 +1330,13 @@ impl<'a> Decoder<'a> {
         let sr = ((inst >> 72) & 0xff) as u32;
         if (inst >> 80) & 1 == 0 {
             let val = self.special_register(sr);
-            self.store_register_predicated(rd, pg, pg_not, val);
+            self.store_register(rd, val);
         } else {
             let hi = if sr == 255 { sr } else { sr + 1 };
             let words = [self.special_register(sr), self.special_register(hi)];
             if rd != 255 {
                 for (i, val) in words.into_iter().enumerate() {
-                    self.store_register_predicated(rd + i as u32, pg, pg_not, val);
+                    self.store_register(rd + i as u32, val);
                 }
             }
         }
@@ -3094,8 +3087,8 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn s2r(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) != 0;
+        let _pg = (((inst >> 12) & 0x7) << 0);
+        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _rd = (((inst >> 16) & 0xff) << 0);
         let _imm8 = (((inst >> 72) & 0xff) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
@@ -3106,11 +3099,11 @@ impl<'a> Decoder<'a> {
         let rd = ((inst >> 16) & 0xff) as u32;
         let sr = ((inst >> 72) & 0xff) as u32;
         let val = self.special_register(sr);
-        self.store_register_predicated(rd, pg, pg_not, val);
+        self.store_register(rd, val);
     }
     pub fn s2ur(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) != 0;
+        let _pg = (((inst >> 12) & 0x7) << 0);
+        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _urd = (((inst >> 16) & 0x3f) << 0);
         let _imm8 = (((inst >> 72) & 0xff) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
@@ -3121,7 +3114,7 @@ impl<'a> Decoder<'a> {
         let urd = ((inst >> 16) & 0x3f) as u32;
         let sr = ((inst >> 72) & 0xff) as u32;
         let val = self.special_register(sr);
-        self.store_ureg_predicated(urd, pg, pg_not, val);
+        self.store_ureg(urd, val);
     }
     pub fn scatter(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3813,8 +3806,8 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn uldc(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
+        let _pg = (((inst >> 12) & 0x7) << 0);
+        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let urd = (((inst >> 16) & 0x3f) << 0) as u32;
         let ra_offset = (((inst >> 38) & 0xffff) << 0) as u32;
         let sc_bank = (((inst >> 54) & 0x1f) << 0) as u32;
@@ -3824,7 +3817,8 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        assert!(inst >> 91 & 1 == 0 && pg == 7 && pg_not == 0, "ULDC with a uniform address or predicate");
+        assert!(inst >> 91 & 1 == 0, "ULDC with a uniform address");
+
         let words = match sz {
             4 | 5 => 1 << (sz - 4),
             _ => todo!("ULDC size {sz}"),

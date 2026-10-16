@@ -180,16 +180,23 @@ pub fn run_gpu_tests() -> Vec<String> {
 
 #[test]
 fn mov_immediate_passes_spirv_val() {
-    let path = std::env::temp_dir().join("oboromi_mov_immediate.spv");
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
     let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)]);
     assert_eq!(module.words()[5..8], [2 << 16 | 17, SHADER, 3 << 16 | 14]);
-    std::fs::write(&path, module.to_bytes()).unwrap();
-    let spirv_val = std::process::Command::new("spirv-val")
+    let spirv_val = Command::new("spirv-val")
         .args(["--target-env", "vulkan1.2"])
-        .arg(&path)
-        .output();
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
     match spirv_val {
-        Ok(out) => assert!(out.status.success(), "{out:?}"),
+        Ok(mut child) => {
+            child.stdin.take().unwrap().write_all(&module.to_bytes()).unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+        }
         Err(e) => eprintln!("skipping, spirv-val unavailable: {e}"),
     }
 }

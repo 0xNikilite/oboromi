@@ -311,6 +311,17 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
+    pub fn emit_entry_point(&mut self, func: u32) {
+        self.ir.emit_entry_point(
+            spirv::execution_model::GLCOMPUTE,
+            func,
+            "main",
+            &[self.var_abstract_state],
+        );
+        self.ir
+            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[1, 1, 1]);
+    }
+
     pub fn init(&mut self) {
         self.type_void = self.ir.emit_type_void();
         self.type_u8[1] = self.ir.emit_type_int(8, 0);

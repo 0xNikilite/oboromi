@@ -136,9 +136,25 @@ pub enum BuiltIn {
 
 #[derive(Debug, Clone)]
 pub struct Emitter {
-    words: Vec<u32>,
+    sections: [Vec<u32>; 11],
     next_id: u32,
-    bound_idx: usize,
+}
+
+// Index into `sections`, which are in SPIR-V logical layout order after the header at 0.
+fn section(opcode: u32, operands: &[u32]) -> usize {
+    match opcode {
+        17 => 1,
+        10 => 2,
+        11 => 3,
+        14 => 4,
+        15 => 5,
+        16 | 331 => 6,
+        2..=7 | 330 => 7,
+        71..=75 | 332 => 8,
+        19..=39 | 41..=52 => 9,
+        59 if operands[2] != storage_class::FUNCTION => 9,
+        _ => 10,
+    }
 }
 
 impl Default for Emitter {
@@ -148,9 +164,8 @@ impl Default for Emitter {
 impl Emitter {
     pub fn new() -> Self {
         Self {
-            words: Vec::with_capacity(4096),
+            sections: Default::default(),
             next_id: 1, // SPIR-V IDs are 1-based; 0 is reserved
-            bound_idx: 0,
         }
     }
 
@@ -163,14 +178,15 @@ impl Emitter {
     }
 
     /// Access the emitted word stream
-    pub fn words(&self) -> &[u32] { &self.words }
-    pub fn len(&self) -> usize { self.words.len() }
+    pub fn words(&self) -> Vec<u32> { self.sections.concat() }
+    pub fn len(&self) -> usize { self.sections.iter().map(Vec::len).sum() }
     pub fn id_bound(&self) -> u32 { self.next_id }
 
     fn inst(&mut self, opcode: u32, operands: &[u32]) {
         let wc = (1 + operands.len()) as u32;
-        self.words.push((wc << 16) | (opcode & 0xFFFF));
-        self.words.extend_from_slice(operands);
+        let words = &mut self.sections[section(opcode, operands)];
+        words.push((wc << 16) | (opcode & 0xFFFF));
+        words.extend_from_slice(operands);
     }
 
     fn typed_un(&mut self, op: u32, ty: u32, a: u32) -> u32 {
@@ -192,17 +208,17 @@ impl Emitter {
     }
 
     pub fn emit_header(&mut self) {
-        self.words.push(0x07230203); // magic
-        self.words.push(0x00010500); // version 1.5
-        self.words.push(0); // generator (unregistered)
-        self.bound_idx = self.words.len();
-        self.words.push(0); // bound (patched by finalize)
-        self.words.push(0); // schema
+        let words = &mut self.sections[0];
+        words.push(0x07230203); // magic
+        words.push(0x00010500); // version 1.5
+        words.push(0); // generator (unregistered)
+        words.push(0); // bound (patched by finalize)
+        words.push(0); // schema
     }
 
     pub fn finalize(&mut self) {
-        if self.bound_idx < self.words.len() {
-            self.words[self.bound_idx] = self.next_id;
+        if let Some(bound) = self.sections[0].get_mut(3) {
+            *bound = self.next_id;
         }
     }
 
@@ -229,16 +245,9 @@ impl Emitter {
         let mut data = vec![r];
         data.extend(members.iter().map(|e| e.1));
         self.inst(30, &data);
-        // Debug names must precede annotations and types, so splice them in after the debug section.
-        let mut pos = 5;
-        while pos < self.words.len() && matches!(self.words[pos] & 0xFFFF, 2..=17 | 330 | 331) {
-            pos += (self.words[pos] >> 16) as usize;
-        }
-        let rest = self.words.split_off(pos);
         for i in 0..members.len() {
             self.emit_member_name(r, i as u32, members[i].0);
         }
-        self.words.extend(rest);
         r
     }
     pub fn emit_constant_typed<T: Literal>(&mut self, ty: u32, value: T) -> u32 {
@@ -956,25 +965,26 @@ impl Emitter {
     }
 
     pub fn validate(&self) {
-        assert!(self.words.len() >= 5);
-        assert!(self.words[0] == 0x07230203);
+        let words = self.words();
+        assert!(words.len() >= 5);
+        assert!(words[0] == 0x07230203);
         // Walk instructions after header
         let mut pos = 5;
-        while pos < self.words.len() {
-            let header = self.words[pos];
+        while pos < words.len() {
+            let header = words[pos];
             let wc = (header >> 16) as usize;
             let opcode = header & 0xFFFF;
             assert!(wc > 0, "Instruction with zero word count");
-            assert!(pos + wc <= self.words.len(), "Instruction extends beyond module end");
+            assert!(pos + wc <= words.len(), "Instruction extends beyond module end");
             // OpNop is valid with wc=1
             assert!(opcode != 0 || wc == 1, "OpNop must have word count 1");
             pos += wc;
         }
-        assert!(pos == self.words.len(), "Trailing data after last instruction");
+        assert!(pos == words.len(), "Trailing data after last instruction");
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.words.iter().flat_map(|e| e.to_le_bytes()).collect()
+        self.sections.iter().flatten().flat_map(|e| e.to_le_bytes()).collect()
     }
 }
 
@@ -1069,7 +1079,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn validate_catches_bad_magic() {
-        let e = Emitter { words: vec![0xDEADBEEF, 0, 0, 1, 0], next_id: 1, bound_idx: 3 };
+        let mut e = Emitter::new();
+        e.sections[0] = vec![0xDEADBEEF, 0, 0, 1, 0];
         e.validate();
     }
 

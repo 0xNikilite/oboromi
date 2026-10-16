@@ -28,6 +28,15 @@ pub struct VkState {
     pub submit: std::sync::Mutex<compute::Submit>,
 }
 
+pub fn device() -> Result<&'static VkState, VkError> {
+    static DEVICE: std::sync::OnceLock<VkState> = std::sync::OnceLock::new();
+    if let Some(state) = DEVICE.get() {
+        return Ok(state);
+    }
+    let state = VkState::new()?;
+    Ok(DEVICE.get_or_init(|| state))
+}
+
 impl VkState {
     pub fn new() -> Result<Self, VkError> {
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
@@ -120,7 +129,6 @@ pub struct State {
     pub shared_memory: *mut u8,
     pub global_memory: *mut u8,
     pub pc: u64,
-    pub vk: Option<VkState>,
 }
 
 impl State {
@@ -131,11 +139,6 @@ impl State {
             shared_memory: core::ptr::null_mut(),
             global_memory: core::ptr::null_mut(),
             pc: 0,
-            vk: None,
         }
-    }
-    pub fn init(&mut self) -> Result<(), VkError> {
-        self.vk = Some(VkState::new()?);
-        Ok(())
     }
 }

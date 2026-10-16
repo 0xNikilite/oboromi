@@ -77,17 +77,17 @@ pub fn run_regs(instructions: &[u128], seed: &[u32], cbuf0: &[u32]) -> Option<Ve
     words.resize(STATE_WORDS, 0);
     let size = (STATE_WORDS * 4) as u64;
     let mut input = HostBuffer::new(&state, size).unwrap();
-    input.write(&bytes(&words));
+    input.write(&bytes(&words)).unwrap();
     let output = HostBuffer::new(&state, size).unwrap();
     let mut cbuf = HostBuffer::new(&state, 16 + 4 * cbuf0.len() as u64).unwrap();
-    cbuf.write(&bytes(cbuf0));
+    cbuf.write(&bytes(cbuf0)).unwrap();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (9, ssbo), (1, DescriptorType::UNIFORM_BUFFER)];
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
     pipeline.bind(&[(10, &input), (9, &output), (1, &cbuf)]);
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let mut out = vec![0u8; STATE_WORDS * 4];
-    output.read(&mut out);
+    output.read(&mut out).unwrap();
     Some(
         out.chunks(4)
             .map(|w| u32::from_le_bytes(w.try_into().unwrap()))

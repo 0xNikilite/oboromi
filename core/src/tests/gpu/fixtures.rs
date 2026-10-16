@@ -70,7 +70,7 @@ mod tests {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
         for fixture in fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
-            if catch_unwind(|| translate_module(&fixture.words, true)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }

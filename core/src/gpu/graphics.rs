@@ -4,7 +4,6 @@ use super::{VkError, VkState};
 use ash::vk;
 
 const COLOR_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
-const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
 pub struct VertexLayout<'a> {
     pub bindings: &'a [vk::VertexInputBindingDescription],
@@ -15,7 +14,7 @@ pub struct VertexLayout<'a> {
 
 pub struct TargetState {
     pub blend: vk::PipelineColorBlendAttachmentState,
-    pub depth: bool,
+    pub depth: Option<vk::Format>,
 }
 
 /// The 3D state that is Vulkan dynamic state, so one pipeline serves every value of it.
@@ -38,15 +37,20 @@ pub struct DrawState<'a> {
     pub index_buffer: Option<(&'a HostBuffer<'a>, vk::IndexType)>,
     pub vertex_count: u32,
     pub first_vertex: u32,
+    pub first_instance: u32,
     pub instance_count: u32,
     /// Without a clear the draw loads what the previous draw into the target left.
     pub clear: Option<[f32; 4]>,
+    pub clear_depth: Option<f32>,
+    /// The colour starts from what `RenderTarget::write` staged, the target's guest memory.
+    pub load: bool,
     pub raster: RasterState,
 }
 
 pub struct GraphicsPipeline<'a> {
     device: &'a ash::Device,
-    pub descriptors: Descriptors<'a>,
+    /// The vertex stage's resources in set 0, the fragment stage's in set 1.
+    pub descriptors: [Descriptors<'a>; 2],
     shaders: [vk::ShaderModule; 2],
     pub layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
@@ -57,7 +61,7 @@ impl<'a> GraphicsPipeline<'a> {
         state: &'a VkState,
         vertex_spirv: &[u32],
         fragment_spirv: &[u32],
-        bindings: &[(u32, vk::DescriptorType)],
+        bindings: [&[(u32, vk::DescriptorType)]; 2],
         vertex_layout: &VertexLayout,
         target: &TargetState,
     ) -> Result<Self, VkError> {
@@ -65,7 +69,7 @@ impl<'a> GraphicsPipeline<'a> {
         let d = &state.device;
         let mut p = Self {
             device: d,
-            descriptors: Descriptors::new(d, bindings, Stage::VERTEX | Stage::FRAGMENT)?,
+            descriptors: [Descriptors::new(d, bindings[0], Stage::VERTEX)?, Descriptors::new(d, bindings[1], Stage::FRAGMENT)?],
             shaders: Default::default(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
@@ -73,7 +77,7 @@ impl<'a> GraphicsPipeline<'a> {
         for (shader, code) in p.shaders.iter_mut().zip([vertex_spirv, fragment_spirv]) {
             *shader = unsafe { d.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(code), None)? };
         }
-        let set_layouts = [p.descriptors.set_layout];
+        let set_layouts = p.descriptors.each_ref().map(|descriptors| descriptors.set_layout);
         let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
         p.layout = unsafe { d.create_pipeline_layout(&layout_info, None)? };
         let stages = [(Stage::VERTEX, p.shaders[0]), (Stage::FRAGMENT, p.shaders[1])]
@@ -105,7 +109,7 @@ impl<'a> GraphicsPipeline<'a> {
         let color_formats = [COLOR_FORMAT];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
-            .depth_attachment_format(if target.depth { DEPTH_FORMAT } else { vk::Format::UNDEFINED });
+            .depth_attachment_format(target.depth.unwrap_or_default());
         let info = [vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
             .vertex_input_state(&vertex_input)
@@ -137,6 +141,7 @@ impl Drop for GraphicsPipeline<'_> {
 
 struct Attachment<'a> {
     device: &'a ash::Device,
+    aspect: vk::ImageAspectFlags,
     image: vk::Image,
     memory: vk::DeviceMemory,
     view: vk::ImageView,
@@ -160,6 +165,7 @@ impl<'a> Attachment<'a> {
             .usage(usage);
         let mut a = Self {
             device,
+            aspect,
             image: unsafe { device.create_image(&info, None)? },
             memory: vk::DeviceMemory::null(),
             view: vk::ImageView::null(),
@@ -201,14 +207,17 @@ pub struct RenderTarget<'a> {
 }
 
 impl<'a> RenderTarget<'a> {
-    pub fn new(state: &'a VkState, width: u32, height: u32, depth: bool) -> Result<Self, VkError> {
+    pub fn new(state: &'a VkState, width: u32, height: u32, depth: Option<vk::Format>) -> Result<Self, VkError> {
         use vk::{ImageAspectFlags as Aspect, ImageUsageFlags as Usage};
         let (d, extent) = (&state.device, vk::Extent2D { width, height });
         Ok(Self {
             extent,
-            color: Attachment::new(d, extent, COLOR_FORMAT, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC, Aspect::COLOR)?,
+            color: Attachment::new(d, extent, COLOR_FORMAT, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC | Usage::TRANSFER_DST, Aspect::COLOR)?,
             depth: depth
-                .then(|| Attachment::new(d, extent, DEPTH_FORMAT, Usage::DEPTH_STENCIL_ATTACHMENT, Aspect::DEPTH))
+                .map(|format| {
+                    let stencil = if format == vk::Format::D24_UNORM_S8_UINT { Aspect::STENCIL } else { Aspect::empty() };
+                    Attachment::new(d, extent, format, Usage::DEPTH_STENCIL_ATTACHMENT, Aspect::DEPTH | stencil)
+                })
                 .transpose()?,
             staging: HostBuffer::new(state, u64::from(width * height * 4))?,
         })
@@ -217,6 +226,10 @@ impl<'a> RenderTarget<'a> {
     pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
         self.staging.read(out)
     }
+
+    pub fn write(&mut self, pixels: &[u8]) -> Result<(), VkError> {
+        self.staging.write(pixels)
+    }
 }
 
 impl VkState {
@@ -224,22 +237,24 @@ impl VkState {
         use vk::{AccessFlags as Access, ImageLayout as Layout, PipelineStageFlags as Stage};
         let d = &self.device;
         let graphics = vk::PipelineBindPoint::GRAPHICS;
-        let load = if draw.clear.is_some() { vk::AttachmentLoadOp::CLEAR } else { vk::AttachmentLoadOp::LOAD };
-        let barrier = |image, aspect_mask| {
+        let load = |clear: bool| if clear { vk::AttachmentLoadOp::CLEAR } else { vk::AttachmentLoadOp::LOAD };
+        let barrier = |attachment: &Attachment| {
             vk::ImageMemoryBarrier::default()
-                .image(image)
-                .subresource_range(vk::ImageSubresourceRange::default().aspect_mask(aspect_mask).level_count(1).layer_count(1))
+                .image(attachment.image)
+                .subresource_range(vk::ImageSubresourceRange::default().aspect_mask(attachment.aspect).level_count(1).layer_count(1))
         };
         // A cleared attachment starts from UNDEFINED, a loaded one from where the previous draw left it.
-        let discard_or = |layout| if draw.clear.is_some() { Layout::UNDEFINED } else { layout };
-        let to_color = barrier(target.color.image, vk::ImageAspectFlags::COLOR)
-            .old_layout(discard_or(Layout::TRANSFER_SRC_OPTIMAL))
+        let discard_or = |clear: bool, layout| if clear { Layout::UNDEFINED } else { layout };
+        let to_upload = barrier(&target.color).new_layout(Layout::TRANSFER_DST_OPTIMAL).dst_access_mask(Access::TRANSFER_WRITE);
+        let to_color = barrier(&target.color)
+            .old_layout(if draw.load { Layout::TRANSFER_DST_OPTIMAL } else { discard_or(draw.clear.is_some(), Layout::TRANSFER_SRC_OPTIMAL) })
             .new_layout(Layout::COLOR_ATTACHMENT_OPTIMAL)
+            .src_access_mask(if draw.load { Access::TRANSFER_WRITE } else { Access::empty() })
             .dst_access_mask(Access::COLOR_ATTACHMENT_READ | Access::COLOR_ATTACHMENT_WRITE);
         let color = [vk::RenderingAttachmentInfo::default()
             .image_view(target.color.view)
             .image_layout(Layout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(load)
+            .load_op(load(draw.clear.is_some()))
             .store_op(vk::AttachmentStoreOp::STORE)
             .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: draw.clear.unwrap_or_default() } })];
         let mut rendering = vk::RenderingInfo::default()
@@ -249,21 +264,22 @@ impl VkState {
         let mut to_attachments = [to_color, to_color];
         let depth_info;
         if let Some(depth) = &target.depth {
-            to_attachments[1] = barrier(depth.image, vk::ImageAspectFlags::DEPTH)
-                .old_layout(discard_or(Layout::DEPTH_ATTACHMENT_OPTIMAL))
-                .new_layout(Layout::DEPTH_ATTACHMENT_OPTIMAL)
+            let clear = draw.clear_depth.is_some();
+            to_attachments[1] = barrier(depth)
+                .old_layout(discard_or(clear, Layout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL))
+                .new_layout(Layout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
                 .src_access_mask(Access::DEPTH_STENCIL_ATTACHMENT_WRITE)
                 .dst_access_mask(Access::DEPTH_STENCIL_ATTACHMENT_READ | Access::DEPTH_STENCIL_ATTACHMENT_WRITE);
             depth_info = vk::RenderingAttachmentInfo::default()
                 .image_view(depth.view)
-                .image_layout(Layout::DEPTH_ATTACHMENT_OPTIMAL)
-                .load_op(load)
+                .image_layout(Layout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .load_op(load(clear))
                 .store_op(vk::AttachmentStoreOp::STORE)
-                .clear_value(vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 } });
+                .clear_value(vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: draw.clear_depth.unwrap_or_default(), stencil: 0 } });
             rendering = rendering.depth_attachment(&depth_info);
         }
         let to_attachments = &to_attachments[..1 + usize::from(target.depth.is_some())];
-        let to_transfer = barrier(target.color.image, vk::ImageAspectFlags::COLOR)
+        let to_transfer = barrier(&target.color)
             .old_layout(Layout::COLOR_ATTACHMENT_OPTIMAL)
             .new_layout(Layout::TRANSFER_SRC_OPTIMAL)
             .src_access_mask(Access::COLOR_ATTACHMENT_WRITE)
@@ -276,6 +292,10 @@ impl VkState {
         let none = vk::DependencyFlags::empty();
         let r = &draw.raster;
         self.submit_and_wait(|cmd| unsafe {
+            if draw.load {
+                d.cmd_pipeline_barrier(cmd, Stage::TOP_OF_PIPE, Stage::TRANSFER, none, &[], &[], &[to_upload]);
+                d.cmd_copy_buffer_to_image(cmd, target.staging.buffer, target.color.image, Layout::TRANSFER_DST_OPTIMAL, &copy);
+            }
             d.cmd_pipeline_barrier(
                 cmd,
                 Stage::TRANSFER | fragment_tests,
@@ -287,7 +307,7 @@ impl VkState {
             );
             d.cmd_begin_rendering(cmd, &rendering);
             d.cmd_bind_pipeline(cmd, graphics, pipeline.pipeline);
-            d.cmd_bind_descriptor_sets(cmd, graphics, pipeline.layout, 0, &[pipeline.descriptors.set], &[]);
+            d.cmd_bind_descriptor_sets(cmd, graphics, pipeline.layout, 0, &pipeline.descriptors.each_ref().map(|descriptors| descriptors.set), &[]);
             d.cmd_set_viewport(cmd, 0, &[r.viewport]);
             d.cmd_set_scissor(cmd, 0, &[r.scissor]);
             d.cmd_set_cull_mode(cmd, r.cull_face);
@@ -303,9 +323,9 @@ impl VkState {
             match draw.index_buffer {
                 Some((buffer, ty)) => {
                     d.cmd_bind_index_buffer(cmd, buffer.buffer, 0, ty);
-                    d.cmd_draw_indexed(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0, 0);
+                    d.cmd_draw_indexed(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0, draw.first_instance);
                 }
-                None => d.cmd_draw(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0),
+                None => d.cmd_draw(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, draw.first_instance),
             }
             d.cmd_end_rendering(cmd);
             d.cmd_pipeline_barrier(cmd, Stage::COLOR_ATTACHMENT_OUTPUT, Stage::TRANSFER, none, &[], &[], &[to_transfer]);

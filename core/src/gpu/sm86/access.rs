@@ -59,7 +59,7 @@ impl<'a> Decoder<'a> {
             self.type_ptr_cbuf_u32 = self.ir.emit_type_pointer(UNIFORM, self.type_u32[1]);
         }
         let var = self.ir.emit_variable(self.type_ptr_cbuf, UNIFORM);
-        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         self.resources.push(Resource { kind, var });
         var

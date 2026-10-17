@@ -30,7 +30,7 @@ mod tests {
         use ResourceKind::*;
         let position = BuiltIn(crate::gpu::spirv::BuiltIn::Position as u32);
         let expected = [VertexInput { location: 0 }, VertexInput { location: 1 }, position, Varying { location: 0, flat: false }];
-        assert_eq!(stage_interface(Stage::Vertex, &vertex_program()), expected);
+        assert_eq!(stage_interface(Stage::Vertex { uint: 0, sint: 0 }, &vertex_program()), expected);
     }
 
     #[test]

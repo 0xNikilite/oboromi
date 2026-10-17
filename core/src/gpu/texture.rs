@@ -113,6 +113,21 @@ impl TexturePool<'_> {
 }
 
 impl TextureHeader {
+    /// How many guest bytes from the header address `upload` reads.
+    pub fn guest_bytes(&self) -> usize {
+        (0..self.levels)
+            .map(|level| {
+                let [columns, rows] = [self.width, self.height].map(|n| (n >> level).max(1).div_ceil(self.block_texels));
+                match self.layout {
+                    Layout::Pitch(pitch) => (pitch * rows) as usize,
+                    Layout::BlockLinear { gob_height_log2 } => {
+                        block_linear_size((columns * self.block_bytes) as usize, rows as usize, level_gob_height_log2(rows, gob_height_log2))
+                    }
+                }
+            })
+            .sum()
+    }
+
     /// The texel blocks of every level in guest `memory` from the header address, packed row after row and level after
     /// level, with the copy of each level into the image.
     pub fn upload(&self, memory: &[u8]) -> (Vec<u8>, Vec<vk::BufferImageCopy>) {

@@ -16,7 +16,7 @@ impl<'a> Decoder<'a> {
                 self.ir.emit_decorate(block, deco::BLOCK, &[]);
                 self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
                 let var = self.ir.emit_variable(self.type_ptr_ssbo64, STORAGE_BUFFER);
-                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
                 self.ir.emit_decorate(var, deco::BINDING, &[GLOBAL_BINDING]);
                 self.resources.push(Resource { kind: ResourceKind::Global64, var });
                 var

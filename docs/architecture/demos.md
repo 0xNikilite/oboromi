@@ -9,7 +9,6 @@ The Qt window has buttons that draw through the GPU work today. Six bigger scene
 | Render Test Frame | `frame::render_test_frame` | A translated SASS program (S2R, IMAD, STG) writes a 1080p gradient as a compute shader |
 | Demo | `frame::render_demo_frame` | A hand-written SASS Julia set animates every frame; the time arrives through constant buffer 0 |
 | Triangle | `frame::render_triangle_demo` | A command list in guest memory draws a turning triangle through the whole engine |
-| Sprites | `demo_sprites::render_sprites_frame` | NVIDIA-compiled sprite shaders draw a scrolling parallax scene of 199 blended quads as one instanced draw |
 
 The Julia set program loops with a predicated branch, a jump taken only where a one-bit flag is set. It reuses one pipeline built once, so a frame costs a dispatch, a readback and a present.
 

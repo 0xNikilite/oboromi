@@ -156,6 +156,7 @@ pub struct Decoder<'a> {
     entry: usize,
     type_ptr_local: u32,
     locals: Option<Locals>,
+    pending_nan: BTreeMap<u32, u32>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -233,6 +234,18 @@ fn access_words(sz: u32) -> u32 {
 fn assert_round_to_nearest(inst: u128) {
     let mode = (inst >> 78 & 3) as usize;
     assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
+}
+
+fn deferred_nan(inst: u128) -> bool {
+    match opcode(inst) & 0x1ff {
+        0x020 | 0x021 | 0x023 | 0x009 | 0x108 => true, // FMUL, FADD, FFMA, FMNMX, MUFU
+        0x107 => inst >> 84 & 3 == 2 && inst >> 75 & 3 == 2, // FRND.F32.F32
+        _ => false,
+    }
+}
+
+fn ignores_nan_payload(inst: u128) -> bool {
+    deferred_nan(inst) || matches!(opcode(inst) & 0x1ff, 0x00a | 0x00b) // FSET, FSETP
 }
 
 fn is_uniform(inst: u128) -> bool {
@@ -333,6 +346,7 @@ impl<'a> Decoder<'a> {
             entry: 0,
             type_ptr_local: 0,
             locals: None,
+            pending_nan: BTreeMap::new(),
             timing: if !hints.timing { Timing::Off } else if let Some(device) = device.filter(|d| d.shader_device_clock) {
                 Timing::Clock { period: device.timestamp_period, emitted: false }
             } else {
@@ -352,7 +366,7 @@ impl<'a> Decoder<'a> {
         }
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.pending_nan.values().copied()).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
@@ -447,8 +461,7 @@ impl<'a> Decoder<'a> {
         let output = self.resource(ResourceKind::Ssbo(1)).unwrap();
         let base = self.invocation_state_base();
         for slot in 0..STATE_WORDS as u32 {
-            let ptr = self.state_slot(slot);
-            let value = self.ir.emit_load(self.type_u32[1], ptr);
+            let value = if slot < MAX_REG_COUNT as u32 { self.load_register(slot) } else { self.load_slot(slot) };
             let word = self.ssbo_word(output, base, slot);
             self.ir.emit_store(word, value);
         }
@@ -555,6 +568,11 @@ impl<'a> Decoder<'a> {
     // Warp collectives and BAR meet at workgroup barriers, so a program with them steps every invocation through the same
     // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
+        // Backedges and predicated writes need provenance even when their producer is emitted later.
+        for &inst in words.iter().filter(|&&inst| deferred_nan(inst)) {
+            let reg = (inst >> 16 & 0xff) as u32;
+            if reg != RZ { self.nan_flag(reg); }
+        }
         if self.translation != Translation::ForceDispatcher {
             match plan(words) {
                 Ok(plan) => return self.translate_structured(words, &plan),
@@ -661,10 +679,16 @@ impl<'a> Decoder<'a> {
         let Some(cond) = cond else { return self.translate(inst) };
         if exchanges(inst) {
             self.active = cond;
+            let flags: Vec<_> = self.pending_nan.values().map(|&var| (var, self.ir.emit_load(self.type_u32[1], var))).collect();
             let before = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
             self.translate(inst);
             let after = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
             let kept = self.ir.emit_select(self.type_abstract_state, cond, after, before);
+            for (var, before) in flags {
+                let after = self.ir.emit_load(self.type_u32[1], var);
+                let kept = self.ir.emit_select(self.type_u32[1], cond, after, before);
+                self.ir.emit_store(var, kept);
+            }
             return self.ir.emit_store(self.var_abstract_state, kept);
         }
         let [then, after] = [(); 2].map(|_| self.ir.alloc_id());
@@ -777,7 +801,33 @@ impl<'a> Decoder<'a> {
         id
     }
 
+    fn nan_flag(&mut self, reg: u32) -> u32 {
+        *self.pending_nan.entry(reg).or_insert_with(|| {
+            self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_0)
+        })
+    }
+
+    fn store_fp_register(&mut self, reg: u32, bits: u32) {
+        if reg == RZ { return; }
+        assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
+        let flag = self.nan_flag(reg);
+        self.store_slot(reg, bits);
+        self.ir.emit_store(flag, self.const_u32_1);
+    }
+
     fn load_register(&mut self, reg: u32) -> u32 {
+        let bits = self.load_float_register(reg);
+        let Some(&flag) = self.pending_nan.get(&reg) else { return bits };
+        let pending = self.ir.emit_load(self.type_u32[1], flag);
+        let pending = self.ir.emit_inot_equal(self.type_bool[1], pending, self.const_u32_0);
+        let val = self.bitcast_f32(bits);
+        let canonical = self.canonical_nan_bits(val);
+        let bits = self.ir.emit_select(self.type_u32[1], pending, canonical, bits);
+        self.store_register(reg, bits);
+        bits
+    }
+
+    fn load_float_register(&mut self, reg: u32) -> u32 {
         if reg == RZ {
             return self.const_u32_0;
         }
@@ -789,6 +839,9 @@ impl<'a> Decoder<'a> {
         if reg == RZ { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
         self.store_slot(reg, val);
+        if let Some(&flag) = self.pending_nan.get(&reg) {
+            self.ir.emit_store(flag, self.const_u32_0);
+        }
     }
 
     fn load_predicate(&mut self) -> u32 {

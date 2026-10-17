@@ -1,6 +1,6 @@
 # Demos
 
-The Qt window has buttons that draw through the GPU work today. Six bigger scenes show more of the engine: post-effect, sprites, particles, BoomBox, FlightHelmet and a ray-traced one. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
+The Qt window has buttons that draw through the GPU work today. Larger scenes show post effects, sprites, particles, BoomBox, FlightHelmet, ray tracing and a dungeon. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
 
 ## What runs today?
 
@@ -15,6 +15,7 @@ The Qt window has buttons that draw through the GPU work today. Six bigger scene
 | Sprites | `demo_sprites::render_sprites_frame` | NVIDIA-compiled sprite shaders draw a scrolling parallax scene of blended sprites as one instanced draw |
 | Music | `demo_music::play_music` | A 16-bar loop plays through the audio renderer: synthesised samples on voices, a low-pass and an echo on the final mix |
 | Bounce | `demo_bounce::render_bounce_frame` | Balls bounce in a box drawn with the particle shaders, and every hit plays a knock on a free voice |
+| Dungeon | `demo_dungeon::render_dungeon_frame` | A torchlit tour with PBR materials, simulated water, particles, two quality presets and spatial audren sound |
 
 The Julia set program loops with a predicated branch, a jump taken only where a one-bit flag is set. It reuses one pipeline built once, so a frame costs a dispatch, a readback and a present.
 
@@ -121,11 +122,11 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon.mp4" type="video/mp4"></video>
 
-*Showcase: a 20-second, 1080p tour rendered offline at fixed 60 Hz, with audio from the emulated renderer. Ray-query shadows, reflections and ambient occlusion run on Intel Arc MTL. Wet cobblestone and rock use ambientCG 2K PBR maps, with layered fire, embers, smoke, heat haze, simulated water, foam, bubbles, drifting leaves, drips, bloom and volumetric torchlight. This is the console-oriented preset; its native Switch 2 frame budget remains unverified.*
+*Showcase: a 20-second, 1080p tour rendered offline at fixed 60 Hz, with audio from the emulated renderer. Ray-query shadows, reflections and ambient occlusion run on Intel Arc MTL. Wet cobblestone and rock use ambientCG 2K PBR maps, with layered fire, embers, smoke, heat haze, simulated water, foam, bubbles, drifting leaves, drips, bloom and volumetric torchlight. Measured median frame time is 146.0 ms on Intel Arc MTL. This is the console-oriented preset; its native Switch 2 frame budget remains unverified.*
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
 
-*Realtime preset: also recorded offline at fixed 60 Hz. It keeps reduced versions of the effects, using baked shadow maps, half-resolution planar reflections, fewer particles and fog steps, and a smaller water grid. The preset name is a target, not a claim that this capture ran at 60 fps.*
+*Realtime preset: also recorded offline at fixed 60 Hz. It keeps reduced versions of the effects, using baked shadow maps, half-resolution planar reflections, fewer particles and fog steps, and a smaller water grid. Measured median frame time is 57.2 ms on Intel Arc MTL; it does not yet run at 60 fps.*
 
 The Qt selector and `capture dungeon --quality realtime|showcase` select the presets;
 `--raytracing on|off` overrides ray queries. The checkbox is disabled on devices
@@ -146,15 +147,24 @@ running, so small on/off differences are not reliable effect-cost deltas.
 
 | Pass | Realtime GPU ms | Showcase GPU ms | Translated/twin ratio | Native Switch 2 ms |
 |---|---:|---:|---|---|
-| Heightfield | 0.019 | 0.021 | N/A: direct GLSL | unverified |
-| Particle simulation | 0.016 | 0.017 | N/A: direct GLSL | unverified |
-| Planar reflection | 1.170 | 0.000 | N/A: direct GLSL | unverified |
-| Instanced cave formations | 0.439 | 1.049 | N/A: direct GLSL | unverified |
-| PBR, shadows and wet reflections | 5.591 | 41.532 | N/A: direct GLSL | unverified |
-| River surface | 0.670 | 9.173 | N/A: direct GLSL | unverified |
-| Flames, smoke and other sprites | 0.238 | 0.322 | N/A: direct GLSL | unverified |
-| Volumetric fog | 0.148 | 0.363 | N/A: direct GLSL | unverified |
-| Bloom, heat haze and tonemap | 1.514 | 1.414 | N/A: direct GLSL | unverified |
+| Heightfield | 0.022 | 0.021 | N/A: direct GLSL | unverified |
+| Particle simulation | 0.020 | 0.015 | N/A: direct GLSL | unverified |
+| Planar reflection | 1.760 | 0.000 | N/A: direct GLSL | unverified |
+| Instanced cave formations | 0.635 | 0.968 | N/A: direct GLSL | unverified |
+| PBR, shadows and wet reflections | 8.228 | 39.149 | N/A: direct GLSL | unverified |
+| River surface | 0.957 | 8.450 | N/A: direct GLSL | unverified |
+| Flames, smoke and other sprites | 0.327 | 0.298 | N/A: direct GLSL | unverified |
+| Volumetric fog | 0.202 | 0.328 | N/A: direct GLSL | unverified |
+| Bloom, heat haze and tonemap | 2.053 | 1.314 | N/A: direct GLSL | unverified |
+
+| Effect setting | Realtime frame ms | Realtime GPU ms | Showcase frame ms | Showcase GPU ms |
+|---|---:|---:|---:|---:|
+| All enabled | 50.81 | 14.10 | 92.15 | 50.55 |
+| Ray queries off | 49.57 | 12.34 | 63.02 | 13.13 |
+| Fire sprites off | 58.13 | 15.08 | 91.23 | 51.18 |
+| Water surface off | 69.84 | 14.87 | 86.89 | 45.86 |
+| Bloom off | 59.00 | 13.66 | 98.19 | 51.00 |
+| Volumetric fog off | 52.41 | 12.07 | 90.34 | 48.75 |
 
 There is no measured translated/twin ratio for these direct GLSL passes and no
 native console trace. Dividing these times by an unrelated translator benchmark
@@ -162,9 +172,8 @@ would give a misleading native estimate. An under-16.7 ms console total has **no
 been established.
 
 [Switchbrew reports](https://switchbrew.org/wiki/Switch_2:_Tegra_T239) a 1536-core
-Ampere GPU, 12 GB memory and a 102 GB/s memory bus. The local conformance checklist
-explicitly prohibits deriving scheduler, RT or clock behavior from core count.
-The brief's approximately 1 GHz docked assumption gives a theoretical 3.07 TFLOPS,
+Ampere GPU, 12 GB memory and a 102 GB/s memory bus. The reported core count does not establish clocks or ray-query throughput.
+Assuming approximately 1 GHz docked gives a theoretical 3.07 TFLOPS,
 or 51.2 GFLOP/frame at 60 Hz, and the reported bus gives 1.70 GB/frame. Those are
 peak ceilings, not predicted frame times. The preset uses 96 particles per light,
 a 256×64 water grid, 24 fog samples per quarter-resolution pixel, four shadow
@@ -173,7 +182,13 @@ surfaces. Ray work still needs a native measurement and sizing pass before the
 console target can be claimed. Realtime uses 32 particles per light, 128×32 water,
 eight fog samples and a 960×540 planar reflection.
 
-<!-- dungeon tour measurements -->
+Full-tour release measurements on Intel Arc MTL, excluding the first three frames:
+
+| Preset | Median frame ms | p95 frame ms | Median summed GPU ms |
+|---|---:|---:|---:|
+| Realtime | 57.17 | 134.60 | 11.94 |
+| Showcase | 146.03 | 209.75 | 82.51 |
+
 
 The other scene documents in `demos/scenes` list their guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. NVIDIA's driver compiles them into the SM86 programs the scenes load.
 

@@ -69,4 +69,11 @@ mod tests {
         let expected = [builtin(B::TessCoord), PerVertex { attr: 0x70, output: false }, builtin(B::TessLevelOuter), Patch { location: 0 }, builtin(B::Position)];
         assert_eq!(stage_interface(Stage::TessEval { mode: 1, spacing: 0, order: 3 }, &program), expected);
     }
+
+    #[test]
+    fn fragment_program_reads_sample_id_and_coverage() {
+        let expected = [ResourceKind::BuiltIn(B::SampleId as u32), ResourceKind::BuiltIn(B::SampleMask as u32), ResourceKind::FragmentOutput { location: 0 }];
+        let program = [pixld(0, PIXLD_MY_INDEX), pixld(1, PIXLD_COVMASK), exit()];
+        assert_eq!(stage_interface(Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &program), expected);
+    }
 }

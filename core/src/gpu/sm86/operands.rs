@@ -342,7 +342,7 @@ impl<'a> Decoder<'a> {
         assert!(compute_only == matches!(self.stage, Stage::Compute { .. }), "{builtin:?} is not an input of a {:?} module", self.stage);
         let ty = match builtin {
             BuiltIn::LocalInvocationIndex | BuiltIn::VertexIndex | BuiltIn::InstanceIndex => self.type_u32[1],
-            BuiltIn::InvocationId | BuiltIn::PrimitiveId | BuiltIn::PatchVertices => self.type_u32[1],
+            BuiltIn::InvocationId | BuiltIn::PrimitiveId | BuiltIn::PatchVertices | BuiltIn::SampleId => self.type_u32[1],
             BuiltIn::FragCoord => self.type_f32[4],
             BuiltIn::TessCoord => self.type_f32[3],
             BuiltIn::FrontFacing => self.type_bool[1],
@@ -355,6 +355,9 @@ impl<'a> Decoder<'a> {
                 let ptr = self.ir.emit_type_pointer(INPUT, ty);
                 let var = self.ir.emit_variable(ptr, INPUT);
                 self.ir.emit_decorate(var, decoration::BUILTIN, &[builtin]);
+                if ty == self.type_u32[1] && matches!(self.stage, Stage::Fragment { .. }) {
+                    self.ir.emit_decorate(var, decoration::FLAT, &[]);
+                }
                 self.resources.push(Resource { kind: ResourceKind::BuiltIn(builtin), var });
                 var
             }
@@ -371,6 +374,7 @@ impl<'a> Decoder<'a> {
         let (ty, len) = match kind {
             ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::TessLevelOuter as u32 => (self.type_f32[1], 4),
             ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::TessLevelInner as u32 => (self.type_f32[1], 2),
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::SampleMask as u32 => (self.type_u32[1], 1),
             ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::Layer as u32 || builtin == BuiltIn::ViewportIndex as u32 => (self.type_u32[1], 0),
             ResourceKind::PerVertex { output, .. } => {
                 let vertices = match self.stage {
@@ -405,6 +409,7 @@ impl<'a> Decoder<'a> {
             }
             (ResourceKind::Patch { .. }, _) => self.ir.emit_decorate(var, PATCH, &[]),
             (ResourceKind::BuiltIn(builtin), _) if tess_level(builtin) => self.ir.emit_decorate(var, PATCH, &[]),
+            (ResourceKind::BuiltIn(builtin), Stage::Fragment { .. }) if builtin == BuiltIn::SampleMask as u32 => self.ir.emit_decorate(var, FLAT, &[]),
             _ => {}
         }
         self.resources.push(Resource { kind, var });

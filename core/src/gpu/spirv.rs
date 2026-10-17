@@ -63,6 +63,7 @@ pub mod capability {
     pub const SHADER: u32 = 1;
     pub const GEOMETRY: u32 = 2;
     pub const TESSELLATION: u32 = 3;
+    pub const SAMPLE_RATE_SHADING: u32 = 35;
     pub const FLOAT16: u32 = 9;
     pub const FLOAT64: u32 = 10;
     pub const INT64: u32 = 11;
@@ -178,6 +179,8 @@ pub enum BuiltIn {
     InstanceIndex = 43,
     FragCoord = 15,
     FrontFacing = 17,
+    SampleId = 18,
+    SampleMask = 20,
     FragDepth = 22,
     NumWorkgroups = 24,
     WorkgroupSize = 25,

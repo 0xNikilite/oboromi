@@ -266,8 +266,24 @@ impl<'a> Decoder<'a> {
         }
         self.store_register(rd, handle);
     }
-    pub fn pixld(&mut self, _inst: u128) {
-        todo!("PIXLD needs SampleId or SampleMask inputs, which are not implemented");
+    pub fn pixld(&mut self, inst: u128) {
+        use spirv::{BuiltIn, storage_class::INPUT};
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let mode = (((inst >> 78) & 0x7) << 0) as usize;
+        let name = ["MSCOUNT", "COVMASK", "CENTROID_OFFSET", "MY_INDEX", "INNER_COVERAGE"].get(mode).unwrap_or(&"INVALID");
+        assert!(matches!(self.stage, Stage::Fragment { .. }), "PIXLD in a {:?} module is not implemented", self.stage);
+        assert!(inst >> 81 & 7 == PT as u128, "PIXLD.{name} into a predicate is not implemented");
+        let val = match mode {
+            1 => {
+                let mask = self.interface_var(ResourceKind::BuiltIn(BuiltIn::SampleMask as u32), INPUT);
+                let ptr = self.ir.emit_type_pointer(INPUT, self.type_u32[1]);
+                let ptr = self.ir.emit_access_chain(ptr, mask, &[self.const_u32_0]);
+                self.ir.emit_load(self.type_u32[1], ptr)
+            }
+            3 => self.builtin(BuiltIn::SampleId),
+            _ => panic!("PIXLD.{name} is not implemented"),
+        };
+        self.store_register(rd, val);
     }
     pub fn setlmembase(&mut self, _inst: u128) {}
     pub fn st(&mut self, inst: u128) {

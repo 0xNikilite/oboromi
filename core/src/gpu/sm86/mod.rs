@@ -357,6 +357,9 @@ impl<'a> Decoder<'a> {
                 }
             }
         }
+        if self.resource(ResourceKind::BuiltIn(spirv::BuiltIn::SampleId as u32)).is_some() {
+            self.ir.emit_capability(cap::SAMPLE_RATE_SHADING);
+        }
         let Some(device) = device else { return };
         for (capability, execution_mode, widths) in [
             (cap::SIGNED_ZERO_INF_NAN_PRESERVE, mode::SIGNED_ZERO_INF_NAN_PRESERVE, device.signed_zero_inf_nan_preserve),

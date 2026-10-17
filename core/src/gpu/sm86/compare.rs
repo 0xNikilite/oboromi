@@ -22,7 +22,7 @@ impl<'a> Decoder<'a> {
     }
 
     // Pu (83:81) takes the result and Pv (86:84) its inverse, each combined with Pp by the op at 75:74.
-    fn store_setp(&mut self, inst: u128, result: u32) {
+    pub(super) fn store_setp(&mut self, inst: u128, result: u32) {
         let p = self.pp_bit(inst);
         let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], result, self.const_u32_1);
         for (value, lsb) in [(result, 81), (inverse, 84)] {

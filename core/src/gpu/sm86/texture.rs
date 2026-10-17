@@ -383,16 +383,25 @@ impl<'a> Decoder<'a> {
         assert!(inst >> 81 & 7 == PT as u128, "TEX sparse residency predicate");
         let [ra, rb] = [24, 32].map(|bit| (inst >> bit & 0xff) as u32);
         let lod = match inst >> 87 & 7 {
-            1 => self.const_u32_0,
-            3 => self.load_register(rb),
+            0 => None,
+            1 => Some(self.const_u32_0),
+            3 => Some(self.load_register(rb)),
             mode => todo!("TEX.{}", ["implicit lod", "LZ", "LB", "LL", "LC", "LB.LC", "LC.FDV", "INVALID7"][mode as usize]),
         };
-        let lod = self.bitcast_f32(lod);
         // .SCR splits the operands between Ra and Rb, so without a lod operand y is in Rb (RTX 3090 fixtures).
-        let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 == 1 { rb } else { ra + 1 };
+        let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 < 2 { rb } else { ra + 1 };
         let coord = self.float_vec2([ra, y]);
         let sampled = self.texture_2d(inst);
-        let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod]);
+        let texel = match lod {
+            Some(lod) => {
+                let lod = self.bitcast_f32(lod);
+                self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod])
+            }
+            None => {
+                self.derivatives = true;
+                self.ir.emit_image_sample_implicit_lod(self.type_f32[4], sampled, coord, &[])
+            }
+        };
         let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
         self.store_texel(inst, bits);
     }
@@ -418,9 +427,11 @@ impl<'a> Decoder<'a> {
         self.store_texel(inst, bits);
     }
 
-    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1.
+    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1; with Rd = RZ they start at Rd2, as the
+    // NVIDIA driver's `TEX RZ, R0, ..., 0x2` that goes on to read the green texel from R0 shows.
     fn store_texel(&mut self, inst: u128, texel: u32) {
         let [rd, rd2] = [16, 64].map(|bit| (inst >> bit & 0xff) as u32);
+        let [rd, rd2] = if rd == RZ { [rd2, RZ] } else { [rd, rd2] };
         let written = (0..4).filter(|c| inst >> (72 + c) & 1 != 0);
         for (i, component) in written.enumerate() {
             let value = self.ir.emit_composite_extract(self.type_u32[1], texel, &[component]);

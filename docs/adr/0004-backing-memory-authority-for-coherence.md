@@ -20,7 +20,7 @@ Guest RAM is the one source of truth. Every host copy is keyed by guest-physical
 
 A `MemoryTracker` stamps each page write with a global counter, the generation, and who wrote it, CPU or GPU. A copy refreshes when the counter on its pages moved.
 
-Every draw writes its render target, the image it painted, back to guest RAM before `submit` returns. It also records the counter it left. A target whose pages changed outside its own draws is an error until loading it is implemented.
+Every draw writes its render target, the image it painted, back to guest RAM before `submit` returns. It also records the counter it left. If the target's pages changed since, by the CPU or a clear, the next draw loads it from guest RAM first. Textures follow the same rule, so a texture that was drawn into shows its latest draw.
 
 ### What this makes easy
 
@@ -31,9 +31,10 @@ Every draw writes its render target, the image it painted, back to guest RAM bef
 
 * Every draw pays for copying its pixels back, which is fine for demos but too slow for a game at full speed.
 * A small write refreshes a whole page.
+* Depth targets are not written back yet, so a depth target must be cleared before its first draw.
 
 ### Confirmation
 
-The engine acceptance test repoints a vertex buffer address between draws and checks the next draw follows it.
+The engine tests repoint a vertex buffer address between draws and check the next draw follows it. They also sample a target as a texture after drawing into it, and load a clear that no draw used.
 
 Sources: core/src/gpu/memory.rs, core/src/gpu/engine.rs.

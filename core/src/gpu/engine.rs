@@ -497,6 +497,19 @@ impl<'a> Gpu<'a> {
         (words, resources)
     }
 
+    /// Mapped guest memory, which a global window covers, with its first VA in the support UBO for the window's addressing.
+    fn window_span(&mut self) -> Result<std::ops::Range<u64>, String> {
+        let span = self.space.span().ok_or("a global window needs mapped guest memory")?;
+        if span.end - span.start > 1 << 32 {
+            return Err(format!("mapped guest memory {span:#x?} spans more than the 4 GiB a global window addresses"));
+        }
+        if self.support.is_none() {
+            self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
+        }
+        self.support.as_mut().unwrap().write(&span.start.to_le_bytes()).map_err(named)?;
+        Ok(span)
+    }
+
     /// Runs a QMD launch over one global window spanning all mapped guest memory, then stores the pages it changed.
     fn dispatch(&mut self, dispatch: &DispatchSnapshot) -> Result<(), String> {
         let code = self.code(dispatch.program_address)?;
@@ -528,10 +541,7 @@ impl<'a> Gpu<'a> {
                 move || ComputePipeline::new(state, &words, &bindings).map(Pipeline::Dispatch)
             })
             .map_err(named)?;
-        let span = self.space.span().ok_or("a compute dispatch needs mapped guest memory")?;
-        if span.end - span.start > 1 << 32 {
-            return Err(format!("mapped guest memory {span:#x?} spans more than the 4 GiB a global window addresses"));
-        }
+        let span = self.window_span()?;
         let mut buffers = Vec::new();
         for (binding, _) in self.kernels[&key].clone() {
             let ranges = match binding {
@@ -545,11 +555,7 @@ impl<'a> Gpu<'a> {
             };
             buffers.push((binding, ranges));
         }
-        if self.support.is_none() {
-            self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
-        }
-        let support = self.support.as_mut().unwrap();
-        support.write(&span.start.to_le_bytes()).map_err(named)?;
+        let support = self.support.as_ref().unwrap();
         let Lookup::Ready(Pipeline::Dispatch(pipeline)) = self.pipelines.wait(&pipeline_key).map_err(named)? else { unreachable!() };
         let bindings = &self.kernels[&key];
         let mut bound: Vec<_> = buffers.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();
@@ -675,6 +681,7 @@ impl<'a> Gpu<'a> {
             attributes.push((location, binding as u32, vertex_format(attribute)?, attribute.offset.into()));
         }
         let mut cbufs: [Vec<(u32, ConstantBuffer)>; 2] = Default::default();
+        let mut windows = [false; 2];
         let mut textures = Vec::new();
         for (stage, (module, pipeline)) in [(vs, VERTEX_PIPELINE), (fs, PIXEL_PIPELINE)].into_iter().enumerate() {
             let group = draw.shader_programs[pipeline].binding_group as usize;
@@ -688,6 +695,7 @@ impl<'a> Gpu<'a> {
                         gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut handle).map_err(named)?;
                         textures.push((images.next().unwrap(), u32::from_le_bytes(handle)));
                     }
+                    ResourceKind::Global | ResourceKind::Support => windows[stage] = true,
                     ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
                     kind => return Err(format!("{kind:?} in shader pipeline {pipeline} is not implemented")),
                 }
@@ -729,6 +737,13 @@ impl<'a> Gpu<'a> {
                 ranges.push((binding, self.mirror(buffer.address, buffer.size.into())?));
             }
         }
+        let window = match windows.contains(&true) {
+            true => {
+                let span = self.window_span()?;
+                Some(self.mirror(span.start, span.end - span.start)?)
+            }
+            false => None,
+        };
         let textures = textures.into_iter().map(|(binding, handle)| Ok((binding, self.texture(draw, handle)?))).collect::<Result<Vec<_>, String>>()?;
 
         let PipelineKey::Draw { streams: rates, attributes, .. } = &key else { unreachable!() };
@@ -740,7 +755,10 @@ impl<'a> Gpu<'a> {
                 .map(|&(location, binding, format, offset)| vk::VertexInputAttributeDescription { location, binding, format, offset })
                 .collect();
             let ubo = vk::DescriptorType::UNIFORM_BUFFER;
-            let [vs_bindings, mut fs_bindings] = cbuf_ranges.each_ref().map(|stage| stage.iter().map(|&(binding, _)| (binding, ubo)).collect::<Vec<_>>());
+            let [mut vs_bindings, mut fs_bindings] = cbuf_ranges.each_ref().map(|stage| stage.iter().map(|&(binding, _)| (binding, ubo)).collect::<Vec<_>>());
+            for (bindings, _) in [&mut vs_bindings, &mut fs_bindings].into_iter().zip(windows).filter(|&(_, window)| window) {
+                bindings.extend([(GLOBAL_BINDING, vk::DescriptorType::STORAGE_BUFFER), (SUPPORT_BINDING, ubo)]);
+            }
             fs_bindings.extend(textures.iter().map(|&(binding, _)| (binding, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)));
             let [vs, fs] = shaders.map(|key| self.modules[&key].words.clone());
             move || {
@@ -750,8 +768,12 @@ impl<'a> Gpu<'a> {
             }
         });
         let Lookup::Ready(Pipeline::Draw(pipeline)) = lookup.map_err(named)? else { return Ok(()) };
-        for (descriptors, ranges) in pipeline.descriptors.iter_mut().zip(&cbuf_ranges) {
-            descriptors.bind(&ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect::<Vec<_>>());
+        for ((descriptors, ranges), stage_window) in pipeline.descriptors.iter_mut().zip(&cbuf_ranges).zip(windows) {
+            let mut buffers: Vec<_> = ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();
+            if let Some(window) = window.as_ref().filter(|_| stage_window) {
+                buffers.extend([(GLOBAL_BINDING, &self.mirrors[window].1.buffer), (SUPPORT_BINDING, self.support.as_ref().unwrap())]);
+            }
+            descriptors.bind(&buffers);
         }
         pipeline.descriptors[1].bind_images(&textures.iter().map(|(binding, key)| (*binding, &self.textures[key].1)).collect::<Vec<_>>());
 

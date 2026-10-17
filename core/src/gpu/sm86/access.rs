@@ -26,7 +26,7 @@ impl<'a> Decoder<'a> {
         old
     }
 
-    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
+    // Guest cbuf slot N is a std140 UBO at set 0, binding CBUF_BINDING + N, holding uvec4 data[4096]; the host support UBO is binding 0.
     pub(super) fn load_cbuf(&mut self, kind: ResourceKind, offset: u32) -> u32 {
         let var = match self.resource(kind) {
             Some(var) => var,
@@ -40,10 +40,21 @@ impl<'a> Decoder<'a> {
         self.ir.emit_load(self.type_u32[1], ptr)
     }
 
+    // URa, URa+1 hold a bindless cbuf handle: the base address >> 4 in bits 0..45, the size >> 4 above (NVK nvk_bindless_cbuf).
+    pub(super) fn load_bindless_cbuf(&mut self, ur: u32, offset: u32) -> u32 {
+        let handle = self.load_ureg(ur);
+        let four = self.cached_const_u32(4);
+        let base = self.ir.emit_shift_left_logical(self.type_u32[1], handle, four);
+        let offset = self.cached_const_u32(offset);
+        let address = self.ir.emit_iadd(self.type_u32[1], base, offset);
+        let ptr = self.global_word_at(address);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
     fn declare_cbuf(&mut self, kind: ResourceKind) -> u32 {
         use spirv::{decoration as deco, storage_class::UNIFORM};
         let binding = match kind {
-            ResourceKind::Cbuf(slot) if slot < 8 => CBUF_BINDING + slot,
+            ResourceKind::Cbuf(slot) => CBUF_BINDING + slot,
             ResourceKind::Support => SUPPORT_BINDING,
             _ => panic!("{kind:?} has no compute uniform binding"),
         };

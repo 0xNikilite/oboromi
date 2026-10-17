@@ -53,28 +53,50 @@ An instruction with a predicate, such as `@P0 FADD`, is wrapped in an if on that
 
 ## What happens when threads of a warp disagree?
 
-A warp is the team of threads the chip runs in lockstep. When teammates take different branches, that is divergence. Most programs never need teammates to meet, so each thread runs its own loop freely.
+A warp is the team of threads the chip runs in lockstep. When teammates take different sides of a branch, that is called divergence. Most programs never need teammates to meet again, so each thread simply runs its own pc loop.
 
-Some instructions make teammates swap values or wait for each other: VOTE, SHFL, MATCH, REDUX, BAR, the tensor instructions, LDSM, MOVM and R2UR.OR. Programs with any of them run in turns. Each turn, the threads vote, the lowest waiting pc runs, and threads at other pcs skip the turn with their memory writes masked.
+Some instructions do need every teammate at the same place, because they swap values or wait for each other. Examples are VOTE, SHFL and BAR. A program that uses any of them runs in turns. In each turn, the threads furthest behind, those at the lowest pc, run one block. Threads at other pcs sit that turn out.
 
+### An example
+
+This program adds one on even threads only, then swaps a value with the next thread:
+
+| Block | Code |
+|---|---|
+| A | Set a flag for even threads; odd threads jump to C |
+| B | Add one to R1 |
+| C | SHFL: read R1 from the next thread, then EXIT |
+
+| Turn | Even threads wait at | Odd threads wait at | Who runs |
+|---|---|---|---|
+| 1 | A | A | Everyone runs A; even threads go on to B, odd threads jump to C |
+| 2 | B | C | B is lower, so even threads run it; odd threads wait |
+| 3 | C | C | Everyone runs C together, so every swap sees the updated R1 |
+
+Without turns, odd threads would reach the swap first and read R1 before their even teammates had added one.
+
+### The details
+
+- The instructions that make a program run in turns: VOTE, SHFL, MATCH, REDUX, BAR, the tensor instructions, LDSM, MOVM and R2UR.OR.
 - Swapped values travel through a shared array, with a barrier before and after.
+- A thread that waits sits its turn out, and its memory writes are masked.
 - BSSY gives each thread a token for where it should rejoin; BSYNC waits while a teammate holding the same token is still elsewhere.
-- BAR counts arrivals per barrier and releases the threads once all have arrived.
+- BAR counts arrivals per barrier and lets the threads go once all have arrived.
 - A program that can never make progress marks itself stuck, and the test harness panics.
 
 Why turns: every thread of a group must reach a Vulkan barrier together. And on lavapipe, Vulkan's own subgroups are narrower than a warp, so they cannot stand in for one. See [ADR-0003](../adr/0003-uniform-workgroup-scheduling-for-divergence.md).
 
 ## Which slots does a shader read its data from?
 
-A Vulkan shader cannot follow pointers to its data. It reads from numbered slots, called bindings, and the host plugs a buffer or image into each slot before the run. All slots sit in one group, descriptor set 0.
+A Vulkan shader cannot follow pointers to its data. It reads from numbered slots, called bindings, and the host plugs a buffer or image into each slot before the run. A group of slots is a descriptor set. Compute and vertex shaders use set 0, and pixel shaders use set 1 with the same numbers.
 
 | Binding | Kind | Holds |
 |---|---|---|
 | 0 | Uniform buffer, small and read-only | oboromi's own helper values, never game data |
-| 1 to 8 | Uniform buffers | The game's constant buffers 0 to 7, stored as `uvec4` arrays |
-| 9 | Storage buffer, large and read-write | The window onto guest memory |
-| 10, 11 | Storage buffers | Register values in and out, tests only |
-| 12 and up | Texture and image slots | Textures and writable images, in the order the shader first uses them |
+| 1 to 32 | Uniform buffers | The game's constant buffers 0 to 31, stored as `uvec4` arrays |
+| 33 | Storage buffer, large and read-write | The window onto guest memory |
+| 34, 35 | Storage buffers | Register values in and out, tests only |
+| 36 and up | Texture and image slots | Textures and writable images, in the order the shader first uses them |
 
 A constant buffer, or cbuf, is a small read-only table the game hands the shader, such as the camera matrix. Vulkan's std140 layout rule pads every uniform array element to a fixed width. A `uvec4` fills that width exactly, so nothing is wasted.
 
@@ -117,7 +139,7 @@ Left out on purpose until something needs them, each with a named panic:
 | Graphics-only data transport | ISBERD, ISBEWR, LDTRAM, OUT, PIXLD |
 | Ray tracing | The six TTU instructions |
 | Sparse tensor | GATHER, SCATTER, GENMETADATA, SPMETADATA, BITEXTRACT |
-| Other | FOOTPRINT, SUQUERY, UCLEA, float atomics, ATOM ARRIVE, CAST and SAFEADD, BAR.SCAN, texture reads with implicit level of detail in compute |
+| Other | FOOTPRINT, SUQUERY, UCLEA, float atomics, ATOM ARRIVE, CAST and SAFEADD, BAR.SCAN, texture reads with implicit level of detail |
 
 Verified by: spirv-val, the Khronos SPIR-V checker, on every emitted module; nvdisasm on every hand-built instruction word; and the silicon scoreboards (see [verification](verification.md)).
 

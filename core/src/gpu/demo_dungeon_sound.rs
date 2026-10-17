@@ -251,7 +251,7 @@ impl Sound {
     pub fn new(world: &World, sources: &[(Sfx, V3, f32)]) -> Sound {
         let samples = SAMPLES.map(sample).into();
         let steps = (0..24).map(|i| step(i / 8 == 1, i / 8 == 2, i % 8)).collect();
-        let mut voices: Vec<Voice> = sources.iter().enumerate().map(|(i, &(sfx, pos, gain))| Voice { sample: sfx.into(), pos, gain: gain * 2.0, pitch: 0.92 + 0.16 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active: true, tail: usize::MAX, variation: 0 }).collect();
+        let mut voices: Vec<Voice> = sources.iter().enumerate().map(|(i, &(sfx, pos, gain))| Voice { sample: sfx.into(), pos, gain: gain * if sfx == Sfx::Heart { 0.8 } else { 2.0 }, pitch: 0.92 + 0.16 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active: true, tail: usize::MAX, variation: 0 }).collect();
         for sample in [[Sample::Drip; DRIPS].as_slice(), &[Sample::Scream, Sample::Step, Sample::Step]].concat() {
             voices.push(Voice { sample, pos: [0.0; 3], gain: 0.0, pitch: 1.0, cursor: 0.0, active: false, tail: 0, variation: 0 });
         }

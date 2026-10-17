@@ -929,7 +929,7 @@ impl Dungeon {
             let gravel = self.world.zones_at(self.eye).any(|z| self.world.zones[z].kind == Kind::Corridor);
             self.sound.play(if wet { Sample::WetStep } else if gravel { Sample::GravelStep } else { Sample::Step }, self.eye, 0.04, 1.0);
         }
-        if self.solo == 0 && !self.scream && self.world.zones[self.world.last].space.contains(self.eye) {
+        if self.solo == 0 && !self.scream && seconds >= 14.0 {
             self.sound.play(Sample::Scream, self.world.zones[self.world.last].space.centre(), 1.4, 1.0);
             self.scream = true;
         }

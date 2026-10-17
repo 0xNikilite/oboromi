@@ -277,6 +277,7 @@ pub struct ImportedRam<'a> {
     device: &'a ash::Device,
     pub memory: vk::DeviceMemory,
     pub memory_type: u32,
+    pub size: u64,
 }
 
 impl<'a> ImportedRam<'a> {
@@ -291,7 +292,9 @@ impl<'a> ImportedRam<'a> {
         }
         let handle_type = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
         let mut pointer = vk::MemoryHostPointerPropertiesEXT::default();
-        unsafe { (host.fp().get_memory_host_pointer_properties_ext)(state.device.handle(), handle_type, ptr.cast(), &mut pointer) }.result()?;
+        if let Err(e) = unsafe { (host.fp().get_memory_host_pointer_properties_ext)(state.device.handle(), handle_type, ptr.cast(), &mut pointer) }.result() {
+            return if e == vk::Result::ERROR_DEVICE_LOST { Err(e.into()) } else { Ok(None) };
+        }
         let types = unsafe { state.instance.get_physical_device_memory_properties(state.physical_device) };
         let coherent = (0..types.memory_type_count).find(|&i| {
             pointer.memory_type_bits >> i & 1 == 1 && types.memory_types[i as usize].property_flags.contains(vk::MemoryPropertyFlags::HOST_COHERENT)
@@ -300,9 +303,9 @@ impl<'a> ImportedRam<'a> {
         let mut import = vk::ImportMemoryHostPointerInfoEXT::default().handle_type(handle_type).host_pointer(ptr.cast());
         let alloc = vk::MemoryAllocateInfo::default().allocation_size(len).memory_type_index(memory_type).push_next(&mut import);
         match unsafe { state.device.allocate_memory(&alloc, None) } {
-            Ok(memory) => Ok(Some(Self { device: &state.device, memory, memory_type })),
-            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_INVALID_EXTERNAL_HANDLE) => Ok(None),
-            Err(e) => Err(e.into()),
+            Ok(memory) => Ok(Some(Self { device: &state.device, memory, memory_type, size: len })),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(vk::Result::ERROR_DEVICE_LOST.into()),
+            Err(_) => Ok(None),
         }
     }
 }

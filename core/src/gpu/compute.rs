@@ -82,9 +82,14 @@ impl<'a> HostBuffer<'a> {
     pub fn imported(state: &'a VkState, ram: &Arc<ImportedRam<'a>>, offset: u64, size: u64) -> Result<Option<Self>, VkError> {
         let d = &state.device;
         let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        let buffer = match unsafe { d.create_buffer(&buffer_info(size).push_next(&mut external), None) } {
+            Ok(buffer) => buffer,
+            Err(vk::Result::ERROR_DEVICE_LOST) => return Err(vk::Result::ERROR_DEVICE_LOST.into()),
+            Err(_) => return Ok(None),
+        };
         let buf = Self {
             device: d,
-            buffer: unsafe { d.create_buffer(&buffer_info(size).push_next(&mut external), None)? },
+            buffer,
             memory: ram.memory,
             size,
             ptr: std::ptr::null_mut(),
@@ -92,10 +97,13 @@ impl<'a> HostBuffer<'a> {
             imported: Some(Arc::clone(ram)),
         };
         let req = unsafe { d.get_buffer_memory_requirements(buf.buffer) };
-        if !offset.is_multiple_of(req.alignment) || req.memory_type_bits >> ram.memory_type & 1 == 0 {
+        if !offset.is_multiple_of(req.alignment) || req.memory_type_bits >> ram.memory_type & 1 == 0
+            || offset.checked_add(req.size).is_none_or(|end| end > ram.size) {
             return Ok(None);
         }
-        unsafe { d.bind_buffer_memory(buf.buffer, buf.memory, offset)? };
+        if let Err(e) = unsafe { d.bind_buffer_memory(buf.buffer, buf.memory, offset) } {
+            return if e == vk::Result::ERROR_DEVICE_LOST { Err(e.into()) } else { Ok(None) };
+        }
         Ok(Some(buf))
     }
 

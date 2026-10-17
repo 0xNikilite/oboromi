@@ -229,7 +229,9 @@ impl VkState {
             .usage(compute::buffer_info(0).usage)
             .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
         unsafe { instance.get_physical_device_external_buffer_properties(physical_device, &buffer_info, &mut host_allocation) };
-        let external_memory_host = has(vk::EXT_EXTERNAL_MEMORY_HOST_NAME)
+        let device_type = unsafe { instance.get_physical_device_properties(physical_device) }.device_type;
+        let external_memory_host = matches!(device_type, vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU)
+            && has(vk::EXT_EXTERNAL_MEMORY_HOST_NAME)
             && host_allocation.external_memory_properties.external_memory_features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE);
         let mut host_pointer = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
         if external_memory_host {

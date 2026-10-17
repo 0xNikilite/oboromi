@@ -1,5 +1,6 @@
 //! Graphics pipelines drawing with dynamic rendering into an offscreen RGBA8 target that is read back after each draw.
 use super::compute::{Descriptors, HostBuffer};
+use super::pipeline_cache::hash;
 use super::{VkError, VkState};
 use ash::vk;
 
@@ -14,6 +15,7 @@ pub struct VertexLayout<'a> {
 }
 
 pub struct TargetState {
+    /// Baked only without VK_EXT_extended_dynamic_state3, which takes `ct_write` and `blend` from `RasterState` instead.
     pub blend: vk::PipelineColorBlendAttachmentState,
     pub depth: bool,
 }
@@ -30,10 +32,14 @@ pub struct RasterState {
     pub depth_write: bool,
     pub depth_func: vk::CompareOp,
     pub blend_const: [f32; 4],
+    pub ct_write: vk::ColorComponentFlags,
+    /// Enabled with this equation when set.
+    pub blend: Option<vk::ColorBlendEquationEXT>,
 }
 
 pub struct DrawState<'a> {
-    pub vertex_buffers: &'a [&'a HostBuffer<'a>],
+    /// Each with its SET_VERTEX_STREAM_A_FORMAT stride.
+    pub vertex_buffers: &'a [(&'a HostBuffer<'a>, u32)],
     /// With an index buffer, `vertex_count` and `first_vertex` count indices.
     pub index_buffer: Option<(&'a HostBuffer<'a>, vk::IndexType)>,
     pub vertex_count: u32,
@@ -100,14 +106,19 @@ impl<'a> GraphicsPipeline<'a> {
             Dynamic::DEPTH_WRITE_ENABLE,
             Dynamic::DEPTH_COMPARE_OP,
             Dynamic::BLEND_CONSTANTS,
+            Dynamic::VERTEX_INPUT_BINDING_STRIDE,
+            Dynamic::COLOR_BLEND_ENABLE_EXT,
+            Dynamic::COLOR_BLEND_EQUATION_EXT,
+            Dynamic::COLOR_WRITE_MASK_EXT,
         ];
-        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let dynamic3 = state.extended_dynamic_state3.is_some();
+        let dynamic_states = &dynamic_states[..dynamic_states.len() - if dynamic3 { 0 } else { 3 }];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(dynamic_states);
         let color_formats = [COLOR_FORMAT];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
             .depth_attachment_format(if target.depth { DEPTH_FORMAT } else { vk::Format::UNDEFINED });
-        let info = [vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
+        let info = vk::GraphicsPipelineCreateInfo::default()
             .vertex_input_state(&vertex_input)
             .input_assembly_state(&input_assembly)
             .viewport_state(&viewport)
@@ -117,9 +128,23 @@ impl<'a> GraphicsPipeline<'a> {
             .color_blend_state(&blend)
             .dynamic_state(&dynamic)
             .layout(p.layout)
-            .push_next(&mut rendering)];
-        p.pipeline = unsafe { d.create_graphics_pipelines(state.pipeline_cache, &info, None) }
-            .map_err(|(_, e)| e)?[0];
+            .push_next(&mut rendering);
+        p.pipeline = if state.graphics_pipeline_library {
+            let streams: Vec<_> = vertex_layout.bindings.iter().map(|b| (b.binding, b.input_rate)).collect();
+            let attributes: Vec<_> = vertex_layout.attributes.iter().map(|a| (a.location, a.binding, a.format, a.offset)).collect();
+            let b = target.blend;
+            let blend = (!dynamic3).then_some((b.blend_enable, b.src_color_blend_factor, b.dst_color_blend_factor, b.color_blend_op));
+            let alpha = (!dynamic3).then_some((b.src_alpha_blend_factor, b.dst_alpha_blend_factor, b.alpha_blend_op, b.color_write_mask));
+            let keys = [
+                hash((streams, attributes, vertex_layout.topology)),
+                hash((vertex_spirv, bindings)),
+                hash((fragment_spirv, bindings, target.depth)),
+                hash((target.depth, blend, alpha)),
+            ];
+            state.link(info, &stages, keys)?
+        } else {
+            state.create_graphics_pipeline(info.stages(&stages))?
+        };
         Ok(p)
     }
 }
@@ -297,8 +322,13 @@ impl VkState {
             d.cmd_set_depth_write_enable(cmd, r.depth_write);
             d.cmd_set_depth_compare_op(cmd, r.depth_func);
             d.cmd_set_blend_constants(cmd, &r.blend_const);
-            for (binding, buffer) in (0..).zip(draw.vertex_buffers) {
-                d.cmd_bind_vertex_buffers(cmd, binding, &[buffer.buffer], &[0]);
+            if let Some(dynamic3) = &self.extended_dynamic_state3 {
+                dynamic3.cmd_set_color_blend_enable(cmd, 0, &[r.blend.is_some().into()]);
+                dynamic3.cmd_set_color_blend_equation(cmd, 0, &[r.blend.unwrap_or_default()]);
+                dynamic3.cmd_set_color_write_mask(cmd, 0, &[r.ct_write]);
+            }
+            for (binding, (buffer, stride)) in (0..).zip(draw.vertex_buffers) {
+                d.cmd_bind_vertex_buffers2(cmd, binding, &[buffer.buffer], &[0], None, Some(&[(*stride).into()]));
             }
             match draw.index_buffer {
                 Some((buffer, ty)) => {

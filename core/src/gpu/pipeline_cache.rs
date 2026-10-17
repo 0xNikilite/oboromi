@@ -3,7 +3,7 @@
 use super::{VkError, VkState};
 use ash::vk;
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::{fs, io, thread};
@@ -106,6 +106,54 @@ impl<K, P> Drop for PipelineBuilder<'_, K, P> {
         self.jobs = mpsc::channel().0;
         self.workers.drain(..).for_each(|worker| drop(worker.join()));
         let _ = self.flush();
+    }
+}
+
+pub(super) fn hash(value: impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl VkState {
+    /// Links the graphics pipeline `info` describes from its four libraries, each created on the first use of its key.
+    pub(super) fn link(
+        &self,
+        info: vk::GraphicsPipelineCreateInfo,
+        stages: &[vk::PipelineShaderStageCreateInfo; 2],
+        keys: [u64; 4],
+    ) -> Result<vk::Pipeline, VkError> {
+        use vk::GraphicsPipelineLibraryFlagsEXT as Part;
+        let parts = [
+            (Part::VERTEX_INPUT_INTERFACE, &stages[..0]),
+            (Part::PRE_RASTERIZATION_SHADERS, &stages[..1]),
+            (Part::FRAGMENT_SHADER, &stages[1..]),
+            (Part::FRAGMENT_OUTPUT_INTERFACE, &stages[..0]),
+        ];
+        let mut libraries = [vk::Pipeline::null(); 4];
+        for ((library, (part, stages)), key) in libraries.iter_mut().zip(parts).zip(keys) {
+            let key = (part.as_raw() as i32, key);
+            let found = self.libraries.lock().unwrap().get(&key).copied();
+            *library = match found {
+                Some(library) => library,
+                None => {
+                    let mut subset = vk::GraphicsPipelineLibraryCreateInfoEXT::default().flags(part);
+                    let info = info.flags(vk::PipelineCreateFlags::LIBRARY_KHR).stages(stages).push_next(&mut subset);
+                    let created = self.create_graphics_pipeline(info)?;
+                    let library = *self.libraries.lock().unwrap().entry(key).or_insert(created);
+                    if library != created {
+                        unsafe { self.device.destroy_pipeline(created, None) };
+                    }
+                    library
+                }
+            };
+        }
+        let mut linked = vk::PipelineLibraryCreateInfoKHR::default().libraries(&libraries);
+        self.create_graphics_pipeline(vk::GraphicsPipelineCreateInfo::default().layout(info.layout).push_next(&mut linked))
+    }
+
+    pub(super) fn create_graphics_pipeline(&self, info: vk::GraphicsPipelineCreateInfo) -> Result<vk::Pipeline, VkError> {
+        Ok(unsafe { self.device.create_graphics_pipelines(self.pipeline_cache, &[info], None) }.map_err(|(_, e)| e)?[0])
     }
 }
 

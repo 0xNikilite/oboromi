@@ -3,7 +3,8 @@ mod tests {
     use crate::gpu::compute::ComputePipeline;
     use crate::gpu::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy};
     use crate::gpu::{VkError, VkState, device};
-    use crate::tests::gpu::harness::translate_module;
+    use crate::tests::gpu::graphics::{SIZE, triangle};
+    use crate::tests::gpu::harness::{translate_module, vk_state};
     use crate::tests::gpu_test::inst;
     use ash::vk::DescriptorType;
     use std::sync::mpsc;
@@ -62,5 +63,19 @@ mod tests {
         assert!(disk.pipeline_cache_data().is_some());
         disk.load(state).unwrap();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn triangle_linked_from_pipeline_libraries_matches_the_monolithic_one() {
+        let Some(mut state) = vk_state() else { return };
+        if !state.graphics_pipeline_library {
+            return eprintln!("skipping: no VK_EXT_graphics_pipeline_library");
+        }
+        let mut pixels = [(); 2].map(|_| vec![0; (SIZE * SIZE * 4) as usize]);
+        for (linked, pixels) in [true, false].into_iter().zip(&mut pixels) {
+            state.graphics_pipeline_library = linked;
+            triangle(&state).unwrap()(pixels).unwrap();
+        }
+        assert!(pixels[0] == pixels[1]);
     }
 }

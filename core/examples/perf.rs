@@ -82,6 +82,14 @@ fn main() {
         disk.flush(&fresh).unwrap();
     }
     let _ = std::fs::remove_dir_all(root);
+    for (name, libraries) in [("triangle monolithic compile", false), ("triangle libraries + link", true)] {
+        let mut fresh = VkState::new().unwrap();
+        fresh.graphics_pipeline_library &= libraries;
+        bench(name, 0, 1, || drop(graphics::triangle_pipeline(&fresh).unwrap()));
+        if fresh.graphics_pipeline_library {
+            bench("triangle link only", 0, 1, || drop(graphics::triangle_pipeline(&fresh).unwrap()));
+        }
+    }
     let mut pipeline = ComputePipeline::new(state, &words, &bindings).unwrap();
     let mut input = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();

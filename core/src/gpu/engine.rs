@@ -194,6 +194,8 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
         depth_write: draw.depth_write_enabled,
         depth_func,
         blend_const: [0.0; 4],
+        ct_write: vk::ColorComponentFlags::from_raw(draw.colour_write_mask.into()),
+        blend: None,
     }
 }
 
@@ -439,7 +441,8 @@ impl<'a> Gpu<'a> {
         if clear.is_none() && target.generation != current {
             return Err(format!("colour target at {:#x} changed outside its draws, and loading it is not implemented", ct.address));
         }
-        let vertex_buffers: Vec<&HostBuffer> = vertex_ranges.iter().map(|ranges| &self.mirrors[ranges].1.buffer).collect();
+        let vertex_buffers: Vec<(&HostBuffer, u32)> =
+            vertex_ranges.iter().zip(&streams).map(|(ranges, &(_, stride))| (&self.mirrors[ranges].1.buffer, stride)).collect();
         let draw_state = DrawState {
             vertex_buffers: &vertex_buffers,
             index_buffer: None,

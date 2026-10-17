@@ -82,10 +82,12 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
         depth_write: false,
         depth_func: vk::CompareOp::ALWAYS,
         blend_const: [0.0; 4],
+        ct_write: vk::ColorComponentFlags::RGBA,
+        blend: None,
     };
     Ok(move |out: &mut [u8]| {
         let draw = DrawState {
-            vertex_buffers: &[&vertices],
+            vertex_buffers: &[(&vertices, 12)],
             index_buffer: None,
             vertex_count: 3,
             first_vertex: 0,

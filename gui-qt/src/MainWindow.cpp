@@ -101,6 +101,8 @@ void MainWindow::buildUi() {
         connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
             if (!on) {
                 m_demoTimer.stop();
+                m_demoFrameClock.invalidate();
+                m_frameLabel->clear();
                 RustBridge::flushDemoCaches();
                 return;
             }
@@ -111,8 +113,11 @@ void MainWindow::buildUi() {
         buttons->addWidget(demoButton);
     }
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
-        if (m_demoFrame.isFinished())
+        if (m_demoFrame.isFinished()) {
+            if (m_demoFrameClock.isValid()) m_frameLabel->setText(QString("%1 ms").arg(m_demoFrameClock.restart()));
+            else m_demoFrameClock.start();
             m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);
+        }
         OboromiInput input;
         oboromi_input_state(&input);
         m_gamepadLabel->setText(input.gamepad[0] ? QString("gamepad: ") + input.gamepad : QString());
@@ -127,6 +132,8 @@ void MainWindow::buildUi() {
     connect(&m_toneTimer, &QTimer::timeout, this, [] { oboromi_audio_test_tone(0.1f); });
     buttons->addWidget(toneButton);
     buttons->addStretch();
+    m_frameLabel = new QLabel(central);
+    buttons->addWidget(m_frameLabel);
     m_gamepadLabel = new QLabel(central);
     buttons->addWidget(m_gamepadLabel);
     layout->addLayout(buttons);

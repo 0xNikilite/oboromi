@@ -37,6 +37,7 @@ private:
     QListWidget *m_logList = nullptr;
     QPushButton *m_cpuButton = nullptr;
     QPushButton *m_gpuButton = nullptr;
+    QLabel *m_frameLabel = nullptr;
     QLabel *m_gamepadLabel = nullptr;
 
     QFutureWatcher<std::vector<std::string>> m_cpuWatcher;
@@ -44,6 +45,7 @@ private:
 
     QTimer m_demoTimer;
     QElapsedTimer m_demoClock;
+    QElapsedTimer m_demoFrameClock;
     QFuture<bool> m_demoFrame;
     bool (*m_demoRender)(float) = nullptr;
 

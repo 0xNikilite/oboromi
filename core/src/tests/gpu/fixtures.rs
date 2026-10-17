@@ -190,14 +190,13 @@ mod tests {
     }
 
     const NOT_REPLAYABLE: &[&str] = &["sts/lane-address"];
-    const LIVE_MASK_SUPPORTED: bool = false;
 
     #[test]
     fn fixtures_match_warp_silicon() {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
         for fixture in warp_fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
-            if !fixture.observed || fixture.lanes_active != u32::MAX && !LIVE_MASK_SUPPORTED {
+            if !fixture.observed {
                 score.skipped += 1;
                 continue;
             }

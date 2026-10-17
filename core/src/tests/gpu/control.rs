@@ -3,7 +3,7 @@ mod tests {
     use crate::tests::gpu::harness::{PRED, UPRED, UREG, run_regs};
     use crate::tests::gpu_test::inst::{
         IMM_B, UIADD3, alu3, bra, bra_conv, bra_div, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, preds, ret_rel,
-        uldc64, W2I_ARRIVES, W2I_BMOV, W2I_BREAK, W2I_CCTLT, W2I_CSMTEST, W2I_DEPBAR, W2I_ERRBAR, W2I_IDE, W2I_JMP,
+        uldc64, W2I_ARRIVES, W2I_BREAK, W2I_CCTLT, W2I_CSMTEST, W2I_DEPBAR, W2I_ERRBAR, W2I_IDE, W2I_JMP,
         W2I_LEPC, W2I_NANOSLEEP, W2I_PMTRIG, W2I_QSPC, W2I_R2B, W2I_RPCMOV_HI, W2I_RPCMOV_LO, W2I_RPCMOV_SET_HI,
         W2I_RPCMOV_SET_LO, W2I_RTT, W2I_SETLMEMBASE, W2I_YIELD,
     };
@@ -159,7 +159,7 @@ mod tests {
     fn special_noops_leave_registers_untouched() {
         let words = [
             W2I_DEPBAR, W2I_YIELD, W2I_NANOSLEEP, W2I_PMTRIG, W2I_ERRBAR, W2I_CSMTEST, W2I_CCTLT, W2I_IDE, W2I_RTT, W2I_QSPC,
-            W2I_R2B, W2I_BMOV, W2I_ARRIVES, W2I_BREAK, W2I_SETLMEMBASE,
+            W2I_R2B, W2I_ARRIVES, W2I_BREAK, W2I_SETLMEMBASE,
         ];
         for word in words {
             let Some((regs, _)) = run_regs(&[word], &[10, 11, 12], &[], &[]) else {

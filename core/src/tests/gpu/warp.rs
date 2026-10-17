@@ -74,6 +74,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bmov_restores_a_spilled_token_before_bsync() {
+        let program = [
+            bssy(0, 0x60),
+            bmov_read(10, 0, false),
+            bmov_read(255, 0, true),
+            W2I_BREAK,
+            bmov_write(0, 10),
+            guard(bra(0x40), 0, false),
+            mov_imm(8, 1),
+            bsync(0),
+            alu(VOTE | VOTE_ANY | preds(7, 0, 7, 0), 9, 0, 0),
+            exit(),
+            mov_imm(8, 2),
+            iadd_imm(8, 8, 3),
+            bra(-0x60),
+        ];
+        let Some(lanes) = run(&program, &rig_seeds(0xffff)) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            assert_eq!(regs[8..10], [if lane < 16 { 5 } else { 1 }, u32::MAX], "lane {lane}");
+        }
+    }
+
     // Lanes 16..31 wait at a BAR that lanes 0..15 only reach past WARPSYNC, so a full-warp WARPSYNC would deadlock.
     #[test]
     fn warpsync_holds_its_mask_and_lets_the_other_half_proceed() {

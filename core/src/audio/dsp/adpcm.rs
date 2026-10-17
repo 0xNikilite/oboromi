@@ -46,7 +46,6 @@ impl GcAdpcmDecoder {
         self.frame_sample = 14;
     }
 
-    // Nintendo DSP-ADPCM stores 14 signed nibbles after each predictor/scale byte.
     pub fn process(&mut self, input: &[u8], output: &mut [f32], samples: usize) -> AdpcmProgress {
         let mut written = 0;
         let mut consumed = 0;
@@ -74,7 +73,7 @@ impl GcAdpcmDecoder {
                 * i32::from(self.context.history_sample_1)
                 + i32::from(self.params.coefficients[predictor + 1])
                     * i32::from(self.context.history_sample_2);
-            let sample = ((nibble * scale << 11) + predicted + 1024) >> 11;
+            let sample = (((nibble * scale) << 11) + predicted + 1024) >> 11;
             let sample = sample.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
             self.context.history_sample_2 = self.context.history_sample_1;
             self.context.history_sample_1 = sample;

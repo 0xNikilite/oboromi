@@ -222,7 +222,7 @@ void oboromi_frame_set_callback(FrameCallback callback, void *user);
 /// rest, returns the frames copied.
 ///
 /// # Safety
-/// `dst` must be valid for `frames * 2` writes.
+/// `dst` must be null or valid for `frames * 2` writes.
 uintptr_t oboromi_audio_pull(int16_t *dst, uintptr_t frames);
 
 /// writes the output format, interleaved i16 samples.

@@ -136,9 +136,12 @@ pub extern "C" fn oboromi_frame_set_callback(callback: FrameCallback, user: *mut
 /// rest, returns the frames copied.
 ///
 /// # Safety
-/// `dst` must be valid for `frames * 2` writes.
+/// `dst` must be null or valid for `frames * 2` writes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oboromi_audio_pull(dst: *mut i16, frames: usize) -> usize {
+    if dst.is_null() {
+        return 0;
+    }
     crate::audio::pull(unsafe { std::slice::from_raw_parts_mut(dst, frames * 2) })
 }
 

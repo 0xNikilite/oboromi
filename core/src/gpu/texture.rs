@@ -30,17 +30,34 @@ impl TexturePool<'_> {
     pub fn texture(&self, handle: u32) -> Result<TextureHeader, String> {
         const PITCH: u32 = 2;
         const BLOCK_LINEAR: u32 = 3;
+        const R16_G16_B16_A16: u32 = 0x03;
         const A8B8G8R8: u32 = 0x08;
         const R32: u32 = 0x0f;
+        const BC7U: u32 = 0x17;
+        const G8R8: u32 = 0x18;
+        const R8: u32 = 0x1d;
+        const DXT1: u32 = 0x24;
+        const DXT45: u32 = 0x26;
         const UNORM: u32 = 0o2222;
         const UINT: u32 = 0o4444;
+        const FLOAT: u32 = 0o7777;
         const IDENTITY_SWIZZLE: u32 = 0o5432;
         const TWO_D: u32 = 1;
         let e = entry(self.tic, handle & 0xf_ffff)?;
-        let (format, block_bytes, block_texels) = match (field(e, 0, 6), field(e, 7, 18)) {
-            (A8B8G8R8, UNORM) => (vk::Format::R8G8B8A8_UNORM, 4, 1),
-            (R32, UINT) => (vk::Format::R32_UINT, 4, 1),
-            (components, types) => return Err(format!("unsupported components {components:#x} with component types {types:#o}")),
+        let srgb = field(e, 150, 150) == 1;
+        let (format, block_bytes, block_texels) = match (field(e, 0, 6), field(e, 7, 18), srgb) {
+            (A8B8G8R8, UNORM, false) => (vk::Format::R8G8B8A8_UNORM, 4, 1),
+            (A8B8G8R8, UNORM, true) => (vk::Format::R8G8B8A8_SRGB, 4, 1),
+            (R8, UNORM, false) => (vk::Format::R8_UNORM, 1, 1),
+            (G8R8, UNORM, false) => (vk::Format::R8G8_UNORM, 2, 1),
+            (R16_G16_B16_A16, FLOAT, false) => (vk::Format::R16G16B16A16_SFLOAT, 8, 1),
+            (R32, UINT, false) => (vk::Format::R32_UINT, 4, 1),
+            (DXT1, UNORM, false) => (vk::Format::BC1_RGBA_UNORM_BLOCK, 8, 4),
+            (DXT45, UNORM, false) => (vk::Format::BC3_UNORM_BLOCK, 16, 4),
+            (BC7U, UNORM, false) => (vk::Format::BC7_UNORM_BLOCK, 16, 4),
+            (components, types, srgb) => {
+                return Err(format!("unsupported components {components:#x} with component types {types:#o}, srgb {srgb}"));
+            }
         };
         check("swizzle", field(e, 19, 30), IDENTITY_SWIZZLE)?;
         check("texture type", field(e, 151, 154), TWO_D)?;

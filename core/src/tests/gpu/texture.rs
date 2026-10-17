@@ -244,4 +244,36 @@ mod tests {
             assert_eq!(bytes, texel, "lane {t}");
         }
     }
+
+    #[test]
+    fn tld_fetches_bc1_blocks_from_a_block_linear_texture() {
+        let device = crate::gpu::device();
+        if device.is_ok_and(|d| unsafe { d.instance.get_physical_device_features(d.physical_device) }.texture_compression_bc == 0) {
+            eprintln!("skipping: Vulkan device lacks textureCompressionBC");
+            return;
+        }
+        const DXT1_UNORM: u32 = 0x24 | 0b010_010_010_010 << 7;
+        // Each 4x4 block is its first 565 endpoint everywhere: red, green, blue and white.
+        let colors = [0xf800u16, 0x07e0, 0x001f, 0xffff];
+        let blocks: Vec<u8> = colors.iter().flat_map(|c| [c.to_le_bytes(), [0; 2], [0; 2], [0; 2]].concat()).collect();
+        let header = [
+            DXT1_UNORM | 0o5432 << 19,
+            TEXELS_ADDRESS as u32,
+            (TEXELS_ADDRESS >> 32) as u32 | 3 << 21,
+            0,
+            7 | 1 << 23,
+            7 | 1 << 31,
+            0,
+            0,
+        ];
+        let seeds: Vec<Vec<u32>> = (0..64).map(|t| vec![0, 0, t % 8, t / 8]).collect();
+        let program = [texture(inst::TLD_LZ_2D, 4, 6, 2, 3, 0x10, 0xf)];
+        let sampler = [2 | 2 << 3, NEAREST | NEAREST << 4, 0, 0, 0, 0, 0, 0];
+        let Some(lanes) = run_entries(&program, &seeds, header, sampler, &pitch_to_block_linear(&blocks, 2, 2, 8, 0)) else { return };
+        let rgba = [[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1], [1, 1, 1, 1]];
+        for (t, regs) in lanes.iter().enumerate() {
+            let block = t / 32 * 2 + t % 8 / 4;
+            assert_eq!(regs[4..8].iter().map(|&r| f32::from_bits(r)).collect::<Vec<_>>(), rgba[block].map(|c| c as f32), "texel {t}");
+        }
+    }
 }

@@ -111,7 +111,7 @@ pub struct HostImage<'a> {
 
 impl<'a> HostImage<'a> {
     /// A 2D image with every level of `header` uploaded from the guest texels at the start of `memory`, left in GENERAL
-    /// so the one view serves both as a sampled texture and as a storage image.
+    /// so the one view serves both as a sampled texture and, where the format allows it, as a storage image.
     pub fn new(
         state: &'a VkState,
         header: &TextureHeader,
@@ -124,6 +124,12 @@ impl<'a> HostImage<'a> {
             height: header.height,
             depth: 1,
         };
+        let features = unsafe { state.instance.get_physical_device_format_properties(state.physical_device, header.format) };
+        let storage = if features.optimal_tiling_features.contains(vk::FormatFeatureFlags::STORAGE_IMAGE) {
+            vk::ImageUsageFlags::STORAGE
+        } else {
+            vk::ImageUsageFlags::empty()
+        };
         let info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(header.format)
@@ -131,7 +137,7 @@ impl<'a> HostImage<'a> {
             .mip_levels(header.levels)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
-            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST);
+            .usage(vk::ImageUsageFlags::SAMPLED | storage | vk::ImageUsageFlags::TRANSFER_DST);
         let mut img = Self {
             device: d,
             image: unsafe { d.create_image(&info, None)? },

@@ -96,6 +96,9 @@ fn main() {
     std::fs::create_dir_all(&out).unwrap();
     let mut wav = flag("--audio").map(Wav::new);
     let audio_only = args.iter().any(|arg| arg == "--audio-only");
+    if let Some(solo) = flag("--solo") {
+        demo_dungeon::set_dungeon_audio_solo(&solo);
+    }
     let mut pixels = Vec::new();
     let mut timings = Vec::new();
     let frames = (seconds * fps).round() as usize;

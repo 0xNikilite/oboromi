@@ -159,6 +159,8 @@ struct SourceState {
     written: u64,
     paths: [PathState; 43],
     reverbs: Vec<Fdn>,
+    room_weights: Vec<f32>,
+    rooms_initialized: bool,
 }
 
 impl SourceState {
@@ -168,6 +170,8 @@ impl SourceState {
             written: 0,
             paths: [PathState::default(); 43],
             reverbs: (0..rooms).map(|_| Fdn::new()).collect(),
+            room_weights: vec![0.0; rooms],
+            rooms_initialized: false,
         }
     }
 }
@@ -238,6 +242,14 @@ impl Spatializer {
             .states
             .entry(source.id)
             .or_insert_with(|| SourceState::new(rooms));
+        if !state.rooms_initialized {
+            state.room_weights.copy_from_slice(&room_weights);
+            state.rooms_initialized = true;
+        } else {
+            for (weight, &target) in state.room_weights.iter_mut().zip(&room_weights) {
+                *weight += (target - *weight).clamp(-0.005, 0.005);
+            }
+        }
         for &sample in mono {
             state.history[(state.written as usize) & (HISTORY - 1)] = sample;
             state.written += 1;
@@ -252,12 +264,13 @@ impl Spatializer {
                     &state.history,
                     state.written,
                     n,
+                    index == 0,
                     frame,
                 );
             }
-            let dry = mono[n] * source.gain;
+            let dry = mono[n] * parameters[0].gain * 0.08;
             for (room, (&weight, &(decay, damping))) in
-                room_weights.iter().zip(&room_data).enumerate()
+                state.room_weights.iter().zip(&room_data).enumerate()
             {
                 let wet = state.reverbs[room].process(dry * weight, decay, damping);
                 frame[0] += wet[0] * weight;
@@ -311,11 +324,14 @@ impl Spatializer {
                         position: image,
                         gain: distance_gain(length(sub(image, self.listener)))
                             * (1.0 - a).powi(2)
-                            * 0.55,
+                            * 0.02,
                         absorption: a,
                     });
                 }
             }
+        }
+        for path in paths.iter_mut().skip(1).take(6) {
+            path.gain *= 0.14;
         }
         paths
     }
@@ -339,9 +355,9 @@ impl Spatializer {
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
         if let Some((around, scattering)) = around {
-            (0.45 * direct.max(0.2) / around.max(direct), 0.72 + scattering * 0.1)
+            (0.14 * direct.max(0.2) / around.max(direct), 0.76 + scattering * 0.1)
         } else {
-            (0.16, 0.9)
+            (0.035, 0.92)
         }
     }
 
@@ -393,7 +409,7 @@ fn parameters(path: &Path, source_gain: f32, listener: V3, forward: V3, up: V3, 
     Parameters {
         delay: std::array::from_fn(|ear| delay + if mode == Mode::Headphones { itd * RATE * far[ear] } else { 0.0 }),
         gain: path.gain * source_gain * near,
-        ear_gain: std::array::from_fn(|ear| if mode == Mode::Speakers { [pan.cos(), pan.sin()][ear] } else { 1.0 - 0.34 * far[ear] }),
+        ear_gain: std::array::from_fn(|ear| if mode == Mode::Speakers { [pan.cos(), pan.sin()][ear] } else { 1.0 - 0.5 * far[ear] }),
         shadow: std::array::from_fn(|ear| coefficient(14_000.0 - 11_000.0 * far[ear])),
         air: coefficient(18_000.0 / (1.0 + 0.045 * distance * distance)),
         material: coefficient(18_000.0 * (1.0 - 0.82 * path.absorption)),
@@ -405,16 +421,17 @@ fn parameters(path: &Path, source_gain: f32, listener: V3, forward: V3, up: V3, 
     }
 }
 
-fn binaural(parameters: &Parameters, previous: &mut PathState, history: &[f32], written: u64, n: usize, frame: &mut [f32; 2]) {
+fn binaural(parameters: &Parameters, previous: &mut PathState, history: &[f32], written: u64, n: usize, direct: bool, frame: &mut [f32; 2]) {
     if n == 0 {
         if !previous.initialized {
-            previous.gain = parameters.gain;
+            previous.gain = if direct { parameters.gain } else { 0.0 };
             previous.delay = parameters.delay;
             previous.initialized = true;
         }
         previous.from_gain = previous.gain;
         previous.from_delay = previous.delay;
-        previous.target_gain = parameters.gain;
+        let step = parameters.gain.max(previous.gain) * 0.005;
+        previous.target_gain = parameters.gain.clamp(previous.gain - step, previous.gain + step);
         previous.target_delay = parameters.delay;
     }
     let t = (n + 1) as f32 / BLOCK as f32;
@@ -712,6 +729,7 @@ mod tests {
                     &history,
                     n as u64,
                     n % BLOCK,
+                    true,
                     &mut frame,
                 );
                 if frame.iter().any(|sample| sample.abs() > 1e-7) {

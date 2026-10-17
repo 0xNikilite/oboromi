@@ -87,6 +87,13 @@ pub enum ResourceKind {
     Surface2D { cbuf_bank: u32, byte_offset: u32, format: vk::Format },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Stage {
+    Compute { local_size: [u32; 3] },
+    Vertex,
+    Fragment,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Resource {
     pub kind: ResourceKind,
@@ -95,6 +102,7 @@ pub struct Resource {
 
 pub struct Decoder<'a> {
     pub ir: &'a mut spirv::Emitter,
+    stage: Stage,
     type_void: u32,
     // Pointers
     type_ptr_u32: [u32; 5],
@@ -199,20 +207,22 @@ fn guest_barriers(words: &[u128]) -> Vec<u32> {
     ids
 }
 
-pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
+pub fn emit_module(device: Option<&VkState>, stage: Stage, body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
     let mut emitter = spirv::Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(spirv::capability::SHADER);
     emitter.emit_memory_model(0, 1);
-    let mut decoder = Decoder::new(&mut emitter);
+    let mut decoder = Decoder::new(&mut emitter, stage);
     decoder.init();
     let void_ty = decoder.get_type_void();
     let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
     let func = decoder.ir.emit_function(void_ty, 0, func_ty);
     decoder.ir.emit_label();
-    decoder.invocations = local_size.iter().product();
+    if let Stage::Compute { local_size } = stage {
+        decoder.invocations = local_size.iter().product();
+    }
     body(&mut decoder);
-    decoder.emit_entry_point(func, device, local_size);
+    decoder.emit_entry_point(func, device);
     decoder.ir.emit_return();
     decoder.ir.emit_function_end();
     decoder.ir.finalize();
@@ -220,9 +230,10 @@ pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl Fn
 }
 
 impl<'a> Decoder<'a> {
-    pub fn new(ir: &'a mut spirv::Emitter) -> Self {
+    pub fn new(ir: &'a mut spirv::Emitter, stage: Stage) -> Self {
         Self {
             ir,
+            stage,
             type_void: 0,
             type_ptr_u32: [0; 5],
             type_u32: [0; 5],
@@ -271,15 +282,22 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
-    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, local_size: [u32; 3]) {
+    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
         let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).collect();
-        self.ir
-            .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
-        self.ir
-            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &local_size);
-        use spirv::{capability as cap, execution_mode as mode};
+        use spirv::{capability as cap, execution_mode as mode, execution_model as model};
+        let execution_model = match self.stage {
+            Stage::Compute { .. } => model::GLCOMPUTE,
+            Stage::Vertex => model::VERTEX,
+            Stage::Fragment => model::FRAGMENT,
+        };
+        self.ir.emit_entry_point(execution_model, func, "main", &interface);
+        match self.stage {
+            Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
+            Stage::Vertex => {}
+            Stage::Fragment => self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]),
+        }
         let Some(device) = device else { return };
         for (capability, execution_mode, widths) in [
             (cap::SIGNED_ZERO_INF_NAN_PRESERVE, mode::SIGNED_ZERO_INF_NAN_PRESERVE, device.signed_zero_inf_nan_preserve),
@@ -292,7 +310,7 @@ impl<'a> Decoder<'a> {
                 self.ir.emit_execution_mode(func, execution_mode, &[width]);
             }
         }
-        if self.derivatives {
+        if self.derivatives && matches!(self.stage, Stage::Compute { .. }) {
             self.ir.emit_capability(cap::COMPUTE_DERIVATIVE_GROUP_LINEAR);
             self.ir.emit_extension("SPV_KHR_compute_shader_derivatives");
             self.ir.emit_execution_mode(func, mode::DERIVATIVE_GROUP_LINEAR, &[]);

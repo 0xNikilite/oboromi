@@ -287,6 +287,8 @@ impl<'a> Decoder<'a> {
 
     pub(super) fn builtin(&mut self, builtin: spirv::BuiltIn) -> u32 {
         use spirv::{BuiltIn, decoration, storage_class::INPUT};
+        let compute_only = matches!(builtin, BuiltIn::LocalInvocationIndex | BuiltIn::LocalInvocationId | BuiltIn::WorkgroupId);
+        assert!(compute_only == matches!(self.stage, Stage::Compute { .. }), "{builtin:?} is not an input of a {:?} module", self.stage);
         let ty = match builtin {
             BuiltIn::LocalInvocationIndex => self.type_u32[1],
             _ => self.type_u32[3],

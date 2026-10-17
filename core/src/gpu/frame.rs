@@ -1,6 +1,6 @@
 //! Test frame: a translated SASS program writes a gradient into global memory that is presented as is.
 use super::compute::{ComputePipeline, HostBuffer};
-use super::sm86::{GLOBAL_BINDING, SUPPORT_BINDING, emit_module};
+use super::sm86::{GLOBAL_BINDING, SUPPORT_BINDING, Stage, emit_module};
 use super::{VkError, device};
 use crate::tests::gpu_test::inst::*;
 use ash::vk::DescriptorType;
@@ -49,7 +49,7 @@ fn gradient_program() -> [u128; 21] {
 pub fn render_test_frame() -> Result<(), VkError> {
     let state = device()?;
     let size = u64::from(WIDTH * HEIGHT * 4);
-    let module = emit_module(Some(state), [GROUP, GROUP, 1], |decoder| decoder.translate_program(&gradient_program()));
+    let module = emit_module(Some(state), Stage::Compute { local_size: [GROUP, GROUP, 1] }, |decoder| decoder.translate_program(&gradient_program()));
     let pixels_buffer = HostBuffer::new(state, size)?;
     let mut support = HostBuffer::new(state, 16)?;
     support.write(&BASE.to_le_bytes())?;

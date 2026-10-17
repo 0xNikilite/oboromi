@@ -1,5 +1,5 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer, HostImage};
-use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING};
+use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, ResourceKind, STATE_WORDS, SUPPORT_BINDING, Stage, TEXTURE_BINDING};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::texture::TexturePool;
 use crate::gpu::{VkError, VkState};
@@ -19,7 +19,7 @@ pub fn emit_module(
     lanes: u32,
     body: impl FnOnce(&mut Decoder),
 ) -> Emitter {
-    sm86::emit_module(device, [lanes, 1, 1], |decoder| {
+    sm86::emit_module(device, Stage::Compute { local_size: [lanes, 1, 1] }, |decoder| {
         if register_io {
             decoder.emit_register_io(10, 11);
         }
@@ -200,7 +200,7 @@ pub fn run_textured(
 /// bytes after the launch, or `None` when there is no Vulkan device.
 pub fn run_grid(instructions: &[u128], block: [u32; 3], grid: [u32; 3], cbuf0: &[u8], regions: &[(u64, &[u8])]) -> Option<Vec<Vec<u8>>> {
     let state = vk_state()?;
-    let module = sm86::emit_module(Some(&state), block, |decoder| decoder.translate_program(instructions));
+    let module = sm86::emit_module(Some(&state), Stage::Compute { local_size: block }, |decoder| decoder.translate_program(instructions));
     spirv_val(&module);
     let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
     let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();

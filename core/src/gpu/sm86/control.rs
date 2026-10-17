@@ -289,8 +289,15 @@ impl<'a> Decoder<'a> {
     // The host driver owns dependency scoreboarding.
     pub fn depbar(&mut self, _inst: u128) {}
     pub fn exit(&mut self, _inst: u128) {
+        let ptr = self.barrier_token(ATEXIT_PC);
+        let atexit = self.ir.emit_load(self.type_u32[1], ptr);
+        self.ir.emit_store(ptr, self.const_u32_0);
+        let none = self.ir.emit_iequal(self.type_bool[1], atexit, self.const_u32_0);
+        let four = self.cached_const_u32(4);
+        let routine = self.ir.emit_shift_right_logical(self.type_u32[1], atexit, four);
         let exit = self.cached_const_u32(u32::MAX);
-        self.ir.emit_store(self.var_pc, exit);
+        let next = self.ir.emit_select(self.type_u32[1], none, exit, routine);
+        self.ir.emit_store(self.var_pc, next);
     }
     pub fn jmp(&mut self, inst: u128) {
         let op = opcode(inst);
@@ -330,7 +337,7 @@ impl<'a> Decoder<'a> {
     }
     pub fn lepc(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let address = self.cached_const_u32((self.pc + 1) * 16);
+        let address = self.cached_const_u32(self.pc * 16);
         let ty = self.type_u64();
         let address = self.ir.emit_u_convert(ty, address);
         self.store_pair(rd, address);

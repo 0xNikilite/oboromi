@@ -360,6 +360,11 @@ mod tests {
         "s3#087/fp16/f2fp-pack-ab-r21-r8-r9",
         "s3#088/fp16/f2fp-merge-c-r22-r7-r0-h1",
         "s3#091/fp16/f2ip-u8-f32-r25-r6-r15-r10",
+        "tex#003/tex/lod-lz",
+        "tex#005/tex/lod-ll",
+        "tex#007/tex/mask-r",
+        "tex#009/tex/mask-rg",
+        "tex#010/tex/mask-a",
     ];
 
     fn destination_width(fixture: &WarpFixture) -> usize {
@@ -450,7 +455,7 @@ mod tests {
             (ADDRESS >> 32) as u32 | 2 << 21,
             PITCH as u32 >> 5,
             3 | 1 << 23,
-            3 | 1 << 31,
+            3,
             0,
             0,
         ];
@@ -480,7 +485,7 @@ mod tests {
         let seeds: Vec<Vec<u32>> = (0..32)
             .map(|lane| {
                 let mut seed = vec![0; PRED + 1];
-                seed[0] = fixture.texels[lane % fixture.texels.len()];
+                seed[0] = 0xffa5_5a00 | lane as u32;
                 seed[4..8].copy_from_slice(&fixture.inputs[lane * 4..][..4]);
                 seed
             })
@@ -488,7 +493,7 @@ mod tests {
         let mut program = vec![fixture.word];
         if fixture.family == "surf" {
             program.push(inst::surface(
-                inst::SULD_D_32,
+                inst::SULD_D_32 | inst::SU_BA,
                 8,
                 6,
                 0xff,
@@ -519,15 +524,13 @@ mod tests {
                 "mask-a" => 8,
                 _ => 15,
             };
+            let [rd, rd2] = [16, 64].map(|bit| (fixture.word >> bit & 0xff) as usize);
             for (lane, regs) in lanes.iter().enumerate() {
                 let packed = fixture.outputs[lane * 2].to_le_bytes();
-                let expected: Vec<_> = (0..4)
-                    .filter(|component| mask >> component & 1 != 0)
-                    .map(|component| packed[component])
-                    .collect();
-                let actual: Vec<_> = regs[8..8 + expected.len()]
+                let expected = &packed[..mask.count_ones() as usize];
+                let actual: Vec<_> = [rd, rd + 1, rd2, rd2 + 1][..expected.len()]
                     .iter()
-                    .map(|&word| (f32::from_bits(word) * 255.0).round() as u8)
+                    .map(|&r| (f32::from_bits(regs[r]) * 255.0).round() as u8)
                     .collect();
                 if actual != expected {
                     return Some(Err(format!(

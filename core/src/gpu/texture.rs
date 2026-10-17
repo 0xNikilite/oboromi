@@ -1,5 +1,5 @@
 //! Ampere texture header (TIC) and sampler (TSC) pool entries, bit positions as in open-gpu-doc clc697tex.h.
-//! Only pitch-linear one-mip RGBA8 2D textures decode; any other header or sampler state is rejected.
+//! Only pitch-linear one-mip RGBA8 UNORM or R32 UINT 2D textures decode; any other header or sampler state is rejected.
 use ash::vk;
 
 pub struct TextureHeader {
@@ -8,6 +8,7 @@ pub struct TextureHeader {
     pub height: u32,
     pub pitch: u32,
     pub address: u64,
+    pub normalized: bool,
 }
 
 #[derive(Default)]
@@ -20,23 +21,28 @@ impl TexturePool<'_> {
     pub fn texture(&self, handle: u32) -> Result<TextureHeader, String> {
         const PITCH: u32 = 2;
         const A8B8G8R8: u32 = 8;
+        const R32: u32 = 0x0f;
         const UNORM_RGBA: u32 = 0b010_010_010_010;
+        const UINT_RGBA: u32 = 0b100_100_100_100;
         const IDENTITY_SWIZZLE: u32 = 0o5432;
         const TWO_D: u32 = 1;
         let e = entry(self.tic, handle & 0xf_ffff)?;
         check("header version", field(e, 85, 87), PITCH)?;
-        check("components", field(e, 0, 6), A8B8G8R8)?;
-        check("component types", field(e, 7, 18), UNORM_RGBA)?;
+        let format = match (field(e, 0, 6), field(e, 7, 18)) {
+            (A8B8G8R8, UNORM_RGBA) => vk::Format::R8G8B8A8_UNORM,
+            (R32, UINT_RGBA) => vk::Format::R32_UINT,
+            (components, types) => return Err(format!("unsupported components {components:#x} with component types {types:#o}")),
+        };
         check("swizzle", field(e, 19, 30), IDENTITY_SWIZZLE)?;
         check("texture type", field(e, 151, 154), TWO_D)?;
         check("max mip level", field(e, 124, 127), 0)?;
-        check("normalized coords", field(e, 191, 191), 1)?;
         Ok(TextureHeader {
-            format: vk::Format::R8G8B8A8_UNORM,
+            format,
             width: field(e, 128, 144) + 1,
             height: (field(e, 146, 146) << 16 | field(e, 160, 175)) + 1,
             pitch: field(e, 145, 145) << 21 | field(e, 96, 111) << 5,
             address: (field(e, 64, 80) as u64) << 32 | (field(e, 37, 63) as u64) << 5,
+            normalized: field(e, 191, 191) == 1,
         })
     }
 

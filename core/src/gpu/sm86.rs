@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use ash::vk;
 use crate::gpu::VkState;
 use crate::gpu::spirv::{self, storage_class};
 
@@ -293,7 +294,7 @@ pub enum ResourceKind {
     Warp,
     Global64,
     Texture2D { cbuf_bank: u32, byte_offset: u32 },
-    Surface2D { cbuf_bank: u32, byte_offset: u32 },
+    Surface2D { cbuf_bank: u32, byte_offset: u32, format: vk::Format },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,7 +338,8 @@ pub struct Decoder<'a> {
     type_f16x2: u32,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
-    type_surface_2d: u32,
+    type_surface_2d: [u32; 2],
+    derivatives: bool,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
@@ -435,7 +437,8 @@ impl<'a> Decoder<'a> {
             type_f16x2: 0,
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
-            type_surface_2d: 0,
+            type_surface_2d: [0; 2],
+            derivatives: false,
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
@@ -466,6 +469,11 @@ impl<'a> Decoder<'a> {
             for (width, _) in [16, 32, 64].into_iter().zip(widths).filter(|&(_, supported)| supported) {
                 self.ir.emit_execution_mode(func, execution_mode, &[width]);
             }
+        }
+        if self.derivatives {
+            self.ir.emit_capability(cap::COMPUTE_DERIVATIVE_GROUP_LINEAR);
+            self.ir.emit_extension("SPV_KHR_compute_shader_derivatives");
+            self.ir.emit_execution_mode(func, mode::DERIVATIVE_GROUP_LINEAR, &[]);
         }
     }
 
@@ -2815,29 +2823,7 @@ impl<'a> Decoder<'a> {
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn footprint(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _b = (((inst >> 59) & 0x1) << 0);
-        let _scr = (((inst >> 60) & 0x1) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("FOOTPRINT");
+        todo!("FOOTPRINT reports the sparse tiles a sample would touch in NVIDIA's tile layout; only VK_NV_shader_image_footprint can express it, and neither Intel nor lavapipe has it: {inst:#034x}");
     }
     pub fn frnd(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4663,26 +4649,9 @@ impl<'a> Decoder<'a> {
         self.store_memory(ResourceKind::Shared, address, sz, rb);
     }
     pub fn suatom(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _clamp = (((inst >> 59) & 0x3) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("SUATOM");
+        let op = (opcode(inst) != 0x595).then_some((inst >> 87 & 0xf) as u32);
+        let old = self.surface_atomic(inst, op);
+        self.store_register((inst >> 16 & 0xff) as u32, old);
     }
     pub fn suld(&mut self, inst: u128) {
         assert!(inst >> 81 & 7 == PT as u128, "SULD sparse residency predicate");
@@ -4690,6 +4659,7 @@ impl<'a> Decoder<'a> {
         let texel = self.ir.emit_image_read(self.type_f32[4], image, coord, &[]);
         let rd = (inst >> 16 & 0xff) as u32;
         if raw {
+            assert!(inst >> 73 & 7 == 4, "SULD.D size {} is not 32", inst >> 73 & 7);
             // The host binds only RGBA8 surfaces, so a raw 32-bit word is the packed texel.
             let bits = self.glsl(spirv::glsl::PACK_UNORM_4X8, self.type_u32[1], &[texel]);
             self.store_register(rd, bits);
@@ -4715,68 +4685,86 @@ impl<'a> Decoder<'a> {
             op if op == p_form => false,
             _ => panic!("{name} only in the bound cbuf form: {inst:#034x}"),
         };
-        assert!(inst >> 61 & 7 == 3, "{name} dimension {} is not 2D", inst >> 61 & 7);
-        if raw {
-            assert!(inst >> 72 & 1 == 0, "{name}.D.BA");
-            assert!(inst >> 73 & 7 == 4, "{name}.D size {} is not 32", inst >> 73 & 7);
+        let (var, ty, coord) = self.surface(inst, vk::Format::R8G8B8A8_UNORM, raw && inst >> 72 & 1 != 0);
+        (self.ir.emit_load(ty, var), coord, raw)
+    }
+
+    // The bound 2D surface variable holding `format` texels, its image type, and the texel coordinate in Ra, Ra+1,
+    // where a byte-addressed x counts the four bytes of each texel.
+    fn surface(&mut self, inst: u128, format: vk::Format, byte_addressed: bool) -> (u32, u32, u32) {
+        const DIM_2D: u32 = 1;
+        const STORAGE: u32 = 2;
+        const RGBA8: u32 = 4;
+        const R32UI: u32 = 33;
+        assert!(inst >> 61 & 7 == 3, "surface dimension {} is not 2D: {inst:#034x}", inst >> 61 & 7);
+        let (slot, sampled, image_format) = match format {
+            vk::Format::R32_UINT => (1, self.type_u32[1], R32UI),
+            _ => (0, self.type_f32[1], RGBA8),
+        };
+        if self.type_surface_2d[slot] == 0 {
+            self.type_surface_2d[slot] = self.ir.emit_type_image(sampled, DIM_2D, 0, 0, 0, STORAGE, image_format);
         }
-        if self.type_surface_2d == 0 {
-            const DIM_2D: u32 = 1;
-            const STORAGE: u32 = 2;
-            const RGBA8: u32 = 4;
-            self.type_surface_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 0, 0, 0, STORAGE, RGBA8);
-        }
+        let ty = self.type_surface_2d[slot];
         let (cbuf_bank, byte_offset) = bound_handle(inst);
-        let var = self.image_variable(ResourceKind::Surface2D { cbuf_bank, byte_offset }, self.type_surface_2d);
-        let image = self.ir.emit_load(self.type_surface_2d, var);
+        let var = self.image_variable(ResourceKind::Surface2D { cbuf_bank, byte_offset, format }, ty);
         let ra = (inst >> 24 & 0xff) as u32;
-        let coords = [ra, ra + 1].map(|r| self.load_register(r));
-        (image, self.ir.emit_composite_construct(self.type_u32[2], &coords), raw)
+        let mut coords = [ra, ra + 1].map(|r| self.load_register(r));
+        if byte_addressed {
+            let two = self.cached_const_u32(2);
+            coords[0] = self.ir.emit_shift_right_logical(self.type_u32[1], coords[0], two);
+        }
+        (var, ty, self.ir.emit_composite_construct(self.type_u32[2], &coords))
     }
     pub fn suquery(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cas = (((inst >> 87) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("SUQUERY");
+        todo!("SUQUERY on SM86 only has COMP_STATUS, the memory compression state of the texel at [Ra], which Vulkan does not expose; surface sizes come from TXQ: {inst:#034x}");
     }
     pub fn sured(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _clamp = (((inst >> 59) & 0x3) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x7) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("SURED");
+        self.surface_atomic(inst, Some((inst >> 87 & 7) as u32));
+    }
+
+    // `op` numbers the operation as ATOM does, None is CAS comparing with Rb and swapping in Rb+1.
+    fn surface_atomic(&mut self, inst: u128, op: Option<u32>) -> u32 {
+        use spirv::memory_semantics::{ACQUIRE_RELEASE, IMAGE_MEMORY};
+        assert!(matches!(opcode(inst), 0x593 | 0x595 | 0x59f), "surface atomics only in the bound cbuf form: {inst:#034x}");
+        let size = (inst >> 73 & 7) as usize;
+        let name = ["U32", "S32", "U64", "F32.FTZ.RN", "F16x2.RN", "S64", "SD32", "SD64"][size];
+        assert!(size < 2, "surface atomic .{name}: the R32_UINT storage image holds 32-bit integer atomics only");
+        let (var, _, coord) = self.surface(inst, vk::Format::R32_UINT, inst >> 72 & 1 != 0);
+        let ptr_ty = self.ir.emit_type_pointer(storage_class::IMAGE, self.type_u32[1]);
+        let ptr = self.ir.emit_image_texel_pointer(ptr_ty, var, coord, self.const_u32_0);
+        let scope = self.cached_const_u32(spirv::scope::DEVICE);
+        let sem = self.cached_const_u32(ACQUIRE_RELEASE | IMAGE_MEMORY);
+        let rb = (inst >> 32 & 0xff) as u32;
+        let value = self.load_register(rb);
+        match op {
+            Some(op) => self.atomic_op(ptr, scope, sem, op, size == 1, value),
+            None => {
+                let swap = self.load_register(nth_reg(rb, RZ, 1));
+                self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value)
+            }
+        }
     }
     pub fn sust(&mut self, inst: u128) {
         let (image, coord, raw) = self.surface_2d(inst, [0xb9d, 0xb9b], "SUST");
         let rb = (inst >> 32 & 0xff) as u32;
         let texel = if raw {
-            let bits = self.load_register(rb);
+            let mut bits = self.load_register(rb);
+            let width = match inst >> 73 & 7 {
+                0 | 1 => 8,
+                2 | 3 => 16,
+                4 => 32,
+                size => panic!("SUST.D size {size} is wider than an RGBA8 texel"),
+            };
+            if width < 32 {
+                assert!(inst >> 72 & 1 != 0, "SUST.D.U8 and .U16 only byte-addressed");
+                let old = self.ir.emit_image_read(self.type_f32[4], image, coord, &[]);
+                let old = self.glsl(spirv::glsl::PACK_UNORM_4X8, self.type_u32[1], &[old]);
+                let x = self.load_register((inst >> 24 & 0xff) as u32);
+                let [three, byte_bits, width] = [3, 24, width].map(|v| self.cached_const_u32(v));
+                let x_bits = self.ir.emit_shift_left_logical(self.type_u32[1], x, three);
+                let offset = self.ir.emit_bitwise_and(self.type_u32[1], x_bits, byte_bits);
+                bits = self.ir.emit_bit_field_insert(self.type_u32[1], old, bits, offset, width);
+            }
             self.glsl(spirv::glsl::UNPACK_UNORM_4X8, self.type_f32[4], &[bits])
         } else {
             assert!(inst >> 72 & 0xf == 0xf, "SUST.P component mask {:#x}", inst >> 72 & 0xf);
@@ -4789,7 +4777,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_image_write(image, coord, texel, &[]);
     }
     pub fn tex(&mut self, inst: u128) {
-        assert!(opcode(inst) == 0xb60 && inst >> 59 & 3 == 0, "TEX only in the bound cbuf form: {inst:#034x}");
+        assert!(opcode(inst) == 0xb60 && inst >> 59 & 1 == 0, "TEX only in the bound cbuf form: {inst:#034x}");
         for (bit, modifier) in [(76, "AOFFI"), (77, "NDV"), (78, "DC"), (79, "F16.RN"), (80, "F16.RZ")] {
             assert!(inst >> bit & 1 == 0, "TEX.{modifier}");
         }
@@ -4803,11 +4791,9 @@ impl<'a> Decoder<'a> {
             mode => todo!("TEX.{}", ["implicit lod", "LZ", "LB", "LL", "LC", "LB.LC", "LC.FDV", "INVALID7"][mode as usize]),
         };
         let lod = self.bitcast_f32(lod);
-        let coords = [ra, ra + 1].map(|r| {
-            let bits = self.load_register(r);
-            self.bitcast_f32(bits)
-        });
-        let coord = self.ir.emit_composite_construct(self.type_f32[2], &coords);
+        // .SCR splits the operands between Ra and Rb, so without a lod operand y is in Rb (RTX 3090 fixtures).
+        let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 == 1 { rb } else { ra + 1 };
+        let coord = self.float_vec2([ra, y]);
         let sampled = self.texture_2d(inst);
         const LOD_OPERAND: u32 = 2;
         let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod]);
@@ -4848,6 +4834,18 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    // The texture unit reads a NaN operand as 0 (RTX 3090 fixtures).
+    fn float_vec2(&mut self, regs: [u32; 2]) -> u32 {
+        let floats = regs.map(|r| {
+            let bits = self.load_register(r);
+            let value = self.bitcast_f32(bits);
+            let nan = self.ir.emit_is_nan(self.type_bool[1], value);
+            let bits = self.ir.emit_select(self.type_u32[1], nan, self.const_u32_0, bits);
+            self.bitcast_f32(bits)
+        });
+        self.ir.emit_composite_construct(self.type_f32[2], &floats)
+    }
+
     fn texture_2d(&mut self, inst: u128) -> u32 {
         if self.type_sampled_texture_2d == 0 {
             const DIM_2D: u32 = 1;
@@ -4876,52 +4874,40 @@ impl<'a> Decoder<'a> {
         var
     }
     pub fn tld4(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _b = (((inst >> 59) & 0x1) << 0);
-        let _scr = (((inst >> 60) & 0x1) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _sem = (((inst >> 79) & 0x3) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _comp = (((inst >> 87) & 0x3) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("TLD4");
+        assert!(opcode(inst) == 0xb63 && inst >> 59 & 3 == 0, "TLD4 only in the bound cbuf form: {inst:#034x}");
+        for (bit, modifier) in [(76, "AOFFI"), (77, "PTP"), (78, "DC"), (79, "F16.RN"), (80, "F16.RZ")] {
+            assert!(inst >> bit & 1 == 0, "TLD4.{modifier}");
+        }
+        assert!(inst >> 61 & 7 == 1, "TLD4 dimension {} is not 2D", inst >> 61 & 7);
+        assert!(inst >> 81 & 7 == PT as u128, "TLD4 sparse residency predicate");
+        let ra = (inst >> 24 & 0xff) as u32;
+        let coord = self.float_vec2([ra, ra + 1]);
+        let sampled = self.texture_2d(inst);
+        let component = self.cached_const_u32((inst >> 87 & 3) as u32);
+        let texels = self.ir.emit_image_gather(self.type_f32[4], sampled, coord, component);
+        let bits = self.ir.emit_bitcast(self.type_u32[4], texels);
+        self.store_texel(inst, bits);
     }
     pub fn tmml(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _b = (((inst >> 59) & 0x1) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("TMML");
+        assert!(opcode(inst) == 0xb69 && inst >> 59 & 1 == 0, "TMML only in the bound cbuf form: {inst:#034x}");
+        assert!(inst >> 77 & 1 == 0, "TMML.NDV");
+        assert!(inst >> 61 & 7 == 1, "TMML dimension {} is not 2D", inst >> 61 & 7);
+        assert!(inst >> 74 & 3 == 0, "TMML writes only the two lod components");
+        let ra = (inst >> 24 & 0xff) as u32;
+        let coord = self.float_vec2([ra, ra + 1]);
+        let sampled = self.texture_2d(inst);
+        self.derivatives = true;
+        let lod = self.ir.emit_image_query_lod(self.type_f32[2], sampled, coord);
+        // TMML returns 8.8 fixed point, the computed lod before the accessed mip level, the reverse of OpImageQueryLod.
+        let scale = self.ir.emit_constant_typed(self.type_f32[1], 256.0f32);
+        let fixed = [1, 0].map(|c| {
+            let value = self.ir.emit_composite_extract(self.type_f32[1], lod, &[c]);
+            let scaled = self.ir.emit_fmul(self.type_f32[1], value, scale);
+            let fixed = self.ir.emit_convert_f_to_s(self.type_s32[1], scaled);
+            self.ir.emit_bitcast(self.type_u32[1], fixed)
+        });
+        let lods = self.ir.emit_composite_construct(self.type_u32[2], &fixed);
+        self.store_texel(inst, lods);
     }
     pub fn ttucctl(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4995,29 +4981,21 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn txd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _b = (((inst >> 59) & 0x1) << 0);
-        let _destidx = (((inst >> 61) & 0x7) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _sem = (((inst >> 79) & 0x3) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _cas = (((inst >> 87) & 0x1) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("TXD");
+        assert!(opcode(inst) == 0xb6c && inst >> 59 & 1 == 0, "TXD only in the bound cbuf form: {inst:#034x}");
+        for (bit, modifier) in [(76, "AOFFI"), (79, "F16.RN"), (80, "F16.RZ"), (87, "LC")] {
+            assert!(inst >> bit & 1 == 0, "TXD.{modifier}");
+        }
+        assert!(inst >> 61 & 7 == 1, "TXD dimension {} is not 2D", inst >> 61 & 7);
+        assert!(inst >> 81 & 7 == PT as u128, "TXD sparse residency predicate");
+        let [ra, rb] = [24, 32].map(|bit| (inst >> bit & 0xff) as u32);
+        let coord = self.float_vec2([ra, ra + 1]);
+        // Rb holds du/dx, du/dy, dv/dx, dv/dy.
+        let [dx, dy] = [[0, 2], [1, 3]].map(|pair| self.float_vec2(pair.map(|i| nth_reg(rb, RZ, i))));
+        let sampled = self.texture_2d(inst);
+        const GRAD_OPERAND: u32 = 4;
+        let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, GRAD_OPERAND, &[dx, dy]);
+        let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
+        self.store_texel(inst, bits);
     }
     pub fn txq(&mut self, inst: u128) {
         assert!(opcode(inst) == 0xb6f && inst >> 59 & 1 == 0, "TXQ only in the bound cbuf form: {inst:#034x}");

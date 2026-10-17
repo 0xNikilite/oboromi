@@ -122,6 +122,14 @@ pub mod inst {
     pub const SULD_P_RGBA: u128 = 0xb97 | SU_RGBA;
     pub const SUST_D_32: u128 = 0xb9d | SZ_32;
     pub const SUST_P_RGBA: u128 = 0xb9b | SU_RGBA;
+    pub const SU_BA: u128 = 1 << 72;
+    pub const SURED_ADD: u128 = 0x59f;
+    pub const SUATOM_ADD: u128 = 0x593;
+    pub const SUATOM_CAS: u128 = 0x595;
+    pub const TLD4_R_2D: u128 = 0xb63 | TEX_2D;
+    pub const TLD4_G_2D: u128 = TLD4_R_2D | 1 << 87;
+    pub const TXD_2D: u128 = 0xb6c | TEX_2D;
+    pub const TMML_LOD_2D: u128 = 0xb69 | TEX_2D;
     const LDS: u128 = 0x984;
     const STS: u128 = 0x388;
     const ATOMS_ADD: u128 = 0x38c;
@@ -261,6 +269,10 @@ pub mod inst {
             | (byte_offset as u128 / 4) << 40
             | (bank as u128) << 54
             | (mask as u128) << 72
+    }
+
+    pub fn with_rb(word: u128, rb: u32) -> u128 {
+        word & !(0xff << 32) | (rb as u128) << 32
     }
 
     pub fn surface(op: u128, rd: u32, ra: u32, rb: u32, bank: u32, byte_offset: u32) -> u128 {
@@ -921,6 +933,14 @@ fn fixtures_match_nvdisasm() {
         (inst::surface(inst::SULD_D_32, 4, 2, 0xff, 3, 0x10), "SULD.D.2D R4, [R2], 0x3, 0x4 ;"),
         (inst::surface(inst::SUST_D_32, 0xff, 2, 5, 3, 0x10), "SUST.D.2D [R2], R5, 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_P_RGBA, 12, 2, 0xff, 3, 0x10), "SULD.P.2D R12, [R2], 0x3, 0x4 ;"),
+        (inst::surface(inst::SULD_D_32 | inst::SU_BA, 8, 6, 0xff, 0, 0x178), "SULD.D.BA.2D R8, [R6], 0x0, 0x5e ;"),
+        (inst::texture(inst::TLD4_R_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.R R6, R4, R2, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TLD4_G_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.G R6, R4, R2, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TXD_2D, 12, 14, 2, 3, 0x10, 0xf), 4), "TXD R14, R12, R2, R4, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TMML_LOD_2D, 4, 0xff, 2, 3, 0x10, 0x3), "TMML.LOD RZ, R4, R2, 0x3, 0x4, 2D, 0x3 ;"),
+        (inst::surface(inst::SURED_ADD, 0, 2, 4, 3, 0x10), "SURED.D.2D.ADD [R2], R4, 0x3, 0x4 ;"),
+        (inst::surface(inst::SUATOM_ADD, 5, 2, 4, 3, 0x10), "SUATOM.D.2D.ADD R5, [R2], R4, 0x3, 0x4 ;"),
+        (inst::surface(inst::SUATOM_CAS, 5, 2, 4, 3, 0x10), "SUATOM.D.2D.CAS R5, [R2], R4, 0x3, 0x4 ;"),
         (inst::s2r(11, 60), "S2R R11, SR_GEMASK ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;

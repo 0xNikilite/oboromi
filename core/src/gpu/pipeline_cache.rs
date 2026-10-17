@@ -154,7 +154,7 @@ impl VkState {
     }
 
     pub(super) fn create_graphics_pipeline(&self, info: vk::GraphicsPipelineCreateInfo) -> Result<vk::Pipeline, VkError> {
-        Ok(unsafe { self.device.create_graphics_pipelines(self.pipeline_cache, &[info], None) }.map_err(|(_, e)| e)?[0])
+        Ok(unsafe { self.device.create_graphics_pipelines(*self.pipeline_cache.read().unwrap(), &[info], None) }.map_err(|(_, e)| e)?[0])
     }
 }
 
@@ -206,14 +206,14 @@ impl Disk {
         let d = &state.device;
         unsafe {
             let saved = d.create_pipeline_cache(&vk::PipelineCacheCreateInfo::default().initial_data(&data), None)?;
-            let merged = d.merge_pipeline_caches(state.pipeline_cache, &[saved]);
+            let merged = d.merge_pipeline_caches(*state.pipeline_cache.write().unwrap(), &[saved]);
             d.destroy_pipeline_cache(saved, None);
             Ok(merged?)
         }
     }
 
     pub fn flush(&self, state: &VkState) -> io::Result<()> {
-        let data = unsafe { state.device.get_pipeline_cache_data(state.pipeline_cache) }.map_err(io::Error::other)?;
+        let data = unsafe { state.device.get_pipeline_cache_data(*state.pipeline_cache.read().unwrap()) }.map_err(io::Error::other)?;
         write_atomically(&self.dir.join("pipeline-cache"), &data)
     }
 }

@@ -101,6 +101,14 @@ mod tests {
     }
 
     #[test]
+    fn r2ur_or_merges_the_active_lanes() {
+        let Some(lanes) = run(&[guard(alu(R2UR_OR, 3, 5, 0), 0, false)], &rig_seeds(0x5555_5555)) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            assert_eq!(regs[UREG + 3], if lane % 2 == 0 { 0x78 } else { 0 }, "lane {lane}");
+        }
+    }
+
+    #[test]
     fn voteu_writes_ballot_and_result_to_uniform_registers() {
         let program = [alu(VOTEU | VOTE_EQ | preds(2, 0, 0, 0), 5, 0, 0), alu(VOTEU | VOTE_ANY | preds(3, 0, 0, 0), 6, 0, 0)];
         let Some(lanes) = run(&program, &rig_seeds(0x8000_0003)) else { return };

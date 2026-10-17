@@ -581,6 +581,7 @@ pub mod inst {
     pub const UR2UP_IMM: u128 = 0x884 | UNIFORM;
     pub const UPLOP3: u128 = 0x89c;
     pub const R2UR: u128 = 0x3c2 | PU_PT;
+    pub const R2UR_OR: u128 = R2UR | 1 << 84;
     pub const NEG_A: u128 = 1 << 72;
     pub const EXTENDED: u128 = 1 << 74;
     pub const ICMP_LT: u128 = 1 << 76;
@@ -899,6 +900,7 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::UMOV_IMM, 1, 0, 0xdead_beef), "UMOV UR1, 0xdeadbeef;"),
         (inst::alu(inst::UMOV, 2, 0, 1), "UMOV UR2, UR1;"),
         (inst::alu(inst::R2UR, 3, 5, 0), "R2UR UR3, R5 ;"),
+        (inst::alu(inst::R2UR_OR, 3, 5, 0), "R2UR.OR PT, UR3, R5 ;"),
         (inst::alu(inst::USEL ^ inst::IMM_B | inst::preds(0, 0, 1, 0), 4, 3, 7), "USEL UR4, UR3, 0x7, UP1;"),
         (inst::alu3(inst::ULEA | inst::lea_shift(3) | inst::preds(7, 0, 0, 0), 6, 3, 1, 63), "ULEA UR6, UR3, UR1, 0x3;"),
         (inst::alu3(inst::UIMAD_WIDE ^ inst::IMM_B | inst::preds(7, 0, 0, 0), 8, 3, 0x10, 10), "UIMAD.WIDE.U32 UR8, UR3, 0x10, UR10;"),

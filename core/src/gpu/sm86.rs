@@ -48,6 +48,7 @@ const VOTEU: u32 = 0x086;
 const UPLOP3: u32 = 0x89c;
 const P0_TO_P6: u32 = 0x7f;
 const S2UR: u32 = 0x1c3;
+const R2UR: u32 = 0x3c2;
 const SHARED_WORDS: u32 = 256;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
 static MAX_CONST_BANK: usize = 17;
@@ -405,9 +406,9 @@ fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
 
-// VOTE, VOTEU, SHFL, MATCH, REDUX, BAR, HMMA, IMMA, DMMA, BMMA, LDSM and MOVM, which every invocation of the workgroup must reach together.
+// VOTE, VOTEU, SHFL, MATCH, REDUX, BAR, HMMA, IMMA, DMMA, BMMA, LDSM, MOVM and R2UR.OR, which every invocation of the workgroup must reach together.
 fn exchanges(inst: u128) -> bool {
-    matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d | 0x03c | 0x037 | 0x03f | 0x03d | 0x03b | 0x03a)
+    matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d | 0x03c | 0x037 | 0x03f | 0x03d | 0x03b | 0x03a) || opcode(inst) == R2UR && inst >> 84 & 1 != 0
 }
 
 fn partial_warpsync(inst: u128) -> bool {
@@ -4071,8 +4072,10 @@ impl<'a> Decoder<'a> {
     }
     pub fn r2ur(&mut self, inst: u128) {
         assert!(inst >> 81 & 7 == 7, "R2UR with a predicate destination");
-        // Compilers only emit R2UR on warp-uniform values, so each lane holds the uniform value.
-        let value = self.load_register((inst >> 24 & 0xff) as u32);
+        let mut value = self.load_register((inst >> 24 & 0xff) as u32);
+        if inst >> 84 & 1 != 0 {
+            value = self.warp_values(value).into_iter().fold(self.const_u32_0, |acc, [v, _]| self.ir.emit_bitwise_or(self.type_u32[1], acc, v));
+        }
         self.store_ureg((inst >> 16 & 0x3f) as u32, value);
     }
     pub fn red(&mut self, inst: u128) {

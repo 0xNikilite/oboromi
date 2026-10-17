@@ -13,11 +13,11 @@ pub struct TestResult {
 // helpers to build sm86 instructions
 #[doc(hidden)]
 pub mod inst {
+    pub use scene::sass::{ald, alu, ast, bra, exit, ffma, fmul, ipa, mov_cbuf, mov_imm};
+    use scene::sass::{FMUL_NOSCALE, NO_SCOREBOARD, NO_WRITE_SCOREBOARD, PIXMASK_ALL, PP_PT, PT_GUARD, RC_RZ, control};
     const IADD3_IMM: u128 = 0x810;
     const IADD3_RRR: u128 = 0x210;
-    const MOV_RI: u128 = 0x802;
     const MOV_RR: u128 = 0x202;
-    const MOV_RC: u128 = 0xa02;
     const MOV_RCX: u128 = 0xa02 | 1 << 91;
     const MOV_RU: u128 = 0xc02 | 1 << 91;
     const MOV_IRF_R: u128 = 0x478 | 1 << 91;
@@ -29,25 +29,14 @@ pub mod inst {
     const S2R: u128 = 0x919;
     const CS2R: u128 = 0x805;
     const S2UR: u128 = 0x9c3;
-    const PT_GUARD: u128 = 7 << 12;
-    const RC_RZ: u128 = 0xff << 64;
-    const PIXMASK_ALL: u128 = 0xf << 72;
     const IADD3_NO_CARRY: u128 = 0x3fff << 77;
-    const PP_PT: u128 = 7 << 87;
-    const NO_SCOREBOARD: u128 = 0x3f << 110;
     const FADD_RR: u128 = 0x221;
     const FADD_RI: u128 = 0x421;
-    const FMUL_RR: u128 = 0x220;
     const FMUL_RI: u128 = 0x820;
-    const FMUL_NOSCALE: u128 = 4 << 84;
-    const FFMA_RRR: u128 = 0x223;
     const FFMA_RRI: u128 = 0x423;
     const FFMA_RIR: u128 = 0x823;
     const FMNMX_RR: u128 = 0x209;
     const MUFU_R: u128 = 0x308;
-    const ALD: u128 = 0x321 | 0xff << 24 | 0xff << 32;
-    const AST: u128 = 0x322 | 0xff << 24 | RC_RZ | NO_WRITE_SCOREBOARD;
-    const IPA: u128 = 0x326 | 0xff << 32 | 7 << 81;
     pub const IPA_CONSTANT: u128 = 1 << 78;
     pub const FSETP_GT: u128 = 0x20b | 4 << 76 | 7 << 84 | PP_PT;
     pub const FP_ABS_B: u128 = 1 << 62;
@@ -143,7 +132,6 @@ pub mod inst {
     const SZ_64: u128 = 5 << 73;
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
-    const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
     const TEX_2D: u128 = 1 << 61;
     const LZ: u128 = 1 << 87;
     pub const TLD_LZ_2D: u128 = 0xb66 | TEX_2D | LZ;
@@ -173,7 +161,6 @@ pub mod inst {
     pub const BAR_RED_AND: u128 = BAR_RED_POPC | 1 << 74;
     const B2R_RESULT: u128 = 0x31c | 1 << 78;
     const WARPSYNC_IMM: u128 = 0x948;
-    const BRA: u128 = 0x947;
     const BRA_UREG: u128 = 0x947 | 1 << 91;
     const BRA_UPRED: u128 = 0x547 | 1 << 91;
     const BRX: u128 = 0x949;
@@ -185,7 +172,6 @@ pub mod inst {
     const BMOV_CLEAR: u128 = 1 << 84;
     const CALL_REL: u128 = 0x944;
     const RET: u128 = 0x950;
-    const EXIT: u128 = 0x94d;
     const COND_U: u128 = 1 << 32;
     const COND_DIV: u128 = 2 << 32;
     const COND_CONV: u128 = 3 << 32;
@@ -263,21 +249,6 @@ pub mod inst {
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
         inst |= ((rc as u128) & 0xff) << 64;
-        inst
-    }
-
-    pub fn mov_imm(rd: u32, imm32: u32) -> u128 {
-        let mut inst = MOV_RI | PT_GUARD | PIXMASK_ALL;
-        inst |= ((rd as u128) & 0xff) << 16;
-        inst |= ((imm32 as u128) & 0xffffffff) << 32;
-        inst
-    }
-
-    pub fn mov_cbuf(rd: u32, bank: u32, off: u32) -> u128 {
-        let mut inst = MOV_RC | PT_GUARD | PIXMASK_ALL;
-        inst |= ((rd as u128) & 0xff) << 16;
-        inst |= ((off as u128 >> 2) & 0x3fff) << 40;
-        inst |= ((bank as u128) & 0x1f) << 54;
         inst
     }
 
@@ -417,14 +388,6 @@ pub mod inst {
         inst
     }
 
-    fn control(op: u128, ra: u32, offset: i64) -> u128 {
-        op | PT_GUARD | PP_PT | NO_SCOREBOARD | (ra as u128 & 0xff) << 24 | ((offset as u128 >> 2) & 0xffff_ffff_ffff) << 34
-    }
-
-    pub fn bra(offset: i64) -> u128 {
-        control(BRA, 0, offset)
-    }
-
     pub fn bra_upred(upq: u32, invert: bool, offset: i64) -> u128 {
         control(BRA_UPRED | COND_U, upq | (invert as u32) << 3, offset)
     }
@@ -469,14 +432,6 @@ pub mod inst {
         control(RET | RET_NODEC, ra, offset)
     }
 
-    pub fn exit() -> u128 {
-        control(EXIT, 0, 0)
-    }
-
-    pub fn alu(op: u128, rd: u32, ra: u32, b: u32) -> u128 {
-        op | PT_GUARD | (rd as u128) << 16 | (ra as u128) << 24 | (b as u128) << 32
-    }
-
     pub fn fadd(rd: u32, ra: u32, rb: u32) -> u128 {
         alu(FADD_RR, rd, ra, rb)
     }
@@ -485,16 +440,8 @@ pub mod inst {
         alu(FADD_RI, rd, ra, imm.to_bits()) | RC_RZ
     }
 
-    pub fn fmul(rd: u32, ra: u32, rb: u32) -> u128 {
-        alu(FMUL_RR, rd, ra, rb) | FMUL_NOSCALE
-    }
-
     pub fn fmul_imm(rd: u32, ra: u32, imm: f32) -> u128 {
         alu(FMUL_RI, rd, ra, imm.to_bits()) | FMUL_NOSCALE
-    }
-
-    pub fn ffma(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
-        alu(FFMA_RRR, rd, ra, rb) | (rc as u128) << 64
     }
 
     pub fn ffma_imm_b(rd: u32, ra: u32, imm: f32, rc: u32) -> u128 {
@@ -511,18 +458,6 @@ pub mod inst {
 
     pub fn mufu(rd: u32, op: u32, rb: u32) -> u128 {
         alu(MUFU_R, rd, 0, rb) | (op as u128) << 74
-    }
-
-    pub fn ald(rd: u32, attr: u32, words: u32) -> u128 {
-        ALD | PT_GUARD | (rd as u128) << 16 | (attr as u128) << 40 | (words as u128 - 1) << 74
-    }
-
-    pub fn ast(attr: u32, rb: u32, words: u32) -> u128 {
-        AST | PT_GUARD | (rb as u128) << 32 | (attr as u128) << 40 | (words as u128 - 1) << 74
-    }
-
-    pub fn ipa(rd: u32, attr: u32, mode: u128) -> u128 {
-        IPA | PT_GUARD | mode | (rd as u128) << 16 | (attr as u128 >> 2) << 64
     }
 
     pub mod cvt {

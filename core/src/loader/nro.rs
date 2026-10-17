@@ -79,7 +79,7 @@ pub fn load(ram: &GuestRam, cpu: &UnicornCPU, kernel: &mut Kernel, path: &Path) 
     let sd = path.with_file_name("sdmc");
     fs::create_dir_all(&sd)?;
     let romfs = romfs(&nro, word::<4>(&nro, 0x18)?);
-    kernel.ports.insert("fsp-srv".into(), Rc::new(RefCell::new(FileSystemProxy { sd, romfs })));
+    kernel.sm.borrow_mut().0.insert("fsp-srv".into(), Rc::new(RefCell::new(FileSystemProxy { sd, romfs })));
     Ok(())
 }
 

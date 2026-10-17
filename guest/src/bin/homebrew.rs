@@ -37,7 +37,9 @@ fn write_sd_file(name: &[u8], bytes: &[u8]) -> Result<()> {
     let mut path = [0u8; 0x301];
     path[..name.len()].copy_from_slice(name);
     let path = [Buffer { address: path.as_ptr() as u64, size: path.len() as u64 }];
-    let fsp = svc::connect_to_named_port(c"fsp-srv")?;
+    let sm = svc::connect_to_named_port(c"sm:")?;
+    call(sm, Request { command: 0, send_pid: true, data: &[0, 0], ..Default::default() })?;
+    let fsp = call(sm, Request { command: 1, data: &[u32::from_le_bytes(*b"fsp-"), u32::from_le_bytes(*b"srv\0")], ..Default::default() })?;
     call(fsp, Request { command: 1, send_pid: true, data: &[0, 0], ..Default::default() })?;
     let sd = call(fsp, Request { command: 18, ..Default::default() })?;
     call(sd, Request { command: 0, pointer: &path, data: &[0, 0, 0, 0], ..Default::default() })?;

@@ -112,14 +112,15 @@ pub struct Kernel {
     /// OutputDebugString texts, for the caller to drain.
     pub debug_output: Vec<String>,
     pub hid: Rc<RefCell<hid::State>>,
+    pub sm: Rc<RefCell<Sm>>,
 }
 
 impl Default for Kernel {
     fn default() -> Self {
         let hid = Rc::new(RefCell::new(hid::State::default()));
-        let sm: Rc<RefCell<dyn Service>> = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
-        let ports = HashMap::from([("sm:".into(), sm)]);
-        Self { process: Process::default(), ports, debug_output: vec![], hid }
+        let sm = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
+        let ports = HashMap::from([("sm:".into(), sm.clone() as _)]);
+        Self { process: Process::default(), ports, debug_output: vec![], hid, sm }
     }
 }
 

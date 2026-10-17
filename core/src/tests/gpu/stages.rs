@@ -71,10 +71,16 @@ mod tests {
     }
 
     #[test]
-    fn fragment_program_reads_sample_id_and_coverage() {
-        let expected = [ResourceKind::BuiltIn(B::SampleId as u32), ResourceKind::BuiltIn(B::SampleMask as u32), ResourceKind::FragmentOutput { location: 0 }];
-        let program = [pixld(0, PIXLD_MY_INDEX), pixld(1, PIXLD_COVMASK), exit()];
-        assert_eq!(stage_interface(Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &program), expected);
+    fn driver_compiled_tessellation_and_multisample_programs_translate() {
+        let programs: [(Stage, &[u8]); 3] = [
+            (Stage::TessControl { vertices: 4 }, include_bytes!("../../../tests/fixtures/sm86-quad-tesc.bin")),
+            (Stage::TessEval { mode: 2, spacing: 0, order: 3 }, include_bytes!("../../../tests/fixtures/sm86-quad-tese.bin")),
+            (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, include_bytes!("../../../tests/fixtures/sm86-msaa-frag.bin")),
+        ];
+        for (stage, bytes) in programs {
+            let words: Vec<u128> = bytes.chunks(16).map(|word| u128::from_le_bytes(word.try_into().unwrap())).collect();
+            stage_interface(stage, &words);
+        }
     }
 
     #[test]

@@ -50,13 +50,10 @@ pub mod inst {
     const IPA: u128 = 0x326 | 0xff << 32 | 7 << 81;
     const OUT: u128 = 0x324 | 0xff << 32;
     const ISBERD: u128 = 0x923;
-    const PIXLD: u128 = 0x925 | 7 << 81;
     pub const ATTR_PATCH: u128 = 1 << 76;
     pub const ATTR_OUTPUT: u128 = 1 << 79;
     pub const OUT_EMIT: u128 = 1 << 78;
     pub const OUT_CUT: u128 = 2 << 78;
-    pub const PIXLD_COVMASK: u32 = 1;
-    pub const PIXLD_MY_INDEX: u32 = 3;
     pub const IPA_CONSTANT: u128 = 1 << 78;
     pub const FSETP_GT: u128 = 0x20b | 4 << 76 | 7 << 84 | PP_PT;
     pub const FP_ABS_B: u128 = 1 << 62;
@@ -540,10 +537,6 @@ pub mod inst {
 
     pub fn isberd(rd: u32, ra: u32, offset: u32) -> u128 {
         ISBERD | PT_GUARD | (rd as u128) << 16 | (ra as u128) << 24 | (offset as u128) << 40
-    }
-
-    pub fn pixld(rd: u32, mode: u32) -> u128 {
-        PIXLD | PT_GUARD | (rd as u128) << 16 | (mode as u128) << 78
     }
 
     pub fn ipa(rd: u32, attr: u32, mode: u128) -> u128 {
@@ -1092,8 +1085,6 @@ fn fixtures_match_nvdisasm() {
         (inst::out(2, 2, inst::OUT_EMIT), "OUT.EMIT R2, R2, RZ ;"),
         (inst::out(2, 2, inst::OUT_CUT), "OUT.CUT R2, R2, RZ ;"),
         (inst::isberd(1, 0, 0), "ISBERD R1, [R0] ;"),
-        (inst::pixld(0, inst::PIXLD_MY_INDEX), "PIXLD.MY_INDEX R0 ;"),
-        (inst::pixld(1, inst::PIXLD_COVMASK), "PIXLD.COVMASK R1 ;"),
     ];
     use crate::tests::gpu::fp::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

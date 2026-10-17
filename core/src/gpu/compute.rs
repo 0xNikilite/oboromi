@@ -74,10 +74,22 @@ impl<'a> HostBuffer<'a> {
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<(), VkError> {
-        assert!(data.len() as u64 <= self.size);
+        self.write_at(0, data)
+    }
+
+    pub fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<(), VkError> {
+        assert!(offset + data.len() as u64 <= self.size);
         unsafe {
-            self.ptr.copy_from_nonoverlapping(data.as_ptr(), data.len());
+            self.ptr.add(offset as usize).copy_from_nonoverlapping(data.as_ptr(), data.len());
             Ok(self.device.flush_mapped_memory_ranges(&self.mapped())?)
+        }
+    }
+
+    /// The buffer's bytes as the device last wrote them.
+    pub fn view(&self) -> Result<&[u8], VkError> {
+        unsafe {
+            self.device.invalidate_mapped_memory_ranges(&self.mapped())?;
+            Ok(std::slice::from_raw_parts(self.ptr, self.size as usize))
         }
     }
 

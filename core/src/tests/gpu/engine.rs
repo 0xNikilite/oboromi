@@ -341,6 +341,16 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_repeated_over_unchanged_pages_uploads_nothing() {
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
+        let uploaded = gpu.memory.uploaded;
+        triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
+        assert_eq!(gpu.memory.uploaded, uploaded);
+    }
+
+    #[test]
     fn begin_end_indexed_draw_builds_a_quad_from_two_triangles() {
         const TWO_BYTES: u32 = 1;
         const TRIANGLES: u32 = 4;

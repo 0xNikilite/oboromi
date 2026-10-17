@@ -36,6 +36,6 @@ mod tests {
     #[test]
     fn fragment_program_reads_varying_and_writes_colour() {
         let expected = [ResourceKind::Varying { location: 0, flat: false }, ResourceKind::FragmentOutput { location: 0 }];
-        assert_eq!(stage_interface(Stage::Fragment, &fragment_program()), expected);
+        assert_eq!(stage_interface(Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &fragment_program()), expected);
     }
 }

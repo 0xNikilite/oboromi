@@ -300,6 +300,19 @@ impl<'a> Decoder<'a> {
         const MOV_RC: u32 = 0xa02;
         const MOV_RCX: u32 = 0x1a02;
         const MOV_RU: u32 = 0x1c02;
+        const MOV_IRF_R: u32 = 0x1478;
+        const MOV_IRF_I: u32 = 0x1878;
+        const MOV_IRF_C: u32 = 0x1a78;
+        const MOV_R_IRF: u32 = 0x1c78;
+        let indexed_ptr = |this: &mut Self, ur| {
+            let index = this.load_ureg(ur);
+            let limit = this.cached_const_u32(MAX_REG_COUNT as u32);
+            let valid = this.ir.emit_uless_than(this.type_bool[1], index, limit);
+            let index = this.ir.emit_select(this.type_u32[1], valid, index, this.const_u32_0);
+            let array = this.ir.emit_access_chain(this.type_ptr_abstract_state_regs, this.var_abstract_state, &[this.const_u32_0]);
+            let ptr = this.ir.emit_access_chain(this.type_ptr_u32[1], array, &[index]);
+            (ptr, valid)
+        };
         let val = match opcode(inst) {
             MOV_RR | MOV_RI | MOV_RC | MOV_RU => self.alu_src(inst),
             MOV_RCX => {
@@ -307,7 +320,27 @@ impl<'a> Decoder<'a> {
                 let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) << 2) as u32);
                 self.load_dynamic_cbuf(bank, offset)
             }
-            _ => todo!("MOV indexed register-file forms are not constant-buffer moves"),
+            MOV_IRF_R | MOV_IRF_I | MOV_IRF_C => {
+                let field = (inst >> 32) as u32;
+                let val = match opcode(inst) {
+                    MOV_IRF_R => self.load_register(field & 0xff),
+                    MOV_IRF_I => self.cached_const_u32(field),
+                    _ => {
+                        let offset = self.cached_const_u32((field >> 8 & 0x3fff) << 2);
+                        self.load_cbuf(ResourceKind::Cbuf(field >> 22 & 0x1f), offset)
+                    }
+                };
+                let (ptr, valid) = indexed_ptr(self, (inst >> 16 & 0x3f) as u32);
+                let old = self.ir.emit_load(self.type_u32[1], ptr);
+                let val = self.ir.emit_select(self.type_u32[1], valid, val, old);
+                return self.ir.emit_store(ptr, val);
+            }
+            MOV_R_IRF => {
+                let (ptr, valid) = indexed_ptr(self, (inst >> 32 & 0x3f) as u32);
+                let val = self.ir.emit_load(self.type_u32[1], ptr);
+                self.ir.emit_select(self.type_u32[1], valid, val, self.const_u32_0)
+            }
+            op => panic!("invalid MOV opcode {op:#x}"),
         };
         self.store_register((inst >> 16 & 0xff) as u32, val);
     }

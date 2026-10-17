@@ -94,7 +94,8 @@ pub enum ResourceKind {
 pub enum Stage {
     Compute { local_size: [u32; 3] },
     Vertex,
-    Fragment,
+    /// Bit n of `flat` and `screen_linear` is the interpolation of generic attribute n; `depth` writes FragDepth.
+    Fragment { flat: u32, screen_linear: u32, depth: bool },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -162,7 +163,7 @@ fn branch_offset(inst: u128) -> i64 {
     ((inst >> 34) as i64) << 16 >> 18
 }
 
-fn branch_target(pc: u32, inst: u128) -> Option<u32> {
+pub fn branch_target(pc: u32, inst: u128) -> Option<u32> {
     let offset = branch_offset(inst);
     match opcode(inst) {
         BRA | BRA_UREG | BRA_UPRED | CALL_REL => Some((pc as i64 + 1 + offset) as u32),
@@ -293,13 +294,18 @@ impl<'a> Decoder<'a> {
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
             Stage::Vertex => model::VERTEX,
-            Stage::Fragment => model::FRAGMENT,
+            Stage::Fragment { .. } => model::FRAGMENT,
         };
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
             Stage::Vertex => {}
-            Stage::Fragment => self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]),
+            Stage::Fragment { depth, .. } => {
+                self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]);
+                if depth {
+                    self.ir.emit_execution_mode(func, mode::DEPTH_REPLACING, &[]);
+                }
+            }
         }
         let Some(device) = device else { return };
         for (capability, execution_mode, widths) in [

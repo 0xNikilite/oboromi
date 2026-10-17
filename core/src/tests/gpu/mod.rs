@@ -7,6 +7,7 @@ mod convert;
 mod fifo;
 mod fixtures;
 pub mod fp;
+pub mod engine;
 pub mod graphics;
 mod int_alu;
 mod memory;

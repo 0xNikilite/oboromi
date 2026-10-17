@@ -1,4 +1,4 @@
-use super::threed::{DrawSnapshot, ThreeD, ThreeDEvent, CLASS_ID};
+use super::threed::{ColourTarget, DrawSnapshot, ThreeD, ThreeDEvent, CLASS_ID};
 
 const SET_OBJECT: usize = 0x00;
 const SEMAPHORE_A: usize = 0x10;
@@ -33,7 +33,8 @@ pub enum Event {
     Report { addr: u64, payload: u32 },
     SemaphoreAcquire { addr: u64, payload: u32 },
     SemaphoreRelease { addr: u64, payload: u32 },
-    Clear { value: u32 },
+    Clear { value: u32, colour: [f32; 4], target: ColourTarget },
+    LoadConstantBuffer { addr: u64, value: u32 },
 }
 
 #[derive(Clone, Copy)]
@@ -69,16 +70,10 @@ impl Pusher {
         &mut self.threed
     }
 
-    pub fn submit<'a, I, F, W>(
-        &mut self,
-        entries: I,
-        mut fetch: F,
-        mut write_memory: W,
-    ) -> Result<Vec<Event>, String>
+    pub fn submit<'a, I, F>(&mut self, entries: I, mut fetch: F) -> Result<Vec<Event>, String>
     where
         I: IntoIterator<Item = [u8; 8]>,
         F: FnMut(u64, usize) -> Result<&'a [u8], String>,
-        W: FnMut(u64, &[u8]) -> Result<(), String>,
     {
         let mut events = Vec::new();
         for encoded in entries {
@@ -95,8 +90,8 @@ impl Pusher {
             while let Some(bytes) = words.next() {
                 let word = u32::from_le_bytes(bytes.try_into().unwrap());
                 if self.packet.is_some() {
-                    self.data(word, &mut write_memory, &mut events)?;
-                } else if !self.header(word, &mut write_memory, &mut events)? {
+                    self.data(word, &mut events)?;
+                } else if !self.header(word, &mut events)? {
                     break;
                 }
             }
@@ -104,12 +99,7 @@ impl Pusher {
         Ok(events)
     }
 
-    fn header(
-        &mut self,
-        word: u32,
-        write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
-        events: &mut Vec<Event>,
-    ) -> Result<bool, String> {
+    fn header(&mut self, word: u32, events: &mut Vec<Event>) -> Result<bool, String> {
         let sec = word >> 29;
         let method = (word & 0xfff) as u16;
         let subchannel = ((word >> 13) & 7) as usize;
@@ -131,13 +121,7 @@ impl Pusher {
             }
             3 => Mode::NonIncrement,
             4 => {
-                self.dispatch(
-                    method,
-                    subchannel,
-                    (word >> 16) & 0x1fff,
-                    write_memory,
-                    events,
-                )?;
+                self.dispatch(method, subchannel, (word >> 16) & 0x1fff, events)?;
                 return Ok(true);
             }
             5 => Mode::OneIncrement,
@@ -162,19 +146,14 @@ impl Pusher {
         Ok(true)
     }
 
-    fn data(
-        &mut self,
-        value: u32,
-        write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
-        events: &mut Vec<Event>,
-    ) -> Result<(), String> {
+    fn data(&mut self, value: u32, events: &mut Vec<Event>) -> Result<(), String> {
         let mut packet = self.packet.unwrap();
         let method = match packet.mode {
             Mode::Increment => packet.method + packet.consumed as u16,
             Mode::NonIncrement => packet.method,
             Mode::OneIncrement => packet.method + u16::from(packet.consumed != 0),
         };
-        self.dispatch(method, packet.subchannel, value, write_memory, events)?;
+        self.dispatch(method, packet.subchannel, value, events)?;
         packet.remaining -= 1;
         packet.consumed += 1;
         self.packet = (packet.remaining != 0).then_some(packet);
@@ -186,7 +165,6 @@ impl Pusher {
         method: u16,
         subchannel: usize,
         value: u32,
-        write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
         events: &mut Vec<Event>,
     ) -> Result<(), String> {
         if method < 0x40 {
@@ -204,11 +182,12 @@ impl Pusher {
                 method as usize * 4
             ));
         }
-        if let Some(event) = self.threed.write(method, value, write_memory)? {
+        if let Some(event) = self.threed.write(method, value)? {
             events.push(match event {
                 ThreeDEvent::Draw(draw) => Event::Draw(draw),
                 ThreeDEvent::Report { addr, payload } => Event::Report { addr, payload },
-                ThreeDEvent::Clear { value } => Event::Clear { value },
+                ThreeDEvent::Clear { value, colour, target } => Event::Clear { value, colour, target },
+                ThreeDEvent::LoadConstantBuffer { addr, value } => Event::LoadConstantBuffer { addr, value },
             });
         }
         Ok(())

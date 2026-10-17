@@ -9,7 +9,7 @@ impl<'a> Decoder<'a> {
         self.workgroup_word(ResourceKind::Shared, SHARED_WORDS, index)
     }
 
-    fn atomic_update(&mut self, ptr: u32, scope: u32, sem: u32, update: impl Fn(&mut Self, u32) -> u32) -> u32 {
+    pub(super) fn atomic_update(&mut self, ptr: u32, scope: u32, sem: u32, update: impl Fn(&mut Self, u32) -> u32) -> u32 {
         let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
         let [header, body, merge] = [(); 3].map(|_| self.ir.alloc_id());
         self.ir.emit_branch(header);

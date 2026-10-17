@@ -203,6 +203,9 @@ bool oboromi_render_demo_frame(float seconds);
 /// vulkan is missing or the draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_triangle_demo(float seconds);
 
+/// saves the pipeline cache of the demos that ran, call it when a demo stops.
+bool oboromi_flush_demo_caches();
+
 /// generation of the last presented frame, 0 until the guest presents one.
 uint64_t oboromi_frame_generation();
 

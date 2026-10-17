@@ -94,6 +94,12 @@ pub extern "C" fn oboromi_render_triangle_demo(seconds: f32) -> bool {
     )
 }
 
+/// saves the pipeline cache of the demos that ran, call it when a demo stops.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_flush_demo_caches() -> bool {
+    matches!(catch_unwind(crate::gpu::frame::flush_demo_caches), Ok(Ok(())))
+}
+
 /// generation of the last presented frame, 0 until the guest presents one.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_generation() -> u64 {

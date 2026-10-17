@@ -2,6 +2,7 @@
 mod tests {
     use crate::gpu::compute::ComputePipeline;
     use crate::gpu::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy};
+    use crate::gpu::sm86::ResourceKind;
     use crate::tests::gpu::graphics::{SIZE, triangle};
     use crate::tests::gpu::harness::{shared_device, translate_module, vk_state};
     use crate::tests::gpu_test::inst;
@@ -38,7 +39,8 @@ mod tests {
         let (root, title) = (std::env::temp_dir().join(format!("oboromi-disk-{}", std::process::id())), "0100000000010000");
         let words = translate_module(&[inst::mov_imm(0, 42)], true, Some(state)).words();
         let disk = Disk::open(&root, title, &device).unwrap();
-        disk.store_spirv(7, &words).unwrap();
+        let resources = [ResourceKind::Cbuf(2), ResourceKind::Varying { location: 3, flat: true }];
+        disk.store_spirv(7, &words, &resources).unwrap();
         let mut builder = PipelineBuilder::new(state, PipelinePolicy::Wait, Some(disk)).unwrap();
         let build = || {
             let words = words.clone();
@@ -48,7 +50,7 @@ mod tests {
         builder.flush().unwrap();
 
         let disk = Disk::open(&root, title, &device).unwrap();
-        assert_eq!(disk.spirv(7), Some(words));
+        assert_eq!(disk.spirv(7), Some((words, resources.to_vec())));
         assert!(disk.pipeline_cache_data().is_some());
         disk.load(state).unwrap();
         std::fs::remove_dir_all(root).unwrap();

@@ -6,13 +6,14 @@ use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
 use super::memory::{Mapping, MemoryError, MemoryTracker, PAGE, PaRange, PageMap, Writer};
-use super::pipeline_cache::{Lookup, PipelineBuilder, PipelinePolicy, hash};
+use super::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy, hash};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::{VkError, VkState};
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
+use std::path::Path;
 use std::time::Instant;
 
 // SM 7.3 and later lead each graphics program with the 32-word SPHV4 header (NAK sph.rs), not the 20-word SPHV3 one.
@@ -117,6 +118,8 @@ pub struct Gpu<'a> {
     modules: HashMap<u64, Module>,
     pipelines: PipelineBuilder<'static, PipelineKey, Pipeline>,
     kernels: HashMap<u64, Vec<(u32, vk::DescriptorType)>>,
+    /// Guest programs translated rather than read back from the disk cache.
+    pub translated: usize,
     support: Option<HostBuffer<'a>>,
     targets: HashMap<TargetKey, Target<'a>>,
     mirrors: HashMap<Vec<PaRange>, (u64, Mapping<'a>)>,
@@ -323,7 +326,12 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
 }
 
 impl<'a> Gpu<'a> {
-    pub fn new(state: &'static VkState, ram_bytes: usize) -> Result<Self, VkError> {
+    /// Keeps translated programs and the pipeline cache under `cache`'s root and title when given.
+    pub fn new(state: &'static VkState, ram_bytes: usize, cache: Option<(&Path, &str)>) -> Result<Self, VkError> {
+        let disk = cache.and_then(|(root, title)| {
+            let device = unsafe { state.instance.get_physical_device_properties(state.physical_device) };
+            Disk::open(root, title, &device).ok()
+        });
         Ok(Self {
             state,
             ram: vec![0; ram_bytes],
@@ -331,8 +339,9 @@ impl<'a> Gpu<'a> {
             memory: MemoryTracker::default(),
             pusher: Pusher::default(),
             modules: HashMap::new(),
-            pipelines: PipelineBuilder::new(state, PipelinePolicy::Wait, None)?,
+            pipelines: PipelineBuilder::new(state, PipelinePolicy::Wait, disk)?,
             kernels: HashMap::new(),
+            translated: 0,
             support: None,
             targets: HashMap::new(),
             mirrors: HashMap::new(),
@@ -346,6 +355,10 @@ impl<'a> Gpu<'a> {
 
     pub fn set_pipeline_policy(&mut self, policy: PipelinePolicy) {
         self.pipelines.policy = policy;
+    }
+
+    pub fn flush_caches(&self) -> std::io::Result<()> {
+        self.pipelines.flush()
     }
 
     /// A CPU write of guest memory at `va`.
@@ -461,13 +474,27 @@ impl<'a> Gpu<'a> {
             }
             _ => return Err(format!("shader program at {:#x} with {header:?} is not implemented for shader type {shader_type}", program.address)),
         };
-        let mut resources = Vec::new();
-        let module = emit_module(Some(self.state), stage, |decoder| {
-            decoder.translate_program(&code);
-            resources = decoder.resources.iter().map(|r| r.kind).collect();
-        });
-        self.modules.insert(key, Module { header, words: module.words(), resources });
+        let (words, resources) = self.translate(key, stage, &code);
+        self.modules.insert(key, Module { header, words, resources });
         Ok(key)
+    }
+
+    fn translate(&mut self, key: u64, stage: Stage, code: &[u128]) -> (Vec<u32>, Vec<ResourceKind>) {
+        let disk = self.pipelines.disk.as_ref();
+        if let Some(saved) = disk.and_then(|disk| disk.spirv(key)) {
+            return saved;
+        }
+        self.translated += 1;
+        let mut resources = Vec::new();
+        let words = emit_module(Some(self.state), stage, |decoder| {
+            decoder.translate_program(code);
+            resources = decoder.resources.iter().map(|r| r.kind).collect();
+        })
+        .words();
+        if let Some(disk) = disk {
+            let _ = disk.store_spirv(key, &words, &resources);
+        }
+        (words, resources)
     }
 
     /// Runs a QMD launch over one global window spanning all mapped guest memory, then stores the pages it changed.
@@ -476,12 +503,8 @@ impl<'a> Gpu<'a> {
         let key = hash((&code, dispatch.block));
         let mut words = Vec::new();
         if !self.kernels.contains_key(&key) {
-            let mut resources = Vec::new();
-            let module = emit_module(Some(self.state), Stage::Compute { local_size: dispatch.block }, |decoder| {
-                decoder.translate_program(&code);
-                resources = decoder.resources.iter().map(|r| r.kind).collect();
-            });
-            words = module.words();
+            let resources;
+            (words, resources) = self.translate(key, Stage::Compute { local_size: dispatch.block }, &code);
             let (ubo, ssbo) = (vk::DescriptorType::UNIFORM_BUFFER, vk::DescriptorType::STORAGE_BUFFER);
             let mut bindings = Vec::new();
             for kind in resources {

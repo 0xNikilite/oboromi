@@ -7,7 +7,7 @@ use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::pipeline_cache::Disk;
 use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, Stage, emit_module};
 use oboromi_core::gpu::{VkState, device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
-use oboromi_core::tests::gpu::engine::{TARGET, TEXTURES, VERTICES, texture_header, textured_quad_frame, triangle_guest, vertex_bytes};
+use oboromi_core::tests::gpu::engine::{TARGET, TEXTURES, VERTICES, texture_header, textured_quad_frame, triangle_frame, triangle_guest, vertex_bytes};
 use oboromi_core::tests::gpu::{graphics, harness::translate_module};
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
@@ -84,6 +84,11 @@ fn main() {
         bench(&format!("julia pipeline {start}"), 0, 1, || drop(ComputePipeline::new(&fresh, &julia, &julia_bindings).unwrap()));
         disk.flush(&fresh).unwrap();
     }
+    for start in ["cold", "warm"] {
+        let fresh = Box::leak(Box::new(VkState::new().unwrap()));
+        let mut gpu = triangle_guest(fresh, Some((&root, "engine")), 1920, 1080, &[([0.0, -0.8], [255; 4]), ([0.7, 0.4], [255; 4]), ([-0.7, 0.4], [255; 4])]).unwrap();
+        bench(&format!("engine first frame {start}"), 0, 1, || triangle_frame(&mut gpu, 1920, 1080, [1.0, 0.0, 0.0, 1.0], 0).unwrap());
+    }
     let _ = std::fs::remove_dir_all(root);
     for (name, libraries) in [("triangle monolithic compile", false), ("triangle libraries + link", true)] {
         let mut fresh = VkState::new().unwrap();
@@ -113,7 +118,7 @@ fn main() {
         render_demo_frame(0.25).unwrap()
     });
     bench("pushbuffer triangle 1080p", 2, 100, || render_triangle_demo(0.25).unwrap());
-    let mut quad = triangle_guest(state, 1920, 1080, &[([0.0; 2], [0; 4]); 3]).unwrap();
+    let mut quad = triangle_guest(state, None, 1920, 1080, &[([0.0; 2], [0; 4]); 3]).unwrap();
     let corners = [([-1.0, -1.0], [0, 0, 0, 0]), ([1.0, -1.0], [255, 0, 0, 0]), ([-1.0, 1.0], [0, 255, 0, 0]), ([1.0, 1.0], [255, 255, 0, 0])];
     quad.write(VERTICES, &vertex_bytes(&corners)).unwrap();
     quad.write(TEXTURES + 0x1000, &(0..64 * 64 * 4).map(|i| i as u8).collect::<Vec<_>>()).unwrap();

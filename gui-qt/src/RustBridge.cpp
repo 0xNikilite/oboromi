@@ -40,4 +40,8 @@ bool renderTriangleDemo(float seconds) {
     return oboromi_render_triangle_demo(seconds);
 }
 
+bool flushDemoCaches() {
+    return oboromi_flush_demo_caches();
+}
+
 }

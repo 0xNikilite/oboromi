@@ -634,9 +634,9 @@ impl Renderer {
                 let z = world.river.lo[2] + uv[1] * (world.river.hi[2] - world.river.lo[2]);
                 let a = x * 3.2 + z * 1.3 - seconds * 1.4;
                 let b = x * 1.7 - z * 4.2 + seconds * 1.1;
-                let h = h + 0.012 * a.sin() + 0.008 * b.sin();
-                let sx = sx + 0.0384 * a.cos() + 0.0136 * b.cos();
-                let sz = sz + 0.0156 * a.cos() - 0.0336 * b.cos();
+                let h = h + 0.025 * a.sin() + 0.014 * b.sin();
+                let sx = sx + 0.08 * a.cos() + 0.0238 * b.cos();
+                let sz = sz + 0.0325 * a.cos() - 0.0588 * b.cos();
                 Vertex {
                     pos: [
                         world.river.lo[0] + uv[0] * (world.river.hi[0] - world.river.lo[0]),

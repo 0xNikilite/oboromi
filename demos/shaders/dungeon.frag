@@ -180,9 +180,14 @@ void main() {
             base=mix(base,vec3(.018,.035,.009),grime*(1.-s.r*.6)*.75);
             rough=clamp(rough+.18+(macro-.5)*.22,.62,.96);
         }else if(m==1){base*=mix(.55,1.,smoothstep(0.,.55,world.y));}
-        wet=m==0?smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22):(m==1?.08:0.);
+        wet=m==0?smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22):(m==1?.14:0.);
         base*=1.-wet*.38; rough=mix(rough,.055,wet);
-        vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;n=normalize(basis*nt);
+        vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;
+        if(m==1){
+            vec3 w=pow(abs(n),vec3(5.));w/=w.x+w.y+w.z;
+            vec3 nx=normalTex(world.zy*.35,1),ny=normalTex(world.xz*.35,1),nz=normalTex(world.xy*.35,1);
+            n=normalize(vec3(nx.z*sign(n.x),nx.y,nx.x)*w.x+vec3(ny.x,ny.z*sign(n.y),ny.y)*w.y+vec3(nz.x,nz.y,nz.z*sign(n.z))*w.z);
+        }else n=normalize(basis*nt);
     } else { base=colour*mix(vec3(.24),albedo(uv,1),.2); rough=clamp(surface(uv,1).g,.4,.85); }
     if(m==5){base=colour;rough=.2;metal=1.;}
     vec3 c=illuminate(world,n,v,base,max(.065,rough),metal,true)*ao;
@@ -198,8 +203,5 @@ void main() {
     }
 #endif
     if(world.y<-.8) c+=base*pow(.5+.5*sin(world.x*9.+sin(world.z*7.+eye_time.w)*2.+eye_time.w*1.8),12.)*.22;
-    float distance_to_eye=length(eye_time.xyz-world);
-    float fog=1.-exp(-distance_to_eye*.024*exp(-max(world.y,0.)*.18));
-    c=mix(c,vec3(.035,.05,.067),fog);
     output_colour=vec4(c,distance(world,eye_time.xyz));
 }

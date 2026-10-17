@@ -399,7 +399,7 @@ impl World {
                     self.lights.push(Light { pos: p, colour: scale(torch, 2.4), flicker: 1.0, flame: 0.32 });
                     self.sources.push((Sfx::Torch, p, 0.45));
                 }
-                self.lights.push(Light { pos: [s.centre()[0], WATER + 0.4, self.river.centre()[2]], colour: [0.05, 0.13, 0.2], flicker: 0.0, flame: 0.0 });
+                self.lights.push(Light { pos: [s.centre()[0], s.hi[1]*0.45, self.river.centre()[2]], colour: [2., 3., 4.5], flicker: 0.0, flame: 0.0 });
                 for i in 0..4 {
                     let x = s.lo[0] + (s.hi[0] - s.lo[0]) * (0.12 + 0.25 * i as f32);
                     self.sources.push((Sfx::River, [x, WATER, self.river.centre()[2]], 1.3));
@@ -962,7 +962,7 @@ impl Dungeon {
         }
         match VIEW.load(std::sync::atomic::Ordering::Relaxed) {
             1 => { let p = self.world.sources.iter().find(|s| s.0 == Sfx::Fire).unwrap().1; self.eye=add(p,[-3.2,1.1,2.8]); self.yaw=0.85; self.pitch=-0.18; }
-            2 => { self.eye=[self.world.bridge.centre()[0]-3.4,EYE,self.world.bridge.lo[2]-1.2]; self.yaw=2.35; self.pitch=-0.18; }
+            2 => { self.eye=[self.world.river.lo[0]+2.,EYE,self.world.river.lo[2]-0.9]; let look=sub([self.world.bridge.centre()[0],EYE,self.world.river.centre()[2]],self.eye); self.yaw=look[0].atan2(-look[2]); self.pitch=0.06; }
             3 => { let p=self.world.grate.centre();self.eye=add(p,[-2.8,EYE-p[1],-3.]);self.yaw=2.4;self.pitch=0.12; }
             _ => {}
         }

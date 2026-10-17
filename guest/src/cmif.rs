@@ -1,5 +1,5 @@
 //! CMIF requests and replies in a thread's 0x100-byte IPC buffer, laid out as libnx's sf/hipc.h and sf/cmif.h do: the
-//! HIPC header, an optional special header with the pid placeholder and copy handles, A then B buffer descriptors, and
+//! HIPC header, an optional special header with the pid placeholder and copy handles, X, A then B buffer descriptors, and
 //! the raw data aligned to 16 bytes starting with the SFCI or SFCO header.
 const REQUEST: u32 = 4;
 const SFCI: u32 = u32::from_le_bytes(*b"SFCI");
@@ -15,6 +15,7 @@ pub struct Request<'a> {
     pub command: u32,
     pub send_pid: bool,
     pub copy_handles: &'a [u32],
+    pub pointer: &'a [Buffer],
     pub send: &'a [Buffer],
     pub receive: &'a [Buffer],
     pub data: &'a [u32],
@@ -29,7 +30,7 @@ pub struct Reply<'a> {
 
 pub fn write_request(ipc: &mut [u32; 64], request: &Request) {
     let special = request.send_pid || !request.copy_handles.is_empty();
-    ipc[0] = REQUEST | (request.send.len() as u32) << 20 | (request.receive.len() as u32) << 24;
+    ipc[0] = REQUEST | (request.pointer.len() as u32) << 16 | (request.send.len() as u32) << 20 | (request.receive.len() as u32) << 24;
     ipc[1] = (8 + request.data.len() as u32) | u32::from(special) << 31;
     let mut at = 2;
     if special {
@@ -37,6 +38,11 @@ pub fn write_request(ipc: &mut [u32; 64], request: &Request) {
         at = 3 + 2 * usize::from(request.send_pid);
         ipc[at..][..request.copy_handles.len()].copy_from_slice(request.copy_handles);
         at += request.copy_handles.len();
+    }
+    for (index, buffer) in request.pointer.iter().enumerate() {
+        let (address, size) = (buffer.address, buffer.size as u32);
+        ipc[at..][..2].copy_from_slice(&[index as u32 | ((address >> 36) as u32 & 7) << 6 | ((address >> 32) as u32 & 0xf) << 12 | size << 16, address as u32]);
+        at += 2;
     }
     for buffer in request.send.iter().chain(request.receive) {
         let (address, size) = (buffer.address, buffer.size);

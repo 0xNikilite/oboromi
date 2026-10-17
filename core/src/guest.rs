@@ -6,10 +6,16 @@ pub const BASE: u64 = 0x0800_0000;
 
 /// Places `image` at `base` in `ram`, returning its entry point, or None when it does not fit.
 pub fn load_flat_image(ram: &GuestRam, image: &[u8], base: u64) -> Option<u64> {
-    let end = usize::try_from(base).ok()?.checked_add(image.len())?;
-    (end <= ram.size()).then(|| {
-        ram.write(base, image);
-        base
+    load_segments(ram, base, &[(0, image)]).map(|()| base)
+}
+
+/// Writes each (offset, bytes) segment at `base + offset` in `ram`, or nothing and None when one does not fit.
+pub fn load_segments(ram: &GuestRam, base: u64, segments: &[(u64, &[u8])]) -> Option<()> {
+    let end = |&(offset, bytes): &(u64, &[u8])| base.checked_add(offset)?.checked_add(bytes.len() as u64);
+    segments.iter().all(|s| end(s).is_some_and(|end| end <= ram.size() as u64)).then(|| {
+        for &(offset, bytes) in segments {
+            ram.write(base + offset, bytes);
+        }
     })
 }
 

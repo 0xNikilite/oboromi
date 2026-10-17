@@ -5,6 +5,7 @@ pub mod compute;
 pub mod compute_class;
 pub mod demo;
 pub mod demo_post;
+pub mod demo_sprites;
 pub mod engine;
 pub mod fifo;
 pub mod frame;

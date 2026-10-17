@@ -1,7 +1,7 @@
 use super::*;
 
 impl<'a> Decoder<'a> {
-    // Bits 11:9 say what bits 32..64 hold: Rb (1), imm32 (2, 4), c[bank][off] (3, 5), URb with bit 91 set (6, 7).
+    // Bits 11:9 say what bits 32..64 hold: Rb (1), imm32 (2, 4), c[bank][off] (3, 5), with bit 91 set cx[URa][off] (3, 5) or URb (6, 7).
     // Forms 2, 3 and 7 feed that operand to C and move B to Rc at 64..72.
     pub(super) fn alu_src(&mut self, inst: u128) -> u32 {
         let field = (inst >> 32) as u32;
@@ -12,6 +12,7 @@ impl<'a> Decoder<'a> {
                 let offset = self.cached_const_u32((field >> 8 & 0x3fff) << 2);
                 self.load_cbuf(ResourceKind::Cbuf(field >> 22 & 0x1f), offset)
             }
+            (3 | 5, 1) => self.load_bindless_cbuf(field & 0x3f, (field >> 8 & 0x3fff) << 2),
             (6 | 7, 1) => self.load_ureg(field & 0x3f),
             form => todo!("ALU source form {form:?}"),
         }
@@ -509,7 +510,10 @@ impl<'a> Decoder<'a> {
                     _ => self.ir.emit_not(ty, lt),
                 }
             }
-            1 | 2 | 4..=31 | 36 | 40..=55 | 61..=133 | SRZ => self.const_u32_0,
+            // SR_WSCALEFACTOR_XY and _Z are f32 scales of W that a driver VS compares x, y and z against for the
+            // CSMTEST clip masks only; 1.0 tests against the view volume.
+            30 | 31 => self.cached_const_u32(1.0f32.to_bits()),
+            1 | 2 | 4..=29 | 36 | 40..=55 | 61..=133 | SRZ => self.const_u32_0,
             _ => panic!("unknown special register {index}"),
         }
     }

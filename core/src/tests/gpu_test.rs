@@ -64,6 +64,7 @@ pub mod inst {
     pub const FP_FMZ: u128 = 1 << 76;
     pub const FP_SAT: u128 = 1 << 77;
     pub const FP_FTZ: u128 = 1 << 80;
+    pub const FP_RZ: u128 = 3 << 78;
     pub const HADD2: u128 = 0x230;
     pub const HMUL2: u128 = 0x232;
     pub const HFMA2: u128 = 0x231;
@@ -873,6 +874,7 @@ fn fixtures_match_nvdisasm() {
         (inst::fmul(1, 2, 3), "FMUL R1, R2, R3;"),
         (inst::fmul(1, 2, 3) | inst::FP_FMZ, "FMUL.FMZ R1, R2, R3;"),
         (inst::fmul(1, 2, 3) | inst::FP_FTZ | inst::FP_SAT, "FMUL.FTZ.SAT R1, R2, R3;"),
+        (inst::fmul(1, 2, 3) | inst::FP_FTZ | inst::FP_RZ, "FMUL.FTZ.RZ R1, R2, R3;"),
         (inst::fmul_imm(1, 2, 3.0), "FMUL R1, R2, 3;"),
         (inst::ffma(1, 2, 3, 4), "FFMA R1, R2, R3, R4;"),
         (inst::ffma(1, 2, 3, 4) | inst::FP_NEG_C | inst::FP_FMZ, "FFMA.FMZ R1, R2, R3, -R4;"),

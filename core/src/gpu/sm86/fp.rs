@@ -107,13 +107,33 @@ impl<'a> Decoder<'a> {
         let b = self.fp_alu_src(inst, ftz);
         let [a, b] = if fmz { self.fmz_operands(a, b) } else { [a, b] };
         let mut product = self.ir.emit_fmul(self.type_f32[1], a, b);
+        let rounding = inst >> 78 & 3;
+        if rounding == 3 {
+            product = self.round_product_toward_zero(product, a, b);
+        }
         let scale = (inst >> 84 & 7) as i32 - 4;
         if scale != 0 {
             let factor = self.ir.emit_constant_typed(self.type_f32[1], 2f32.powi(scale));
             product = self.ir.emit_fmul(self.type_f32[1], product, factor);
         }
-        let bits = self.fp_arith_result(inst, product, ftz);
+        let bits = self.fp_arith_result(if rounding == 3 { inst & !(3 << 78) } else { inst }, product, ftz);
         self.store_register((inst >> 16 & 0xff) as u32, bits);
+    }
+    // Fma gives the exact residual a * b - p, whose sign says whether p was rounded away from zero; a device that does not
+    // fuse Fma gets a zero residual and so the nearest product.
+    fn round_product_toward_zero(&mut self, product: u32, a: u32, b: u32) -> u32 {
+        let (ty, uty, bool_ty) = (self.type_f32[1], self.type_u32[1], self.type_bool[1]);
+        let negated = self.ir.emit_fnegate(ty, product);
+        let residual = self.glsl(spirv::glsl::FMA, ty, &[a, b, negated]);
+        let zero = self.ir.emit_constant_typed(ty, 0.0f32);
+        let inexact = self.ir.emit_ford_not_equal(bool_ty, residual, zero);
+        let [bits, residual_bits] = [product, residual].map(|x| self.bitcast_u32(x));
+        let signs = self.ir.emit_bitwise_xor(uty, bits, residual_bits);
+        let opposite = self.ir.emit_sless_than(bool_ty, signs, self.const_u32_0);
+        let away = self.ir.emit_logical_and(bool_ty, inexact, opposite);
+        let toward_zero = self.ir.emit_isub(uty, bits, self.const_u32_1);
+        let bits = self.ir.emit_select(uty, away, toward_zero, bits);
+        self.bitcast_f32(bits)
     }
     pub fn frnd(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;

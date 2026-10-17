@@ -314,12 +314,7 @@ impl<'a> Decoder<'a> {
             (ptr, valid)
         };
         let val = match opcode(inst) {
-            MOV_RR | MOV_RI | MOV_RC | MOV_RU => self.alu_src(inst),
-            MOV_RCX => {
-                let bank = self.load_ureg((inst >> 32 & 0x3f) as u32);
-                let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) << 2) as u32);
-                self.load_dynamic_cbuf(bank, offset)
-            }
+            MOV_RR | MOV_RI | MOV_RC | MOV_RU | MOV_RCX => self.alu_src(inst),
             MOV_IRF_R | MOV_IRF_I | MOV_IRF_C => {
                 let field = (inst >> 32) as u32;
                 let val = match opcode(inst) {

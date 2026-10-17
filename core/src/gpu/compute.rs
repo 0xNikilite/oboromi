@@ -233,7 +233,7 @@ pub struct Descriptors<'a> {
 }
 
 impl<'a> Descriptors<'a> {
-    // All bindings live in set 0: 0 host support UBO, 1-8 guest cbufs, storage buffers 9-11, textures and surfaces from 12.
+    // All bindings live in set 0: 0 host support UBO, 1-32 guest cbufs, storage buffers 33-35, textures and surfaces from 36.
     pub fn new(
         device: &'a ash::Device,
         bindings: &[(u32, vk::DescriptorType)],

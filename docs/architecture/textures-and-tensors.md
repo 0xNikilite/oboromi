@@ -8,12 +8,12 @@ Some instructions need more than a direct rewrite. Texture reads need the game's
 
 A texture is an image a shader reads with filtering, and a sampler holds the reading settings, such as edge wrapping. A game describes both in tables in guest memory, called pools. The TIC pool holds texture headers (format, size, layout, address) and the TSC pool holds sampler entries.
 
-The shader picks one entry from each pool with a handle, one word stored in a constant buffer (cbuf). The translator records where each handle comes from, as a cbuf bank and byte offset. Each distinct source gets its own Vulkan slot, a binding, numbered upwards from 12. Before the run, the host reads the handle, decodes both pool entries, and plugs in a Vulkan image with its sampler.
+The shader picks one entry from each pool with a handle, one word stored in a constant buffer (cbuf). The translator records where each handle comes from, as a cbuf bank and byte offset. Each distinct source gets its own Vulkan slot, a binding, numbered upwards from 36. Before the run, the host reads the handle, decodes both pool entries, and plugs in a Vulkan image with its sampler. The image is uploaded again whenever its guest pages change, so a texture that was drawn into shows its latest draw. In draws, textures are read by pixel shaders today.
 
 | Handle bits | Picks |
 |---|---|
 | Low 20 | The TIC entry, the texture |
-| Top 12 | The TSC entry, the sampler |
+| Top 12 | The TSC entry, the sampler, unless the game links each sampler to its texture's index |
 
 ```mermaid
 flowchart LR

@@ -21,7 +21,7 @@ pub fn emit_module(
 ) -> Emitter {
     sm86::emit_module(device, Stage::Compute { local_size: [lanes, 1, 1] }, |decoder| {
         if register_io {
-            decoder.emit_register_io(10, 11);
+            decoder.emit_register_io(GLOBAL_BINDING + 1, GLOBAL_BINDING + 2);
         }
         body(decoder);
         if register_io {
@@ -177,10 +177,10 @@ pub fn run_textured(
         _ => None,
     });
     let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
-    let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
+    let buffers = [(GLOBAL_BINDING + 1, ssbo), (GLOBAL_BINDING + 2, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).collect();
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.descriptors.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
+    pipeline.descriptors.bind(&[(GLOBAL_BINDING + 1, &input), (GLOBAL_BINDING + 2, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
     pipeline.descriptors.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {

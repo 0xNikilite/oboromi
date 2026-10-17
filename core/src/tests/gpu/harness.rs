@@ -48,7 +48,7 @@ pub fn spirv_val(module: &Emitter) {
     assert!(out.status.success(), "{out:?}");
 }
 
-fn vk_state() -> Option<VkState> {
+pub fn vk_state() -> Option<VkState> {
     match VkState::new() {
         Ok(s) => Some(s),
         Err(e @ (VkError::Loader | VkError::NoDevice)) => {

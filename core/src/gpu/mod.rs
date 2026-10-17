@@ -2,6 +2,7 @@ use ash::vk;
 
 pub mod compute;
 pub mod frame;
+pub mod graphics;
 pub mod sm86;
 pub mod spirv;
 pub mod texture;
@@ -52,7 +53,7 @@ impl VkState {
 
     pub fn new() -> Result<Self, VkError> {
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
-        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
         let instance_info = vk::InstanceCreateInfo::default().application_info(&app);
         let instance =
             unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| match e {
@@ -113,12 +114,12 @@ impl VkState {
             .into_iter()
             .filter(|&pd| {
                 unsafe { instance.get_physical_device_properties(pd) }.api_version
-                    >= vk::API_VERSION_1_2
+                    >= vk::API_VERSION_1_3
             })
             .find_map(|pd| {
                 unsafe { instance.get_physical_device_queue_family_properties(pd) }
                     .iter()
-                    .position(|q| q.queue_flags.contains(vk::QueueFlags::COMPUTE))
+                    .position(|q| q.queue_flags.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE))
                     .map(|i| (pd, i as u32))
             })
             .ok_or(VkError::NoDevice)?;
@@ -156,13 +157,15 @@ impl VkState {
             .shader_shared_int64_atomics(shader_shared_int64_atomics);
         let mut enabled_derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
             .compute_derivative_group_linear(linear_derivatives);
+        let mut enabled_vulkan13 = vk::PhysicalDeviceVulkan13Features::default().dynamic_rendering(true);
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&enabled_extensions)
             .enabled_features(&device_features)
             .push_next(&mut enabled_float16)
             .push_next(&mut enabled_atomic_int64)
-            .push_next(&mut enabled_derivatives);
+            .push_next(&mut enabled_derivatives)
+            .push_next(&mut enabled_vulkan13);
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)

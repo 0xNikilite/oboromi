@@ -5,6 +5,7 @@ mod compare;
 mod control;
 mod convert;
 mod fixtures;
+pub mod graphics;
 pub mod fp;
 mod int_alu;
 mod memory;

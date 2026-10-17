@@ -1,6 +1,5 @@
 //! The service manager behind the `sm:` port: RegisterClient and GetService (switchbrew Services_API).
 
-use crate::kernel::Object;
 use crate::nn::hipc::{Request, Response, Service};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -19,7 +18,7 @@ impl Service for Sm {
                 let name = request.args.get(..8).unwrap_or_default();
                 let name = String::from_utf8_lossy(name.split(|&b| b == 0).next().unwrap_or_default());
                 match self.0.get(name.as_ref()) {
-                    Some(service) => Response { move_handles: vec![Object::Session(service.clone())], ..Response::default() },
+                    Some(service) => Response { objects: vec![service.clone()], ..Response::default() },
                     None => Response::error(NOT_REGISTERED),
                 }
             }

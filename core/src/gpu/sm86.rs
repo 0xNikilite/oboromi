@@ -4620,13 +4620,17 @@ impl<'a> Decoder<'a> {
         let sampled = self.texture_2d(inst);
         self.derivatives = true;
         let lod = self.ir.emit_image_query_lod(self.type_f32[2], sampled, coord);
-        // TMML returns 8.8 fixed point, the computed lod before the accessed mip level, the reverse of OpImageQueryLod.
-        let scale = self.ir.emit_constant_typed(self.type_f32[1], 256.0f32);
+        // TMML returns signed 8.8 fixed point in the low half, the computed lod before the accessed mip level, the reverse of
+        // OpImageQueryLod, and silicon clamps a lod below -32 (zero derivatives) to -32.
+        let [scale, min_lod] = [256.0f32, -32.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
+        let low_half = self.cached_const_u32(0xffff);
         let fixed = [1, 0].map(|c| {
             let value = self.ir.emit_composite_extract(self.type_f32[1], lod, &[c]);
+            let value = self.glsl(spirv::glsl::N_MAX, self.type_f32[1], &[value, min_lod]);
             let scaled = self.ir.emit_fmul(self.type_f32[1], value, scale);
             let fixed = self.ir.emit_convert_f_to_s(self.type_s32[1], scaled);
-            self.ir.emit_bitcast(self.type_u32[1], fixed)
+            let fixed = self.ir.emit_bitcast(self.type_u32[1], fixed);
+            self.ir.emit_bitwise_and(self.type_u32[1], fixed, low_half)
         });
         let lods = self.ir.emit_composite_construct(self.type_u32[2], &fixed);
         self.store_texel(inst, lods);

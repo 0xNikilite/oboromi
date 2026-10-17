@@ -458,7 +458,6 @@ mod tests {
         "s5tensor#007/tensor/m16n8k16-f16/mixed-exponents/",
         "s5tensor#009/tensor/m16n8k16-f32/mixed-exponents/",
         "s5tensor#011/tensor/m16n8k8-f32/mixed-exponents/",
-        "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
         "s5suatom#000/suatom/d-2d-add",
     ];
     const LLVMPIPE_FAILURES: &[&str] = &[
@@ -480,6 +479,8 @@ mod tests {
         "s5tex#007/tex/mask-r",
         "s5tex#009/tex/mask-rg",
         "s5tex#010/tex/mask-a",
+        // lavapipe scales the lod of unnormalized coordinates by the texture size once more.
+        "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
     ];
 
     fn destination_width(fixture: &WarpFixture) -> usize {

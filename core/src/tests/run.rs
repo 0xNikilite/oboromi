@@ -52,7 +52,7 @@ impl TestResult {
     }
 }
 
-mod arm64 {
+pub mod arm64 {
     pub fn add_imm(rd: u8, rn: u8, imm12: u16) -> u32 {
         0x91000000 | ((imm12 as u32) << 10) | ((rn as u32) << 5) | (rd as u32)
     }
@@ -87,6 +87,26 @@ mod arm64 {
 
     pub fn brk(imm16: u16) -> u32 {
         0xD4200000 | ((imm16 as u32) << 5)
+    }
+
+    pub fn ldr(rt: u8, rn: u8) -> u32 {
+        0xB9400000 | ((rn as u32) << 5) | (rt as u32)
+    }
+
+    pub fn ldr_post(rt: u8, rn: u8, imm9: u16) -> u32 {
+        0xB8400400 | ((imm9 as u32) << 12) | ((rn as u32) << 5) | (rt as u32)
+    }
+
+    pub fn str_post(rt: u8, rn: u8, imm9: u16) -> u32 {
+        0xB8000400 | ((imm9 as u32) << 12) | ((rn as u32) << 5) | (rt as u32)
+    }
+
+    pub fn subs_imm(rd: u8, rn: u8, imm12: u16) -> u32 {
+        0xF1000000 | ((imm12 as u32) << 10) | ((rn as u32) << 5) | (rd as u32)
+    }
+
+    pub fn b_ne(offset: i32) -> u32 {
+        0x54000001 | (((offset as u32) & 0x7FFFF) << 5)
     }
 }
 

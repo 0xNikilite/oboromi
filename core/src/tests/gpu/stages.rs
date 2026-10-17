@@ -6,9 +6,11 @@ mod tests {
     use crate::gpu::spirv::Emitter;
     use crate::gpu::texture::TexturePool;
     use crate::gpu::VkState;
-    use crate::tests::gpu::graphics::SIZE;
+    use crate::gpu::spirv::BuiltIn as B;
+    use crate::gpu::threed::PrimitiveTopology;
+    use crate::tests::gpu::graphics::{SIZE, opaque};
     use crate::tests::gpu::harness::{GLOBAL_BASE, spirv_val, vk_state};
-    use crate::tests::gpu_test::inst::{ald, ast, exit, fmul, ipa, mov_cbuf};
+    use crate::tests::gpu_test::inst::*;
     use ash::vk::{self, DescriptorType};
 
     const SCALE: u32 = 8;
@@ -51,17 +53,20 @@ mod tests {
         ($($name:literal),*) => { [$(($name, include_bytes!(concat!("../../../tests/fixtures/driver-shaders/", $name, ".bin")).as_slice())),*] };
     }
 
-    const DRIVER_SHADERS: [(&str, &[u8]); 11] = driver_shaders!(
+    const DRIVER_SHADERS: [(&str, &[u8]); 15] = driver_shaders!(
         "triangle.vert", "triangle.frag", "particles.vert", "particles.frag", "particles_update.comp", "pbr.vert", "pbr.frag",
-        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag"
+        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag"
     );
 
-    // The code of a graphics stage follows its 0x80-byte program header; compute has none.
+    // The code of a graphics stage follows its 0x80-byte program header, whose byte 11 is a TCS's THREADS_PER_INPUT_PRIMITIVE
+    // (clc797sph.h:58); compute has none.
     fn driver_module(device: Option<&VkState>, name: &str) -> (Emitter, Vec<ResourceKind>) {
         let bytes = DRIVER_SHADERS.iter().find(|shader| shader.0 == name).unwrap().1;
         let (stage, code) = match &name[name.len() - 4..] {
             "vert" => (Stage::Vertex { uint: 0, sint: 0 }, &bytes[0x80..]),
             "frag" => (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &bytes[0x80..]),
+            "tesc" => (Stage::TessControl { vertices: bytes[11].into() }, &bytes[0x80..]),
+            "tese" => (Stage::TessEval { mode: 2, spacing: 0, order: 3 }, &bytes[0x80..]),
             _ => (Stage::Compute { local_size: [256, 1, 1] }, bytes),
         };
         let program: Vec<u128> = code.chunks(16).map(|word| u128::from_le_bytes(word.try_into().unwrap())).collect();
@@ -88,7 +93,7 @@ mod tests {
         let vertex_bindings: Vec<_> = buffers.iter().map(|&(b, _)| (b, uniform(b))).collect();
         let fragment_bindings: Vec<_> = vertex_bindings.iter().copied().chain(images.iter().map(|&(b, _)| (b, DescriptorType::COMBINED_IMAGE_SAMPLER))).collect();
         let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-        let mut pipeline = GraphicsPipeline::new(state, &vertex, &fragment, [&vertex_bindings, &fragment_bindings], layout, &TargetState { blend, depth: None }).unwrap();
+        let mut pipeline = GraphicsPipeline::new(state, &vertex, None, &fragment, [&vertex_bindings, &fragment_bindings], layout, &TargetState { blend, depth: None }).unwrap();
         for descriptors in &mut pipeline.descriptors {
             descriptors.bind(buffers);
         }
@@ -190,5 +195,88 @@ mod tests {
         for (x, y) in [(4, 4), (15, 32), (48, 32), (32, 15), (32, 48)] {
             assert_eq!(pixel(&pixels, x, y), [255; 4], "({x}, {y})");
         }
+    }
+
+    #[test]
+    fn geometry_program_reads_its_point_and_emits_a_strip() {
+        use ResourceKind::*;
+        let program = [isberd(1, 255, 0), ald_vertex(4, 0x70, 4, 1), ald_vertex(8, 0x80, 4, 1), ald(12, 0x60, 1), ast(0x64, 12, 1)];
+        let strip = [ast(0x80, 8, 4), ast(0x70, 4, 4), out(2, 2, OUT_EMIT), fadd_imm(4, 4, 0.5), ast(0x70, 4, 4), out(2, 2, OUT_EMIT), out(2, 2, OUT_CUT), exit()];
+        let stage = Stage::Geometry { input: PrimitiveTopology::Points, output: 7, max_vertices: 2, invocations: 1 };
+        let builtin = |b: B| BuiltIn(b as u32);
+        let expected = [PerVertex { attr: 0x70, output: false }, PerVertex { attr: 0x80, output: false }, builtin(B::PrimitiveId), builtin(B::Layer), Varying { location: 0, flat: false }, builtin(B::Position)];
+        assert_eq!(stage_interface(stage, &[&program[..], &strip].concat()), expected);
+    }
+
+    #[test]
+    fn tess_control_program_copies_its_vertex_and_writes_the_patch() {
+        use ResourceKind::*;
+        let program = [s2r(1, 17), isberd(2, 1, 0), ald_vertex(4, 0x70, 4, 2), ast(0x70, 4, 4), ast(0x0, 4, 4) | ATTR_PATCH, ast(0x10, 4, 2) | ATTR_PATCH, ast(0x20, 4, 1) | ATTR_PATCH, exit()];
+        let builtin = |b: B| BuiltIn(b as u32);
+        let expected = [builtin(B::InvocationId), PerVertex { attr: 0x70, output: false }, PerVertex { attr: 0x70, output: true }, builtin(B::TessLevelOuter), builtin(B::TessLevelInner), Patch { location: 0 }];
+        assert_eq!(stage_interface(Stage::TessControl { vertices: 3 }, &program), expected);
+    }
+
+    #[test]
+    fn tess_eval_program_reads_the_coordinate_and_patch_and_writes_position() {
+        use ResourceKind::*;
+        let program = [s2r(0, 0), ald_vertex(2, 0x2f0, 2, 0) | ATTR_OUTPUT, isberd(1, 255, 2), ald_vertex(4, 0x70, 4, 1), ald(8, 0x0, 4) | ATTR_PATCH, ald(12, 0x20, 1) | ATTR_PATCH, ffma(4, 2, 8, 4), ast(0x70, 4, 4), exit()];
+        let builtin = |b: B| BuiltIn(b as u32);
+        let expected = [builtin(B::TessCoord), PerVertex { attr: 0x70, output: false }, builtin(B::TessLevelOuter), Patch { location: 0 }, builtin(B::Position)];
+        assert_eq!(stage_interface(Stage::TessEval { mode: 1, spacing: 0, order: 3 }, &program), expected);
+    }
+
+    #[test]
+    fn geometry_program_turns_a_point_into_a_triangle() {
+        let corners = [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5)].map(|(x, y)| [fadd_imm(0, 4, x), fadd_imm(1, 5, y), ast(0x70, 0, 2), out(2, 2, OUT_EMIT)]);
+        let geometry = [&[isberd(1, 255, 0), ald_vertex(4, 0x70, 4, 1), ast(0x78, 6, 2)][..], &corners.concat(), &[out(2, 2, OUT_CUT), exit()]].concat();
+        let fragment = [mov_imm(0, 1.0f32.to_bits()), mov_imm(1, 0), mov_imm(2, 0), mov_imm(3, 1.0f32.to_bits()), exit()];
+        let stages = [
+            (Stage::Vertex { uint: 0, sint: 0 }, &[ald(0, 0x80, 4), ast(0x70, 0, 4), exit()][..]),
+            (Stage::Geometry { input: PrimitiveTopology::Points, output: 7, max_vertices: 3, invocations: 1 }, &geometry),
+            (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &fragment),
+        ];
+        for (stage, program) in stages {
+            stage_interface(stage, program);
+        }
+        let Some(state) = vk_state() else { return };
+        let [vertex, geometry, fragment] = stages.map(|(stage, program)| emit_module(Some(&state), stage, |decoder| decoder.translate_program(program)).words());
+        let bindings = [vk::VertexInputBindingDescription { binding: 0, stride: 8, input_rate: vk::VertexInputRate::VERTEX }];
+        let attributes = [vk::VertexInputAttributeDescription { location: 0, binding: 0, format: vk::Format::R32G32_SFLOAT, offset: 0 }];
+        let topology = vk::PrimitiveTopology::POINT_LIST;
+        let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
+        let pipeline = GraphicsPipeline::new(&state, &vertex, Some(&geometry), &fragment, [&[], &[]], &layout, &TargetState { blend: opaque(), depth: None }).unwrap();
+        let target = RenderTarget::new(&state, SIZE, SIZE, None).unwrap();
+        let mut point = HostBuffer::new(&state, 8).unwrap();
+        point.write(&[0u8; 8]).unwrap();
+        let raster = RasterState {
+            viewport: vk::Viewport { x: 0.0, y: 0.0, width: SIZE as f32, height: SIZE as f32, min_depth: 0.0, max_depth: 1.0 },
+            scissor: target.extent.into(),
+            cull_face: vk::CullModeFlags::NONE,
+            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            topology,
+            depth_test: false,
+            depth_write: false,
+            depth_func: vk::CompareOp::ALWAYS,
+            blend_const: [0.0; 4],
+            blend: opaque(),
+        };
+        let draw = DrawState {
+            vertex_buffers: &[(&point, 8)],
+            index_buffer: None,
+            vertex_count: 1,
+            first_vertex: 0,
+            first_instance: 0,
+            instance_count: 1,
+            clear: Some([1.0; 4]),
+            clear_depth: None,
+            load: false,
+            raster,
+        };
+        state.draw(&pipeline, &target, &draw).unwrap();
+        let mut pixels = vec![0; (SIZE * SIZE * 4) as usize];
+        target.read(&mut pixels).unwrap();
+        let corners = [(17, 17), (17, 45), (45, 17), (40, 40)].map(|(x, y)| pixel(&pixels, x, y));
+        assert_eq!(corners, [[255, 0, 0, 255], [255, 0, 0, 255], [255, 0, 0, 255], [255; 4]]);
     }
 }

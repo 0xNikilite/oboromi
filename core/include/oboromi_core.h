@@ -217,6 +217,9 @@ bool oboromi_render_demo_frame(float seconds);
 /// vulkan is missing or the draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_triangle_demo(float seconds);
 
+/// saves the pipeline cache of the demos that ran, call it when a demo stops.
+bool oboromi_flush_demo_caches();
+
 /// draws the pbr BoomBox demo at `seconds` and presents it, false if vulkan is
 /// missing or the draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_boombox_demo(float seconds);
@@ -228,6 +231,10 @@ bool oboromi_render_helmet_demo(float seconds);
 /// draws the post-effect demo at `seconds` and presents it, false if vulkan
 /// is missing or a draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_post_frame(float seconds);
+
+/// draws the sprites demo at `seconds` and presents it, false if vulkan is
+/// missing or the draw fails. blocks, so call it from a worker thread.
+bool oboromi_render_sprites_frame(float seconds);
 
 /// generation of the last presented frame, 0 until the guest presents one.
 uint64_t oboromi_frame_generation();
@@ -252,6 +259,9 @@ void *oboromi_vk_instance();
 /// pixels. call it again on resize and expose, and with a null surface before destroying it.
 /// false if the device cannot present to it.
 bool oboromi_display_surface(uint64_t surface, uint32_t width, uint32_t height);
+
+/// skips draws while their pipelines compile in engines created from now on.
+void oboromi_set_skip_draw_while_compiling(bool skip);
 
 /// a qt key code pressed or released in the gui.
 void oboromi_input_key(int32_t code, bool down);

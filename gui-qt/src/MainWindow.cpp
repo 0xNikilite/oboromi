@@ -94,11 +94,15 @@ void MainWindow::buildUi() {
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
     for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}, {"Post", RustBridge::renderPostFrame},
-                                {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Helmet", RustBridge::renderHelmetDemo}}) {
+                                {"Sprites", RustBridge::renderSpritesFrame}, {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Helmet", RustBridge::renderHelmetDemo}}) {
         auto *demoButton = new QPushButton(name, central);
         demoButton->setCheckable(true);
         connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
-            if (!on) return m_demoTimer.stop();
+            if (!on) {
+                m_demoTimer.stop();
+                RustBridge::flushDemoCaches();
+                return;
+            }
             m_demoRender = render;
             m_demoClock.start();
             m_demoTimer.start(16);

@@ -26,6 +26,20 @@ fn pages(start: u64, len: u64) -> Range<u64> {
     start / PAGE..(start + len).div_ceil(PAGE)
 }
 
+/// `ranges` cut at page boundaries, in order.
+fn pieces(ranges: &[PaRange]) -> impl Iterator<Item = PaRange> + '_ {
+    ranges.iter().flat_map(|range| pages(range.start, range.end - range.start).map(|page| (page * PAGE).max(range.start)..((page + 1) * PAGE).min(range.end)))
+}
+
+/// The bytes `bytes` of `ranges` laid end to end, as pieces of guest-physical memory and where each starts in `bytes`.
+pub fn within(ranges: &[PaRange], bytes: Range<u64>) -> impl Iterator<Item = (u64, PaRange)> + '_ {
+    let starts = ranges.iter().scan(0, |at, range| Some(std::mem::replace(at, *at + range.end - range.start)));
+    starts.zip(ranges).filter_map(move |(start, range)| {
+        let (lo, hi) = (bytes.start.max(start), bytes.end.min(start + range.end - range.start));
+        (lo < hi).then(|| (lo, range.start + lo - start..range.start + hi - start))
+    })
+}
+
 #[derive(Default)]
 pub struct PageMap {
     pa_by_va_page: HashMap<u64, u64>,
@@ -85,28 +99,35 @@ pub enum Writer {
 pub struct MemoryTracker {
     last_write: HashMap<u64, (u64, Writer)>,
     generation: u64,
+    /// Bytes copied from guest RAM into host mirrors.
+    pub uploaded: u64,
 }
 
-/// A host-visible copy of guest-physical ranges, gathered in order into one buffer.
+/// A host-visible copy of guest-physical ranges, gathered in order into one buffer, with the generation each page piece
+/// had when the buffer last matched it.
 pub struct Mapping<'a> {
     pub buffer: HostBuffer<'a>,
     pub ranges: Vec<PaRange>,
+    seen: Vec<(PaRange, u64)>,
 }
 
-impl Mapping<'_> {
-    /// Copies the pages `changed` picks, given a guest-physical start and length, into the buffer.
-    pub fn refresh(&mut self, ram: &[u8], changed: impl Fn(u64, u64) -> bool) -> Result<(), VkError> {
-        let mut offset = 0;
-        for range in &self.ranges {
-            for page in pages(range.start, range.end - range.start) {
-                let piece = (page * PAGE).max(range.start)..((page + 1) * PAGE).min(range.end);
-                if changed(piece.start, piece.end - piece.start) {
-                    self.buffer.write_at(offset + piece.start - range.start, &ram[piece.start as usize..piece.end as usize]);
-                }
+impl<'a> Mapping<'a> {
+    pub fn new(buffer: HostBuffer<'a>, ranges: Vec<PaRange>) -> Self {
+        let seen = pieces(&ranges).map(|piece| (piece, u64::MAX)).collect();
+        Self { buffer, ranges, seen }
+    }
+
+    /// Lays `ranges` over the buffer, keeping every page piece that stays at its offset.
+    pub fn retarget(&mut self, ranges: Vec<PaRange>) {
+        let old = std::mem::replace(&mut self.seen, pieces(&ranges).map(|piece| (piece, u64::MAX)).collect());
+        let (mut old_at, mut at) = (0, 0);
+        for ((piece, seen), (old, old_seen)) in self.seen.iter_mut().zip(old) {
+            if old_at == at && old == *piece {
+                *seen = old_seen;
             }
-            offset += range.end - range.start;
+            (old_at, at) = (old_at + old.end - old.start, at + piece.end - piece.start);
         }
-        self.buffer.flush()
+        self.ranges = ranges;
     }
 }
 
@@ -134,35 +155,62 @@ impl MemoryTracker {
         self.last_write.get(&(pa / PAGE)).map(|&(_, writer)| writer)
     }
 
-    pub fn upload<'a>(&self, state: &'a VkState, ram: &[u8], ranges: impl IntoIterator<Item = PaRange>) -> Result<Mapping<'a>, VkError> {
+    pub fn upload<'a>(&mut self, state: &'a VkState, ram: &[u8], ranges: impl IntoIterator<Item = PaRange>) -> Result<Mapping<'a>, VkError> {
         let ranges: Vec<_> = ranges.into_iter().collect();
         let len = ranges.iter().map(|range| range.end - range.start).sum::<u64>();
-        let mut mapping = Mapping { buffer: HostBuffer::new(state, len.max(1))?, ranges };
-        mapping.refresh(ram, |_, _| true)?;
+        let mut mapping = Mapping::new(HostBuffer::new(state, len.max(1))?, ranges);
+        self.refresh(&mut mapping, ram)?;
         Ok(mapping)
     }
 
-    pub fn download(&mut self, mapping: &Mapping, ram: &mut [u8]) -> Result<(), VkError> {
-        let mut bytes = vec![0; mapping.ranges.iter().map(|range| (range.end - range.start) as usize).sum()];
-        mapping.buffer.read(&mut bytes)?;
-        self.store(ram, &mapping.ranges, &bytes, Writer::Gpu);
+    /// Copies into `mapping` the page pieces written since it last matched them, one copy per contiguous run.
+    pub fn refresh(&mut self, mapping: &mut Mapping, ram: &[u8]) -> Result<(), VkError> {
+        let (mut offset, mut runs) = (0, Vec::<(u64, PaRange)>::new());
+        for (piece, seen) in &mut mapping.seen {
+            let generation = self.generation(piece.start, piece.end - piece.start);
+            if *seen != generation {
+                *seen = generation;
+                match runs.last_mut() {
+                    Some((at, run)) if run.end == piece.start && *at + run.end - run.start == offset => run.end = piece.end,
+                    _ => runs.push((offset, piece.clone())),
+                }
+            }
+            offset += piece.end - piece.start;
+        }
+        for (offset, run) in runs {
+            self.uploaded += run.end - run.start;
+            mapping.buffer.write_at(offset, &ram[run.start as usize..run.end as usize])?;
+        }
         Ok(())
     }
 
-    /// Scatters `bytes` over `ranges` in order.
+    /// Stores the page pieces the device changed in `mapping`, which matched guest memory before it ran.
+    pub fn download(&mut self, mapping: &mut Mapping, ram: &mut [u8]) -> Result<(), VkError> {
+        let len = mapping.ranges.iter().map(|range| range.end - range.start).sum();
+        self.store(ram, &mapping.ranges, mapping.buffer.view(0..len)?, Writer::Gpu);
+        for (piece, seen) in &mut mapping.seen {
+            *seen = self.generation(piece.start, piece.end - piece.start);
+        }
+        Ok(())
+    }
+
+    /// Scatters `bytes` over `ranges` in order, marking only the page pieces whose bytes change.
     pub fn store(&mut self, ram: &mut [u8], ranges: &[PaRange], bytes: &[u8], writer: Writer) {
         let mut rest = bytes;
-        for range in ranges {
-            let (head, tail) = rest.split_at((range.end - range.start) as usize);
-            ram[range.start as usize..range.end as usize].copy_from_slice(head);
-            self.mark(range.start, range.end - range.start, writer);
+        for piece in pieces(ranges) {
+            let (head, tail) = rest.split_at((piece.end - piece.start) as usize);
+            let ram = &mut ram[piece.start as usize..piece.end as usize];
+            if ram != head {
+                ram.copy_from_slice(head);
+                self.mark(piece.start, piece.end - piece.start, writer);
+            }
             rest = tail;
         }
     }
 
     /// The global-memory SSBO window for `va..va + len` and the VA its first byte holds, aligned down for 128-bit
     /// accesses; the whole window must be mapped.
-    pub fn window<'a>(&self, state: &'a VkState, ram: &[u8], space: &PageMap, va: u64, len: u64) -> Result<(Mapping<'a>, u64), MemoryError> {
+    pub fn window<'a>(&mut self, state: &'a VkState, ram: &[u8], space: &PageMap, va: u64, len: u64) -> Result<(Mapping<'a>, u64), MemoryError> {
         let base = va & !0xf;
         Ok((self.upload(state, ram, space.resolve(base, va + len - base)?)?, base))
     }

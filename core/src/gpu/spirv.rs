@@ -61,6 +61,9 @@ fn encode_string(buf: &mut Vec<u32>, s: &str) {
 
 pub mod capability {
     pub const SHADER: u32 = 1;
+    pub const GEOMETRY: u32 = 2;
+    pub const TESSELLATION: u32 = 3;
+    pub const SAMPLE_RATE_SHADING: u32 = 35;
     pub const FLOAT16: u32 = 9;
     pub const FLOAT64: u32 = 10;
     pub const INT64: u32 = 11;
@@ -106,12 +109,33 @@ pub mod memory_semantics {
 
 pub mod execution_model {
     pub const VERTEX: u32 = 0;
+    pub const TESSELLATION_CONTROL: u32 = 1;
+    pub const TESSELLATION_EVALUATION: u32 = 2;
+    pub const GEOMETRY: u32 = 3;
     pub const FRAGMENT: u32 = 4;
     pub const GLCOMPUTE: u32 = 5;
 }
 
 pub mod execution_mode {
+    pub const INVOCATIONS: u32 = 0;
+    pub const SPACING_EQUAL: u32 = 1;
+    pub const SPACING_FRACTIONAL_EVEN: u32 = 2;
+    pub const SPACING_FRACTIONAL_ODD: u32 = 3;
+    pub const VERTEX_ORDER_CW: u32 = 4;
+    pub const VERTEX_ORDER_CCW: u32 = 5;
+    pub const POINT_MODE: u32 = 10;
     pub const LOCAL_SIZE: u32 = 17;
+    pub const INPUT_POINTS: u32 = 19;
+    pub const INPUT_LINES: u32 = 20;
+    pub const INPUT_LINES_ADJACENCY: u32 = 21;
+    pub const TRIANGLES: u32 = 22;
+    pub const INPUT_TRIANGLES_ADJACENCY: u32 = 23;
+    pub const QUADS: u32 = 24;
+    pub const ISOLINES: u32 = 25;
+    pub const OUTPUT_VERTICES: u32 = 26;
+    pub const OUTPUT_POINTS: u32 = 27;
+    pub const OUTPUT_LINE_STRIP: u32 = 28;
+    pub const OUTPUT_TRIANGLE_STRIP: u32 = 29;
     pub const ORIGIN_UPPER_LEFT: u32 = 7;
     pub const DEPTH_REPLACING: u32 = 12;
     pub const DENORM_PRESERVE: u32 = 4459;
@@ -129,6 +153,7 @@ pub mod decoration {
     pub const BUILTIN: u32 = 11;
     pub const NO_PERSPECTIVE: u32 = 13;
     pub const FLAT: u32 = 14;
+    pub const PATCH: u32 = 15;
     pub const NON_WRITABLE: u32 = 24;
     pub const NON_READABLE: u32 = 25;
     pub const LOCATION: u32 = 30;
@@ -142,10 +167,20 @@ pub mod decoration {
 pub enum BuiltIn {
     Position = 0,
     PointSize = 1,
+    PrimitiveId = 7,
+    InvocationId = 8,
+    Layer = 9,
+    ViewportIndex = 10,
+    TessLevelOuter = 11,
+    TessLevelInner = 12,
+    TessCoord = 13,
+    PatchVertices = 14,
     VertexIndex = 42,
     InstanceIndex = 43,
     FragCoord = 15,
     FrontFacing = 17,
+    SampleId = 18,
+    SampleMask = 20,
     FragDepth = 22,
     NumWorkgroups = 24,
     WorkgroupSize = 25,
@@ -997,6 +1032,14 @@ impl Emitter {
         let r = self.alloc_id();
         self.inst(1, &[ty, r]);
         r
+    }
+
+    pub fn emit_emit_vertex(&mut self) {
+        self.inst(218, &[]);
+    }
+
+    pub fn emit_end_primitive(&mut self) {
+        self.inst(219, &[]);
     }
 
     pub fn emit_kill(&mut self) {

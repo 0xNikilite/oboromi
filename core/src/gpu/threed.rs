@@ -211,6 +211,7 @@ pub(crate) enum ThreeDEvent {
     Draw(DrawSnapshot),
     Report { addr: u64, payload: u32 },
     Clear { value: u32 },
+    LoadConstantBuffer { addr: u64, value: u32 },
 }
 
 pub struct ThreeD {
@@ -244,12 +245,7 @@ impl ThreeD {
         self.words[method as usize]
     }
 
-    pub(crate) fn write(
-        &mut self,
-        method: u16,
-        value: u32,
-        write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
-    ) -> Result<Option<ThreeDEvent>, String> {
+    pub(crate) fn write(&mut self, method: u16, value: u32) -> Result<Option<ThreeDEvent>, String> {
         let byte = method as usize * 4;
         if byte >= REGISTER_BYTES {
             return Err(format!("C797 method {byte:#06x} outside register file"));
@@ -301,10 +297,9 @@ impl ThreeD {
                     SET_CONSTANT_BUFFER_SELECTOR_B,
                     SET_CONSTANT_BUFFER_SELECTOR_C,
                 ) + (self.word(LOAD_CONSTANT_BUFFER_OFFSET) & 0xffff) as u64;
-                write_memory(addr, &value.to_le_bytes())?;
                 self.words[LOAD_CONSTANT_BUFFER_OFFSET / 4] =
                     (self.word(LOAD_CONSTANT_BUFFER_OFFSET) + 4) & 0xffff;
-                Ok(None)
+                Ok(Some(ThreeDEvent::LoadConstantBuffer { addr, value }))
             }
             _ => Ok(None),
         }

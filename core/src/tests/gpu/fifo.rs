@@ -69,7 +69,6 @@ fn submit(words: &[u32], split: Option<usize>) -> Vec<Event> {
                 let start = (address - 0x1000) as usize;
                 Ok(&memory[start..start + len])
             },
-            |_, _| Ok(()),
         )
         .unwrap()
 }
@@ -226,7 +225,6 @@ fn names_unbound_subchannel_and_unsupported_class() {
         .submit(
             [entry(0x1000, words.len())],
             |_, _| Ok(memory.as_slice()),
-            |_, _| Ok(()),
         )
         .unwrap_err();
     assert!(error.contains("unbound subchannel 0"), "{error}");
@@ -239,7 +237,6 @@ fn names_unbound_subchannel_and_unsupported_class() {
         .submit(
             [entry(0x1000, words.len())],
             |_, _| Ok(memory.as_slice()),
-            |_, _| Ok(()),
         )
         .unwrap_err();
     assert!(
@@ -260,7 +257,6 @@ fn one_increment_advances_only_first_word() {
         .submit(
             [entry(0x1000, words.len())],
             |_, _| Ok(memory.as_slice()),
-            |_, _| Ok(()),
         )
         .unwrap();
     assert_eq!(pusher.threed().raw((SET_VERTEX_ATTRIBUTE_A / 4) as u16), 1);

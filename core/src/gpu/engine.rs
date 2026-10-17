@@ -12,7 +12,9 @@ use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-const SPH_BYTES: usize = 0x50;
+// SM 7.3 and later lead each graphics program with the 32-word SPHV4 header (NAK sph.rs), not the 20-word SPHV3 one.
+const SPH_BYTES: usize = 0x80;
+const SPH_VERSION: u32 = 4;
 const VERTEX_PIPELINE: usize = 1;
 const PIXEL_PIPELINE: usize = 5;
 const SHADER_TYPE_VERTEX: u32 = 1;
@@ -24,6 +26,7 @@ const CLEAR_RGBA: u32 = 0x3c;
 #[derive(Debug)]
 struct ProgramHeader {
     sph_type: u32,
+    version: u32,
     shader_type: u32,
     /// Bit n: generic attribute n is read.
     inputs: u32,
@@ -44,6 +47,7 @@ impl ProgramHeader {
         let pixel_mode = |i: usize, mode: &dyn Fn(u32) -> bool| pixel && (0..4).any(|c| mode(field(192 + 8 * i + 2 * c, 2)));
         Self {
             sph_type: field(0, 5),
+            version: field(5, 5),
             shader_type: field(10, 4),
             inputs: generics(&|i| pixel_mode(i, &|m| m != 0) || !pixel && field(192 + 4 * i, 4) != 0),
             outputs: generics(&|i| !pixel && field(432 + 4 * i, 4) != 0),
@@ -283,6 +287,9 @@ impl<'a> Gpu<'a> {
             return Ok(key);
         }
         let header = ProgramHeader::new(&sph);
+        if header.version != SPH_VERSION {
+            return Err(format!("shader program at {:#x} has SPH version {}, only SPHV4 is implemented", program.address, header.version));
+        }
         let stage = match (header.sph_type, header.shader_type) {
             (1, SHADER_TYPE_VERTEX) if shader_type == SHADER_TYPE_VERTEX => Stage::Vertex,
             (2, SHADER_TYPE_PIXEL) if shader_type == SHADER_TYPE_PIXEL && header.colour_targets == 0xf => {

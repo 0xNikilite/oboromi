@@ -62,7 +62,7 @@ pub fn vertex_bytes(vertices: &[Vertex]) -> Vec<u8> {
 }
 
 fn program(header_bits: impl IntoIterator<Item = usize>, code: &[u128]) -> Vec<u8> {
-    let mut bytes = vec![0; 0x50];
+    let mut bytes = vec![0; 0x80];
     for bit in header_bits {
         bytes[bit / 8] |= 1 << (bit % 8);
     }
@@ -70,10 +70,10 @@ fn program(header_bits: impl IntoIterator<Item = usize>, code: &[u128]) -> Vec<u
     bytes
 }
 
-// The SPH bits (clc797sph.h): type 1 vertex reading generics 0 and 1, writing position and generic 0; type 2 pixel
+// The SPHV4 bits (clc797sph.h, version 4 at bit 7): type 1 vertex reading generics 0 and 1, writing position and generic 0; type 2 pixel
 // reading generic 0 perspective-correct and writing RGBA of target 0. Position is c[0][0x0..0x10] times (x, y).
 fn programs() -> [Vec<u8>; 2] {
-    let vertex = program([0, 10].into_iter().chain(192..200).chain(428..436), &[
+    let vertex = program([0, 7, 10].into_iter().chain(192..200).chain(428..436), &[
         ald(0, 0x80, 2),
         ald(4, 0x90, 4),
         mov_cbuf(8, 0, 0),
@@ -91,7 +91,7 @@ fn programs() -> [Vec<u8>; 2] {
         exit(),
         bra(-16),
     ]);
-    let pixel = program([1, 10, 12, 193, 195, 197, 199, 576, 577, 578, 579], &[
+    let pixel = program([1, 7, 10, 12, 193, 195, 197, 199, 576, 577, 578, 579], &[
         ipa(0, 0x80, 0),
         ipa(1, 0x84, 0),
         ipa(2, 0x88, 0),

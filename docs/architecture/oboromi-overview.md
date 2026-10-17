@@ -1,6 +1,6 @@
 # Emulator overview
 
-The upstream project laid the foundations every other part builds on. Those include the project layout, a multicore ARM CPU on one shared memory block, a registry of the console's services, and the GPU instruction table with its decoder generator. For example, the GPU translator decodes every instruction with the generator upstream wrote, and the GPU reads the same memory block the CPU cores share.
+The upstream project laid the foundations every other part builds on. Those include the project layout, a multicore ARM CPU on one shared memory block, and a registry of the console's services. They also include the GPU instruction table with its decoder generator. For example, the GPU translator decodes every instruction with the generator upstream wrote, and the GPU reads the same memory block the CPU cores share.
 
 ```mermaid
 flowchart TB

@@ -36,7 +36,7 @@ Unicorn is a CPU emulator library built on the CPU core of QEMU, the open-source
 This work is on the `guest-path` branch. The RAM block is one anonymous memory mapping, `GuestRam`, that the cores and the GPU both use. Two rules keep them in agreement:
 
 - **One at a time.** A lock called the turn is held while a core runs and while the GPU runs. So the CPU and the GPU never touch the memory at the same moment.
-- **The GPU knows what the CPU changed.** When the GPU maps a range, every core adds a Unicorn write hook on it, a callback on each store to that range. The hook sets a bit for the page. Before the GPU runs, it takes those bits and refreshes its copies of exactly those pages.
+- **The GPU knows what the CPU changed.** When the GPU maps a range, every core adds a Unicorn write hook on it. A write hook is a callback that runs on each store to that range, and it sets a bit for the page. Before the GPU runs, it takes those bits and refreshes its copies of exactly those pages.
 
 The GPU's own results go straight into the block before the CPU gets its turn back. So a core always reads what the GPU last wrote.
 

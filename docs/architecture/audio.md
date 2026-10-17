@@ -1,6 +1,6 @@
 # Audio
 
-A Switch game makes sound by describing it to the audio renderer service, not by writing samples to a speaker. It lists its sounds, how loud each one is, which effects they pass through, and where the result goes, and the service mixes them in small steps. For example, a game plays footsteps by adding a voice that points at a footstep sample, with a volume and a reverb send.
+A Switch game makes sound by describing it to the audio renderer service, not by writing samples to a speaker. It lists its sounds, their volumes, their effects and where the result goes. The service then mixes them in small steps. For example, a game plays footsteps by adding a voice that points at a footstep sample, with a volume and a reverb send.
 
 ```mermaid
 flowchart LR
@@ -30,6 +30,7 @@ The renderer service is `audren`. Upstream's registry already has its entry, and
 | Frames per step | 240 |
 | Step length | 5 ms |
 | Work buffer | Guest memory the game hands over, mapped, not copied |
+| Output samples | Signed 16-bit, interleaved per frame |
 
 Rendering runs on its own clock, one step every 5 ms, and never follows the screen's frame rate.
 
@@ -46,7 +47,7 @@ Rendering runs on its own clock, one step every 5 ms, and never follows the scre
 | Sink | Where the final sound goes | The device sink, the speakers |
 | De-pop | Smooths a sudden volume change so it does not click | A voice that stops mid-sample |
 
-In the design, the device sink hands interleaved 16-bit samples to the host. The Rust core will keep them in a ring buffer that the C interface exposes, like the frame slot for the display. The Qt window will play them through Qt's own audio output, so the Rust core needs no audio library. If the buffer runs dry, the output plays silence and never blocks the window.
+In the design, the device sink hands interleaved signed samples to the host, in the format the table below gives. The Rust core will keep them in a ring buffer that the C interface exposes, like the frame slot for the display. The Qt window will play them through Qt's own audio output, so the Rust core needs no audio library. If the buffer runs dry, the output plays silence and never blocks the window.
 
 `audout` is the simpler raw-output service: a game queues buffers of finished samples, and the service plays them in order.
 
@@ -70,11 +71,11 @@ Each game says which renderer revision it was built for, and newer revisions add
 | 12 | Filter and mix fused into one step, filters on splitters |
 | 13 | Compressor statistics, explicit splitter volume reset |
 
-On the Switch 2, the renderer accepts a revision marker that only the Switch 2 uses, and its work buffer grew in the 19.x and 20.x system updates. The table above follows the Switch 1 references, so the newest Switch 2 revision is not assumed to be 13 until firmware evidence shows it.
+On the Switch 2, the renderer accepts a revision marker only the Switch 2 uses. Its work buffer also grew in the 19.x and 20.x system updates. The table above follows the Switch 1 references, so the newest Switch 2 revision is not assumed to be 13 until firmware evidence shows it.
 
 ## How is it built and checked?
 
-The implementation follows switchbrew's documentation, with the Ryujinx and yuzu emulators as behaviour references only: their code is not copied. Tests use our own fixtures: ADPCM decoding, resampler responses, reverb tails, volume ramps and the final sample format, checked at every 240-frame step.
+The implementation follows switchbrew's documentation, with the Ryujinx and yuzu emulators as behaviour references only: their code is not copied. Tests use our own fixtures: ADPCM decoding, resampler responses, reverb tails, volume ramps and the final sample format, checked at every step.
 
 | Step | State |
 |---|---|

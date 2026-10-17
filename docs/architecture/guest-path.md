@@ -1,6 +1,6 @@
 # Guest path
 
-Today the GPU tests write command lists into guest memory themselves. The guest path replaces them with a small program we write ourselves that runs on the emulated CPU and goes through the same steps a game does. For example, it asks the GPU driver service for memory, submits a triangle, waits for it, and hands the frame to the display service.
+Today the GPU tests write command lists into guest memory themselves. The guest path replaces them with a small program of our own. It runs on the emulated CPU and goes through the same steps a game does. For example, it asks the GPU driver service for memory, submits a triangle, waits for it, and hands the frame to the display service.
 
 ```mermaid
 flowchart TB
@@ -21,7 +21,7 @@ A real game needs a loader for its file formats, threads, a scheduler and many m
 
 ## What does the guest program look like?
 
-It is Rust without the standard library, built for bare-metal 64-bit ARM. It has its own start code, and it makes system calls with inline assembly.
+It is Rust without the standard library, built for bare-metal AArch64. It has its own start code, and it makes system calls with inline assembly.
 
 | Guest fact | Value |
 |---|---|
@@ -69,7 +69,7 @@ The guest maps memory through the nvmap and address-space ioctls, submits the tr
 | Display services and the binder | Planned |
 | Guest demo button and the acceptance test | Planned |
 
-Left for later on purpose: threads and a scheduler, asynchronous events, domains (several service objects on one session), the game file loaders, the full service manager, and thread-local storage beyond the IPC buffer.
+Left for later on purpose: threads and a scheduler, asynchronous events, and domains, which are several service objects on one session. The game file loaders, the full service manager, and thread-local storage beyond the IPC buffer also come later.
 
 Verified by: `the_guest_image_reaches_its_debug_string_svc` on the `guest/scene-crate` branch, and the shared-memory tests listed on the [CPU](cpu.md) page.
 

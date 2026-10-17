@@ -1,6 +1,6 @@
 # Demos
 
-The Qt window has buttons that draw through the GPU work today. Six bigger scenes are prepared, and the first, a lit 3D model, is being wired now. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
+The Qt window has buttons that draw through the GPU work today. Six bigger scenes are prepared: the post-effect and sprites scenes run, and the particles and BoomBox scenes are being wired. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
 
 ## What runs today?
 
@@ -9,6 +9,8 @@ The Qt window has buttons that draw through the GPU work today. Six bigger scene
 | Render Test Frame | `frame::render_test_frame` | A translated SASS program (S2R, IMAD, STG) writes a 1080p gradient as a compute shader |
 | Demo | `frame::render_demo_frame` | A hand-written SASS Julia set animates every frame; the time arrives through constant buffer 0 |
 | Triangle | `frame::render_triangle_demo` | A command list in guest memory draws a turning triangle through the whole engine |
+| Post | `demo_post::render_post_frame` | NVIDIA-compiled shaders draw a pinwheel into one image, then sample it as a texture to add screen effects |
+| Sprites | `demo_sprites::render_sprites_frame`, on `gpu/demo-sprites` | NVIDIA-compiled sprite shaders draw a scrolling parallax scene of blended sprites as one instanced draw |
 
 The Julia set program loops with a predicated branch, a jump taken only where a one-bit flag is set. It reuses one pipeline built once, so a frame costs a dispatch, a readback and a present.
 
@@ -57,24 +59,42 @@ Measured on an Intel Arc (MTL), p50 per frame:
 ```mermaid
 flowchart LR
     TRI["Triangle<br/>Runs today"] --> PBR["pbr-boombox<br/>A lit 3D model, being wired"]
-    PBR --> POST["post-effect<br/>The model, then screen filters"]
+    TRI --> POST["post-effect<br/>Draw, then screen filters; runs"]
     PBR --> FH["pbr-flighthelmet<br/>A heavy model, to time throughput"]
     PBR --> RT["raytraced<br/>Shadows and reflections by ray queries"]
-    TRI --> SPR["sprites2d<br/>Layered 2D sprites"]
-    TRI --> PART["particles<br/>Particles moved by a compute launch"]
+    TRI --> SPR["sprites2d<br/>Layered 2D sprites; runs"]
+    TRI --> PART["particles<br/>Moved by a compute launch; being wired"]
     RT -.->|"Still needs"| N1["Acceleration structures,<br/>Depth kept in guest memory"]
 ```
 
-*The six prepared scenes. The engine has what they need, except two features for the ray-traced one.*
+*The six prepared scenes and their state. The ray-traced one still needs two engine features.*
 
-| Scene | Content | Shaders |
+| Scene | Content | Shaders | State |
 |---|---|---|
-| pbr-boombox | The BoomBox or Avocado model, lit with physically based materials and normal maps, one light | pbr.vert, pbr.frag |
-| post-effect | The PBR scene drawn offscreen, then colour fringing, scanlines and a vignette | post.vert, post.frag |
-| particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag |
-| sprites2d | Scrolling layers and floating sprites, blended over a generated texture sheet | sprite2d.vert, sprite2d.frag |
-| pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material, timed against pbr-boombox | pbr.vert, pbr.frag |
-| raytraced | BoomBox on a ground plane with ray-query shadows and reflections, plus ray-traced ambient occlusion | rt.frag, rt_ao.comp |
+| pbr-boombox | The BoomBox or Avocado model, lit with physically based materials and normal maps, one light | pbr.vert, pbr.frag | In progress |
+| post-effect | A scene drawn offscreen, then colour fringing, scanlines and a vignette; a pinwheel stands in for the PBR scene for now | post.vert, post.frag | Runs |
+| particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag | Runs on its branch, being merged |
+| sprites2d | Scrolling hill layers and floating sprites, blended over a sky | sprite2d.vert, sprite2d.frag | Runs |
+| pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material, timed against pbr-boombox | pbr.vert, pbr.frag | In progress |
+| raytraced | BoomBox on a ground plane with ray-query shadows and reflections, plus ray-traced ambient occlusion | rt.frag, rt_ao.comp | Prepared |
+
+### What do the new scenes look like?
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-sprites-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-sprites.mp4" type="video/mp4"></video>
+
+*Sprites: NVIDIA-compiled sprite shaders draw scrolling hills and floating sprites, blended back to front, from a host-written command list.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-post-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-post.mp4" type="video/mp4"></video>
+
+*Post-effect: a pinwheel drawn into one image, then sampled as a texture by a second pass that adds the screen effects.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-particles-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-particles.mp4" type="video/mp4"></video>
+
+*Particles: a compute launch from the command list moves the particles, then one instanced draw shows them, still on its branch.*
+
+![The BoomBox model, drawn by the PBR scene while it is being wired](https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-boombox.png)
+
+*BoomBox: a still from the PBR scene while it is being wired.*
 
 Each scene document in `demos/scenes` lists its guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. The plan is to compile them with NVIDIA's driver on a rented card, which yields the SM86 programs the scenes load.
 

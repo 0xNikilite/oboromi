@@ -289,8 +289,28 @@ mod tests {
         };
         let fixtures = tensor_fixtures().into_iter().filter(|f| f.id.contains("/small-integers/") && crate::gpu::sm86::f16_hmma_shape(*tensor_program(f).last().unwrap()).is_some());
         for fixture in fixtures {
-            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force)));
+            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force), crate::gpu::sm86::TensorMode::Exact));
             assert_eq!(cooperative, loops, "{}", fixture.id);
+        }
+    }
+
+    #[test]
+    fn fast_hmma_is_exact_on_small_integers_and_within_64_ulp_on_mixed_exponents() {
+        use crate::gpu::sm86::TensorMode;
+        use crate::tests::gpu::silicon::{replay_tensor, tensor_d_words, tensor_fixtures};
+        let Ok(state) = crate::gpu::device() else { return eprintln!("skipping: no Vulkan device") };
+        let fixtures = tensor_fixtures().into_iter().filter(|f| f.observed && (f.case.ends_with("f32") || f.case.ends_with("f16")));
+        for fixture in fixtures.filter(|f| f.id.contains("/small-integers/") || f.id.contains("/mixed-exponents/")) {
+            let lanes = replay_tensor(state, &fixture, None, TensorMode::Fast).unwrap();
+            let (words, rd) = (tensor_d_words(&fixture), (fixture.words[0] >> 16 & 0xff) as usize);
+            let (width, infinity) = if words == 4 { (32, 0x7f80_0000) } else { (16, 0x7c00) };
+            let magnitude = |bits: u32| bits & (infinity | infinity - 1);
+            let ordered = |bits: u32| if bits & (1 << (width - 1)) != 0 { -i64::from(magnitude(bits)) } else { i64::from(magnitude(bits)) };
+            let elements = lanes.iter().enumerate().flat_map(|(lane, regs)| regs[rd..rd + words].iter().zip(&fixture.after[lane * 4..][..words]));
+            let elements = elements.flat_map(|(&got, &want)| (0..32 / width).map(move |i| [got, want].map(|bits| bits >> (width * i) & (u32::MAX >> (32 - width)))));
+            let ulps = elements.filter(|&[_, want]| magnitude(want) < infinity).map(|[got, want]| (ordered(got) - ordered(want)).abs());
+            let max = ulps.max().unwrap();
+            assert!(max <= if fixture.id.contains("/small-integers/") { 0 } else { 64 }, "{}: {max} ulp", fixture.id);
         }
     }
 }

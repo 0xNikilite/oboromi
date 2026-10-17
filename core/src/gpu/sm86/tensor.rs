@@ -177,6 +177,9 @@ impl<'a> Decoder<'a> {
             let neg = negate[is_b as usize];
             if format == 2 { vec![s.tf32_source(word, neg)] } else { s.mma_source_pair(word, format == 1, neg).to_vec() }
         });
+        if self.tensor == TensorMode::Fast {
+            return self.fma_hmma([a, b], rd, rc, f32_acc, group);
+        }
         let (ty, f32_ty, ptr_ty, private) = (self.type_u32[1], self.type_f32[1], self.type_ptr_u32[1], spirv::storage_class::PRIVATE);
         let [length, d_base] = [72, 68].map(|c| self.cached_const_u32(c));
         if self.mma_vars[0] == 0 {
@@ -292,11 +295,46 @@ impl<'a> Decoder<'a> {
             }
         }
     }
+    // Fast gives up the silicon's exact group sums for f32 fmas in ascending k or the device's cooperative matrices: up to 38 ulp off
+    // under cancellation, the other infinity or a NaN past an intermediate overflow, and far worse through f16 cooperative accumulators.
     fn hmma_tile(&self, shape: (u32, bool)) -> Option<[u32; 3]> {
         let device = self.device.filter(|_| self.invocations % 32 == 0)?;
         let tile = cooperative_tile(device, shape)?;
         let exact = || device.exact_cooperative_hmma.get_or_init(|| crate::tests::gpu::silicon::exact_cooperative_hmma(device)).contains(&shape);
-        self.force_cooperative_hmma.unwrap_or_else(exact).then_some(tile)
+        self.force_cooperative_hmma.unwrap_or_else(|| self.tensor == TensorMode::Fast && shape.1 || exact()).then_some(tile)
+    }
+    fn fma_hmma(&mut self, [a, b]: [[Vec<u32>; 2]; 2], rd: u32, rc: u32, f32_acc: bool, group: usize) {
+        let (f32_ty, f16_ty) = (self.type_f32[1], self.type_f16());
+        let d = [0, 1].map(|half| {
+            let c = if f32_acc {
+                [0, 1].map(|column| {
+                    let bits = self.load_register(nth_reg(rc, RZ, 2 * half + column));
+                    self.bitcast_f32(bits)
+                })
+            } else {
+                let word = self.load_register(nth_reg(rc, RZ, half));
+                self.half2_lanes(word, 0, false, false, false)
+            };
+            [0, 1].map(|column| a[half as usize].chunks(group).zip(b[column].chunks(group)).fold(c[column], |acc, (x, y)| {
+                let sum = x.iter().zip(y).fold(acc, |acc, (&x, &y)| self.glsl(spirv::glsl::FMA, f32_ty, &[x, y, acc]));
+                if f32_acc {
+                    return sum;
+                }
+                let rounded = self.ir.emit_f_convert(f16_ty, sum);
+                self.ir.emit_f_convert(f32_ty, rounded)
+            }))
+        });
+        for (half, d) in (0..).zip(d) {
+            if f32_acc {
+                for (column, val) in (0..).zip(d) {
+                    let bits = self.bitcast_u32(val);
+                    self.store_register(nth_reg(rd, RZ, 2 * half + column), bits);
+                }
+            } else {
+                let packed = self.pack_half2(d);
+                self.store_register(nth_reg(rd, RZ, half), packed);
+            }
+        }
     }
     fn cooperative_type(&mut self, key: [u32; 4]) -> u32 {
         if self.cooperative_types.is_empty() {

@@ -13,17 +13,17 @@ pub fn translate_module(
     device: Option<&VkState>,
     timing_hints: bool,
 ) -> Emitter {
-    emit_module(register_io, device, 1, timing_hints, |decoder| decoder.translate_program(instructions))
+    emit_module(register_io, device, 1, Hints { timing: timing_hints, ..Default::default() }, |decoder| decoder.translate_program(instructions))
 }
 
 pub fn emit_module(
     register_io: bool,
     device: Option<&VkState>,
     lanes: u32,
-    timing_hints: bool,
+    hints: Hints,
     body: impl FnOnce(&mut Decoder),
 ) -> Emitter {
-    sm86::emit_module(device, [lanes, 1, 1], Hints { timing: timing_hints }, |decoder| {
+    sm86::emit_module(device, [lanes, 1, 1], hints, |decoder| {
         if register_io {
             decoder.emit_register_io(10, 11);
         }
@@ -109,7 +109,7 @@ pub fn run_hints(
         cbuf0,
         global,
         &Textures::default(),
-        true,
+        Hints { timing: true, ..Default::default() },
     )?;
     Some((lanes.remove(0), global, counts))
 }
@@ -157,7 +157,7 @@ pub fn run_textured(
     global: &[u32],
     textures: &Textures,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
-    run_on(&vk_state()?, body, seeds, cbuf0, global, textures, false).map(|(lanes, global, _)| (lanes, global))
+    run_on(&vk_state()?, body, seeds, cbuf0, global, textures, Hints::default()).map(|(lanes, global, _)| (lanes, global))
 }
 
 pub fn run_on(
@@ -167,11 +167,11 @@ pub fn run_on(
     cbuf0: &[u32],
     global: &[u32],
     textures: &Textures,
-    timing_hints: bool,
+    hints: Hints,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>, Vec<u32>)> {
     let words = pad_to_warps(seeds);
     let mut resources = Vec::new();
-    let module = emit_module(true, Some(state), (words.len() / STATE_WORDS) as u32, timing_hints, |decoder| {
+    let module = emit_module(true, Some(state), (words.len() / STATE_WORDS) as u32, hints, |decoder| {
         body(decoder);
         resources = decoder.resources.clone();
     });

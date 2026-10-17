@@ -1,6 +1,7 @@
 use ash::vk;
 
 pub mod compute;
+pub mod compute_class;
 pub mod engine;
 pub mod fifo;
 pub mod frame;

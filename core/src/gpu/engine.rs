@@ -242,6 +242,7 @@ impl<'a> Gpu<'a> {
         for event in events {
             match event {
                 Event::Draw(draw) => self.draw(&draw)?,
+                Event::Dispatch(_) => return Err("compute dispatches are not implemented".into()),
                 Event::Report { addr, payload } | Event::SemaphoreRelease { addr, payload } => {
                     self.store(addr, &payload.to_le_bytes(), Writer::Gpu).map_err(named)?
                 }

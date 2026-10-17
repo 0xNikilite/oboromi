@@ -399,9 +399,9 @@ fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
 
-// VOTE, VOTEU, SHFL, MATCH, REDUX and BAR, which every invocation of the workgroup must reach together.
+// VOTE, VOTEU, SHFL, MATCH, REDUX, BAR, HMMA, IMMA and LDSM, which every invocation of the workgroup must reach together.
 fn exchanges(inst: u128) -> bool {
-    matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d)
+    matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d | 0x03c | 0x037 | 0x03b)
 }
 
 fn partial_warpsync(inst: u128) -> bool {
@@ -497,13 +497,17 @@ impl<'a> Decoder<'a> {
         self.ir
             .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &local_size);
         use spirv::{capability as cap, execution_mode as mode};
-        if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
-            self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);
-            self.ir.emit_execution_mode(func, mode::SIGNED_ZERO_INF_NAN_PRESERVE, &[32]);
-        }
-        if device.is_some_and(|d| d.denorm_preserve) {
-            self.ir.emit_capability(cap::DENORM_PRESERVE);
-            self.ir.emit_execution_mode(func, mode::DENORM_PRESERVE, &[32]);
+        let Some(device) = device else { return };
+        for (capability, execution_mode, widths) in [
+            (cap::SIGNED_ZERO_INF_NAN_PRESERVE, mode::SIGNED_ZERO_INF_NAN_PRESERVE, device.signed_zero_inf_nan_preserve),
+            (cap::DENORM_PRESERVE, mode::DENORM_PRESERVE, device.denorm_preserve),
+        ] {
+            if widths.contains(&true) {
+                self.ir.emit_capability(capability);
+            }
+            for (width, _) in [16, 32, 64].into_iter().zip(widths).filter(|&(_, supported)| supported) {
+                self.ir.emit_execution_mode(func, execution_mode, &[width]);
+            }
         }
         if self.derivatives {
             self.ir.emit_capability(cap::COMPUTE_DERIVATIVE_GROUP_LINEAR);
@@ -1635,19 +1639,22 @@ impl<'a> Decoder<'a> {
         let ty = self.type_f16x2();
         let half2 = self.ir.emit_composite_construct(ty, &halves);
         let mut packed = self.bitcast_u32(half2);
-        if rtz {
-            let width = self.cached_const_u32(16);
-            for i in 0..2 {
+        let [width, canonical_nan] = [16, 0x7fff].map(|c| self.cached_const_u32(c));
+        for i in 0..2 {
+            let offset = self.cached_const_u32(16 * i as u32);
+            if rtz {
                 let back = self.ir.emit_f_convert(self.type_f32[1], halves[i]);
                 let source = self.fp_src(self.type_f32[1], lanes[i], true, false);
                 let back = self.fp_src(self.type_f32[1], back, true, false);
                 let above = self.ir.emit_ford_greater_than(self.type_bool[1], back, source);
-                let offset = self.cached_const_u32(16 * i as u32);
                 let bits = self.ir.emit_bit_field_u_extract(self.type_u32[1], packed, offset, width);
                 let down = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
                 let bits = self.ir.emit_select(self.type_u32[1], above, down, bits);
                 packed = self.ir.emit_bit_field_insert(self.type_u32[1], packed, bits, offset, width);
             }
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], lanes[i]);
+            let canonical = self.ir.emit_bit_field_insert(self.type_u32[1], packed, canonical_nan, offset, width);
+            packed = self.ir.emit_select(self.type_u32[1], nan, canonical, packed);
         }
         packed
     }
@@ -1680,7 +1687,7 @@ impl<'a> Decoder<'a> {
         } else {
             lanes
         };
-        let bits = if f32_out { self.bitcast_u32(lanes[0]) } else { self.pack_half2(lanes) };
+        let bits = if f32_out { self.canonical_nan_bits(lanes[0]) } else { self.pack_half2(lanes) };
         let bits = match (ftz, f32_out) {
             (false, _) => bits,
             (true, true) => self.flush_subnormal(bits),
@@ -1920,7 +1927,7 @@ impl<'a> Decoder<'a> {
             let hi = self.cached_const_u32(hi);
             let result = self.ir.emit_select(self.type_u32[1], below, lo, converted);
             let result = self.ir.emit_select(self.type_u32[1], above, hi, result);
-            let result = self.ir.emit_select(self.type_u32[1], nan, self.const_u32_0, result);
+            let result = self.ir.emit_select(self.type_u32[1], nan, lo, result);
             self.store_register(rd, result);
         } else {
             let u64_ty = self.type_u64();
@@ -1933,10 +1940,9 @@ impl<'a> Decoder<'a> {
             };
             let lo = self.ir.emit_constant_typed(u64_ty, if signed { i64::MIN as u64 } else { 0 });
             let hi = self.ir.emit_constant_typed(u64_ty, if signed { i64::MAX as u64 } else { u64::MAX });
-            let zero = self.ir.emit_constant_typed(u64_ty, 0u64);
             let result = self.ir.emit_select(u64_ty, below, lo, converted);
             let result = self.ir.emit_select(u64_ty, above, hi, result);
-            let result = self.ir.emit_select(u64_ty, nan, zero, result);
+            let result = self.ir.emit_select(u64_ty, nan, lo, result);
             self.store_pair(rd, result);
         }
     }
@@ -1986,8 +1992,35 @@ impl<'a> Decoder<'a> {
         } else {
             val
         };
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
         if ftz { self.flush_subnormal(bits) } else { bits }
+    }
+
+    fn canonical_nan_bits(&mut self, val: u32) -> u32 {
+        let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+        let canonical = self.cached_const_u32(0x7fff_ffff);
+        let bits = self.bitcast_u32(val);
+        self.ir.emit_select(self.type_u32[1], nan, canonical, bits)
+    }
+
+    // NVIDIA returns the first quiet NaN operand, else the first signaling one quieted, in both cases without its sign.
+    fn propagated_nan_bits(&mut self, val: u32, operands: &[u32]) -> u32 {
+        let (ty, bool_ty) = (self.type_u64(), self.type_bool[1]);
+        let [magnitude, infinity, quiet, default] = [0x7fff_ffff_ffff_ffffu64, 0x7ff0_0000_0000_0000, 0x7ff8_0000_0000_0000, 0xfff8_0000_0000_0000]
+            .map(|c| self.ir.emit_constant_typed(ty, c));
+        let mut nan_bits = default;
+        for quiet_only in [false, true] {
+            for &operand in operands.iter().rev() {
+                let bits = self.bitcast_u64(operand);
+                let bits = self.ir.emit_bitwise_and(ty, bits, magnitude);
+                let nan = if quiet_only { self.ir.emit_ugreater_than_equal(bool_ty, bits, quiet) } else { self.ir.emit_ugreater_than(bool_ty, bits, infinity) };
+                let quieted = self.ir.emit_bitwise_or(ty, bits, quiet);
+                nan_bits = self.ir.emit_select(ty, nan, quieted, nan_bits);
+            }
+        }
+        let nan = self.ir.emit_f_is_nan(bool_ty, val);
+        let bits = self.bitcast_u64(val);
+        self.ir.emit_select(ty, nan, nan_bits, bits)
     }
 
     fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
@@ -2419,7 +2452,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("BITEXTRACT");
     }
     pub fn bmma(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2439,7 +2472,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("BMMA");
     }
     pub fn bmov(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2711,7 +2744,7 @@ impl<'a> Decoder<'a> {
         let (abs, neg) = if form == 1 { (inst >> 74 & 1 != 0, inst >> 75 & 1 != 0) } else { (inst >> 62 & 1 != 0, inst >> 63 & 1 != 0) };
         let b = self.fp64_src(b, !imm && abs, !imm && neg);
         let result = self.ir.emit_fadd(ty, a, b);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn depbar(&mut self, inst: u128) {
@@ -2740,7 +2773,7 @@ impl<'a> Decoder<'a> {
         let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
         let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [c, src] } else { [src, c] };
         let result = self.glsl(spirv::glsl::FMA, ty, &[a, b, c]);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b, c]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dmma(&mut self, inst: u128) {
@@ -2764,7 +2797,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("DMMA");
     }
     pub fn dmul(&mut self, inst: u128) {
         Self::fp64_rounding(inst);
@@ -2774,7 +2807,7 @@ impl<'a> Decoder<'a> {
         let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
         let b = self.fp64_alu_src(inst);
         let result = self.ir.emit_fmul(ty, a, b);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dsetp(&mut self, inst: u128) {
@@ -2951,12 +2984,15 @@ impl<'a> Decoder<'a> {
         let round = if inst >> 78 & 3 == 3 { spirv::glsl::TRUNC } else { spirv::glsl::ROUND_EVEN };
         let (b, c) = self.srcs_bc(inst);
         let a = self.load_register((inst >> 24 & 0xff) as u32);
+        let nan_byte = self.cached_const_u32(0x80);
         let [a, b] = [a, b].map(|x| {
             let x = self.bitcast_f32(x);
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], x);
             let x = self.glsl(round, self.type_f32[1], &[x]);
             let x = self.glsl(81, self.type_f32[1], &[x, lo, hi]);
             let x = self.ir.emit_convert_f_to_s(self.type_s32[1], x);
-            self.bitcast_u32(x)
+            let x = self.bitcast_u32(x);
+            self.ir.emit_select(self.type_u32[1], nan, nan_byte, x)
         });
         let c = self.high_half_if(c, inst >> 72 & 1 != 0);
         let word = self.pack_narrow(a, b, c, 8);
@@ -2986,9 +3022,10 @@ impl<'a> Decoder<'a> {
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn flo(&mut self, inst: u128) {
-        assert!(inst >> 81 & 7 == 7, "FLO predicate output not implemented");
         let ty = self.type_u32[1];
         let b = self.src_b_maybe_inverted(inst);
+        let nonzero = self.emit_cmp_against_zero(5, b);
+        self.store_pred_bit(is_uniform(inst), (inst >> 81 & 7) as u32, nonzero);
         let msb = self.glsl(if inst >> 73 & 1 != 0 { spirv::glsl::FIND_S_MSB } else { spirv::glsl::FIND_U_MSB }, ty, &[b]);
         let res = if inst >> 74 & 1 != 0 {
             let none = self.cached_const_u32(u32::MAX);
@@ -3011,7 +3048,7 @@ impl<'a> Decoder<'a> {
         // NMin and NMax return the other operand when one is NaN, like the hardware.
         let [min, max] = [spirv::glsl::N_MIN, spirv::glsl::N_MAX].map(|op| self.glsl(op, self.type_f32[1], &[a, b]));
         let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fmul(&mut self, inst: u128) {
@@ -3051,16 +3088,15 @@ impl<'a> Decoder<'a> {
             10 => {
                 let val = self.fp_alu_src(inst, ftz);
                 let val = self.glsl(ROUNDING[rnd], self.type_f32[1], &[val]);
-                let val = self.bitcast_u32(val);
+                let val = self.canonical_nan_bits(val);
                 self.store_register(rd, val);
             }
             15 => {
                 let val = self.fp64_alu_src(inst);
                 let ty = self.type_f64();
-                let val = self.glsl(ROUNDING[rnd], ty, &[val]);
-                let u64_ty = self.type_u64();
-                let val = self.ir.emit_bitcast(u64_ty, val);
-                self.store_pair(rd, val);
+                let rounded = self.glsl(ROUNDING[rnd], ty, &[val]);
+                let bits = self.propagated_nan_bits(rounded, &[val]);
+                self.store_pair(rd, bits);
             }
             _ => todo!("FRND format {fmt} requires f16 support"),
         }
@@ -3164,7 +3200,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("GATHER");
     }
     pub fn genmetadata(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3186,7 +3222,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("GENMETADATA");
     }
     pub fn getlmembase(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3226,7 +3262,7 @@ impl<'a> Decoder<'a> {
             if inst >> 79 & 1 == 0 {
                 return val;
             }
-            let negative = self.ir.emit_ford_less_than(self.type_bool[1], val, zero);
+            let negative = self.ir.emit_ford_less_than_equal(self.type_bool[1], val, zero);
             self.ir.emit_select(self.type_f32[1], negative, zero, val)
         });
         self.store_half2(inst, val, ofmt == 1, inst >> 77 & 1 != 0, ftz);
@@ -3234,30 +3270,105 @@ impl<'a> Decoder<'a> {
     pub fn hfma2_mma(&mut self, inst: u128) {
         self.hfma2(inst);
     }
+    // Lane 4g + t of an MMA fragment holds row (or column) g of the tile, and t picks its k columns.
+    fn lane_quad(&mut self) -> [u32; 2] {
+        let lane = self.special_register(0);
+        let [two, three] = [2, 3].map(|c| self.cached_const_u32(c));
+        [self.ir.emit_shift_right_logical(self.type_u32[1], lane, two), self.ir.emit_bitwise_and(self.type_u32[1], lane, three)]
+    }
+    fn quad_lanes(&mut self, first: u32) -> Vec<u32> {
+        (0..4).map(|t| {
+            let t = self.cached_const_u32(t);
+            self.ir.emit_iadd(self.type_u32[1], first, t)
+        }).collect()
+    }
+    // Gathers the A rows g, g + 8 and B columns 2t, 2t + 1 that the D elements of lane 4g + t need, each in ascending k.
+    fn mma_operands(&mut self, inst: u128, k_regs: u32, mut unpack: impl FnMut(&mut Self, u32, bool) -> Vec<u32>) -> [[Vec<u32>; 2]; 2] {
+        let [ra, rb] = [24, 32].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let ty = self.type_u32[1];
+        let [group, thread] = self.lane_quad();
+        let [two, three, four] = [2, 3, 4].map(|c| self.cached_const_u32(c));
+        let own_quad = self.ir.emit_shift_left_logical(ty, group, two);
+        let row_lanes = self.quad_lanes(own_quad);
+        let column_quad = self.ir.emit_shift_left_logical(ty, thread, three);
+        let next_column_quad = self.ir.emit_iadd(ty, column_quad, four);
+        let mut column_lanes = self.quad_lanes(column_quad);
+        column_lanes.extend(self.quad_lanes(next_column_quad));
+        let (mut a, mut b) = ([Vec::new(), Vec::new()], [Vec::new(), Vec::new()]);
+        for k_reg in 0..k_regs {
+            for (half, row) in (0..).zip(&mut a) {
+                let own = self.load_register(nth_reg(ra, RZ, 2 * k_reg + half));
+                for [word, _] in self.warp_exchange(own, &row_lanes) {
+                    row.extend(unpack(self, word, false));
+                }
+            }
+            let own = self.load_register(nth_reg(rb, RZ, k_reg));
+            let words = self.warp_exchange(own, &column_lanes);
+            for (column, words) in b.iter_mut().zip(words.chunks(4)) {
+                for &[word, _] in words {
+                    column.extend(unpack(self, word, true));
+                }
+            }
+        }
+        [a, b]
+    }
+    // A bfloat16 is the upper half of an f32.
+    fn mma_source_pair(&mut self, word: u32, bf16: bool, neg: bool) -> [u32; 2] {
+        if !bf16 {
+            return self.half2_lanes(word, 0, false, neg, false);
+        }
+        let [sixteen, high] = [16, 0xffff_0000].map(|c| self.cached_const_u32(c));
+        let bits = [self.ir.emit_shift_left_logical(self.type_u32[1], word, sixteen), self.ir.emit_bitwise_and(self.type_u32[1], word, high)];
+        bits.map(|bits| {
+            let val = self.bitcast_f32(bits);
+            self.fp_src(self.type_f32[1], val, false, neg)
+        })
+    }
     pub fn hmma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _re = (((inst >> 40) & 0xff) << 0);
-        let _id = (((inst >> 48) & 0x3) << 0);
-        let _re_reuse_src_e = (((inst >> 50) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _size = (((inst >> 78) & 0x1) << 1) | (((inst >> 75) & 0x1) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _srcfmt = (((inst >> 82) & 0x3) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert_eq!(opcode(inst), 0x23c, "HMMA with a uniform register file");
+        assert!(inst >> 73 & 1 == 0, "HMMA.SP");
+        assert_eq!(inst >> 87 & 0xf, 0, "HMMA with a UPp condition");
+        let k_regs = match (inst >> 78 & 1) << 1 | inst >> 75 & 1 {
+            0 => 1,
+            1 => 2,
+            _ => todo!("HMMA.1684"),
+        };
+        let bf16 = match inst >> 82 & 3 {
+            0 => false,
+            1 => true,
+            _ => todo!("HMMA.TF32"),
+        };
+        let f32_acc = inst >> 76 & 1 != 0;
+        let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let negate = [inst >> 72 & 1 != 0, inst >> 63 & 1 != 0];
+        let [a, b] = self.mma_operands(inst, k_regs, |s, word, is_b| s.mma_source_pair(word, bf16, negate[is_b as usize]).to_vec());
+        let f32_ty = self.type_f32[1];
+        for (half, row) in (0..).zip(&a) {
+            let c = if f32_acc {
+                [0, 1].map(|column| {
+                    let word = self.load_register(nth_reg(rc, RZ, 2 * half + column));
+                    self.bitcast_f32(word)
+                })
+            } else {
+                let word = self.load_register(nth_reg(rc, RZ, half));
+                self.half2_lanes(word, 0, false, false, false)
+            };
+            let d = [0, 1].map(|column| {
+                row.iter().zip(&b[column]).fold(c[column], |sum, (&x, &y)| {
+                    let product = self.ir.emit_fmul(f32_ty, x, y);
+                    self.ir.emit_fadd(f32_ty, sum, product)
+                })
+            });
+            if f32_acc {
+                for (column, val) in (0..).zip(d) {
+                    let bits = self.bitcast_u32(val);
+                    self.store_register(nth_reg(rd, RZ, 2 * half + column), bits);
+                }
+            } else {
+                let packed = self.pack_half2(d);
+                self.store_register(nth_reg(rd, RZ, half), packed);
+            }
+        }
     }
     pub fn hmnmx2(&mut self, inst: u128) {
         let ofmt = (inst >> 85 & 1) << 1 | inst >> 78 & 1;
@@ -3585,28 +3696,36 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn imma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _re_reuse_src_e = (((inst >> 50) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _rndsrc = (((inst >> 82) & 0x1) << 0);
-        let _srcfmta = (((inst >> 83) & 0x1) << 2) | (((inst >> 76) & 0x3) << 0);
-        let _srcfmtb = (((inst >> 84) & 0x1) << 2) | (((inst >> 78) & 0x3) << 0);
-        let _size = (((inst >> 85) & 0x3) << 1) | (((inst >> 75) & 0x1) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 72 & 1 == 0, "IMMA.SP");
+        assert_eq!(inst >> 87 & 0xf, 0, "IMMA with a UPp condition");
+        assert!(inst >> 82 & 1 == 0, "IMMA.SAT");
+        assert!(inst >> 83 & 3 == 0, "IMMA with S4 or U4 sources");
+        let k_regs = match inst >> 84 & 6 | inst >> 75 & 1 {
+            4 => 1,
+            5 => 2,
+            size => todo!("IMMA size {size}"),
+        };
+        let signed = [76, 78].map(|bit| inst >> bit & 1 != 0);
+        let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let ty = self.type_u32[1];
+        let eight = self.cached_const_u32(8);
+        let [a, b] = self.mma_operands(inst, k_regs, |s, word, is_b| {
+            (0..4).map(|byte| {
+                let offset = s.cached_const_u32(8 * byte);
+                if signed[is_b as usize] { s.ir.emit_bit_field_s_extract(ty, word, offset, eight) } else { s.ir.emit_bit_field_u_extract(ty, word, offset, eight) }
+            }).collect()
+        });
+        for (half, row) in (0..).zip(&a) {
+            for (column, col) in (0..).zip(&b) {
+                let reg = 2 * half + column;
+                let c = self.load_register(nth_reg(rc, RZ, reg));
+                let d = row.iter().zip(col).fold(c, |sum, (&x, &y)| {
+                    let product = self.ir.emit_imul(ty, x, y);
+                    self.ir.emit_iadd(ty, sum, product)
+                });
+                self.store_register(nth_reg(rd, RZ, reg), d);
+            }
+        }
     }
     pub fn imnmx(&mut self, inst: u128) {
         let a = self.load_register((inst >> 24 & 0xff) as u32);
@@ -4002,21 +4121,41 @@ impl<'a> Decoder<'a> {
         self.load_memory(ResourceKind::Shared, address, sz, rd);
     }
     pub fn ldsm(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_urb = (((inst >> 32) & 0x3f) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _num = (((inst >> 72) & 0x3) << 0);
-        let _sz = (((inst >> 75) & 0x7) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let transposed = match inst >> 78 & 3 {
+            0 => false,
+            1 => true,
+            2 => todo!("LDSM.M816"),
+            _ => todo!("LDSM.M832"),
+        };
+        let ty = self.type_u32[1];
+        let address = self.global_address(inst, 32, 40);
+        let [group, thread] = self.lane_quad();
+        let first_column = self.ir.emit_shift_left_logical(ty, thread, self.const_u32_1);
+        let tiles = 1 << (inst >> 72 & 3);
+        let mut row_lanes = Vec::new();
+        let mut columns = Vec::new();
+        for tile in 0..tiles {
+            let first_row = self.cached_const_u32(8 * tile);
+            for half in [self.const_u32_0, self.const_u32_1] {
+                let column = self.ir.emit_iadd(ty, first_column, half);
+                let (row, column) = if transposed { (column, group) } else { (group, column) };
+                row_lanes.push(self.ir.emit_iadd(ty, first_row, row));
+                columns.push(column);
+            }
+        }
+        let row_addresses = self.warp_exchange(address, &row_lanes);
+        let halves: Vec<u32> = row_addresses.iter().zip(columns).map(|(&[row, _], column)| {
+            let offset = self.ir.emit_shift_left_logical(ty, column, self.const_u32_1);
+            let at = self.ir.emit_iadd(ty, row, offset);
+            let ptr = self.shared_word_at(at);
+            let word = self.ir.emit_load(ty, ptr);
+            self.load_narrow(word, at, 2)
+        }).collect();
+        let sixteen = self.cached_const_u32(16);
+        for (tile, pair) in (0..).zip(halves.chunks(2)) {
+            let word = self.ir.emit_bit_field_insert(ty, pair[0], pair[1], sixteen, sixteen);
+            self.store_register(nth_reg((inst >> 16 & 0xff) as u32, RZ, tile), word);
+        }
     }
     pub fn ldtram(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4243,7 +4382,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("MOVM");
     }
     pub fn mufu(&mut self, inst: u128) {
         use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
@@ -4267,7 +4406,9 @@ impl<'a> Decoder<'a> {
             9 => self.glsl(TANH, ty, &[x]),
             op => panic!("MUFU op {op} (RCP64H, RSQ64H) is not implemented"),
         };
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
+        // RCP flushes a subnormal result to zero.
+        let bits = if inst >> 74 & 0xf == 4 { self.flush_subnormal(bits) } else { bits };
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn nanosleep(&mut self, inst: u128) {
@@ -4667,7 +4808,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("SCATTER");
     }
     pub fn sel(&mut self, inst: u128) {
         let p = self.pred_bit(is_uniform(inst), (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
@@ -4788,7 +4929,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("SPMETADATA");
     }
     pub fn st(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

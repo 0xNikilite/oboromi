@@ -53,6 +53,18 @@ pub mod inst {
     pub const HMUL2: u128 = 0x232;
     pub const HFMA2: u128 = 0x231;
     pub const HFMA2_MMA: u128 = 0x235;
+    pub const HMMA: u128 = 0x23c;
+    pub const MMA_16816: u128 = 1 << 75;
+    pub const MMA_F32: u128 = 1 << 76;
+    pub const MMA_BF16: u128 = 1 << 82;
+    pub const IMMA: u128 = 0x237 | 1 << 74;
+    pub const IMMA_16816: u128 = 1 << 86;
+    pub const IMMA_16832: u128 = IMMA_16816 | 1 << 75;
+    pub const IMMA_S8_A: u128 = 1 << 76;
+    pub const IMMA_S8_B: u128 = 1 << 78;
+    pub const LDSM: u128 = 0x83b;
+    pub const LDSM_X4: u128 = 2 << 72;
+    pub const LDSM_MT88: u128 = 1 << 78;
     pub const HSET2: u128 = 0x233 | PP_PT;
     pub const HSETP2: u128 = 0x234 | PP_PT;
     pub const HMNMX2: u128 = 0x240;
@@ -963,6 +975,14 @@ fn fixtures_match_nvdisasm() {
         (inst::surface(inst::SUATOM_ADD, 5, 2, 4, 3, 0x10), "SUATOM.D.2D.ADD R5, [R2], R4, 0x3, 0x4 ;"),
         (inst::surface(inst::SUATOM_CAS, 5, 2, 4, 3, 0x10), "SUATOM.D.2D.CAS R5, [R2], R4, 0x3, 0x4 ;"),
         (inst::s2r(11, 60), "S2R R11, SR_GEMASK ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 16), "HMMA.16816.F32 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_16816 | inst::MMA_F32 | inst::MMA_BF16, 4, 8, 12, 16), "HMMA.16816.F32.BF16 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_F32, 4, 8, 12, 16), "HMMA.1688.F32 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_16816, 4, 8, 12, 16), "HMMA.16816.F16 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16816, 4, 8, 12, 16), "IMMA.16816.U8.U8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S8.S8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu(inst::LDSM | inst::LDSM_X4, 4, 2, 0), "LDSM.16.M88.4 R4, [R2] ;"),
+        (inst::alu(inst::LDSM | inst::LDSM_X4 | inst::LDSM_MT88, 12, 2, 0), "LDSM.16.MT88.4 R12, [R2] ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

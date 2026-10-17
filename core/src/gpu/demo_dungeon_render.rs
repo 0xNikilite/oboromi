@@ -61,7 +61,7 @@ pub(super) struct Renderer {
     vertices: HostBuffer<'static>,
     indices: HostBuffer<'static>,
     particles: HostBuffer<'static>,
-    _lights: HostBuffer<'static>,
+    lights: HostBuffer<'static>,
     shadows_ready: bool,
     shadow_maps: HostBuffer<'static>,
     _geometry: HostBuffer<'static>,
@@ -378,7 +378,7 @@ impl Renderer {
             vertices: vb,
             indices: ib,
             particles,
-            _lights: lights,
+            lights,
             shadows_ready: false,
             shadow_maps,
             _geometry: geo,
@@ -623,6 +623,12 @@ impl Renderer {
             })
             .collect();
         self.vertices.write_at((self.water_vertex * 48) as u64, &pack(&water)).map_err(named)?;
+        let light_data: Vec<_> = world.lights.iter().enumerate().flat_map(|(i,l)| {
+            let phase=i as f32*2.3;
+            let flicker=1.+l.flicker*(0.21*(seconds*11.7+phase).sin()+0.11*(seconds*23.1+phase*1.7).sin()+0.08*(seconds*4.3+phase).sin());
+            [l.pos[0],l.pos[1],l.pos[2],l.flame,l.colour[0]*flicker,l.colour[1]*flicker,l.colour[2]*flicker,0.]
+        }).collect();
+        self.lights.write(&floats(&light_data)).map_err(named)?;
         let per_emitter = if self.showcase { 96 } else { 32 };
         self.particle_time.write(&floats(&[seconds, per_emitter as f32, 0., 0.])).map_err(named)?;
         self.state.dispatch_profiled(&self.particles_step, [(self.emitter_count * per_emitter).div_ceil(64) as u32, 1, 1],self.query_pool()).map_err(named)?;

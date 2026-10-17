@@ -88,9 +88,8 @@ vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shad
     for(int i=0;i<lights.length();i++) {
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
         if(d2>min(180.,lights[i].colour.r*24.) || dot(n,to)<=0.)continue;
-        float flicker=1.+.09*sin(eye_time.w*11.7+float(i)*2.3)+.045*sin(eye_time.w*23.1+float(i));
         float vis=(shadow && settings.z<.5)?(up_rt.w>.5?softVisibility(p,n,to):shadowMap(-to,i,n)):1.;
-        c+=brdf(base,n,v,normalize(to),rough,metal)*lights[i].colour.rgb*flicker*vis*5./max(.22,d2);
+        c+=brdf(base,n,v,normalize(to),rough,metal)*lights[i].colour.rgb*vis*5./max(.22,d2);
     }
     return c;
 }

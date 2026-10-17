@@ -27,9 +27,9 @@ void main(){
         a=body*smoothstep(0.,.12,y)*(1.-smoothstep(.7,1.,y))*smoothstep(.3,.72,turbulence+(1.-y)*.2);
         float core=pow(max(0.,1.-abs(uv.x+distortion)/max(width,.01)),3.)*(1.-y);
         c=mix(vec3(1.5,.025,.001),vec3(4.,.7,.025),clamp(turbulence+core,0.,1.));
-        c=mix(c,vec3(7.,3.,.4),core*turbulence);a*=colour.a;
+        c=mix(c,vec3(6.,4.8,2.6),clamp(core*.8,0.,1.));a*=colour.a;
     }else if(kind<1.5){a=exp(-dot(uv,uv)*5.)*(1.-smoothstep(.6,1.,length(uv)))*colour.a;c*=12.;}
-    else if(kind<2.5){a=pow(max(0.,1.-dot(uv,uv)),2.)*colour.a*(.6+.4*sin(uv.x*9.+sin(uv.y*7.)+seed));}
+    else if(kind<2.5){float billow=noise(uv*3.+vec2(seed,eye_time.w*.18))*.65+noise(uv*7.+seed)*.35;a=pow(max(0.,1.-dot(uv,uv)),1.5)*colour.a*smoothstep(.12,.8,billow);}
     else if(kind<3.5) { a=pow(max(0.,1.-dot(uv,uv)),3.)*colour.a; }
     else if(kind<4.5) { a=pow(max(0.,1.-dot(uv,uv)),2.)*colour.a; c=vec3(.15,.3,.35)+pow(max(0.,1.-length(uv-vec2(-.2,.25))*3.),8.)*3.; }
     else if(kind<5.5) { a=exp(-pow((length(uv)-.8)*30.,2.))*colour.a; }

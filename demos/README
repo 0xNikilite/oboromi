@@ -1,5 +1,5 @@
 Demo scenes for the emulated GPU: host-written pushbuffers that drive the 3D (0xC797) and compute (0xC7C0) classes. GLSL in shaders/, register programs and memory maps in scenes/.
-pbr-boombox: BoomBox or Avocado with metallic-roughness PBR and normal maps. Needs indexed u32 draws, depth, five sampled textures, mipmaps once block-linear TICs decode.
+pbr-boombox: BoomBox or Avocado with metallic-roughness PBR and normal maps. Needs indexed u32 draws, depth, five mipmapped block-linear sampled textures.
 post-effect: the PBR scene rendered offscreen, then a full-screen chromatic aberration, scanline and vignette pass. Needs render to texture by VA and vertex-less draws.
 particles: 8192 particles integrated by a compute dispatch, drawn as additive instanced quads from the same buffer. Needs the compute class QMD launch, a compute-to-vertex barrier, per-instance streams, blending.
 sprites2d: parallax hill layers and floating sprites as alpha-blended instanced quads over a procedural atlas. Needs per-instance streams, alpha blending, repeat-wrap sampling.

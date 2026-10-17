@@ -6,10 +6,9 @@ structure, then `shaders/rt_ao.comp` casts four ambient-occlusion rays per pixel
 buffer a post pass can multiply in. Conventions, init program and `(verify)` meaning as in pbr-boombox.md.
 
 The shaders are `#version 460` (GL_EXT_ray_query requires it) and compile with `glslangValidator -V --target-env
-vulkan1.2` to SPIR-V 1.5 with the RayQueryKHR capability. The SM86 rig compiles them with the NVIDIA driver like the
-other scenes, and the ray-query parts come out as TTU instructions (TTUOPEN, TTUST, TTUGO, TTULD, TTUCCTL, TTUCLOSE,
-TTUMACROFUSE in sm_86_instructions.txt); those captures are being taken now and nothing below depends on their exact
-sequence.
+vulkan1.2` to SPIR-V 1.5 with the RayQueryKHR capability. The NVIDIA driver turns ray queries into one block of
+TTUOPEN, TTUMACROFUSE, TTUST, TTUGO and TTULD wrapped in its own candidate loop, which `core/src/gpu/sm86/ray.rs` runs
+on a Vulkan ray query; the rig has captured that block from compute shaders but not yet these two shaders (verify).
 
 ## Scene
 
@@ -40,12 +39,13 @@ projection as pbr-boombox. rt.frag's uniform block is pbr.frag's plus `sky` at +
 ## How the acceleration structure reaches the shader (guest side)
 
 On the guest, NVN builds acceleration structures through the driver into guest memory, in NVIDIA's own BVH format, and
-the application only hands over vertex and index buffers, instance transforms and a destination. The shader never sees
-the layout: it passes the TLAS address to the RT core through TTU instructions, and the address arrives in a driver
-constant bank the way the uniform pointers do (`c[0x1d]`, extracted-sass-analysis) (verify). The BVH format, the build
-path (compute launches or a dedicated method) and the TTU register protocol are unknown (verify); no TTU mapping exists
-in the translator yet. For this demo the synthetic guest writes no BVH at all: it writes the instance list and the
-TLAS address, which is all the host plan below needs.
+the application only hands over vertex and index buffers, instance transforms and a destination. In the desktop
+driver's compute code the TLAS address arrives as a 64-bit cbuf value (`c[0x0][0x40]` for a descriptor, the push
+constant slot for `accelerationStructureEXT(uint64_t)`), the shader adds the root offset it reads at TLAS + 0x20 and
+hands that to the TTU, and it reads instance custom indices and transforms from the TLAS itself, which a host-built
+structure does not provide. Which cbuf an NVN pixel shader uses is unknown (verify), and so are the BVH format and the
+build path (compute launches or a dedicated method). For this demo the synthetic guest writes no BVH at all: it writes
+the instance list and the TLAS address, which is all the host plan below needs.
 
 ## Register program additions
 
@@ -85,12 +85,12 @@ VK_KHR_acceleration_structure and VK_KHR_ray_query:
   48, u32 indices, opaque geometry, PREFER_FAST_TRACE. The guest BLAS VA is the cache key.
 - The TLAS every frame from the guest instance list at 0x1300_0000 (two instances, transform plus BLAS VA), with
   PREFER_FAST_BUILD; two instances are cheap enough that refit is not worth it.
-- The translated shader gets the TLAS as an `accelerationStructureEXT` descriptor next to the texture bindings of
-  ADR 0001 (a new binding kind, not yet in the ABI), and the TTU sequences map to OpRayQueryInitializeKHR / Proceed /
-  GetIntersectionType once the captures show their shape (verify).
+- The translated shader gets the TLAS as an `accelerationStructureEXT` descriptor bound after its textures, which
+  `Gpu::register_acceleration_structure` resolves from the TLAS address in the cbuf; compute launches bind it, draws
+  do not yet.
 
-When the TTU emulation lands it receives the guest's TLAS address and resolves it through this same cache, so a real
-game whose BVH bytes the host cannot read still gets a host-built structure from its build inputs.
+The TTU emulation resolves the guest's TLAS address through this same registry, so a real game whose BVH bytes the
+host cannot read still gets a host-built structure from its build inputs.
 
 Local devices, vulkaninfo, Mesa 26.0.8: Intel Arc (MTL, ANV) and lavapipe (LLVM 21.1.8) both expose
 VK_KHR_acceleration_structure and VK_KHR_ray_query with `accelerationStructure` and `rayQuery` true (lavapipe also

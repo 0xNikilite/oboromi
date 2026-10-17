@@ -19,6 +19,7 @@ mod operands;
 mod shared;
 mod special;
 mod tensor;
+pub use tensor::{cooperative_tile, f16_hmma_shape};
 mod texture;
 mod uniform;
 mod warp;
@@ -82,6 +83,7 @@ pub enum ResourceKind {
     Shared,
     Shared64,
     Warp,
+    Mma,
     Schedule,
     Global64,
     Hints,
@@ -133,6 +135,9 @@ pub struct Decoder<'a> {
     type_f16: u32,
     type_f16x2: u32,
     mma_vars: [u32; 9],
+    device: Option<&'a VkState>,
+    pub force_cooperative_hmma: Option<bool>,
+    cooperative_types: HashMap<[u32; 4], u32>,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
@@ -234,7 +239,7 @@ pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], hints: Hints,
 }
 
 impl<'a> Decoder<'a> {
-    pub fn new(ir: &'a mut spirv::Emitter, hints: Hints, device: Option<&VkState>) -> Self {
+    pub fn new(ir: &'a mut spirv::Emitter, hints: Hints, device: Option<&'a VkState>) -> Self {
         Self {
             ir,
             type_void: 0,
@@ -270,6 +275,9 @@ impl<'a> Decoder<'a> {
             type_f16: 0,
             type_f16x2: 0,
             mma_vars: [0; 9],
+            device,
+            force_cooperative_hmma: None,
+            cooperative_types: HashMap::new(),
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],

@@ -2,6 +2,7 @@
 //! and sinks once per 5 ms period, audout plays queued pcm, and both end in the gui's sink ring.
 
 pub mod audout;
+pub mod demo_music;
 pub mod dsp;
 pub mod effect;
 pub mod mix;

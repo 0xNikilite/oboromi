@@ -199,12 +199,14 @@ impl Pusher {
             match (self.threed.write(method, value)?, events.last_mut()) {
                 (None, _) => {}
                 (Some(ThreeDEvent::Draw(draw)), Some(Event::Draw(last))) if last.continued_by(&draw) => last.instance_count += 1,
+                (Some(ThreeDEvent::NextInstance(_)), Some(Event::Draw(last))) => last.instance_count += 1,
                 (Some(event), _) => events.push(match event {
                     ThreeDEvent::Draw(draw) => Event::Draw(draw),
                     ThreeDEvent::Report { addr, payload, one_word } => Event::Report { addr, payload, one_word },
                     ThreeDEvent::SemaphoreAcquire { addr, payload, at_least } => Event::SemaphoreAcquire { addr, payload, at_least },
                     ThreeDEvent::Clear(clear) => Event::Clear(clear),
                     ThreeDEvent::LoadConstantBuffer { addr, value } => Event::LoadConstantBuffer { addr, value },
+                    ThreeDEvent::NextInstance(value) => Event::Draw(self.threed.encoded_draw(value, false)?),
                 }),
             }
         } else {

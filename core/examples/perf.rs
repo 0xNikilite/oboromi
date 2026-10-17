@@ -6,7 +6,8 @@ use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::pipeline_cache::Disk;
 use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, Stage, emit_module};
-use oboromi_core::gpu::{VkState, demo, demo_post::render_post_frame, demo_sprites::render_sprites_frame, surface_device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
+use oboromi_core::audio::demo_music::{music, sequence};
+use oboromi_core::gpu::{VkState, demo, demo_bounce::render_bounce_frame, demo_particles::render_particles_frame, demo_post::render_post_frame, demo_sprites::render_sprites_frame, surface_device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
 use oboromi_core::tests::gpu::engine::{TARGET, TEXTURES, VERTICES, texture_header, textured_quad_frame, triangle_frame, triangle_guest, vertex_bytes};
 use oboromi_core::tests::gpu::{graphics, harness::translate_module};
 use oboromi_core::tests::gpu_test::inst;
@@ -40,6 +41,11 @@ fn main() {
     let program: Vec<u128> = fixtures.iter().copied().cycle().take(1000).collect();
     bench("translate 1000 inst", 20, 200, || {
         black_box(translate_module(black_box(&program), true, None));
+    });
+    let mut song = music();
+    bench("audren music period", 20, 2000, || {
+        sequence(&mut song);
+        black_box(song.period());
     });
     let (w, h) = (1920, 1080);
     let pixels = vec![0x80u8; w * h * 4];
@@ -131,12 +137,14 @@ fn main() {
     bench("pushbuffer triangle 1080p", 2, 100, || render_triangle_demo(0.25).unwrap());
     bench("demo post 1080p", 2, 100, || render_post_frame(0.25).unwrap());
     bench("demo sprites 1080p", 2, 100, || render_sprites_frame(0.25).unwrap());
+    bench("demo particles 1080p", 2, 100, || render_particles_frame(0.25).unwrap());
     let mut quad = triangle_guest(state, None, 1920, 1080, &[([0.0; 2], [0; 4]); 3]).unwrap();
     let corners = [([-1.0, -1.0], [0, 0, 0, 0]), ([1.0, -1.0], [255, 0, 0, 0]), ([-1.0, 1.0], [0, 255, 0, 0]), ([1.0, 1.0], [255, 255, 0, 0])];
     quad.write(VERTICES, &vertex_bytes(&corners)).unwrap();
     quad.write(TEXTURES + 0x1000, &(0..64 * 64 * 4).map(|i| i as u8).collect::<Vec<_>>()).unwrap();
     texture_header(&mut quad, TEXTURES + 0x1000, 64, 64, 64 * 4).unwrap();
     bench("pushbuffer textured quad 1080p", 2, 100, || textured_quad_frame(&mut quad, 1920, 1080, TARGET, 0).unwrap());
+    bench("demo bounce 1080p", 2, 100, || render_bounce_frame(0.25).unwrap());
     bench("demo boombox 1080p", 2, 100, || demo::render_boombox_frame(0.25).unwrap());
     match demo::asset_dir("flighthelmet").exists() {
         true => bench("demo helmet 1080p", 2, 100, || demo::render_helmet_frame(0.25).unwrap()),

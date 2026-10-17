@@ -237,6 +237,17 @@ bool oboromi_render_post_frame(float seconds);
 bool oboromi_render_sprites_frame(float seconds);
 bool oboromi_render_dungeon_frame(float seconds);
 
+/// plays the music demo up to `seconds` through the audio renderer, false if it panicked.
+bool oboromi_render_music_demo(float seconds);
+
+/// steps the bounce demo to `seconds`, plays its knocks and presents the frame, false if vulkan
+/// is missing or a draw fails. blocks, so call it from a worker thread.
+bool oboromi_render_bounce_demo(float seconds);
+
+/// draws a frame of the particles demo at `seconds` and presents it, false if
+/// vulkan is missing or the frame fails. blocks, so call it from a worker thread.
+bool oboromi_render_particles_frame(float seconds);
+
 /// generation of the last presented frame, 0 until the guest presents one.
 uint64_t oboromi_frame_generation();
 

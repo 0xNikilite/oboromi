@@ -4,6 +4,8 @@ const BMOV_R_B: u32 = 0x355;
 const BMOV_B_R: u32 = 0x356;
 const BMOV_B_B_CLEAR: u32 = 0xf55;
 const BMOV_B_B: u32 = 0xf56;
+const BMOV_ATEXIT_R: u32 = 0x357;
+const BMOV_ATEXIT_I: u32 = 0x957;
 
 impl<'a> Decoder<'a> {
     fn pack_lanes(&mut self, bits: Vec<u32>) -> u32 {
@@ -19,6 +21,11 @@ impl<'a> Decoder<'a> {
         let state = (inst >> 24 & 0x3f) as u32;
         let clear = inst >> 84 & 1 != 0;
         let op = opcode(inst);
+        if matches!(op, BMOV_ATEXIT_R | BMOV_ATEXIT_I) {
+            let pc = if op == BMOV_ATEXIT_R { self.load_register((inst >> 32 & 0xff) as u32) } else { self.cached_const_u32(((inst >> 34) as u32) << 2) };
+            let ptr = self.barrier_token(ATEXIT_PC);
+            return self.ir.emit_store(ptr, pc);
+        }
         assert!(state < 16 && (op == BMOV_R_B || clear == (op == BMOV_B_B_CLEAR)), "unsupported BMOV state {state}");
         let state_ptr = self.barrier_token(state);
         match op {

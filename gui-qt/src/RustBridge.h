@@ -34,4 +34,11 @@ bool renderPostFrame(float seconds);
 bool renderSpritesFrame(float seconds);
 bool renderDungeonFrame(float seconds);
 
+// Plays the music demo and steps the bounce demo up to the given time
+bool renderMusicDemo(float seconds);
+bool renderBounceDemo(float seconds);
+
+// Draws the particles demo at the given time into the display
+bool renderParticlesFrame(float seconds);
+
 }

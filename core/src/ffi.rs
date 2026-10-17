@@ -135,6 +135,29 @@ pub extern "C" fn oboromi_render_sprites_frame(seconds: f32) -> bool {
     )
 }
 
+/// plays the music demo up to `seconds` through the audio renderer, false if it panicked.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_music_demo(seconds: f32) -> bool {
+    catch_unwind(|| crate::audio::demo_music::play_music(seconds)).is_ok()
+}
+
+/// steps the bounce demo to `seconds`, plays its knocks and presents the frame, false if vulkan
+/// is missing or a draw fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_bounce_demo(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo_bounce::render_bounce_frame(seconds)), Ok(Ok(())))
+}
+
+/// draws a frame of the particles demo at `seconds` and presents it, false if
+/// vulkan is missing or the frame fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_particles_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::demo_particles::render_particles_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
 /// generation of the last presented frame, 0 until the guest presents one.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_generation() -> u64 {

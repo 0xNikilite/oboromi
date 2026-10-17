@@ -38,6 +38,7 @@ pub struct DrawState<'a> {
     pub index_buffer: Option<(&'a HostBuffer<'a>, vk::IndexType)>,
     pub vertex_count: u32,
     pub first_vertex: u32,
+    pub first_instance: u32,
     pub instance_count: u32,
     /// Without a clear the draw loads what the previous draw into the target left.
     pub clear: Option<[f32; 4]>,
@@ -303,9 +304,9 @@ impl VkState {
             match draw.index_buffer {
                 Some((buffer, ty)) => {
                     d.cmd_bind_index_buffer(cmd, buffer.buffer, 0, ty);
-                    d.cmd_draw_indexed(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0, 0);
+                    d.cmd_draw_indexed(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0, draw.first_instance);
                 }
-                None => d.cmd_draw(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0),
+                None => d.cmd_draw(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, draw.first_instance),
             }
             d.cmd_end_rendering(cmd);
             d.cmd_pipeline_barrier(cmd, Stage::COLOR_ATTACHMENT_OUTPUT, Stage::TRANSFER, none, &[], &[], &[to_transfer]);

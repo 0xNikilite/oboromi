@@ -231,3 +231,13 @@ fn one_increment_advances_only_first_word() {
         3
     );
 }
+
+#[test]
+fn subsequent_instances_of_one_draw_merge_into_an_instanced_draw() {
+    const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
+    let mut words = triangle_pushbuffer();
+    non_inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT, &[(4 << 28) | (3 << 16) | 2; 2], &mut words);
+    let events = submit(&words, None);
+    let [Event::Draw(draw)] = events.as_slice() else { panic!("{events:?}") };
+    assert_eq!((draw.first_instance, draw.instance_count), (0, 3));
+}

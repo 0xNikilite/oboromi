@@ -45,6 +45,7 @@ const DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_FIRST: usize = 0x17ec;
 const DRAW_INDEX_BUFFER32_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f0;
 const DRAW_INDEX_BUFFER16_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f4;
 const DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f8;
+const BEGIN: usize = 0x1618;
 const OGL_SET_CULL: usize = 0x1918;
 const OGL_SET_FRONT_FACE: usize = 0x191c;
 const OGL_SET_CULL_FACE: usize = 0x1920;
@@ -208,6 +209,7 @@ pub struct DrawSnapshot {
     pub topology: PrimitiveTopology,
     pub vertex_count: u32,
     pub first_vertex: u32,
+    pub first_instance: u32,
     pub instance_count: u32,
     pub indexed: bool,
     pub vertex_streams: [VertexStream; 32],
@@ -230,6 +232,14 @@ pub struct DrawSnapshot {
     pub constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
 }
 
+impl DrawSnapshot {
+    /// Whether `next` draws the instance after this draw's last with the same state, so both make one instanced draw.
+    pub fn continued_by(&self, next: &DrawSnapshot) -> bool {
+        next.first_instance == self.first_instance + self.instance_count
+            && *self == DrawSnapshot { first_instance: self.first_instance, instance_count: self.instance_count, ..next.clone() }
+    }
+}
+
 pub(crate) enum ThreeDEvent {
     Draw(DrawSnapshot),
     Report { addr: u64, payload: u32 },
@@ -241,7 +251,7 @@ pub struct ThreeD {
     words: Box<[u32; REGISTER_BYTES / 4]>,
     dirty: DirtyFlags,
     topology: PrimitiveTopology,
-    instances: u32,
+    instance: u32,
     constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
 }
 
@@ -251,7 +261,7 @@ impl Default for ThreeD {
             words: Box::new([0; REGISTER_BYTES / 4]),
             dirty: DirtyFlags::default(),
             topology: PrimitiveTopology::Points,
-            instances: 1,
+            instance: 0,
             constant_buffers: Default::default(),
         }
     }
@@ -284,12 +294,21 @@ impl ThreeD {
                 value,
                 false,
             )?))),
+            BEGIN => {
+                self.topology = u8::try_from(value & 0xffff).unwrap_or(u8::MAX).try_into()?;
+                match value >> 26 & 3 {
+                    0 => self.instance = 0,
+                    1 => self.instance += 1,
+                    _ => {}
+                }
+                Ok(None)
+            }
             DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST => {
-                self.instances = 1;
+                self.instance = 0;
                 Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, false)?)))
             }
             DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT => {
-                self.instances += 1;
+                self.instance += 1;
                 Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, false)?)))
             }
             DRAW_INDEX_BUFFER => Ok(Some(ThreeDEvent::Draw(self.snapshot(
@@ -301,14 +320,14 @@ impl ThreeD {
             DRAW_INDEX_BUFFER32_BEGIN_END_INSTANCE_FIRST
             | DRAW_INDEX_BUFFER16_BEGIN_END_INSTANCE_FIRST
             | DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_FIRST => {
-                self.instances = 1;
+                self.instance = 0;
                 self.set_index_size(byte);
                 Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, true)?)))
             }
             DRAW_INDEX_BUFFER32_BEGIN_END_INSTANCE_SUBSEQUENT
             | DRAW_INDEX_BUFFER16_BEGIN_END_INSTANCE_SUBSEQUENT
             | DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_SUBSEQUENT => {
-                self.instances += 1;
+                self.instance += 1;
                 self.set_index_size(byte);
                 Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, true)?)))
             }
@@ -435,7 +454,8 @@ impl ThreeD {
             topology,
             vertex_count,
             first_vertex,
-            instance_count: self.instances,
+            first_instance: self.instance,
+            instance_count: 1,
             indexed,
             vertex_streams: streams,
             vertex_attributes: attributes,

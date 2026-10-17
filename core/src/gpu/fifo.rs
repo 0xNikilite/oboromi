@@ -195,13 +195,15 @@ impl Pusher {
                 events.push(Event::Dispatch(dispatch));
             }
         } else if class == THREED_CLASS_ID {
-            if let Some(event) = self.threed.write(method, value)? {
-                events.push(match event {
+            match (self.threed.write(method, value)?, events.last_mut()) {
+                (None, _) => {}
+                (Some(ThreeDEvent::Draw(draw)), Some(Event::Draw(last))) if last.continued_by(&draw) => last.instance_count += 1,
+                (Some(event), _) => events.push(match event {
                     ThreeDEvent::Draw(draw) => Event::Draw(draw),
                     ThreeDEvent::Report { addr, payload } => Event::Report { addr, payload },
                     ThreeDEvent::Clear { value, colour, target } => Event::Clear { value, colour, target },
                     ThreeDEvent::LoadConstantBuffer { addr, value } => Event::LoadConstantBuffer { addr, value },
-                });
+                }),
             }
         } else {
             return Err(format!(

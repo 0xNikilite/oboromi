@@ -85,6 +85,7 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
             index_buffer: None,
             vertex_count: 3,
             first_vertex: 0,
+            first_instance: 0,
             instance_count: 1,
             clear: Some([1.0; 4]),
             raster,

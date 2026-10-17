@@ -544,6 +544,7 @@ impl<'a> Gpu<'a> {
             index_buffer: None,
             vertex_count: draw.vertex_count,
             first_vertex: draw.first_vertex,
+            first_instance: draw.first_instance,
             instance_count: draw.instance_count,
             clear,
             raster: raster_state(draw, extent, topology),

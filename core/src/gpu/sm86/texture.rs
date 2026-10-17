@@ -427,9 +427,11 @@ impl<'a> Decoder<'a> {
         self.store_texel(inst, bits);
     }
 
-    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1.
+    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1; with Rd = RZ they start at Rd2, as the
+    // NVIDIA driver's `TEX RZ, R0, ..., 0x2` that goes on to read the green texel from R0 shows.
     fn store_texel(&mut self, inst: u128, texel: u32) {
         let [rd, rd2] = [16, 64].map(|bit| (inst >> bit & 0xff) as u32);
+        let [rd, rd2] = if rd == RZ { [rd2, RZ] } else { [rd, rd2] };
         let written = (0..4).filter(|c| inst >> (72 + c) & 1 != 0);
         for (i, component) in written.enumerate() {
             let value = self.ir.emit_composite_extract(self.type_u32[1], texel, &[component]);

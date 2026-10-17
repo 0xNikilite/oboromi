@@ -74,11 +74,11 @@ struct Module {
 enum PipelineKey {
     Draw {
         shaders: [u64; 2],
-        streams: Vec<(u32, vk::VertexInputRate)>,
+        streams: Vec<vk::VertexInputRate>,
         attributes: Vec<(u32, u32, vk::Format, u32)>,
         topology: vk::PrimitiveTopology,
-        colour_write_mask: u8,
-        blend: Option<Blend>,
+        /// SET_BLEND, its equations and SET_CT_WRITE, unless VK_EXT_extended_dynamic_state3 makes them dynamic.
+        blend: Option<(Option<Blend>, u8)>,
         depth: Option<vk::Format>,
     },
     Dispatch(u64),
@@ -677,11 +677,10 @@ impl<'a> Gpu<'a> {
         let pipeline_depth = draw.depth_target.map(|target| self.depth_format(target)).transpose()?;
         let key = PipelineKey::Draw {
             shaders,
-            streams: streams.iter().map(|&(_, stride, rate)| (stride, rate)).collect(),
+            streams: streams.iter().map(|&(.., rate)| rate).collect(),
             attributes,
             topology,
-            colour_write_mask: draw.colour_write_mask,
-            blend: draw.blend,
+            blend: self.state.extended_dynamic_state3.is_none().then_some((draw.blend, draw.colour_write_mask)),
             depth: pipeline_depth,
         };
 
@@ -712,7 +711,7 @@ impl<'a> Gpu<'a> {
         let PipelineKey::Draw { streams: rates, attributes, .. } = &key else { unreachable!() };
         let (state, blend) = (self.state, blend_state(draw.blend, draw.colour_write_mask)?);
         let lookup = self.pipelines.get_or_request(&key, || {
-            let bindings: Vec<_> = (0..).zip(rates).map(|(binding, &(stride, input_rate))| vk::VertexInputBindingDescription { binding, stride, input_rate }).collect();
+            let bindings: Vec<_> = (0..).zip(rates).map(|(binding, &input_rate)| vk::VertexInputBindingDescription { binding, stride: 0, input_rate }).collect();
             let attributes: Vec<_> = attributes
                 .iter()
                 .map(|&(location, binding, format, offset)| vk::VertexInputAttributeDescription { location, binding, format, offset })

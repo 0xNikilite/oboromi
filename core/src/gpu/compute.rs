@@ -113,8 +113,8 @@ pub struct HostImage<'a> {
 }
 
 impl<'a> HostImage<'a> {
-    /// A one-mip 2D image uploaded from the pitch-linear rows at the start of `memory`, left in GENERAL so the one
-    /// view serves both as a sampled texture and as a storage image.
+    /// A 2D image with every level of `header` uploaded from the guest texels at the start of `memory`, left in GENERAL
+    /// so the one view serves both as a sampled texture and, where the format allows it, as a storage image.
     pub fn new(
         state: &'a VkState,
         header: &TextureHeader,
@@ -127,14 +127,20 @@ impl<'a> HostImage<'a> {
             height: header.height,
             depth: 1,
         };
+        let features = unsafe { state.instance.get_physical_device_format_properties(state.physical_device, header.format) };
+        let storage = if features.optimal_tiling_features.contains(vk::FormatFeatureFlags::STORAGE_IMAGE) {
+            vk::ImageUsageFlags::STORAGE
+        } else {
+            vk::ImageUsageFlags::empty()
+        };
         let info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(header.format)
             .extent(extent)
-            .mip_levels(1)
+            .mip_levels(header.levels)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
-            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST);
+            .usage(vk::ImageUsageFlags::SAMPLED | storage | vk::ImageUsageFlags::TRANSFER_DST);
         let mut img = Self {
             device: d,
             image: unsafe { d.create_image(&info, None)? },
@@ -148,17 +154,11 @@ impl<'a> HostImage<'a> {
             .memory_type_index(req.memory_type_bits.trailing_zeros());
         let range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(1)
+            .level_count(header.levels)
             .layer_count(1);
-        let mut staging = HostBuffer::new(state, memory.len() as u64)?;
-        staging.write(memory)?;
-        let layers = vk::ImageSubresourceLayers::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .layer_count(1);
-        let copy = [vk::BufferImageCopy::default()
-            .buffer_row_length(header.pitch / 4)
-            .image_subresource(layers)
-            .image_extent(extent)];
+        let (texels, copies) = header.upload(memory);
+        let mut staging = HostBuffer::new(state, texels.len() as u64)?;
+        staging.write(&texels)?;
         let to_transfer = vk::ImageMemoryBarrier::default()
             .image(img.image)
             .subresource_range(range)
@@ -189,7 +189,7 @@ impl<'a> HostImage<'a> {
                     staging.buffer,
                     img.image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &copy,
+                    &copies,
                 );
                 d.cmd_pipeline_barrier(
                     cmd,

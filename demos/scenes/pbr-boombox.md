@@ -35,7 +35,7 @@ Values tagged `(verify)` rest on a convention not yet confirmed on hardware or b
 | 0x1003_0000 | 0x1_0000 | TIC pool +0x0000 (4 entries of 32 B), TSC pool +0x8000 (1 entry) |
 | 0x1004_0000 | 0x3_0000 | boombox/vertices.bin, 171600 B, stride 48 |
 | 0x1007_0000 | 0x2_0000 | boombox/indices.bin, 72432 B, 18108 u32 |
-| 0x1010_0000 | 0x6_0000 | baseColor.rgba8 (mip 0 at +0, 256x256, pitch 1024; mips 1-8 follow tightly) |
+| 0x1010_0000 | 0x6_0000 | baseColor.rgba8 (256x256 block-linear, gob height 16 rows, 5 levels down to 16x16 back to back) |
 | 0x1016_0000 | 0x6_0000 | metallicRoughness.rgba8 (also the occlusion map: glTF reads occlusion from R) |
 | 0x101C_0000 | 0x6_0000 | normal.rgba8 |
 | 0x1022_0000 | 0x6_0000 | emissive.rgba8 (Avocado has none: point TIC 3 at baseColor, emissive factor is 0) |
@@ -47,21 +47,18 @@ Values tagged `(verify)` rest on a convention not yet confirmed on hardware or b
 
 TIC entries (8 words, word 0 first). Word 0 = components A8B8G8R8 (8), UNORM per channel, swizzle RGBA (verify: TIC
 format code and data type values from clc797tex.h, never checked against a rig-written header). Word 2 = header
-version PITCH (2 << 21). Word 3 = pitch >> 5. Word 4 = width-1, TWO_D (1 << 23). Word 5 = height-1, normalized coords.
+version BLOCKLINEAR (3 << 21). Word 3 = gobs per block height 2 (1 << 3), MAX_MIP_LEVEL 4 (4 << 28). Word 4 = width-1,
+TWO_D (1 << 23), sRGB conversion (1 << 22) for baseColor and emissive. Word 5 = height-1, normalized coords.
 
 | TIC | texture | w0 | w1 | w2 | w3 | w4 | w5 | w6 | w7 |
 |---|---|---|---|---|---|---|---|---|---|
-| 0 | baseColor | 0x58d24908 | 0x10100000 | 0x00400000 | 0x00000020 | 0x008000ff | 0x800000ff | 0 | 0 |
-| 1 | metallicRoughness / occlusion | 0x58d24908 | 0x10160000 | 0x00400000 | 0x00000020 | 0x008000ff | 0x800000ff | 0 | 0 |
-| 2 | normal | 0x58d24908 | 0x101c0000 | 0x00400000 | 0x00000020 | 0x008000ff | 0x800000ff | 0 | 0 |
-| 3 | emissive | 0x58d24908 | 0x10220000 | 0x00400000 | 0x00000020 | 0x008000ff | 0x800000ff | 0 | 0 |
+| 0 | baseColor | 0x58d24908 | 0x10100000 | 0x00600000 | 0x40000008 | 0x00c000ff | 0x800000ff | 0 | 0 |
+| 1 | metallicRoughness / occlusion | 0x58d24908 | 0x10160000 | 0x00600000 | 0x40000008 | 0x008000ff | 0x800000ff | 0 | 0 |
+| 2 | normal | 0x58d24908 | 0x101c0000 | 0x00600000 | 0x40000008 | 0x008000ff | 0x800000ff | 0 | 0 |
+| 3 | emissive | 0x58d24908 | 0x10220000 | 0x00600000 | 0x40000008 | 0x00c000ff | 0x800000ff | 0 | 0 |
 
-These headers describe mip 0 only, which is what texture.rs decodes today. The full chain needs `MAX_MIP_LEVEL` = 8 in
-w3 bits 31:28 (w3 = 0x80000020), a mip filter in the sampler, and texture.rs accepting levels; on hardware a mipmapped
-texture is block-linear, so the chain in the asset files would also need swizzling (verify).
-
-TSC 0, repeat, linear min and mag, no mip: w0 = 0x00000000, w1 = 0x00000062 (mag 2, min 2 << 4, mip NONE 1 << 6),
-w2-w7 = 0. With mips: w1 = 0x000000e2 (MIP_LINEAR) and w2 = 0x00008000 (max LOD clamp 8.0 in 4.8 fixed point).
+TSC 0, repeat, trilinear: w0 = 0x00000000, w1 = 0x000000e2 (mag 2, min 2 << 4, MIP_LINEAR 3 << 6), w2 = 0x00400000
+(max LOD clamp 4.0 in 4.8 fixed point at bits 23:12), w3-w7 = 0.
 
 Handle words at PS c2 (verify): +0x0 = 0x00000000 (baseColor), +0x4 = 0x00000002 (normal), +0x8 = 0x00000001
 (metallicRoughness), +0xc = 0x00000001 (occlusion), +0x10 = 0x00000003 (emissive).

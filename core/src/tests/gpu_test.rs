@@ -641,6 +641,7 @@ pub mod inst {
     pub const UIMAD_WIDE: u128 = 0x2a5 | UNIFORM;
     pub const UISETP: u128 = 0x28c | UNIFORM;
     pub const ULEA: u128 = 0x291 | UNIFORM;
+    pub const UCLEA: u128 = 0x8bc | UNIFORM;
     pub const USEL: u128 = 0x287 | UNIFORM;
     pub const UMOV: u128 = 0xc82 | UNIFORM;
     pub const UMOV_IMM: u128 = 0x882;
@@ -952,6 +953,8 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::R2UR_OR, 3, 5, 0), "R2UR.OR PT, UR3, R5 ;"),
         (inst::alu(inst::USEL ^ inst::IMM_B | inst::preds(0, 0, 1, 0), 4, 3, 7), "USEL UR4, UR3, 0x7, UP1;"),
         (inst::alu3(inst::ULEA | inst::lea_shift(3) | inst::preds(7, 0, 0, 0), 6, 3, 1, 63), "ULEA UR6, UR3, UR1, 0x3;"),
+        (inst::alu(inst::UCLEA | 4 << 73, 14, 10, 0x30), "UCLEA UR14, UP0, UR10, 0x30, 0x4;"),
+        (inst::alu(inst::UCLEA | 0x400 | 2 << 73 | inst::preds(7, 0, 0, 0), 14, 10, 8), "UCLEA UR14, UPT, UR10, UR8, 0x2;"),
         (inst::alu3(inst::UIMAD_WIDE ^ inst::IMM_B | inst::preds(7, 0, 0, 0), 8, 3, 0x10, 10), "UIMAD.WIDE.U32 UR8, UR3, 0x10, UR10;"),
         (inst::alu3(inst::UIADD3_64 ^ inst::IMM_B | inst::preds(7, 7, 7, 7), 12, 10, u32::MAX, 63), "UIADD3.64 UR12, UR10, -0x1, URZ;"),
         (inst::alu(inst::UISETP | inst::ICMP_LT | inst::preds(0, 1, 7, 0), 0, 5, 6), "UISETP.LT.U32.AND UP0, UP1, UR5, UR6, UPT;"),

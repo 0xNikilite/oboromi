@@ -12,7 +12,7 @@ impl<'a> Decoder<'a> {
         if is_uniform(inst) { self.load_ureg_pair(index & 0x3f) } else { self.load_pair(index & 0xff) }
     }
 
-    fn store_alu_pair(&mut self, inst: u128, val: u32) {
+    pub(super) fn store_alu_pair(&mut self, inst: u128, val: u32) {
         let rd = (inst >> 16) as u32;
         if !is_uniform(inst) {
             return self.store_pair(rd & 0xff, val);

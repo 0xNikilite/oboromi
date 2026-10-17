@@ -9,7 +9,7 @@ pub const SIZE: u32 = 64;
 const VERTICES: [([f32; 2], [u8; 4]); 3] =
     [([-0.875, -0.875], [255, 0, 0, 255]), ([0.875, -0.875], [0, 255, 0, 255]), ([-0.875, 0.875], [0, 0, 255, 255])];
 
-fn opaque() -> vk::PipelineColorBlendAttachmentState {
+pub fn opaque() -> vk::PipelineColorBlendAttachmentState {
     vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA)
 }
 
@@ -63,7 +63,7 @@ pub fn triangle_pipeline(state: &VkState) -> Result<GraphicsPipeline<'_>, VkErro
         .map(|(location, format, offset)| vk::VertexInputAttributeDescription { location, binding: 0, format, offset });
     let topology = vk::PrimitiveTopology::TRIANGLE_LIST;
     let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
-    GraphicsPipeline::new(state, &vertex, &fragment, [&[], &[]], &layout, &TargetState { blend: opaque(), depth: None })
+    GraphicsPipeline::new(state, &vertex, None, &fragment, [&[], &[]], &layout, &TargetState { blend: opaque(), depth: None })
 }
 
 /// Draws the triangle over a white clear into a SIZE x SIZE target and reads it back, once per call.

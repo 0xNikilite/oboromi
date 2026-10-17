@@ -11,7 +11,7 @@ void main(){
     int count=int(time_count.y), emitter=int(i)/count,k=int(i)%count;
     Light l=lights[emitter]; float seed=float(i)+1.,scale=max(l.position.w,.04);
     float age=fract(time_count.x*(.16+hash(seed)*.24)+hash(seed+3.));
-    float type=k<9?0.:k%3==0?2.:1.;
+    float type=k<9?0.:k%4==0?2.:1.;
     vec3 p=l.position.xyz;
     vec4 colour=vec4(1.,.28,.018,1.);
     vec2 size;

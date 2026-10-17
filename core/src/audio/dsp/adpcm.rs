@@ -13,6 +13,14 @@ pub struct AdpcmContext {
 pub struct GcAdpcmDecoder {
     params: AdpcmParams,
     context: AdpcmContext,
+    frame: [u8; 8],
+    frame_sample: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AdpcmProgress {
+    pub samples: usize,
+    pub bytes: usize,
 }
 
 impl GcAdpcmDecoder {
@@ -20,6 +28,8 @@ impl GcAdpcmDecoder {
         Self {
             params,
             context: AdpcmContext::default(),
+            frame: [0; 8],
+            frame_sample: 14,
         }
     }
 
@@ -33,43 +43,49 @@ impl GcAdpcmDecoder {
 
     pub fn restore(&mut self, context: AdpcmContext) {
         self.context = context;
+        self.frame_sample = 14;
     }
 
     // Nintendo DSP-ADPCM stores 14 signed nibbles after each predictor/scale byte.
-    pub fn process(&mut self, input: &[u8], output: &mut [f32], samples: usize) -> usize {
+    pub fn process(&mut self, input: &[u8], output: &mut [f32], samples: usize) -> AdpcmProgress {
         let mut written = 0;
-        for frame in input.chunks_exact(8) {
-            if written == samples || written == output.len() {
-                break;
+        let mut consumed = 0;
+        while written < samples && written < output.len() {
+            if self.frame_sample == 14 {
+                let Some(frame) = input.get(consumed..consumed + 8) else {
+                    break;
+                };
+                self.frame.copy_from_slice(frame);
+                consumed += 8;
+                self.frame_sample = 0;
             }
-            let header = frame[0];
+            let header = self.frame[0];
             let predictor = usize::from(header >> 4).min(7) * 2;
             let scale = 1_i32 << (header & 0xf);
             self.context.predictor_scale = header;
-            for index in 0..14 {
-                if written == samples || written == output.len() {
-                    break;
-                }
-                let byte = frame[1 + index / 2];
-                let nibble = if index & 1 == 0 {
-                    byte >> 4
-                } else {
-                    byte & 0xf
-                };
-                let nibble = i32::from((nibble as i8) << 4) >> 4;
-                let predicted = i32::from(self.params.coefficients[predictor])
-                    * i32::from(self.context.history_sample_1)
-                    + i32::from(self.params.coefficients[predictor + 1])
-                        * i32::from(self.context.history_sample_2);
-                let sample = ((nibble * scale << 11) + predicted + 1024) >> 11;
-                let sample = sample.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
-                self.context.history_sample_2 = self.context.history_sample_1;
-                self.context.history_sample_1 = sample;
-                output[written] = f32::from(sample) / 32768.0;
-                written += 1;
-            }
+            let byte = self.frame[1 + self.frame_sample / 2];
+            let nibble = if self.frame_sample & 1 == 0 {
+                byte >> 4
+            } else {
+                byte & 0xf
+            };
+            let nibble = i32::from((nibble as i8) << 4) >> 4;
+            let predicted = i32::from(self.params.coefficients[predictor])
+                * i32::from(self.context.history_sample_1)
+                + i32::from(self.params.coefficients[predictor + 1])
+                    * i32::from(self.context.history_sample_2);
+            let sample = ((nibble * scale << 11) + predicted + 1024) >> 11;
+            let sample = sample.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+            self.context.history_sample_2 = self.context.history_sample_1;
+            self.context.history_sample_1 = sample;
+            output[written] = f32::from(sample) / 32768.0;
+            self.frame_sample += 1;
+            written += 1;
         }
-        written
+        AdpcmProgress {
+            samples: written,
+            bytes: consumed,
+        }
     }
 }
 
@@ -127,12 +143,12 @@ mod tests {
             .collect();
         let encoded = encode(&source, coefficients);
         let mut decoded = vec![0.0; source.len()];
-        let count = GcAdpcmDecoder::new(AdpcmParams { coefficients }).process(
+        let progress = GcAdpcmDecoder::new(AdpcmParams { coefficients }).process(
             &encoded,
             &mut decoded,
             source.len(),
         );
-        assert_eq!(count, source.len());
+        assert_eq!(progress.samples, source.len());
         assert!(
             source
                 .iter()
@@ -158,5 +174,35 @@ mod tests {
         let mut replay = [0.0; 14];
         decoder.process(&encoded[8..], &mut replay, 14);
         assert_eq!(replay, expected);
+    }
+
+    #[test]
+    fn partial_frame_continues_in_the_next_update() {
+        let mut coefficients = [0; 16];
+        coefficients[2] = 2048;
+        let source: Vec<_> = (0..28).map(|i| i * 80).collect();
+        let encoded = encode(&source, coefficients);
+        let mut decoder = GcAdpcmDecoder::new(AdpcmParams { coefficients });
+        let mut output = [0.0; 28];
+        let first = decoder.process(&encoded, &mut output[..16], 16);
+        assert_eq!(
+            first,
+            AdpcmProgress {
+                samples: 16,
+                bytes: 16
+            }
+        );
+        let second = decoder.process(&encoded[first.bytes..], &mut output[16..], 12);
+        assert_eq!(
+            second,
+            AdpcmProgress {
+                samples: 12,
+                bytes: 0
+            }
+        );
+
+        let mut expected = [0.0; 28];
+        GcAdpcmDecoder::new(AdpcmParams { coefficients }).process(&encoded, &mut expected, 28);
+        assert_eq!(output, expected);
     }
 }

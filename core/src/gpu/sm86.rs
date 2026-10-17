@@ -362,6 +362,7 @@ pub struct Decoder<'a> {
     type_f64: u32,
     type_f16: u32,
     type_f16x2: u32,
+    mma_group_sum: u32,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
@@ -490,6 +491,7 @@ impl<'a> Decoder<'a> {
             type_f64: 0,
             type_f16: 0,
             type_f16x2: 0,
+            mma_group_sum: 0,
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],
@@ -2971,10 +2973,11 @@ impl<'a> Decoder<'a> {
         let negate = [inst >> 72 & 1 != 0, inst >> 63 & 1 != 0];
         let [a, b] = self.mma_operands(inst, 2, k_regs, |s, word, is_b| {
             let neg = negate[is_b as usize];
-            let values = if format == 2 { vec![s.tf32_source(word, neg)] } else { s.mma_source_pair(word, format == 1, neg).to_vec() };
-            values.into_iter().map(|val| s.mma_term(val, min_exponent, 10)).collect()
+            if format == 2 { vec![s.tf32_source(word, neg)] } else { s.mma_source_pair(word, format == 1, neg).to_vec() }
         });
         let f16_ty = self.type_f16();
+        let group_sum = self.mma_group_sum_function();
+        let [min_exponent, zero] = [self.cached_const_u32(min_exponent as u32), self.ir.emit_constant_typed(self.type_f32[1], 0.0f32)];
         for (half, row) in (0..).zip(&a) {
             let c = if f32_acc {
                 [0, 1].map(|column| {
@@ -2986,9 +2989,10 @@ impl<'a> Decoder<'a> {
                 self.half2_lanes(word, 0, false, false, false)
             };
             let d = [0, 1].map(|column| {
-                let products: Vec<_> = row.iter().zip(&b[column]).collect();
-                products.chunks(group).fold(c[column], |acc, products| {
-                    let sum = self.truncated_group_sum(acc, products);
+                row.chunks(group).zip(b[column].chunks(group)).fold(c[column], |acc, (x, y)| {
+                    let padding = vec![zero; 8 - group];
+                    let args: Vec<u32> = [acc, min_exponent].iter().chain(x).chain(&padding).chain(y).chain(&padding).copied().collect();
+                    let sum = self.ir.emit_function_call(self.type_f32[1], group_sum, &args);
                     if f32_acc {
                         return sum;
                     }
@@ -3013,10 +3017,29 @@ impl<'a> Decoder<'a> {
         let val = self.bitcast_f32(bits);
         self.fp_src(self.type_f32[1], val, false, neg)
     }
-    fn mma_term(&mut self, val: u32, min_exponent: i32, fraction_bits: u32) -> [u32; 5] {
+    // Products of four TF32 pairs come padded with zeros, which add nothing and never set the largest exponent.
+    fn mma_group_sum_function(&mut self) -> u32 {
+        if self.mma_group_sum == 0 {
+            let (f32_ty, ty) = (self.type_f32[1], self.type_u32[1]);
+            let params: Vec<u32> = [f32_ty, ty].into_iter().chain([f32_ty; 16]).collect();
+            let function_ty = self.ir.emit_type_function(f32_ty, &params);
+            let current = self.ir.begin_function_after_current();
+            self.mma_group_sum = self.ir.emit_function(f32_ty, 0, function_ty);
+            let params: Vec<u32> = params.iter().map(|&ty| self.ir.emit_function_parameter(ty)).collect();
+            self.ir.emit_label();
+            let terms: Vec<[u32; 5]> = params[2..].iter().map(|&val| self.mma_term(val, params[1], 10)).collect();
+            let (x, y) = terms.split_at(8);
+            let sum = self.truncated_group_sum(params[0], &x.iter().zip(y).collect::<Vec<_>>());
+            self.ir.emit_return_value(sum);
+            self.ir.emit_function_end();
+            self.ir.end_function_after_current(current);
+        }
+        self.mma_group_sum
+    }
+    fn mma_term(&mut self, val: u32, floor: u32, fraction_bits: u32) -> [u32; 5] {
         let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
-        let [twenty_three, field_mask, mantissa_mask, bias, floor, zero_exponent, narrowing] =
-            [23, 0xff, 0x7f_ffff, 127, min_exponent as u32, -1000i32 as u32, 23 - fraction_bits].map(|c| self.cached_const_u32(c));
+        let [twenty_three, field_mask, mantissa_mask, bias, zero_exponent, narrowing] =
+            [23, 0xff, 0x7f_ffff, 127, -1000i32 as u32, 23 - fraction_bits].map(|c| self.cached_const_u32(c));
         let bits = self.bitcast_u32(val);
         let field = self.ir.emit_shift_right_logical(ty, bits, twenty_three);
         let field = self.ir.emit_bitwise_and(ty, field, field_mask);
@@ -3037,7 +3060,8 @@ impl<'a> Decoder<'a> {
     }
     fn truncated_group_sum(&mut self, acc: u32, products: &[(&[u32; 5], &[u32; 5])]) -> u32 {
         let (ty, bool_ty, f32_ty) = (self.type_u32[1], self.type_bool[1], self.type_f32[1]);
-        let [_, c_bits, c_exponent, c_significand, mut special] = self.mma_term(acc, -126, 23);
+        let f32_floor = self.cached_const_u32(-126i32 as u32);
+        let [_, c_bits, c_exponent, c_significand, mut special] = self.mma_term(acc, f32_floor, 23);
         let [one, four, max_shift, twenty_three, below_hidden_bias, max_finite, infinity, sign_bit] =
             [1, 4, 31, 23, 125, 253, 0x7f80_0000, 0x8000_0000].map(|c| self.cached_const_u32(c));
         let mut terms = vec![(c_bits, c_exponent, c_significand, one)];

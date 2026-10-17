@@ -56,7 +56,7 @@ pub struct GraphicsPipeline<'a> {
     device: &'a ash::Device,
     /// The vertex stage's resources in set 0, the fragment stage's in set 1.
     pub descriptors: [Descriptors<'a>; 2],
-    shaders: [vk::ShaderModule; 2],
+    shaders: Vec<vk::ShaderModule>,
     pub layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
 }
@@ -65,6 +65,7 @@ impl<'a> GraphicsPipeline<'a> {
     pub fn new(
         state: &'a VkState,
         vertex_spirv: &[u32],
+        geometry_spirv: Option<&[u32]>,
         fragment_spirv: &[u32],
         bindings: [&[(u32, vk::DescriptorType)]; 2],
         vertex_layout: &VertexLayout,
@@ -74,19 +75,24 @@ impl<'a> GraphicsPipeline<'a> {
         let d = &state.device;
         let mut p = Self {
             device: d,
-            descriptors: [Descriptors::new(d, bindings[0], Stage::VERTEX)?, Descriptors::new(d, bindings[1], Stage::FRAGMENT)?],
-            shaders: Default::default(),
+            descriptors: [
+                Descriptors::new(d, bindings[0], Stage::VERTEX | geometry_spirv.map_or(Stage::empty(), |_| Stage::GEOMETRY))?,
+                Descriptors::new(d, bindings[1], Stage::FRAGMENT)?,
+            ],
+            shaders: Vec::new(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
         };
-        for (shader, code) in p.shaders.iter_mut().zip([vertex_spirv, fragment_spirv]) {
-            *shader = unsafe { d.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(code), None)? };
+        let mut stages = Vec::new();
+        for (stage, code) in [(Stage::VERTEX, Some(vertex_spirv)), (Stage::GEOMETRY, geometry_spirv), (Stage::FRAGMENT, Some(fragment_spirv))] {
+            let Some(code) = code else { continue };
+            let module = unsafe { d.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(code), None)? };
+            p.shaders.push(module);
+            stages.push(vk::PipelineShaderStageCreateInfo::default().stage(stage).module(module).name(c"main"));
         }
         let set_layouts = p.descriptors.each_ref().map(|descriptors| descriptors.set_layout);
         let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
         p.layout = unsafe { d.create_pipeline_layout(&layout_info, None)? };
-        let stages = [(Stage::VERTEX, p.shaders[0]), (Stage::FRAGMENT, p.shaders[1])]
-            .map(|(stage, module)| vk::PipelineShaderStageCreateInfo::default().stage(stage).module(module).name(c"main"));
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(vertex_layout.bindings)
             .vertex_attribute_descriptions(vertex_layout.attributes);
@@ -140,7 +146,7 @@ impl<'a> GraphicsPipeline<'a> {
             let alpha = (!dynamic3).then_some((b.src_alpha_blend_factor, b.dst_alpha_blend_factor, b.alpha_blend_op, b.color_write_mask));
             let keys = [
                 hash((streams, attributes, vertex_layout.topology)),
-                hash((vertex_spirv, bindings)),
+                hash((vertex_spirv, geometry_spirv, bindings)),
                 hash((fragment_spirv, bindings, target.depth)),
                 hash((target.depth, blend, alpha)),
             ];

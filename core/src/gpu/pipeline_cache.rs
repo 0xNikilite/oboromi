@@ -121,14 +121,14 @@ impl VkState {
     pub(super) fn link(
         &self,
         info: vk::GraphicsPipelineCreateInfo,
-        stages: &[vk::PipelineShaderStageCreateInfo; 2],
+        stages: &[vk::PipelineShaderStageCreateInfo],
         keys: [u64; 4],
     ) -> Result<vk::Pipeline, VkError> {
         use vk::GraphicsPipelineLibraryFlagsEXT as Part;
         let parts = [
             (Part::VERTEX_INPUT_INTERFACE, &stages[..0]),
-            (Part::PRE_RASTERIZATION_SHADERS, &stages[..1]),
-            (Part::FRAGMENT_SHADER, &stages[1..]),
+            (Part::PRE_RASTERIZATION_SHADERS, &stages[..stages.len() - 1]),
+            (Part::FRAGMENT_SHADER, &stages[stages.len() - 1..]),
             (Part::FRAGMENT_OUTPUT_INTERFACE, &stages[..0]),
         ];
         let mut libraries = [vk::Pipeline::null(); 4];
@@ -243,6 +243,8 @@ fn encode(kind: ResourceKind) -> [u32; 4] {
         VertexInput { location } => [13, location, 0, 0],
         Varying { location, flat } => [14, location, flat.into(), 0],
         FragmentOutput { location } => [15, location, 0, 0],
+        PerVertex { attr, output } => [16, attr, output.into(), 0],
+        Patch { location } => [17, location, 0, 0],
     }
 }
 
@@ -265,6 +267,8 @@ fn decode([tag, a, b, c]: [u32; 4]) -> Option<ResourceKind> {
         13 => VertexInput { location: a },
         14 => Varying { location: a, flat: b != 0 },
         15 => FragmentOutput { location: a },
+        16 => PerVertex { attr: a, output: b != 0 },
+        17 => Patch { location: a },
         _ => return None,
     })
 }

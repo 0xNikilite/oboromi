@@ -761,7 +761,7 @@ impl<'a> Gpu<'a> {
             move || {
                 let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
                 let target = TargetState { blend, depth: pipeline_depth };
-                GraphicsPipeline::new(state, &vs, &fs, [&vs_bindings, &fs_bindings], &layout, &target).map(Pipeline::Draw)
+                GraphicsPipeline::new(state, &vs, None, &fs, [&vs_bindings, &fs_bindings], &layout, &target).map(Pipeline::Draw)
             }
         });
         let Lookup::Ready(Pipeline::Draw(pipeline)) = lookup.map_err(named)? else { return Ok(()) };

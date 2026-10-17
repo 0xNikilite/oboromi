@@ -3,6 +3,7 @@ use super::compute::{ComputePipeline, HostBuffer};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, SUPPORT_BINDING, Stage, emit_module};
 use super::demo::SCENE;
 use super::demo_post::POST;
+use super::demo_sprites::SPRITES;
 use super::engine::Gpu;
 use super::{VkError, device};
 use crate::tests::gpu::engine::{TARGET, triangle_frame, triangle_guest};
@@ -192,5 +193,6 @@ pub fn render_triangle_demo(seconds: f32) -> Result<(), String> {
 pub fn flush_demo_caches() -> std::io::Result<()> {
     TRIANGLE_DEMO.lock().unwrap().as_ref().map_or(Ok(()), Gpu::flush_caches)?;
     POST.lock().unwrap().as_ref().map_or(Ok(()), |post| post.gpu.flush_caches())?;
-    SCENE.lock().unwrap().as_ref().map_or(Ok(()), |(_, scene)| scene.gpu.flush_caches())
+    SCENE.lock().unwrap().as_ref().map_or(Ok(()), |(_, scene)| scene.gpu.flush_caches())?;
+    SPRITES.lock().unwrap().as_ref().map_or(Ok(()), Gpu::flush_caches)
 }

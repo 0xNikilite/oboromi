@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{UREG, run_regs};
+    use crate::tests::gpu::harness::{UREG, run_regs, spirv_val, translate_module};
     use crate::tests::gpu_test::inst;
 
     const IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
@@ -41,6 +41,12 @@ mod tests {
             return;
         };
         assert_eq!(regs[5..7], [0x1234, 0x5678]);
+    }
+
+    #[test]
+    fn mov_cx_validates_dynamic_constant_bank() {
+        let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None);
+        spirv_val(&module);
     }
 
     #[test]

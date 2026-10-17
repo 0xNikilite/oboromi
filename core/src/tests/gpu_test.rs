@@ -18,6 +18,7 @@ pub mod inst {
     const MOV_RI: u128 = 0x802;
     const MOV_RR: u128 = 0x202;
     const MOV_RC: u128 = 0xa02;
+    const MOV_RCX: u128 = 0xa02 | 1 << 91;
     const MOV_RU: u128 = 0xc02 | 1 << 91;
     const KILL: u128 = 0x95b;
     const GUARD: u128 = 0xf << 12;
@@ -162,6 +163,15 @@ pub mod inst {
     pub const W2I_RPCMOV_HI: u128 = W2I_RPCMOV_LO | 1 << 31 | 1 << 16;
     pub const W2I_RPCMOV_SET_LO: u128 = 0x000fc000000000000000123400007952;
     pub const W2I_RPCMOV_SET_HI: u128 = 0x000fc000000000000000567880007952;
+    pub const W2J_MOV_CX: u128 = 0x0000000008000f000000040400057a02;
+    pub const W2J_F2FP_RZ_RELU_SATFINITE: u128 = 0x000000000001a8ff000000070614723e;
+    pub const W2J_I2FP_RZ: u128 = 0x000000000020d0000000000b00177245;
+    pub const W2J_UF2FP: u128 = 0x000000000820080000000007060a72ba;
+    pub const W2J_BAR_RED_POPC: u128 = 0x0001c00000004000000000020000731d;
+    pub const W2J_BAR_SCAN: u128 = 0x0001c00000006000000000020000731d;
+    pub const W2J_BAR_ARV: u128 = 0x0001c000000020000000000000007b1d;
+    pub const W2J_ATOMG_U64_ADD: u128 = 0x0001c000001ee50000000006020473a8;
+    pub const W2J_ATOMS_U64_ADD: u128 = 0x000000000000040000000006ff04738c;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -203,6 +213,14 @@ pub mod inst {
         let mut inst = MOV_RU | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((urb as u128) & 0x3f) << 32;
+        inst
+    }
+
+    pub fn mov_cbuf_ureg(rd: u32, urb: u32, off: u32) -> u128 {
+        let mut inst = MOV_RCX | PT_GUARD | PIXMASK_ALL;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((urb as u128) & 0x3f) << 32;
+        inst |= ((off as u128 >> 2) & 0x3fff) << 40;
         inst
     }
 
@@ -679,6 +697,7 @@ fn fixtures_match_nvdisasm() {
         (inst::mov_reg(1, 2), "MOV R1, R2;"),
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
         (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
+        (inst::W2J_MOV_CX, "MOV R5, cx[UR4][0x10];"),
         (inst::kill(7, false), "KILL;"),
         (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
@@ -839,6 +858,9 @@ fn fixtures_match_nvdisasm() {
         (inst::atoms_add(4, 255, 5), "ATOMS.ADD R4, [RZ], R5 ;"),
         (inst::atoms_cas(7, 255, 8, 9), "ATOMS.CAS R7, [RZ], R8, R9 ;"),
         (inst::bar_sync(), "BAR.SYNC 0x0 ;"),
+        (inst::W2J_BAR_RED_POPC, "BAR.RED.POPC R2, R2, P0 ;"),
+        (inst::W2J_BAR_SCAN, "BAR.SCAN R2, R2, P0 ;"),
+        (inst::W2J_BAR_ARV, "BAR.ARV 0x0, 0x0 ;"),
         (inst::s2r(1, 33), "S2R R1, SR_TID.X ;"),
         (inst::cs2r(4, 80, false), "CS2R.32 R4, SR_CLOCKLO;"),
         (inst::cs2r(4, 80, true), "CS2R R4, SR_CLOCKLO;"),
@@ -856,6 +878,11 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::ATOMG | inst::ATOM_MAX, 4, 2, 5), "ATOMG.E.MAX.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::alu(inst::ATOMG | inst::ATOM_MIN | inst::S32, 6, 8, 5), "ATOMG.E.MIN.S32.STRONG.GPU PT, R6, [R8], R5 ;"),
         (inst::alu3(inst::ATOMG_CAS, 4, 2, 5, 6), "ATOMG.E.CAS.STRONG.GPU PT, R4, [R2], R5, R6 ;"),
+        (inst::W2J_ATOMG_U64_ADD, "ATOMG.E.ADD.64.STRONG.GPU PT, R4, [R2], R6 ;"),
+        (inst::W2J_ATOMS_U64_ADD, "ATOMS.ADD.64 R4, [RZ], R6 ;"),
+        (inst::W2J_F2FP_RZ_RELU_SATFINITE, "F2FP.SATFINITE.RELU.PACK_AB.RZ R20, R6, R7;"),
+        (inst::W2J_I2FP_RZ, "I2FP.F32.U32.RZ R23, R11;"),
+        (inst::W2J_UF2FP, "UF2FP.PACK_AB UR10, UR6, UR7;"),
         (inst::alu(inst::ATOMG | inst::ATOM_INC, 4, 2, 5), "ATOMG.E.INC.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::alu(inst::ATOMG | inst::ATOM_DEC, 6, 8, 5), "ATOMG.E.DEC.STRONG.GPU PT, R6, [R8], R5 ;"),
         (inst::alu3(inst::RED | inst::RED_UR_64, 0, 2, 5, 4), "RED.E.ADD.STRONG.GPU [R2.64+UR4], R5 ;"),

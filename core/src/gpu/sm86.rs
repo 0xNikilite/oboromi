@@ -2299,7 +2299,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("BITEXTRACT");
     }
     pub fn bmma(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2319,7 +2319,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("BMMA");
     }
     pub fn bmov(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2644,7 +2644,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("DMMA");
     }
     pub fn dmul(&mut self, inst: u128) {
         Self::fp64_rounding(inst);
@@ -3044,7 +3044,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("GATHER");
     }
     pub fn genmetadata(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3066,7 +3066,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("GENMETADATA");
     }
     pub fn getlmembase(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3114,7 +3114,7 @@ impl<'a> Decoder<'a> {
     pub fn hfma2_mma(&mut self, inst: u128) {
         self.hfma2(inst);
     }
-    // Lane 4g + t of an MMA fragment holds row (or column) g of the tile, and t picks its pair of k columns.
+    // Lane 4g + t of an MMA fragment holds row (or column) g of the tile, and t picks its k columns.
     fn lane_quad(&mut self) -> [u32; 2] {
         let lane = self.special_register(0);
         let [two, three] = [2, 3].map(|c| self.cached_const_u32(c));
@@ -3125,6 +3125,36 @@ impl<'a> Decoder<'a> {
             let t = self.cached_const_u32(t);
             self.ir.emit_iadd(self.type_u32[1], first, t)
         }).collect()
+    }
+    // Gathers the A rows g, g + 8 and B columns 2t, 2t + 1 that the D elements of lane 4g + t need, each in ascending k.
+    fn mma_operands(&mut self, inst: u128, k_regs: u32, mut unpack: impl FnMut(&mut Self, u32, bool) -> Vec<u32>) -> [[Vec<u32>; 2]; 2] {
+        let [ra, rb] = [24, 32].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let ty = self.type_u32[1];
+        let [group, thread] = self.lane_quad();
+        let [two, three, four] = [2, 3, 4].map(|c| self.cached_const_u32(c));
+        let own_quad = self.ir.emit_shift_left_logical(ty, group, two);
+        let row_lanes = self.quad_lanes(own_quad);
+        let column_quad = self.ir.emit_shift_left_logical(ty, thread, three);
+        let next_column_quad = self.ir.emit_iadd(ty, column_quad, four);
+        let mut column_lanes = self.quad_lanes(column_quad);
+        column_lanes.extend(self.quad_lanes(next_column_quad));
+        let (mut a, mut b) = ([Vec::new(), Vec::new()], [Vec::new(), Vec::new()]);
+        for k_reg in 0..k_regs {
+            for (half, row) in (0..).zip(&mut a) {
+                let own = self.load_register(nth_reg(ra, RZ, 2 * k_reg + half));
+                for [word, _] in self.warp_exchange(own, &row_lanes) {
+                    row.extend(unpack(self, word, false));
+                }
+            }
+            let own = self.load_register(nth_reg(rb, RZ, k_reg));
+            let words = self.warp_exchange(own, &column_lanes);
+            for (column, words) in b.iter_mut().zip(words.chunks(4)) {
+                for &[word, _] in words {
+                    column.extend(unpack(self, word, true));
+                }
+            }
+        }
+        [a, b]
     }
     // A bfloat16 is the upper half of an f32.
     fn mma_source_pair(&mut self, word: u32, bf16: bool, neg: bool) -> [u32; 2] {
@@ -3153,33 +3183,9 @@ impl<'a> Decoder<'a> {
             _ => todo!("HMMA.TF32"),
         };
         let f32_acc = inst >> 76 & 1 != 0;
-        let [rd, ra, rb, rc] = [16, 24, 32, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
-        let (neg_a, neg_b) = (inst >> 72 & 1 != 0, inst >> 63 & 1 != 0);
-        let ty = self.type_u32[1];
-        let [group, thread] = self.lane_quad();
-        let [two, three, four] = [2, 3, 4].map(|c| self.cached_const_u32(c));
-        let own_quad = self.ir.emit_shift_left_logical(ty, group, two);
-        let row_lanes = self.quad_lanes(own_quad);
-        let column_quad = self.ir.emit_shift_left_logical(ty, thread, three);
-        let next_column_quad = self.ir.emit_iadd(ty, column_quad, four);
-        let mut column_lanes = self.quad_lanes(column_quad);
-        column_lanes.extend(self.quad_lanes(next_column_quad));
-        let (mut a, mut b) = ([Vec::new(), Vec::new()], [Vec::new(), Vec::new()]);
-        for k_reg in 0..k_regs {
-            for (half, row) in (0..).zip(&mut a) {
-                let own = self.load_register(nth_reg(ra, RZ, 2 * k_reg + half));
-                for [word, _] in self.warp_exchange(own, &row_lanes) {
-                    row.extend(self.mma_source_pair(word, bf16, neg_a));
-                }
-            }
-            let own = self.load_register(nth_reg(rb, RZ, k_reg));
-            let words = self.warp_exchange(own, &column_lanes);
-            for (column, words) in b.iter_mut().zip(words.chunks(4)) {
-                for &[word, _] in words {
-                    column.extend(self.mma_source_pair(word, bf16, neg_b));
-                }
-            }
-        }
+        let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let negate = [inst >> 72 & 1 != 0, inst >> 63 & 1 != 0];
+        let [a, b] = self.mma_operands(inst, k_regs, |s, word, is_b| s.mma_source_pair(word, bf16, negate[is_b as usize]).to_vec());
         let f32_ty = self.type_f32[1];
         for (half, row) in (0..).zip(&a) {
             let c = if f32_acc {
@@ -3534,28 +3540,36 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn imma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _re_reuse_src_e = (((inst >> 50) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _rndsrc = (((inst >> 82) & 0x1) << 0);
-        let _srcfmta = (((inst >> 83) & 0x1) << 2) | (((inst >> 76) & 0x3) << 0);
-        let _srcfmtb = (((inst >> 84) & 0x1) << 2) | (((inst >> 78) & 0x3) << 0);
-        let _size = (((inst >> 85) & 0x3) << 1) | (((inst >> 75) & 0x1) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 72 & 1 == 0, "IMMA.SP");
+        assert_eq!(inst >> 87 & 0xf, 0, "IMMA with a UPp condition");
+        assert!(inst >> 82 & 1 == 0, "IMMA.SAT");
+        assert!(inst >> 83 & 3 == 0, "IMMA with S4 or U4 sources");
+        let k_regs = match inst >> 84 & 6 | inst >> 75 & 1 {
+            4 => 1,
+            5 => 2,
+            size => todo!("IMMA size {size}"),
+        };
+        let signed = [76, 78].map(|bit| inst >> bit & 1 != 0);
+        let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let ty = self.type_u32[1];
+        let eight = self.cached_const_u32(8);
+        let [a, b] = self.mma_operands(inst, k_regs, |s, word, is_b| {
+            (0..4).map(|byte| {
+                let offset = s.cached_const_u32(8 * byte);
+                if signed[is_b as usize] { s.ir.emit_bit_field_s_extract(ty, word, offset, eight) } else { s.ir.emit_bit_field_u_extract(ty, word, offset, eight) }
+            }).collect()
+        });
+        for (half, row) in (0..).zip(&a) {
+            for (column, col) in (0..).zip(&b) {
+                let reg = 2 * half + column;
+                let c = self.load_register(nth_reg(rc, RZ, reg));
+                let d = row.iter().zip(col).fold(c, |sum, (&x, &y)| {
+                    let product = self.ir.emit_imul(ty, x, y);
+                    self.ir.emit_iadd(ty, sum, product)
+                });
+                self.store_register(nth_reg(rd, RZ, reg), d);
+            }
+        }
     }
     pub fn imnmx(&mut self, inst: u128) {
         let a = self.load_register((inst >> 24 & 0xff) as u32);
@@ -4212,7 +4226,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("MOVM");
     }
     pub fn mufu(&mut self, inst: u128) {
         use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
@@ -4636,7 +4650,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("SCATTER");
     }
     pub fn sel(&mut self, inst: u128) {
         let p = self.pred_bit(is_uniform(inst), (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
@@ -4757,7 +4771,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("SPMETADATA");
     }
     pub fn st(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

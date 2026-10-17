@@ -4,7 +4,7 @@
 use core::fmt::Write;
 use guest::nv::Nv;
 use guest::nvdrv::*;
-use guest::{display, hid, svc};
+use guest::{am_time, display, hid, svc};
 use scene::{Addresses, Scene, Vertex};
 
 core::arch::global_asm!(
@@ -103,6 +103,10 @@ fn print(line: core::fmt::Arguments) {
 #[unsafe(no_mangle)]
 extern "C" fn main() -> ! {
     print(format_args!("hello from guest"));
+    match am_time::initialize() {
+        Ok((focus, time)) => print(format_args!("focus {focus} time {time}")),
+        Err(code) => print(format_args!("am/time error {code:#x}")),
+    }
     match hid::read_full_key() {
         Ok(pad) => print(format_args!("buttons {:#x} left {} {}", pad.buttons, pad.left[0], pad.left[1])),
         Err(code) => print(format_args!("hid error {code:#x}")),

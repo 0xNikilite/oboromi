@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 /// vi result InvalidValue, module 114 description 7.
 pub const INVALID_VALUE: u32 = 114 | 7 << 9;
-const LAYER_ID: u64 = 1;
+pub(crate) const LAYER_ID: u64 = 1;
 
 #[derive(Clone, Copy)]
 enum Interface {

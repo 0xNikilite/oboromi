@@ -26,15 +26,14 @@ mod tests {
     use crate::gpu::engine::Gpu;
     use crate::input::InputState;
     use crate::kernel::Kernel;
-    use crate::nn::{hipc::Service, nvdrv::Nvdrv, sm::Sm, vi};
+    use crate::nn::{hipc::Service, nvdrv::Nvdrv, vi};
     use crate::tests::gpu::harness::vk_state;
     use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::rc::Rc;
 
     // guest.bin is what scripts/build-guest.sh builds from guest/. nvdrv needs a GPU, which the kernel's own sm: lacks.
     #[test]
-    fn the_guest_image_reads_the_pad_draws_a_triangle_and_presents_three_frames() {
+    fn the_guest_image_initializes_services_draws_and_presents() {
         let Some(state) = vk_state() else { return };
         let cpu = CpuManager::new();
         let image = include_bytes!("../tests/fixtures/guest/guest.bin");
@@ -43,15 +42,15 @@ mod tests {
         let mut kernel = Kernel::default();
         kernel.hid.borrow_mut().input = || InputState { buttons: 1, left: [0.5, -0.5], right: [0.0; 2], connected: true };
         let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::new(Box::leak(Box::new(state)), cpu.ram.clone()))));
-        let mut services = HashMap::from([
-            ("hid".into(), kernel.hid.clone() as Rc<RefCell<dyn Service>>),
-            ("nvdrv".into(), nvdrv.clone() as Rc<RefCell<dyn Service>>),
-        ]);
-        services.extend(vi::services(nvdrv));
-        kernel.ports.insert("sm:".into(), Rc::new(RefCell::new(Sm(services))));
+        kernel.sm.borrow_mut().0.insert("nvdrv".into(), nvdrv.clone() as Rc<RefCell<dyn Service>>);
+        kernel.sm.borrow_mut().0.extend(vi::services(nvdrv));
         kernel.start(core, entry, image.len() as u64);
         assert!(kernel.run(core));
-        assert_eq!(kernel.debug_output, ["hello from guest", "buttons 0x1 left 16383 -16383", "pixel ff8000ff", "slots 0 1 0"]);
+        assert_eq!(kernel.debug_output[0], "hello from guest");
+        let time: i64 = kernel.debug_output[1].strip_prefix("focus 1 time ").unwrap().parse().unwrap();
+        assert!((time - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).abs() < 5);
+        println!("{}", kernel.debug_output[1]);
+        assert_eq!(&kernel.debug_output[2..], ["buttons 0x1 left 16383 -16383", "pixel ff8000ff", "slots 0 1 0"]);
         let frame = crate::display::DISPLAY.lock().unwrap();
         assert_eq!((frame.width, frame.height), (128, 64));
         assert_eq!(&frame.pixels[(20 * 128 + 20) * 4..][..4], &[40, 80, 192, 255]);

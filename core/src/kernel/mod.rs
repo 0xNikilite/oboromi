@@ -8,7 +8,7 @@ pub use threads::{Scheduler, Timer};
 use crate::cpu::UnicornCPU;
 use crate::cpu::cpu_manager::MEMORY_SIZE;
 use crate::nn::hipc::{self, ParsedRequest, Service};
-use crate::nn::{hid, sm::Sm};
+use crate::nn::{applet, hid, sm::Sm, time};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -145,7 +145,17 @@ pub struct Kernel {
 impl Default for Kernel {
     fn default() -> Self {
         let hid = Rc::new(RefCell::new(hid::State::default()));
-        let sm = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
+        let applet = Rc::new(RefCell::new(applet::State));
+        let time = Rc::new(RefCell::new(time::State));
+        let services: HashMap<String, Rc<RefCell<dyn Service>>> = HashMap::from([
+            ("hid".into(), hid.clone() as _),
+            ("appletOE".into(), applet.clone() as _),
+            ("appletAE".into(), applet as _),
+            ("time:u".into(), time.clone() as _),
+            ("time:s".into(), time.clone() as _),
+            ("time:a".into(), time as _),
+        ]);
+        let sm = Rc::new(RefCell::new(Sm(services)));
         let ports = HashMap::from([("sm:".into(), sm.clone() as _)]);
         Self { scheduler: Scheduler::default(), process: Process::default(), ports, debug_output: vec![], hid, sm }
     }

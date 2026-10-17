@@ -4,6 +4,7 @@
 
 pub mod cmif;
 #[cfg(target_arch = "aarch64")]
+pub mod am_time;
 pub mod display;
 #[cfg(target_arch = "aarch64")]
 pub mod hid;

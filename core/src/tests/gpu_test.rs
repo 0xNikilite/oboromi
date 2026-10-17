@@ -989,6 +989,7 @@ fn fixtures_match_nvdisasm() {
         (inst::frnd(4, 5, inst::cvt::RN), "FRND R4, R5 ;"),
         (inst::i2f(6, 7, inst::cvt::F32, inst::cvt::S32), "I2F R6, R7 ;"),
         (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
+        (inst::i2f(17, 0, inst::cvt::F32, inst::cvt::U32) | (inst::cvt::RP as u128) << 78, "I2F.U32.RP R17, R0 ;"),
         (inst::W6_F2F_F32_F16_H1, "F2F.F32.F16 R1, R2.H1 ;"),
         (inst::W6_F2F_F16_F32_RP, "F2F.F16.F32.RP R3, R4 ;"),
         (inst::W6_F2F_F16_F64_RZ, "F2F.F16.F64.RZ R5, R6 ;"),

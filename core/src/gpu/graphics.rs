@@ -268,6 +268,10 @@ impl<'a> RenderTarget<'a> {
         })
     }
 
+    pub fn color_image(&self) -> vk::Image {
+        self.color.image
+    }
+
     pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
         self.staging.read(out)
     }

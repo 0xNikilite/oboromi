@@ -5,16 +5,18 @@ use crate::gpu::spirv::capability::SHADER;
 use crate::gpu::{VkError, VkState};
 use ash::vk::DescriptorType;
 
+pub const UREG: usize = 255;
+
 pub fn translate_module(
     instructions: &[u128],
     register_io: bool,
     device: Option<&VkState>,
 ) -> Emitter {
-    emit_module(register_io, device, |decoder| {
-        for &inst in instructions {
-            decoder.translate(inst);
-        }
-    })
+    emit_module(register_io, device, translate_all(instructions))
+}
+
+fn translate_all(instructions: &[u128]) -> impl FnOnce(&mut Decoder) {
+    move |decoder| instructions.iter().for_each(|&inst| decoder.translate(inst))
 }
 
 pub fn emit_module(
@@ -71,12 +73,7 @@ pub fn spirv_val(module: &Emitter) {
 /// Runs `instructions` once with the state words seeded from `seed` and cbuf slot 0 holding `cbuf0`,
 /// returning every state word, or `None` when there is no Vulkan device.
 pub fn run_regs(instructions: &[u128], seed: &[u32], cbuf0: &[u32]) -> Option<Vec<u32>> {
-    let translate = |decoder: &mut Decoder| {
-        for &inst in instructions {
-            decoder.translate(inst);
-        }
-    };
-    run_body(translate, seed, cbuf0)
+    run_body(translate_all(instructions), seed, cbuf0)
 }
 
 pub fn run_body(body: impl FnOnce(&mut Decoder), seed: &[u32], cbuf0: &[u32]) -> Option<Vec<u32>> {

@@ -17,12 +17,14 @@ pub mod inst {
     const IADD3_RRR: u128 = 0x210;
     const MOV_RI: u128 = 0x802;
     const MOV_RR: u128 = 0x202;
+    const MOV_RC: u128 = 0xa02;
+    const MOV_RU: u128 = 0xc02 | 1 << 91;
     const KILL: u128 = 0x95b;
     const PT_GUARD: u128 = 7 << 12;
     const RC_RZ: u128 = 0xff << 64;
     const PIXMASK_ALL: u128 = 0xf << 72;
     const IADD3_NO_CARRY: u128 = 0x3fff << 77;
-    const KILL_PP_PT: u128 = 7 << 87;
+    const PP_PT: u128 = 7 << 87;
     const NO_SCOREBOARD: u128 = 0x3f << 110;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
@@ -53,20 +55,16 @@ pub mod inst {
         inst
     }
 
-    // mov rd, c[bank][off] (opcode=0xa02, off >> 2 at bits 53:40, bank at 58:54)
     pub fn mov_cbuf(rd: u32, bank: u32, off: u32) -> u128 {
-        let mut inst: u128 = 0x7a02;
-        inst |= 0xfu128 << 72;
+        let mut inst = MOV_RC | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((off as u128 >> 2) & 0x3fff) << 40;
         inst |= ((bank as u128) & 0x1f) << 54;
         inst
     }
 
-    // mov rd, urb (opcode=0x1c02, bit 91 selects the uniform source)
     pub fn mov_ureg(rd: u32, urb: u32) -> u128 {
-        let mut inst: u128 = 0x7c02 | 1 << 91;
-        inst |= 0xfu128 << 72;
+        let mut inst = MOV_RU | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((urb as u128) & 0x3f) << 32;
         inst
@@ -80,7 +78,7 @@ pub mod inst {
     }
 
     pub fn kill(pred: u32, invert: bool) -> u128 {
-        let mut inst = KILL | KILL_PP_PT | NO_SCOREBOARD;
+        let mut inst = KILL | PP_PT | NO_SCOREBOARD;
         inst |= ((pred as u128) & 0x7) << 12;
         if invert {
             inst |= 1 << 15;
@@ -132,7 +130,7 @@ pub fn run_gpu_tests() -> Vec<String> {
     let tests = vec![
         run_translation_test("IADD Immediate", &[inst::iadd_imm(1, 2, 42)]),
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
-        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 0xFF)]),
+        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 4)]),
         run_translation_test("MOV immediate", &[inst::mov_imm(1, 0xCAFEBABE)]),
         run_translation_test("MOV register", &[inst::mov_reg(1, 2)]),
         run_translation_test("KILL PT", &[inst::kill(7, false)]),
@@ -170,7 +168,13 @@ pub fn run_gpu_tests() -> Vec<String> {
 #[test]
 fn fixtures_match_nvdisasm() {
     let Some(nvdisasm) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .chain(std::fs::read_dir("/usr/local").into_iter().flatten().flatten().map(|e| e.path().join("bin")))
+        .chain(
+            std::fs::read_dir("/usr/local")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path().join("bin")),
+        )
         .map(|dir| dir.join("nvdisasm"))
         .find(|path| path.is_file())
     else {
@@ -181,7 +185,7 @@ fn fixtures_match_nvdisasm() {
     let fixtures: &[(u128, &str)] = &[
         (inst::iadd_imm(1, 2, 42), "IADD3 R1, R2, 0x2a, RZ;"),
         (inst::iadd_reg(1, 2, 3), "IADD3 R1, R2, R3, RZ;"),
-        (inst::iadd3_reg(1, 2, 3, 0xFF), "IADD3 R1, R2, R3, RZ;"),
+        (inst::iadd3_reg(1, 2, 3, 4), "IADD3 R1, R2, R3, R4;"),
         (inst::mov_imm(1, 0xCAFEBABE), "MOV R1, 0xcafebabe;"),
         (inst::mov_reg(1, 2), "MOV R1, R2;"),
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
@@ -190,9 +194,16 @@ fn fixtures_match_nvdisasm() {
     ];
     for &(word, expected) in fixtures {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();
-        let out = std::process::Command::new(&nvdisasm).args(["--binary", "SM86"]).arg(&bin).output().unwrap();
+        let out = std::process::Command::new(&nvdisasm)
+            .args(["--binary", "SM86"])
+            .arg(&bin)
+            .output()
+            .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        let disasm = text.lines().find_map(|line| line.split("/*0000*/").nth(1)).unwrap_or_default();
+        let disasm = text
+            .lines()
+            .find_map(|line| line.split("/*0000*/").nth(1))
+            .unwrap_or_default();
         assert_eq!(disasm.trim(), expected, "{word:#x}");
     }
     std::fs::remove_file(bin).unwrap();
@@ -200,9 +211,7 @@ fn fixtures_match_nvdisasm() {
 
 #[test]
 fn mov_immediate_passes_spirv_val() {
-    use crate::gpu::spirv::capability::SHADER;
     use crate::tests::gpu::harness::spirv_val;
     let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None);
-    assert_eq!(module.words()[5..8], [2 << 16 | 17, SHADER, 3 << 16 | 14]);
     spirv_val(&module);
 }

@@ -1,6 +1,7 @@
 use crate::nn;
 use crate::sys;
 
+pub mod fs;
 pub mod hipc;
 
 macro_rules! define_service {
@@ -35,8 +36,8 @@ define_service!(
     bpc, bpmpmr, bsd, bsdcfg, bt, btdrv, btm, btp, capmtp,
     caps, caps2, cec_mgr, chat, clkrst, codecctl, csrng,
     dauth, disp, dispdrv, dmnt, dns, dt, ectx, erpt, es,
-    eth, ethc, eupld, fan, fatal, fgm, file_io, friend, fs,
-    fsp_ldr, fsp_pr, fsp_srv, gds, gpio, gpuk, grc, gsv,
+    eth, ethc, eupld, fan, fatal, fgm, file_io, friend,
+    fsp_ldr, fsp_pr, gds, gpio, gpuk, grc, gsv,
     hdcp, hid, hidbus, host1x, hshl, htc, htcs, hwopus, i2c,
     idle, ifcfg, imf, ins, irs, jit, lbl, ldn, ldr, led, lm,
     lp2p, lr, manu, mig, mii, miiimg, mm, mnpp, ncm, nd, ndd,
@@ -57,7 +58,7 @@ pub trait ServiceTrait {
 }
 
 pub fn start_host_services(state: &mut sys::State) {
-    let entries: [(&str, fn(&mut sys::State)); 160] = [
+    let entries: [(&str, fn(&mut sys::State)); 159] = [
         ("acc", nn::acc::State::run),
         ("adraw", nn::adraw::State::run),
         ("ahid", nn::ahid::State::run),
@@ -114,10 +115,9 @@ pub fn start_host_services(state: &mut sys::State) {
         ("fgm", nn::fgm::State::run),
         ("file_io", nn::file_io::State::run),
         ("friend", nn::friend::State::run),
-        ("fs", nn::fs::State::run),
         ("fsp-ldr", nn::fsp_ldr::State::run),
         ("fsp-pr", nn::fsp_pr::State::run),
-        ("fsp-srv", nn::fsp_srv::State::run),
+        ("fsp-srv", nn::fs::State::run),
         ("gds", nn::gds::State::run),
         ("gpio", nn::gpio::State::run),
         ("gpuk", nn::gpuk::State::run),

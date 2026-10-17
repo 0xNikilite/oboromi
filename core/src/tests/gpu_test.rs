@@ -438,6 +438,10 @@ pub mod inst {
         control(BRA, 0, offset)
     }
 
+    pub fn bra_pp(pp: u32, offset: i64) -> u128 {
+        bra(offset) & !PP_PT | (pp as u128) << 87
+    }
+
     pub fn bra_upred(upq: u32, invert: bool, offset: i64) -> u128 {
         control(BRA_UPRED | COND_U, upq | (invert as u32) << 3, offset)
     }
@@ -699,7 +703,7 @@ fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
     let start = Instant::now();
     println!("Running test: {} ({} instructions)", name, instructions.len());
     let result = catch_unwind(AssertUnwindSafe(|| {
-        translate_module(instructions, false, None).validate()
+        translate_module(instructions, false, None, false).validate()
     }));
 
     let duration = start.elapsed();
@@ -823,6 +827,7 @@ fn fixtures_match_nvdisasm() {
         (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
         (inst::bra(-80), "BRA -0x40;"),
+        (inst::guard(inst::bra_pp(1, 16), 0, false), "@P0 BRA P1, 0x20;"),
         (inst::exit(), "EXIT;"),
         (inst::bssy(0, 0x40), "BSSY B0, 0x50;"),
         (inst::bsync(0), "BSYNC B0;"),
@@ -845,7 +850,9 @@ fn fixtures_match_nvdisasm() {
         (inst::W2I_DEPBAR, "DEPBAR;"),
         (inst::W2I_YIELD, "YIELD;"),
         (inst::W2I_NANOSLEEP, "NANOSLEEP 0x0;"),
+        (inst::W2I_NANOSLEEP | (1_000_000u128 << 32), "NANOSLEEP 0xf4240;"),
         (inst::W2I_PMTRIG, "PMTRIG 0x0;"),
+        (inst::W2I_PMTRIG | (17u128 << 32), "PMTRIG 0x11;"),
         (inst::W2I_ERRBAR, "ERRBAR;"),
         (inst::W2I_CSMTEST, "CSMTEST.INVALID0.F.AND P0, P0, 0x0, PT;"),
         (inst::W2I_CCTLT, "CCTLT.IVALL;"),
@@ -1109,6 +1116,6 @@ fn fixtures_match_nvdisasm() {
 #[test]
 fn mov_immediate_passes_spirv_val() {
     use crate::tests::gpu::harness::spirv_val;
-    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None);
+    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None, false);
     spirv_val(&module);
 }

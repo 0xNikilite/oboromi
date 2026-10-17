@@ -1,5 +1,16 @@
 use super::*;
 
+/// The (k, f32 accumulator) of an HMMA with f16 sources, the only kind VK_KHR_cooperative_matrix can run.
+pub fn f16_hmma_shape(inst: u128) -> Option<(u32, bool)> {
+    (opcode(inst) == 0x23c && inst >> 73 & 1 == 0 && inst >> 78 & 1 == 0 && inst >> 82 & 3 == 0).then(|| (8 << (inst >> 75 & 1), inst >> 76 & 1 != 0))
+}
+
+/// The largest subgroup tile the device multiplies f16 in that divides the 16 x 8 x k shape.
+pub fn cooperative_tile(device: &VkState, (k, f32_acc): (u32, bool)) -> Option<[u32; 3]> {
+    let tiles = device.cooperative_f16_tiles.iter().filter(|&&([m, n, tile_k], f32)| f32 == f32_acc && 16 % m == 0 && 8 % n == 0 && k % tile_k == 0);
+    tiles.map(|&(tile, _)| tile).filter(|_| device.subgroup_size <= 32).max_by_key(|tile| tile.iter().product::<u32>())
+}
+
 impl<'a> Decoder<'a> {
     pub fn bmma(&mut self, inst: u128) {
         assert_eq!(inst >> 87 & 0xf, 0, "BMMA with a UPp condition");
@@ -149,6 +160,9 @@ impl<'a> Decoder<'a> {
         let f32_acc = inst >> 76 & 1 != 0;
         let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
         let negate = [inst >> 72 & 1 != 0, inst >> 63 & 1 != 0];
+        if let Some(tile) = f16_hmma_shape(inst).and_then(|shape| self.hmma_tile(shape)) {
+            return self.cooperative_hmma(inst, tile, k, f32_acc, negate);
+        }
         let [a, b] = self.mma_operands(inst, 2, [k_regs >> sparse as u32, k_regs], |s, word, is_b| {
             let neg = negate[is_b as usize];
             if format == 2 { vec![s.tf32_source(word, neg)] } else { s.mma_source_pair(word, format == 1, neg).to_vec() }
@@ -268,6 +282,114 @@ impl<'a> Decoder<'a> {
                 self.store_register(nth_reg(rd, RZ, half), packed);
             }
         }
+    }
+    fn hmma_tile(&self, shape: (u32, bool)) -> Option<[u32; 3]> {
+        let device = self.device.filter(|_| self.invocations % 32 == 0)?;
+        let tile = cooperative_tile(device, shape)?;
+        let exact = || device.exact_cooperative_hmma.get_or_init(|| crate::tests::gpu::silicon::exact_cooperative_hmma(device)).contains(&shape);
+        self.force_cooperative_hmma.unwrap_or_else(exact).then_some(tile)
+    }
+    fn cooperative_type(&mut self, key: [u32; 4]) -> u32 {
+        if self.cooperative_types.is_empty() {
+            // SPIR-V allows cooperative matrices in shaders only under the Vulkan memory model.
+            const VULKAN: u32 = 3;
+            self.ir.emit_capability(spirv::capability::COOPERATIVE_MATRIX);
+            self.ir.emit_capability(spirv::capability::VULKAN_MEMORY_MODEL);
+            self.ir.emit_extension("SPV_KHR_cooperative_matrix");
+            self.ir.emit_memory_model(0, VULKAN);
+        }
+        if let Some(&ty) = self.cooperative_types.get(&key) {
+            return ty;
+        }
+        let [component, rows, columns, usage] = key;
+        let [scope, rows, columns, usage] = [spirv::scope::SUBGROUP, rows, columns, usage].map(|c| self.cached_const_u32(c));
+        let ty = self.ir.emit_type_cooperative_matrix(component, scope, rows, columns, usage);
+        self.cooperative_types.insert(key, ty);
+        ty
+    }
+    // PTX ISA "Matrix Fragments for mma.m16n8k16": lane 4g + t holds A[g + 8h][2t + 8r + i], B[2t + 8r + i][g] and C[g + 8h][2t + i], so
+    // every A and B register is one word of a row-major A or column-major B staged per warp, and each C register one element of a row-major C.
+    fn cooperative_hmma(&mut self, inst: u128, [m, n, tile_k]: [u32; 3], k: u32, f32_acc: bool, negate: [bool; 2]) {
+        const B_AT: u32 = 128;
+        const C_AT: u32 = 192;
+        const WARP_WORDS: u32 = 320;
+        let ty = self.type_u32[1];
+        let [rd, ra, rb, rc] = [16, 24, 32, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let (k_words, c_words) = (k / 2, if f32_acc { 8 } else { 4 });
+        let len = WARP_WORDS * self.invocations / 32;
+        let invocation = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
+        let [five, thirty_one, eight, warp_words, sign, subgroup] = [5, 31, 8, WARP_WORDS, 0x8000_8000, self.device.unwrap().subgroup_size].map(|c| self.cached_const_u32(c));
+        let warp = self.ir.emit_shift_right_logical(ty, invocation, five);
+        let base = self.ir.emit_imul(ty, warp, warp_words);
+        let stage = |s: &mut Self, row: u32, row_words: u32, column: u32, offset: u32| {
+            let [row_words, offset] = [row_words, offset].map(|c| s.cached_const_u32(c));
+            let index = s.ir.emit_imul(ty, row, row_words);
+            let index = s.ir.emit_iadd(ty, index, column);
+            let index = s.ir.emit_iadd(ty, index, offset);
+            let index = s.ir.emit_iadd(ty, index, base);
+            s.workgroup_word(ResourceKind::Mma, len, index)
+        };
+        let [group, thread] = self.lane_quad();
+        let rows = [group, self.ir.emit_iadd(ty, group, eight)];
+        for k_reg in 0..k / 8 {
+            let sources = [(nth_reg(ra, RZ, 2 * k_reg), rows[0], 4 * k_reg, negate[0]), (nth_reg(ra, RZ, 2 * k_reg + 1), rows[1], 4 * k_reg, negate[0]), (nth_reg(rb, RZ, k_reg), group, B_AT + 4 * k_reg, negate[1])];
+            for (reg, row, offset, negate) in sources {
+                let word = self.load_register(reg);
+                let word = if negate { self.ir.emit_bitwise_xor(ty, word, sign) } else { word };
+                let word = self.ir.emit_select(ty, self.active, word, self.const_u32_0);
+                let ptr = stage(self, row, k_words, thread, offset);
+                self.ir.emit_store(ptr, word);
+            }
+        }
+        let even = self.ir.emit_shift_left_logical(ty, thread, self.const_u32_1);
+        let columns = [even, self.ir.emit_iadd(ty, even, self.const_u32_1)];
+        let c_slots: Vec<_> = if f32_acc { (0..4).map(|reg| (reg, rows[reg as usize / 2], columns[reg as usize % 2])).collect() } else { (0..2).map(|reg| (reg, rows[reg as usize], thread)).collect() };
+        for &(reg, row, column) in &c_slots {
+            let word = self.load_register(nth_reg(rc, RZ, reg));
+            let ptr = stage(self, row, c_words, column, C_AT);
+            self.ir.emit_store(ptr, word);
+        }
+        self.workgroup_barrier();
+        // One subgroup per warp multiplies, so a subgroup narrower than the warp does not store the tiles twice.
+        let lane = self.ir.emit_bitwise_and(ty, invocation, thirty_one);
+        let leads = self.ir.emit_uless_than(self.type_bool[1], lane, subgroup);
+        let [then, after] = [(); 2].map(|_| self.ir.alloc_id());
+        self.ir.emit_selection_merge(after, 0);
+        self.ir.emit_branch_conditional(leads, then, after);
+        self.ir.emit_label_id(then);
+        let f16 = self.type_f16();
+        let accumulator = if f32_acc { self.type_f32[1] } else { f16 };
+        let [a_ty, b_ty, c_ty] = [[f16, m, tile_k, 0], [f16, tile_k, n, 1], [accumulator, m, n, 2]].map(|key| self.cooperative_type(key));
+        let [row_major, column_major] = [self.const_u32_0, self.const_u32_1];
+        let [k_stride, c_stride] = [k_words, c_words].map(|c| self.cached_const_u32(c));
+        let tile = |s: &mut Self, offset: u32| {
+            let offset = s.cached_const_u32(offset);
+            let index = s.ir.emit_iadd(ty, base, offset);
+            s.workgroup_word(ResourceKind::Mma, len, index)
+        };
+        for row in (0..16).step_by(m as usize) {
+            for column in (0..8).step_by(n as usize) {
+                let c_ptr = tile(self, C_AT + row * c_words + column * c_words / 8);
+                let mut acc = self.ir.emit_cooperative_matrix_load(c_ty, c_ptr, row_major, c_stride);
+                for first in (0..k).step_by(tile_k as usize) {
+                    let a_ptr = tile(self, row * k_words + first / 2);
+                    let a = self.ir.emit_cooperative_matrix_load(a_ty, a_ptr, row_major, k_stride);
+                    let b_ptr = tile(self, B_AT + column * k_words + first / 2);
+                    let b = self.ir.emit_cooperative_matrix_load(b_ty, b_ptr, column_major, k_stride);
+                    acc = self.ir.emit_cooperative_matrix_mul_add(c_ty, a, b, acc);
+                }
+                self.ir.emit_cooperative_matrix_store(c_ptr, acc, row_major, c_stride);
+            }
+        }
+        self.ir.emit_branch(after);
+        self.ir.emit_label_id(after);
+        self.workgroup_barrier();
+        for &(reg, row, column) in &c_slots {
+            let ptr = stage(self, row, c_words, column, C_AT);
+            let word = self.ir.emit_load(ty, ptr);
+            self.store_register(nth_reg(rd, RZ, reg), word);
+        }
+        self.workgroup_barrier();
     }
     fn staged_slot(&mut self, staged: u32, index: u32) -> u32 {
         let index = self.cached_const_u32(index);

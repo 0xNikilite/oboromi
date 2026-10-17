@@ -1,6 +1,6 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer, HostImage};
 use crate::gpu::cubin::{Arg, Kernel};
-use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING};
+use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, Hints, PMTRIG_WORDS, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::texture::TexturePool;
 use crate::gpu::{VkError, VkState};
@@ -11,17 +11,19 @@ pub fn translate_module(
     instructions: &[u128],
     register_io: bool,
     device: Option<&VkState>,
+    timing_hints: bool,
 ) -> Emitter {
-    emit_module(register_io, device, 1, |decoder| decoder.translate_program(instructions))
+    emit_module(register_io, device, 1, timing_hints, |decoder| decoder.translate_program(instructions))
 }
 
 pub fn emit_module(
     register_io: bool,
     device: Option<&VkState>,
     lanes: u32,
+    timing_hints: bool,
     body: impl FnOnce(&mut Decoder),
 ) -> Emitter {
-    sm86::emit_module(device, [lanes, 1, 1], |decoder| {
+    sm86::emit_module(device, [lanes, 1, 1], Hints { timing: timing_hints }, |decoder| {
         if register_io {
             decoder.emit_register_io(10, 11);
         }
@@ -94,6 +96,24 @@ pub fn run_lanes(
     run_body(|decoder| decoder.translate_program(instructions), seeds, cbuf0, global)
 }
 
+pub fn run_hints(
+    instructions: &[u128],
+    seed: &[u32],
+    cbuf0: &[u32],
+    global: &[u32],
+) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>)> {
+    let (mut lanes, global, counts) = run_on(
+        &vk_state()?,
+        |decoder| decoder.translate_program(instructions),
+        &[seed.to_vec()],
+        cbuf0,
+        global,
+        &Textures::default(),
+        true,
+    )?;
+    Some((lanes.remove(0), global, counts))
+}
+
 fn pad_to_warps(seeds: &[Vec<u32>]) -> Vec<u32> {
     let idle = vec![0; STATE_WORDS];
     let mut words = Vec::new();
@@ -137,10 +157,21 @@ pub fn run_textured(
     global: &[u32],
     textures: &Textures,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
-    let state = vk_state()?;
+    run_on(&vk_state()?, body, seeds, cbuf0, global, textures, false).map(|(lanes, global, _)| (lanes, global))
+}
+
+pub fn run_on(
+    state: &VkState,
+    body: impl FnOnce(&mut Decoder),
+    seeds: &[Vec<u32>],
+    cbuf0: &[u32],
+    global: &[u32],
+    textures: &Textures,
+    timing_hints: bool,
+) -> Option<(Vec<Vec<u32>>, Vec<u32>, Vec<u32>)> {
     let words = pad_to_warps(seeds);
     let mut resources = Vec::new();
-    let module = emit_module(true, Some(&state), (words.len() / STATE_WORDS) as u32, |decoder| {
+    let module = emit_module(true, Some(state), (words.len() / STATE_WORDS) as u32, timing_hints, |decoder| {
         body(decoder);
         resources = decoder.resources.clone();
     });
@@ -157,21 +188,21 @@ pub fn run_textured(
             .collect::<Vec<_>>()
     };
     let size = 4 * words.len() as u64;
-    let mut input = HostBuffer::new(&state, size).unwrap();
+    let mut input = HostBuffer::new(state, size).unwrap();
     input.write(&bytes(&words)).unwrap();
-    let output = HostBuffer::new(&state, size).unwrap();
-    let mut cbuf = HostBuffer::new(&state, 16 + 4 * cbuf0.len() as u64).unwrap();
+    let output = HostBuffer::new(state, size).unwrap();
+    let mut cbuf = HostBuffer::new(state, 16 + 4 * cbuf0.len() as u64).unwrap();
     cbuf.write(&bytes(cbuf0)).unwrap();
-    let mut memory = HostBuffer::new(&state, 4 * global.len().max(1) as u64).unwrap();
+    let mut memory = HostBuffer::new(state, 4 * global.len().max(1) as u64).unwrap();
     memory.write(&bytes(global)).unwrap();
-    let mut support = HostBuffer::new(&state, 16).unwrap();
+    let mut support = HostBuffer::new(state, 16).unwrap();
     support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
     let image = |format: Option<vk::Format>| {
         let header = textures.pool.texture(textures.handle).unwrap();
         assert!(format.is_none_or(|f| f == header.format), "a {:?} header cannot back a {format:?} surface", header.format);
         let texels = textures.memory.iter().find(|(address, _)| *address == header.address).expect("no texels at the header address").1;
-        HostImage::new(&state, &header, texels, &textures.pool.sampler(textures.handle).unwrap()).unwrap()
+        HostImage::new(state, &header, texels, &textures.pool.sampler(textures.handle).unwrap()).unwrap()
     };
     let image_types = resources.iter().filter_map(|r| match r.kind {
         ResourceKind::Texture2D { .. } => Some((DescriptorType::COMBINED_IMAGE_SAMPLER, None)),
@@ -180,9 +211,16 @@ pub fn run_textured(
     });
     let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
     let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
-    let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).collect();
-    let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
+    let hint_binding = TEXTURE_BINDING + images.len() as u32;
+    let mut hints = resources.iter().any(|r| r.kind == ResourceKind::Hints).then(|| HostBuffer::new(state, 4 * (PMTRIG_WORDS + 1) as u64).unwrap());
+    if let Some(hints) = &mut hints {
+        hints.write(&vec![0; 4 * (PMTRIG_WORDS + 1)]).unwrap();
+    }
+    let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).chain(hints.as_ref().map(|_| (hint_binding, ssbo))).collect();
+    let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
+    let mut bound = vec![(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)];
+    bound.extend(hints.as_ref().map(|buffer| (hint_binding, buffer)));
+    pipeline.bind(&bound);
     pipeline.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {
@@ -194,7 +232,8 @@ pub fn run_textured(
     };
     let lanes: Vec<Vec<u32>> = read(&output, words.len()).chunks(STATE_WORDS).take(seeds.len()).map(<[u32]>::to_vec).collect();
     assert!(lanes.iter().all(|lane| lane[LIVE] < 2), "a lane was left waiting on a barrier");
-    Some((lanes, read(&memory, global.len())))
+    let counts = hints.as_ref().map(|buffer| read(buffer, PMTRIG_WORDS)).unwrap_or_default();
+    Some((lanes, read(&memory, global.len()), counts))
 }
 
 /// A translated program launched the way a driver does, without register io: each of `banks` as the (bank, bytes) of a
@@ -211,7 +250,7 @@ pub struct Grid<'a> {
 
 impl<'a> Grid<'a> {
     pub fn new(state: &'a VkState, instructions: &[u128], block: [u32; 3], banks: &[(u32, Vec<u8>)], regions: &[(u64, &[u8])]) -> Self {
-        let module = sm86::emit_module(Some(state), block, |decoder| decoder.translate_program(instructions));
+        let module = sm86::emit_module(Some(state), block, Hints::default(), |decoder| decoder.translate_program(instructions));
         spirv_val(&module);
         let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
         let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();

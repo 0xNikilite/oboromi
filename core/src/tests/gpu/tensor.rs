@@ -320,4 +320,18 @@ mod tests {
             assert_eq!(regs[RD], half(2 * t + 1, g) << 16 | half(2 * t, g), "lane {lane}");
         }
     }
+
+    // Small integers sum exactly in any order, so both paths agree exactly when the fragment-to-tile mapping is right.
+    #[test]
+    fn cooperative_hmma_matches_loops_on_exact_sums() {
+        use crate::tests::gpu::silicon::{replay_tensor, tensor_fixtures, tensor_program};
+        let Some(state) = crate::gpu::device().ok().filter(|d| !d.cooperative_f16_tiles.is_empty()) else {
+            return eprintln!("skipping: no VK_KHR_cooperative_matrix f16 tiles");
+        };
+        let fixtures = tensor_fixtures().into_iter().filter(|f| f.id.contains("/small-integers/") && crate::gpu::sm86::f16_hmma_shape(*tensor_program(f).last().unwrap()).is_some());
+        for fixture in fixtures {
+            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force)));
+            assert_eq!(cooperative, loops, "{}", fixture.id);
+        }
+    }
 }

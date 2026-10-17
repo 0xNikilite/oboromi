@@ -96,7 +96,7 @@ void MainWindow::buildUi() {
     buttons->addStretch();
     layout->addLayout(buttons);
 
-    layout->addWidget(new DisplayWidget(central), /*stretch=*/3);
+    layout->addWidget(createDisplay(central), /*stretch=*/3);
 
     auto *resultsLabel = new QLabel("Results:", central);
     resultsLabel->setStyleSheet("color: rgb(200, 200, 200);");

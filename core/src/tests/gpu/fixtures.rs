@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::texture::TexturePool;
+    use crate::tests::gpu::silicon::{numbers, observed, string, tensor_fixtures, tensor_mismatch, tensor_program, tensor_seeds};
     use crate::tests::gpu::harness::{
         run_lanes, run_regs, run_textured, translate_module, Textures, GLOBAL_BASE, LIVE, PRED,
     };
@@ -22,27 +23,6 @@ mod tests {
         global_after: Vec<u32>,
     }
 
-    fn string(object: &str, key: &str) -> String {
-        let value = object
-            .split_once(&format!("\"{key}\":"))
-            .unwrap()
-            .1
-            .trim_start();
-        let value = value.strip_prefix('"').unwrap();
-        value[..value.find('"').unwrap()].to_owned()
-    }
-
-    fn numbers(object: &str, key: &str) -> Vec<u32> {
-        let Some((_, value)) = object.split_once(&format!("\"{key}\":")) else {
-            return Vec::new();
-        };
-        let value = value.split_once('[').unwrap().1.split_once(']').unwrap().0;
-        value
-            .split(',')
-            .filter_map(|n| n.trim().parse().ok())
-            .collect()
-    }
-
     fn reg(object: &str, name: &str) -> usize {
         string(object, name)[1..].parse().unwrap()
     }
@@ -54,10 +34,6 @@ mod tests {
     fn id(object: &str) -> String {
         let [id, family, case] = ["id", "family", "case"].map(|key| string(object, key));
         format!("{id}/{family}/{case}")
-    }
-
-    fn observed(object: &str) -> bool {
-        object.contains("\"observed\":true")
     }
 
     fn fixtures(json: &str) -> Vec<Fixture> {
@@ -89,14 +65,14 @@ mod tests {
             0x000f4200021e0f0230005cff04127b60,
             0x000f4200031e0f0230005cff04127b60,
         ] {
-            assert!(catch_unwind(|| translate_module(&[word], true, None)).is_err());
+            assert!(catch_unwind(|| translate_module(&[word], true, None, false)).is_err());
         }
     }
 
     #[test]
     #[should_panic(expected = "ATOMS.ADD.INVALID3 is illegal instruction on silicon")]
     fn atoms_invalid3_is_illegal_on_silicon() {
-        translate_module(&[0x004f5e0000000600000000070804038c], true, None);
+        translate_module(&[0x004f5e0000000600000000070804038c], true, None, false);
     }
 
     #[derive(Default)]
@@ -118,7 +94,7 @@ mod tests {
                 eprintln!("{id}: skipped, ptxas kept the local array in registers so the instruction has no observable result");
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -149,7 +125,7 @@ mod tests {
                 eprintln!("{id}: skipped, R1 held the stack pointer so the first fp64 operand was not recorded");
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -522,78 +498,6 @@ mod tests {
         Some(Ok(()))
     }
 
-    struct TensorFixture {
-        id: String,
-        case: String,
-        modifier: String,
-        words: Vec<u128>,
-        observed: bool,
-        before: Vec<u32>,
-        after: Vec<u32>,
-    }
-
-    fn tensor_fixtures() -> Vec<TensorFixture> {
-        include_str!("../../../tests/fixtures/sm86-tensor.jsonl")
-            .lines()
-            .map(|object| {
-                let case = string(object, "case");
-                let [dataset, modifier] = ["dataset", "modifier"].map(|key| {
-                    object
-                        .contains(&format!("\"{key}\":\""))
-                        .then(|| string(object, key))
-                        .unwrap_or_default()
-                });
-                TensorFixture {
-                    id: format!(
-                        "{}/tensor/{case}/{dataset}/{modifier}",
-                        string(object, "id")
-                    ),
-                    case,
-                    modifier,
-                    words: object
-                        .split_once("\"words\":[")
-                        .unwrap()
-                        .1
-                        .split_once(']')
-                        .unwrap()
-                        .0
-                        .split(',')
-                        .map(|word| u128::from_str_radix(word.trim_matches('"'), 16).unwrap())
-                        .collect(),
-                    observed: observed(object),
-                    before: numbers(object, "fragments_before"),
-                    after: numbers(object, "fragments_after"),
-                }
-            })
-            .collect()
-    }
-
-    fn tensor_program(fixture: &TensorFixture) -> Vec<u128> {
-        if fixture.words.len() == 1 {
-            return fixture.words.clone();
-        }
-        let index = match fixture.case.as_str() {
-            "m16n8k8-f32" => 0,
-            "m16n8k16-f32" => 1,
-            "m16n8k8-tf32" => 2,
-            "ldmatrix-x4-trans" => 3,
-            "ldmatrix-x4" => 4,
-            "m16n8k16-f16" => 5,
-            _ => unreachable!(),
-        };
-        if fixture.case.starts_with("ldmatrix") {
-            vec![
-                inst::sts(20, 16),
-                inst::sts(21, 17),
-                inst::sts(22, 18),
-                inst::sts(23, 19),
-                fixture.words[index],
-            ]
-        } else {
-            vec![fixture.words[index]]
-        }
-    }
-
     #[test]
     fn fixtures_match_tensor_silicon() {
         let mut score = Score::default();
@@ -605,65 +509,16 @@ mod tests {
                 continue;
             }
             let program = tensor_program(&fixture);
-            if catch_unwind(|| translate_module(&program, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&program, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
-            let mut seeds = vec![vec![0; PRED + 1]; 32];
-            for (lane, seed) in seeds.iter_mut().enumerate() {
-                let before = &fixture.before[lane * 12..][..12];
-                match fixture.case.as_str() {
-                    "m16n8k8-f32" => {
-                        seed[6..8].copy_from_slice(&before[..2]);
-                        seed[0] = before[2];
-                        seed[8..12].copy_from_slice(&before[3..7]);
-                    }
-                    case if case.starts_with("ldmatrix") => {
-                        let slot = 16 * (5 * lane as u32 % 32);
-                        seed[0] = slot;
-                        seed[16..20].copy_from_slice(&before[..4]);
-                        for word in 0..4 {
-                            seed[20 + word] = slot + 4 * word as u32;
-                        }
-                        seed[PRED] = (case == "ldmatrix-x4-trans") as u32;
-                    }
-                    case if case.starts_with("m8n8") || case.starts_with("m16n8k4") || case.starts_with("m16n8k32") || case.starts_with("m16n8k64") => {
-                        let [ra, rb, rc] = [24, 32, 64].map(|bit| (fixture.words[0] >> bit & 0xff) as usize);
-                        let (a, b, c) = match case {
-                            "m16n8k4-tf32" | "m16n8k32-s4" => (2, 1, 4),
-                            "m16n8k64-s4" | "m16n8k32-s8" | "m16n8k32-s8-satfinite" => (4, 2, 4),
-                            _ => (1, 1, 2),
-                        };
-                        seed[ra..ra + a].copy_from_slice(&before[..a]);
-                        seed[rb..rb + b].copy_from_slice(&before[a..a + b]);
-                        seed[rc..rc + c].copy_from_slice(&before[a + b..a + b + c]);
-                    }
-                    _ => {
-                        seed[12..16].copy_from_slice(&before[..4]);
-                        seed[6..8].copy_from_slice(&before[4..6]);
-                        seed[8..12].copy_from_slice(&before[6..10]);
-                    }
-                }
-                let pg = (fixture.words[0] >> 12 & 7) as usize;
-                if pg != 7 && fixture.words[0] >> 15 & 1 == 0 {
-                    seed[PRED] |= 1 << pg;
-                }
-            }
+            let seeds = tensor_seeds(&fixture);
             let Some((lanes, _)) = run_lanes(&program, &seeds, &[], &[]) else {
                 eprintln!("skipping tensor silicon fixtures: no Vulkan device");
                 return;
             };
-            let width = if fixture.case == "m16n8k16-f16" || fixture.modifier == "dst-f16" || fixture.case.starts_with("m8n8") {
-                2
-            } else {
-                4
-            };
-            let rd = (fixture.words[0] >> 16 & 0xff) as usize;
-            let mismatch = lanes.iter().enumerate().find_map(|(lane, regs)| {
-                let expected = &fixture.after[lane * 4..][..width];
-                let actual = &regs[rd..rd + width];
-                (actual != expected).then_some((lane, expected.to_vec(), actual.to_vec()))
-            });
+            let mismatch = tensor_mismatch(&fixture, &lanes);
             if let Some((lane, expected, actual)) = mismatch {
                 score.fail += 1;
                 if !KNOWN_FAILURES.contains(&id.as_str()) {
@@ -720,7 +575,7 @@ mod tests {
             if matches!(fixture.family.as_str(), "sts" | "atoms") {
                 words.push(0x004f_c800_0000_0800_0000_0000_0011_0984 | (shared as u128) << 24);
             }
-            if catch_unwind(|| translate_module(&words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -819,7 +674,7 @@ mod tests {
                 score.unimplemented += 1;
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }

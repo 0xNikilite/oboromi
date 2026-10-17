@@ -179,19 +179,20 @@ impl Disk {
         self.dir.join(format!("{code_hash:016x}-{}.spv", env!("TRANSLATOR_HASH")))
     }
 
-    /// The module and its resources this translator build saved for the guest code with `code_hash`.
-    pub fn spirv(&self, code_hash: u64) -> Option<(Vec<u32>, Vec<ResourceKind>)> {
+    /// The module, its resources and whether it stores global memory, as this translator build saved them for the guest
+    /// code with `code_hash`.
+    pub fn spirv(&self, code_hash: u64) -> Option<(Vec<u32>, Vec<ResourceKind>, bool)> {
         let bytes = fs::read(self.spirv_path(code_hash)).ok()?;
         let words: Vec<u32> = bytes.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
-        let (count, rest) = words.split_first()?;
-        let (resources, spirv) = rest.split_at_checked(4 * *count as usize)?;
+        let (&[count, stores_global], rest) = words.split_first_chunk()?;
+        let (resources, spirv) = rest.split_at_checked(4 * count as usize)?;
         let resources = resources.chunks_exact(4).map(|w| decode(w.try_into().unwrap())).collect::<Option<_>>()?;
-        Some((spirv.to_vec(), resources))
+        Some((spirv.to_vec(), resources, stores_global != 0))
     }
 
-    /// Saves the resource count, each resource as four words, then the module.
-    pub fn store_spirv(&self, code_hash: u64, words: &[u32], resources: &[ResourceKind]) -> io::Result<()> {
-        let header = std::iter::once(resources.len() as u32).chain(resources.iter().flat_map(|&kind| encode(kind)));
+    /// Saves the resource count, whether the module stores global memory, each resource as four words, then the module.
+    pub fn store_spirv(&self, code_hash: u64, words: &[u32], resources: &[ResourceKind], stores_global: bool) -> io::Result<()> {
+        let header = [resources.len() as u32, stores_global.into()].into_iter().chain(resources.iter().flat_map(|&kind| encode(kind)));
         write_atomically(&self.spirv_path(code_hash), &header.chain(words.iter().copied()).flat_map(u32::to_le_bytes).collect::<Vec<_>>())
     }
 

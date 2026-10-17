@@ -157,7 +157,7 @@ fn init_segment(width: u32, height: u32) -> Vec<u32> {
 pub fn sprites_guest(state: &'static VkState, cache: Option<(&Path, &str)>, width: u32, height: u32) -> Result<Gpu<'static>, String> {
     let named = |e| format!("{e:?}");
     let len = (TARGET - BASE + u64::from(width * height) * 4).next_multiple_of(PAGE);
-    let mut gpu = Gpu::new(state, len as usize, cache, Default::default()).map_err(|e| format!("{e:?}"))?;
+    let mut gpu = Gpu::new(state, len as usize, cache, *super::SPEED_HACKS.lock().unwrap()).map_err(|e| format!("{e:?}"))?;
     gpu.space.map(BASE, 0, len);
     // The rig's programs stop at their last EXIT; the self-branch a compiled program ends with marks the end.
     let vertex = include_bytes!("../../tests/fixtures/driver-shaders/sprite2d.vert.bin");

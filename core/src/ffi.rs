@@ -195,6 +195,12 @@ pub extern "C" fn oboromi_display_surface(surface: vk::SurfaceKHR, width: u32, h
     )
 }
 
+/// skips draws while their pipelines compile in engines created from now on.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_skip_draw_while_compiling(skip: bool) {
+    crate::gpu::SPEED_HACKS.lock().unwrap().skip_draw_while_compiling = skip;
+}
+
 /// a qt key code pressed or released in the gui.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_input_key(code: i32, down: bool) {

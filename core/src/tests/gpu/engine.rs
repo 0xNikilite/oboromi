@@ -17,7 +17,7 @@ pub const SET_VERTEX_ATTRIBUTE_A: u32 = 0x1160;
 pub const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST: u32 = 0x1214;
 pub const CLEAR_SURFACE: u32 = 0x19d0;
 pub const SET_CT_WRITE: u32 = 0x1a00;
-const SET_REPORT_SEMAPHORE_A: u32 = 0x1b00;
+pub const SET_REPORT_SEMAPHORE_A: u32 = 0x1b00;
 pub const SET_VERTEX_STREAM_A_FORMAT: u32 = 0x1c00;
 pub const SET_PIPELINE_SHADER: u32 = 0x2000;
 pub const SET_CONSTANT_BUFFER_SELECTOR_A: u32 = 0x2380;
@@ -213,7 +213,7 @@ pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], 
 mod tests {
     use super::*;
     use crate::tests::gpu::harness::{sha256, shared_device};
-    use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f};
+    use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f, stg};
 
     const END: u32 = 0x1614;
     const BEGIN: u32 = 0x1618;
@@ -232,6 +232,7 @@ mod tests {
     const DEPTH: u64 = 0x1_0060_0000;
     const TARGET_B: u64 = 0x1_0200_0000;
     const INSTANCED_PROGRAM: u64 = 0x1_0010_3000;
+    const STORING_PROGRAM: u64 = 0x1_0010_4000;
     const SEMAPHORE_A: u32 = 0x0010;
     const SET_WINDOW_ORIGIN: u32 = 0x13ac;
     const OGL_SET_CULL: u32 = 0x1918;
@@ -346,6 +347,37 @@ mod tests {
             assert_eq!(gpu.translated, translated);
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_frame_repeated_over_unchanged_pages_uploads_nothing() {
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
+        let uploaded = gpu.memory.uploaded;
+        triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
+        assert_eq!(gpu.memory.uploaded, uploaded);
+    }
+
+    #[test]
+    fn a_pixel_program_store_lands_in_guest_memory() {
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        for va in (PUSHBUFFER..TARGET).step_by(PAGE as usize) {
+            if gpu.space.resolve(va, 1).is_err() {
+                map(&mut gpu, va, PAGE);
+            }
+        }
+        let code = [mov_imm(4, REPORT as u32), mov_imm(5, 0xfeed), stg(4, 0, 5), ipa(0, 0x80, 0), ipa(1, 0x84, 0), ipa(2, 0x88, 0), ipa(3, 0x8c, 0), exit(), bra(-16)];
+        gpu.write(STORING_PROGRAM, &program([1, 7, 10, 12, 193, 195, 197, 199, 576, 577, 578, 579], &code)).unwrap();
+        let mut words = Vec::new();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &split(STORING_PROGRAM), &mut words);
+        inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
+        run(&mut gpu, &words).unwrap();
+        let mut stored = [0; 4];
+        gpu.read(REPORT, &mut stored).unwrap();
+        assert_eq!(u32::from_le_bytes(stored), 0xfeed);
     }
 
     #[test]

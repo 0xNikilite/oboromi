@@ -40,7 +40,7 @@ mod tests {
         let words = translate_module(&[inst::mov_imm(0, 42)], true, Some(state)).words();
         let disk = Disk::open(&root, title, &device).unwrap();
         let resources = [ResourceKind::Cbuf(2), ResourceKind::Varying { location: 3, flat: true }];
-        disk.store_spirv(7, &words, &resources).unwrap();
+        disk.store_spirv(7, &words, &resources, true).unwrap();
         let mut builder = PipelineBuilder::new(state, PipelinePolicy::Wait, Some(disk)).unwrap();
         let build = || {
             let words = words.clone();
@@ -50,7 +50,7 @@ mod tests {
         builder.flush().unwrap();
 
         let disk = Disk::open(&root, title, &device).unwrap();
-        assert_eq!(disk.spirv(7), Some((words, resources.to_vec())));
+        assert_eq!(disk.spirv(7), Some((words, resources.to_vec(), true)));
         assert!(disk.pipeline_cache_data().is_some());
         disk.load(state).unwrap();
         std::fs::remove_dir_all(root).unwrap();

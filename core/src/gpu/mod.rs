@@ -34,9 +34,12 @@ impl From<vk::Result> for VkError {
 /// Settings that trade accuracy for speed, all off by default.
 #[derive(Clone, Copy, Default)]
 pub struct SpeedHacks {
+    pub fast_tensor: bool,
     /// Skips draws whose pipeline is still compiling instead of waiting, so new shaders pop in.
     pub skip_draw_while_compiling: bool,
 }
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false, skip_draw_while_compiling: false });
 
 pub struct VkState {
     pub entry: ash::Entry,
@@ -210,6 +213,7 @@ impl VkState {
         let geometry_shader = features.features.geometry_shader == vk::TRUE;
         let vertex_stores = features.features.vertex_pipeline_stores_and_atomics == vk::TRUE;
         let fragment_stores = features.features.fragment_stores_and_atomics == vk::TRUE;
+        let sampler_anisotropy = features.features.sampler_anisotropy == vk::TRUE;
         let _ = features;
         let shader_float16 = float16_int8.shader_float16 == vk::TRUE;
         let shader_buffer_int64_atomics = atomic_int64.shader_buffer_int64_atomics == vk::TRUE;
@@ -245,7 +249,8 @@ impl VkState {
             .texture_compression_bc(texture_compression_bc)
             .geometry_shader(geometry_shader)
             .vertex_pipeline_stores_and_atomics(vertex_stores)
-            .fragment_stores_and_atomics(fragment_stores);
+            .fragment_stores_and_atomics(fragment_stores)
+            .sampler_anisotropy(sampler_anisotropy);
         let mut enabled_float16 = vk::PhysicalDeviceShaderFloat16Int8Features::default()
             .shader_float16(shader_float16);
         let mut enabled_atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()

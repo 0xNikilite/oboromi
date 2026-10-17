@@ -260,6 +260,9 @@ void *oboromi_vk_instance();
 /// false if the device cannot present to it.
 bool oboromi_display_surface(uint64_t surface, uint32_t width, uint32_t height);
 
+/// skips draws while their pipelines compile in engines created from now on.
+void oboromi_set_skip_draw_while_compiling(bool skip);
+
 /// a qt key code pressed or released in the gui.
 void oboromi_input_key(int32_t code, bool down);
 

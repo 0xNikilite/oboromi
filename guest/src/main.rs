@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::fmt::Write;
-use guest::{hid, svc};
+use guest::{am_time, hid, svc};
 
 core::arch::global_asm!(
     ".section .text._start, \"ax\"",
@@ -32,6 +32,12 @@ impl Write for Text {
 extern "C" fn main() -> ! {
     let _ = svc::output_debug_string("hello from guest");
     let mut text = Text { bytes: [0; 64], len: 0 };
+    let _ = match am_time::initialize() {
+        Ok((focus, time)) => write!(text, "focus {focus} time {time}"),
+        Err(code) => write!(text, "am/time error {code:#x}"),
+    };
+    let _ = svc::output_debug_string(core::str::from_utf8(&text.bytes[..text.len]).unwrap_or_default());
+    text.len = 0;
     let _ = match hid::read_full_key() {
         Ok(pad) => write!(text, "buttons {:#x} left {} {}", pad.buttons, pad.left[0], pad.left[1]),
         Err(code) => write!(text, "hid error {code:#x}"),

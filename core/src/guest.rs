@@ -22,7 +22,7 @@ mod tests {
 
     // guest.bin is what scripts/build-guest.sh builds from guest/.
     #[test]
-    fn the_guest_image_reads_the_host_pad_through_hid_shared_memory() {
+    fn the_guest_image_initializes_applet_time_and_hid() {
         let cpu = CpuManager::new();
         let image = include_bytes!("../tests/fixtures/guest/guest.bin");
         let entry = load_flat_image(&cpu.ram, image, BASE).unwrap();
@@ -31,6 +31,10 @@ mod tests {
         kernel.hid.borrow_mut().input = || InputState { buttons: 1, left: [0.5, -0.5], right: [0.0; 2], connected: true };
         kernel.start(core, entry, image.len() as u64);
         assert!(kernel.run(core));
-        assert_eq!(kernel.debug_output, ["hello from guest", "buttons 0x1 left 16383 -16383"]);
+        assert_eq!(kernel.debug_output[0], "hello from guest");
+        let time: i64 = kernel.debug_output[1].strip_prefix("focus 1 time ").unwrap().parse().unwrap();
+        assert!((time - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).abs() < 5);
+        assert_eq!(kernel.debug_output[2], "buttons 0x1 left 16383 -16383");
+        println!("{}", kernel.debug_output[1]);
     }
 }

@@ -22,6 +22,7 @@ const RECORDS: u64 = 17;
 const RECORD_SIZE: u64 = 0x30;
 const FULL_KEY: u32 = 1;
 const CONNECTED_WIRED: u32 = 0b11;
+pub const ARUID: u64 = 0;
 
 pub struct State {
     pub input: fn() -> InputState,

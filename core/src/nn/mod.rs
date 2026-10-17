@@ -4,6 +4,10 @@ use crate::sys;
 pub mod hid;
 pub mod hipc;
 pub mod sm;
+pub mod applet;
+pub use applet as applet_ae;
+pub use applet as applet_oe;
+pub mod time;
 
 macro_rules! define_service {
     ($($name:ident),* $(,)?) => {
@@ -31,7 +35,7 @@ macro_rules! define_service {
 }
 
 define_service!(
-    acc, adraw, ahid, aoc, apm, applet_ae, applet_oe, arp,
+    acc, adraw, ahid, aoc, apm, arp,
     aud, audctl, auddebug, auddev, auddmg, audin, audout,
     audrec, audren, audsmx, avm, banana, batlog, bcat, bgtc,
     bpc, bpmpmr, bsd, bsdcfg, bt, btdrv, btm, btp, capmtp,
@@ -47,7 +51,7 @@ define_service!(
     olsc, omm, ommdisp, ovln, pcie, pcm, pctl, pcv, pdm,
     pgl, pinmux, pl, pm, prepo, psc, psm, pwm, rgltr, ro,
     rtc, sasbus, set, sf_uds, sfdnsres, spbg, spi, spl,
-    sprof, spsm, srepo, ssl, syncpt, tc, tcap, time,
+    sprof, spsm, srepo, ssl, syncpt, tc, tcap,
     tma_log, tmagent, ts, tspm, uart, usb, vi, vi2, vic,
     wlan, xcd,
 );

@@ -4,6 +4,8 @@
 
 use crate::cpu::UnicornCPU;
 use crate::kernel::Object;
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 pub const MESSAGE_SIZE: usize = 0x100;
 pub const CLOSE: u16 = 2;
@@ -15,6 +17,7 @@ const SFCO: u32 = u32::from_le_bytes(*b"SFCO");
 /// sf result descriptions (module 10), Ryujinx.Horizon/Sdk/Sf/SfResult.cs.
 #[derive(Debug, Clone, Copy)]
 pub enum SfError {
+    NotSupported = 1,
     InvalidHeaderSize = 202,
     InvalidInHeader = 211,
     UnknownCommandId = 221,
@@ -61,6 +64,14 @@ impl Response {
     pub fn unknown_command(cmd: u32) -> Self {
         log::warn!("command {cmd}: {:?}", SfError::UnknownCommandId);
         Self::error(SfError::UnknownCommandId.code())
+    }
+
+    pub fn not_implemented(service: &'static str, cmd: u32) -> Self {
+        static SEEN: OnceLock<Mutex<HashSet<(&'static str, u32)>>> = OnceLock::new();
+        if SEEN.get_or_init(Mutex::default).lock().unwrap().insert((service, cmd)) {
+            log::warn!("{service} command {cmd}: {:?}", SfError::NotSupported);
+        }
+        Self::error(SfError::NotSupported.code())
     }
 }
 

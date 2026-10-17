@@ -98,7 +98,7 @@ mod tests {
             descriptors.bind(buffers);
         }
         pipeline.descriptors[1].bind_images(images);
-        let target = RenderTarget::new(state, SIZE, SIZE, None).unwrap();
+        let target = RenderTarget::new(state, SIZE, SIZE, None, None).unwrap();
         let mut buffer = HostBuffer::new(state, vertices.len() as u64).unwrap();
         buffer.write(vertices).unwrap();
         let raster = RasterState {
@@ -246,7 +246,7 @@ mod tests {
         let topology = vk::PrimitiveTopology::POINT_LIST;
         let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
         let pipeline = GraphicsPipeline::new(&state, &vertex, Some(&geometry), &fragment, [&[], &[]], &layout, &TargetState { blend: opaque(), depth: None }).unwrap();
-        let target = RenderTarget::new(&state, SIZE, SIZE, None).unwrap();
+        let target = RenderTarget::new(&state, SIZE, SIZE, None, None).unwrap();
         let mut point = HostBuffer::new(&state, 8).unwrap();
         point.write(&[0u8; 8]).unwrap();
         let raster = RasterState {

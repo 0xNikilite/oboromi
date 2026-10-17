@@ -243,6 +243,10 @@ bool oboromi_render_music_demo(float seconds);
 /// is missing or a draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_bounce_demo(float seconds);
 
+/// draws a frame of the particles demo at `seconds` and presents it, false if
+/// vulkan is missing or the frame fails. blocks, so call it from a worker thread.
+bool oboromi_render_particles_frame(float seconds);
+
 /// generation of the last presented frame, 0 until the guest presents one.
 uint64_t oboromi_frame_generation();
 

@@ -86,6 +86,19 @@ impl FrameImage {
 
     /// Copies linear RGBA8 rows from `buffer` and leaves the image in TRANSFER_SRC_OPTIMAL.
     pub fn upload(&self, buffer: vk::Buffer) -> Result<(), VkError> {
+        let region = self.region();
+        self.fill(|d, cmd| unsafe { d.cmd_copy_buffer_to_image(cmd, buffer, self.image, Layout::TRANSFER_DST_OPTIMAL, &region) })
+    }
+
+    /// Copies `image` of the same size and format, in TRANSFER_SRC_OPTIMAL, and leaves the frame in TRANSFER_SRC_OPTIMAL.
+    pub fn copy(&self, image: vk::Image) -> Result<(), VkError> {
+        let extent = vk::Extent3D { width: self.width, height: self.height, depth: 1 };
+        let region = [vk::ImageCopy::default().src_subresource(COLOR_LAYER).dst_subresource(COLOR_LAYER).extent(extent)];
+        let (src, dst) = (Layout::TRANSFER_SRC_OPTIMAL, Layout::TRANSFER_DST_OPTIMAL);
+        self.fill(|d, cmd| unsafe { d.cmd_copy_image(cmd, image, src, self.image, dst, &region) })
+    }
+
+    fn fill(&self, copy: impl FnOnce(&ash::Device, vk::CommandBuffer)) -> Result<(), VkError> {
         let d = &self.state.device;
         // A barrier's first scope reaches back into earlier submissions, so this makes the
         // producer's shader writes visible to the copy.
@@ -106,8 +119,7 @@ impl FrameImage {
         self.state.submit_and_wait(|cmd| unsafe {
             let src = Stage::COMPUTE_SHADER | Stage::TRANSFER;
             d.cmd_pipeline_barrier(cmd, src, Stage::TRANSFER, none, &[written], &[], &[to_dst]);
-            let dst = Layout::TRANSFER_DST_OPTIMAL;
-            d.cmd_copy_buffer_to_image(cmd, buffer, self.image, dst, &self.region());
+            copy(d, cmd);
             d.cmd_pipeline_barrier(cmd, Stage::TRANSFER, Stage::TRANSFER, none, &[], &[], &[to_src]);
         })
     }

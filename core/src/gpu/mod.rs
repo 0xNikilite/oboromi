@@ -38,7 +38,7 @@ pub struct VkState {
     pub pipeline_cache: vk::PipelineCache,
     /// Graphics pipelines link from libraries shared between them, compiled once per stage or interface.
     pub graphics_pipeline_library: bool,
-    pub(crate) libraries: std::sync::Mutex<std::collections::HashMap<(i32, u64), vk::Pipeline>>,
+    pub(crate) libraries: std::sync::Mutex<std::collections::HashMap<(vk::GraphicsPipelineLibraryFlagsEXT, u64), vk::Pipeline>>,
     /// Present when colour blend enable, blend equation and colour write mask are dynamic state.
     pub extended_dynamic_state3: Option<ash::ext::extended_dynamic_state3::Device>,
     pub signed_zero_inf_nan_preserve: [bool; 3],

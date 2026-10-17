@@ -132,7 +132,7 @@ impl VkState {
         ];
         let mut libraries = [vk::Pipeline::null(); 4];
         for ((library, (part, stages)), key) in libraries.iter_mut().zip(parts).zip(keys) {
-            let key = (part.as_raw() as i32, key);
+            let key = (part, key);
             let found = self.libraries.lock().unwrap().get(&key).copied();
             *library = match found {
                 Some(library) => library,

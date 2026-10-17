@@ -20,6 +20,9 @@ pub struct Ram {
     alignment: usize,
 }
 
+// The allocation is owned by Ram and only reached through its slices.
+unsafe impl Send for Ram {}
+
 impl Ram {
     pub fn new(bytes: usize, alignment: usize) -> Self {
         let len = bytes.max(1).next_multiple_of(alignment);

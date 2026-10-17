@@ -151,7 +151,11 @@ fn settle_ranges(targets: &mut HashMap<TargetKey, Target>, memory: &mut MemoryTr
     for (key, target) in targets {
         let Some(pending) = target.pending.take_if(|pending| within(&key.ranges, pending.clone()).any(|(_, piece)| overlaps(&piece))) else { continue };
         let pieces: Vec<_> = within(&key.ranges, pending.clone()).map(|(_, piece)| piece).collect();
-        memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);
+        if target.render_target.staging.imported.is_some() {
+            pieces.iter().for_each(|piece| memory.mark_gpu_written(piece.start, piece.end - piece.start));
+        } else {
+            memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);
+        }
         target.generation = generation(memory, &key.ranges);
     }
     Ok(())
@@ -814,12 +818,17 @@ impl<'a> Gpu<'a> {
         let target = match self.targets.entry(target_key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth).map_err(named)?;
+                let staging = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth, staging).map_err(named)?;
                 entry.insert(Target { render_target, generation: u64::MAX, pending: None, depth_cleared: false })
             }
         };
         let load = clear.is_none() && target.generation != current;
-        if load {
+        let imported = target.render_target.staging.imported.is_some();
+        if load && !imported {
             self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
             gather(&self.space, &self.ram, ct.address, &mut self.pixels).map_err(named)?;
             target.render_target.write(&self.pixels).map_err(named)?;

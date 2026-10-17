@@ -361,7 +361,7 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn interface_vec4(&mut self, kind: ResourceKind, storage: u32) -> u32 {
-        use spirv::decoration::{BUILTIN, FLAT, LOCATION};
+        use spirv::decoration::{BUILTIN, FLAT, LOCATION, NO_PERSPECTIVE};
         if let Some(var) = self.resource(kind) {
             return var;
         }
@@ -372,9 +372,26 @@ impl<'a> Decoder<'a> {
             ResourceKind::VertexInput { location } | ResourceKind::Varying { location, .. } | ResourceKind::FragmentOutput { location } => self.ir.emit_decorate(var, LOCATION, &[location]),
             _ => unreachable!("{kind:?} is not a stage interface"),
         }
-        if let ResourceKind::Varying { flat: true, .. } = kind {
-            self.ir.emit_decorate(var, FLAT, &[]);
+        match (kind, self.stage) {
+            (ResourceKind::Varying { flat: true, .. }, _) => self.ir.emit_decorate(var, FLAT, &[]),
+            (ResourceKind::Varying { location, .. }, Stage::Fragment { screen_linear, .. }) if screen_linear >> location & 1 != 0 => {
+                self.ir.emit_decorate(var, NO_PERSPECTIVE, &[])
+            }
+            _ => {}
         }
+        self.resources.push(Resource { kind, var });
+        var
+    }
+
+    pub(super) fn frag_depth(&mut self) -> u32 {
+        use spirv::{BuiltIn::FragDepth, decoration::BUILTIN, storage_class::OUTPUT};
+        let kind = ResourceKind::BuiltIn(FragDepth as u32);
+        if let Some(var) = self.resource(kind) {
+            return var;
+        }
+        let ptr = self.ir.emit_type_pointer(OUTPUT, self.type_f32[1]);
+        let var = self.ir.emit_variable(ptr, OUTPUT);
+        self.ir.emit_decorate(var, BUILTIN, &[FragDepth as u32]);
         self.resources.push(Resource { kind, var });
         var
     }

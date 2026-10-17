@@ -94,7 +94,8 @@ pub enum ResourceKind {
 pub enum Stage {
     Compute { local_size: [u32; 3] },
     Vertex,
-    Fragment,
+    /// Bit n of `flat` and `screen_linear` is the interpolation of generic attribute n; `depth` writes FragDepth.
+    Fragment { flat: u32, screen_linear: u32, depth: bool },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -293,13 +294,18 @@ impl<'a> Decoder<'a> {
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
             Stage::Vertex => model::VERTEX,
-            Stage::Fragment => model::FRAGMENT,
+            Stage::Fragment { .. } => model::FRAGMENT,
         };
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
             Stage::Vertex => {}
-            Stage::Fragment => self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]),
+            Stage::Fragment { depth, .. } => {
+                self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]);
+                if depth {
+                    self.ir.emit_execution_mode(func, mode::DEPTH_REPLACING, &[]);
+                }
+            }
         }
         let Some(device) = device else { return };
         for (capability, execution_mode, widths) in [

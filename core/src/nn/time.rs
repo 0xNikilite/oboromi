@@ -53,7 +53,9 @@ impl Service for SystemClock {
         match cmd {
             0 => Response { data: unix_time().to_le_bytes().into(), ..Response::default() },
             2 => {
-                let data = [unix_time().to_le_bytes().as_slice(), &steady_point()].concat();
+                let point = steady_point();
+                let steady = i64::from_le_bytes(point[..8].try_into().unwrap());
+                let data = [(unix_time() - steady).to_le_bytes().as_slice(), &point].concat();
                 Response { data, ..Response::default() }
             }
             _ => Response::not_implemented("ISystemClock", cmd),

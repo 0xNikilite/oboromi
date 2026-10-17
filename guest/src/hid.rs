@@ -1,5 +1,5 @@
 //! libnx's hid start-up (nx/source/services/hid.c, sm.c) and padUpdate's read of Npad No1's latest FullKey state.
-use crate::cmif::{self, Buffer, Request};
+use crate::cmif::{Buffer, Request};
 use crate::svc::{self, Result};
 
 /// No applet service hands out a resource user id yet.
@@ -15,14 +15,8 @@ pub struct FullKey {
 }
 
 /// Sends `request` and returns the reply's first handle, 0 without one.
-fn call(session: u32, request: Request) -> Result<u32> {
-    let ipc = unsafe { &mut *svc::ipc_buffer() };
-    cmif::write_request(ipc, &request);
-    svc::send_sync_request(session)?;
-    let reply = cmif::read_reply(ipc).ok_or(u32::MAX)?;
-    if reply.result != 0 {
-        return Err(reply.result);
-    }
+pub fn call(session: u32, request: Request) -> Result<u32> {
+    let reply = svc::request(session, &request)?;
     Ok(reply.copy_handles.iter().chain(reply.move_handles).next().copied().unwrap_or(0))
 }
 

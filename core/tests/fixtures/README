@@ -3,4 +3,4 @@ One fixture per line, id is <capture>#<index in that capture> and word_hex the i
 observed:true means the outputs were captured on silicon, false marks a case that could not be run.
 The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
 mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.
-guest/guest.bin is the flat AArch64 image scripts/build-guest.sh builds from guest/ for core/src/guest.rs, sha256 132e357213dd6b1c2b5fd15114578c18aadc5e8f0f8401c27f387f823c72ba8c.
+guest/guest.bin is the flat AArch64 image scripts/build-guest.sh builds from guest/ for core/src/guest.rs, sha256 86dcbf2e50a3a4d80fdddd0c855c2e874376975caade469d57bc0830f190b33c.

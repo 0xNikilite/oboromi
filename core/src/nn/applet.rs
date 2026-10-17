@@ -76,8 +76,7 @@ impl Service for SelfController {
         match cmd {
             9 => Response { copy_handles: vec![Object::Event(Rc::new(Cell::new(true)))], ..Response::default() },
             10 | 11 | 12 | 13 | 14 | 16 => Response::default(),
-            // VI does not expose a layer registry on guest-path yet.
-            40 => Response { data: 0u64.to_le_bytes().into(), ..Response::default() },
+            40 => Response { data: crate::nn::vi::LAYER_ID.to_le_bytes().into(), ..Response::default() },
             _ => Response::not_implemented("ISelfController", cmd),
         }
     }

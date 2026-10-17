@@ -65,6 +65,10 @@ pub fn surface_device() -> Result<&'static VkState, VkError> {
     device()
 }
 
+// The Vulkan loader unlinks a destroyed device under a different lock than vkGetDeviceProcAddr walks the device list
+// with, so creating a device while another thread destroys one reads freed memory.
+static DEVICE_LIFETIMES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn device() -> Result<&'static VkState, VkError> {
     static DEVICE: std::sync::OnceLock<VkState> = std::sync::OnceLock::new();
     if let Some(state) = DEVICE.get() {
@@ -81,6 +85,7 @@ impl VkState {
     }
 
     pub fn new() -> Result<Self, VkError> {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
         let extensions = if SURFACES.load(Relaxed) {
@@ -287,6 +292,7 @@ impl VkState {
 
 impl Drop for VkState {
     fn drop(&mut self) {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let _ = self.device.device_wait_idle();
             let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());

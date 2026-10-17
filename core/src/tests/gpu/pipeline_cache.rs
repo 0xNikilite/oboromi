@@ -2,24 +2,13 @@
 mod tests {
     use crate::gpu::compute::ComputePipeline;
     use crate::gpu::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy};
-    use crate::gpu::{VkError, VkState, device};
     use crate::tests::gpu::graphics::{SIZE, triangle};
-    use crate::tests::gpu::harness::{translate_module, vk_state};
+    use crate::tests::gpu::harness::{shared_device, translate_module, vk_state};
     use crate::tests::gpu_test::inst;
     use ash::vk::DescriptorType;
     use std::sync::mpsc;
 
     const REGISTER_IO: [(u32, DescriptorType); 2] = [(10, DescriptorType::STORAGE_BUFFER), (11, DescriptorType::STORAGE_BUFFER)];
-
-    fn shared_device() -> Option<&'static VkState> {
-        match device() {
-            Err(e @ (VkError::Loader | VkError::NoDevice)) => {
-                eprintln!("skipping: {e:?}");
-                None
-            }
-            state => Some(state.unwrap()),
-        }
-    }
 
     #[test]
     fn builder_skips_the_draw_until_its_pipeline_is_built_and_waits_when_told_to() {

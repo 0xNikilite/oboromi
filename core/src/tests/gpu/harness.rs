@@ -48,6 +48,16 @@ pub fn spirv_val(module: &Emitter) {
     assert!(out.status.success(), "{out:?}");
 }
 
+pub fn shared_device() -> Option<&'static VkState> {
+    match crate::gpu::device() {
+        Err(e @ (VkError::Loader | VkError::NoDevice)) => {
+            eprintln!("skipping: {e:?}");
+            None
+        }
+        state => Some(state.unwrap()),
+    }
+}
+
 pub fn vk_state() -> Option<VkState> {
     match VkState::new() {
         Ok(s) => Some(s),

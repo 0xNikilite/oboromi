@@ -16,7 +16,7 @@ pub enum PipelinePolicy {
 }
 
 pub enum Lookup<'p, P> {
-    Ready(&'p P),
+    Ready(&'p mut P),
     Pending,
 }
 
@@ -86,8 +86,8 @@ impl<'a, K: Hash + Eq + Clone + Send + 'static, P: Send + 'static> PipelineBuild
         }
     }
 
-    fn lookup(&self, key: &K) -> Result<Lookup<'_, P>, VkError> {
-        match self.pipelines.get(key) {
+    fn lookup(&mut self, key: &K) -> Result<Lookup<'_, P>, VkError> {
+        match self.pipelines.get_mut(key) {
             Some(Some(Ok(pipeline))) => Ok(Lookup::Ready(pipeline)),
             Some(Some(Err(e))) => Err(*e),
             _ => Ok(Lookup::Pending),

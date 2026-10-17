@@ -4,6 +4,7 @@ mod atomics;
 mod compare;
 mod control;
 mod convert;
+mod cubin;
 mod fixtures;
 pub mod fp;
 mod int_alu;

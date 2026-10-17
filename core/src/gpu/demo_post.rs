@@ -1,10 +1,12 @@
 //! The post-effect scene (demos/scenes/post-effect.md): a spinning pinwheel drawn into one colour target, then that
 //! target's VA sampled as TIC 4 by the NVIDIA driver's SM86 build of demos/shaders/post.vert and post.frag into a second.
 use super::engine::Gpu;
+use super::frame::cache_root;
 use super::memory::PAGE;
 use super::{VkState, device};
 use crate::tests::gpu::engine::{bytes, entry, inc};
 use crate::tests::gpu_test::inst::bra;
+use std::path::Path;
 use std::sync::Mutex;
 
 const BASE: u64 = 0x1000_0000;
@@ -85,10 +87,10 @@ pub struct Post<'a> {
 
 impl<'a> Post<'a> {
     /// Draws the pinwheel at `scene` size and the post pass at `out` size, running the init segment.
-    pub fn new(state: &'a VkState, scene: [u32; 2], out: [u32; 2]) -> Result<Self, String> {
+    pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, scene: [u32; 2], out: [u32; 2]) -> Result<Self, String> {
         let target = (SCENE + u64::from(scene[0] * scene[1] * 4)).next_multiple_of(PAGE);
         let end = (target + u64::from(out[0] * out[1] * 4)).next_multiple_of(PAGE);
-        let mut gpu = Gpu::new(state, (end - BASE) as usize);
+        let mut gpu = Gpu::new(state, (end - BASE) as usize, cache, *super::SPEED_HACKS.lock().unwrap()).map_err(named)?;
         gpu.space.map(BASE, 0, end - BASE);
         // The rig's programs stop at their last EXIT; the self-branch a compiled program ends with marks the end.
         for (va, program) in [
@@ -187,12 +189,13 @@ impl<'a> Post<'a> {
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
+pub(super) static POST: Mutex<Option<Post<'static>>> = Mutex::new(None);
+
 pub fn render_post_frame(seconds: f32) -> Result<(), String> {
-    static POST: Mutex<Option<Post<'static>>> = Mutex::new(None);
     let mut slot = POST.lock().unwrap();
     let post = match &mut *slot {
         Some(post) => post,
-        empty => empty.insert(Post::new(device().map_err(named)?, [1280, 720], [WIDTH, HEIGHT])?),
+        empty => empty.insert(Post::new(device().map_err(named)?, Some((&cache_root(), "demos")), [1280, 720], [WIDTH, HEIGHT])?),
     };
     post.frame(seconds)?;
     post.gpu.present(post.target, WIDTH, HEIGHT).map_err(named)

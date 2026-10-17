@@ -162,6 +162,7 @@ pub struct Decoder<'a> {
     invocations: u32,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
+    pub stores_global: bool,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
 }
@@ -303,6 +304,7 @@ impl<'a> Decoder<'a> {
             invocations: 0,
             glsl_ext: 0,
             resources: Vec::new(),
+            stores_global: false,
             const_cache: HashMap::new(),
         }
     }

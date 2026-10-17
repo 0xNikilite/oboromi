@@ -30,8 +30,8 @@ mod tests {
         };
         let mut ram = vec![0xaa; 2 * PAGE as usize];
         ram[PAGE as usize..].fill(0xbb);
-        let (mut space, tracker) = (PageMap::default(), MemoryTracker::default());
-        let window_bytes = |space: &PageMap| {
+        let (mut space, mut tracker) = (PageMap::default(), MemoryTracker::default());
+        let mut window_bytes = |space: &PageMap| {
             let (mapping, base) = tracker.window(state, &ram, space, VA + 4, 8).unwrap();
             let mut bytes = [0; 12];
             mapping.buffer.read(&mut bytes).unwrap();

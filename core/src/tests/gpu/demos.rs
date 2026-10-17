@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::demo::{Scene, asset_dir};
-    use crate::tests::gpu::harness::vk_state;
+    use crate::tests::gpu::harness::shared_device;
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -15,8 +15,8 @@ mod tests {
         if !asset_dir(asset).exists() {
             return eprintln!("skipped: run demos/assets/fetch.sh for {asset}");
         }
-        let Some(state) = vk_state() else { return };
-        let mut scene = Scene::new(&state, asset, WIDTH, HEIGHT).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut scene = Scene::new(state, None, asset, WIDTH, HEIGHT).unwrap();
         scene.frame(0.0).unwrap();
         let mut pixels = vec![0; (WIDTH * HEIGHT * 4) as usize];
         scene.gpu.read(scene.target, &mut pixels).unwrap();

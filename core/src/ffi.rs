@@ -95,6 +95,12 @@ pub extern "C" fn oboromi_render_triangle_demo(seconds: f32) -> bool {
     )
 }
 
+/// saves the pipeline cache of the demos that ran, call it when a demo stops.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_flush_demo_caches() -> bool {
+    matches!(catch_unwind(crate::gpu::frame::flush_demo_caches), Ok(Ok(())))
+}
+
 /// draws the pbr BoomBox demo at `seconds` and presents it, false if vulkan is
 /// missing or the draw fails. blocks, so call it from a worker thread.
 #[unsafe(no_mangle)]
@@ -197,6 +203,12 @@ pub extern "C" fn oboromi_display_surface(surface: vk::SurfaceKHR, width: u32, h
         catch_unwind(|| attach_surface(surface, width, height)),
         Ok(Ok(()))
     )
+}
+
+/// skips draws while their pipelines compile in engines created from now on.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_skip_draw_while_compiling(skip: bool) {
+    crate::gpu::SPEED_HACKS.lock().unwrap().skip_draw_while_compiling = skip;
 }
 
 /// a qt key code pressed or released in the gui.

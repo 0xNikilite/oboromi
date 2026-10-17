@@ -1,5 +1,6 @@
 //! Pipelines built off the frame: worker threads run each pipeline's build while draws look it up by key, and `Disk`
 //! keeps the translated SPIR-V and the device's VkPipelineCache per title so the next run starts warm.
+use super::sm86::ResourceKind;
 use super::{VkError, VkState};
 use ash::vk;
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ pub enum PipelinePolicy {
 }
 
 pub enum Lookup<'p, P> {
-    Ready(&'p P),
+    Ready(&'p mut P),
     Pending,
 }
 
@@ -24,7 +25,7 @@ type Built<K, P> = (K, Result<P, VkError>);
 
 pub struct PipelineBuilder<'a, K, P> {
     state: &'a VkState,
-    disk: Option<Disk>,
+    pub disk: Option<Disk>,
     pub policy: PipelinePolicy,
     /// `None` while the pipeline builds.
     pipelines: HashMap<K, Option<Result<P, VkError>>>,
@@ -86,8 +87,8 @@ impl<'a, K: Hash + Eq + Clone + Send + 'static, P: Send + 'static> PipelineBuild
         }
     }
 
-    fn lookup(&self, key: &K) -> Result<Lookup<'_, P>, VkError> {
-        match self.pipelines.get(key) {
+    fn lookup(&mut self, key: &K) -> Result<Lookup<'_, P>, VkError> {
+        match self.pipelines.get_mut(key) {
             Some(Some(Ok(pipeline))) => Ok(Lookup::Ready(pipeline)),
             Some(Some(Err(e))) => Err(*e),
             _ => Ok(Lookup::Pending),
@@ -153,7 +154,7 @@ impl VkState {
     }
 
     pub(super) fn create_graphics_pipeline(&self, info: vk::GraphicsPipelineCreateInfo) -> Result<vk::Pipeline, VkError> {
-        Ok(unsafe { self.device.create_graphics_pipelines(self.pipeline_cache, &[info], None) }.map_err(|(_, e)| e)?[0])
+        Ok(unsafe { self.device.create_graphics_pipelines(*self.pipeline_cache.read().unwrap(), &[info], None) }.map_err(|(_, e)| e)?[0])
     }
 }
 
@@ -178,14 +179,21 @@ impl Disk {
         self.dir.join(format!("{code_hash:016x}-{}.spv", env!("TRANSLATOR_HASH")))
     }
 
-    /// The module this translator build saved for the guest code with `code_hash`.
-    pub fn spirv(&self, code_hash: u64) -> Option<Vec<u32>> {
+    /// The module, its resources and whether it stores global memory, as this translator build saved them for the guest
+    /// code with `code_hash`.
+    pub fn spirv(&self, code_hash: u64) -> Option<(Vec<u32>, Vec<ResourceKind>, bool)> {
         let bytes = fs::read(self.spirv_path(code_hash)).ok()?;
-        Some(bytes.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect())
+        let words: Vec<u32> = bytes.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
+        let (&[count, stores_global], rest) = words.split_first_chunk()?;
+        let (resources, spirv) = rest.split_at_checked(4 * count as usize)?;
+        let resources = resources.chunks_exact(4).map(|w| decode(w.try_into().unwrap())).collect::<Option<_>>()?;
+        Some((spirv.to_vec(), resources, stores_global != 0))
     }
 
-    pub fn store_spirv(&self, code_hash: u64, words: &[u32]) -> io::Result<()> {
-        write_atomically(&self.spirv_path(code_hash), &words.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<_>>())
+    /// Saves the resource count, whether the module stores global memory, each resource as four words, then the module.
+    pub fn store_spirv(&self, code_hash: u64, words: &[u32], resources: &[ResourceKind], stores_global: bool) -> io::Result<()> {
+        let header = [resources.len() as u32, stores_global.into()].into_iter().chain(resources.iter().flat_map(|&kind| encode(kind)));
+        write_atomically(&self.spirv_path(code_hash), &header.chain(words.iter().copied()).flat_map(u32::to_le_bytes).collect::<Vec<_>>())
     }
 
     /// The saved VkPipelineCache data, unless its header names another device or driver build.
@@ -199,14 +207,14 @@ impl Disk {
         let d = &state.device;
         unsafe {
             let saved = d.create_pipeline_cache(&vk::PipelineCacheCreateInfo::default().initial_data(&data), None)?;
-            let merged = d.merge_pipeline_caches(state.pipeline_cache, &[saved]);
+            let merged = d.merge_pipeline_caches(*state.pipeline_cache.write().unwrap(), &[saved]);
             d.destroy_pipeline_cache(saved, None);
             Ok(merged?)
         }
     }
 
     pub fn flush(&self, state: &VkState) -> io::Result<()> {
-        let data = unsafe { state.device.get_pipeline_cache_data(state.pipeline_cache) }.map_err(io::Error::other)?;
+        let data = unsafe { state.device.get_pipeline_cache_data(*state.pipeline_cache.read().unwrap()) }.map_err(io::Error::other)?;
         write_atomically(&self.dir.join("pipeline-cache"), &data)
     }
 }
@@ -215,4 +223,53 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let partial = path.with_extension("partial");
     fs::write(&partial, bytes)?;
     fs::rename(partial, path)
+}
+
+fn encode(kind: ResourceKind) -> [u32; 4] {
+    use ResourceKind::*;
+    match kind {
+        BuiltIn(n) => [0, n, 0, 0],
+        Cbuf(n) => [1, n, 0, 0],
+        Ssbo(n) => [2, n, 0, 0],
+        Support => [3, 0, 0, 0],
+        Global => [4, 0, 0, 0],
+        Local => [5, 0, 0, 0],
+        Shared => [6, 0, 0, 0],
+        Shared64 => [7, 0, 0, 0],
+        Warp => [8, 0, 0, 0],
+        Schedule => [9, 0, 0, 0],
+        Global64 => [10, 0, 0, 0],
+        Texture2D { cbuf_bank, byte_offset } => [11, cbuf_bank, byte_offset, 0],
+        Surface2D { cbuf_bank, byte_offset, format } => [12, cbuf_bank, byte_offset, format.as_raw() as u32],
+        VertexInput { location } => [13, location, 0, 0],
+        Varying { location, flat } => [14, location, flat.into(), 0],
+        FragmentOutput { location } => [15, location, 0, 0],
+        PerVertex { attr, output } => [16, attr, output.into(), 0],
+        Patch { location } => [17, location, 0, 0],
+    }
+}
+
+fn decode([tag, a, b, c]: [u32; 4]) -> Option<ResourceKind> {
+    use ResourceKind::*;
+    Some(match tag {
+        0 => BuiltIn(a),
+        1 => Cbuf(a),
+        2 => Ssbo(a),
+        3 => Support,
+        4 => Global,
+        5 => Local,
+        6 => Shared,
+        7 => Shared64,
+        8 => Warp,
+        9 => Schedule,
+        10 => Global64,
+        11 => Texture2D { cbuf_bank: a, byte_offset: b },
+        12 => Surface2D { cbuf_bank: a, byte_offset: b, format: vk::Format::from_raw(c as i32) },
+        13 => VertexInput { location: a },
+        14 => Varying { location: a, flat: b != 0 },
+        15 => FragmentOutput { location: a },
+        16 => PerVertex { attr: a, output: b != 0 },
+        17 => Patch { location: a },
+        _ => return None,
+    })
 }

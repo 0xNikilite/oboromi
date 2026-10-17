@@ -201,7 +201,7 @@ impl<'a> Decoder<'a> {
             0 | 4 => (0, true),
             1 => (0, false),
             2 => (inst >> 74 & 3, true),
-            3 => todo!("BAR.SCAN"),
+            3 => todo!("BAR.SCAN has no published scan result or per-lane ordering in the SM86 table, Eden, Ryujinx, or NAK"),
             mode => panic!("BAR mode {mode} is invalid"),
         };
         assert!(op != 3, "BAR.RED operation 3 is invalid");

@@ -133,6 +133,12 @@ pub mod inst {
     const LZ: u128 = 1 << 87;
     pub const TLD_LZ_2D: u128 = 0xb66 | TEX_2D | LZ;
     pub const TEX_LZ_2D: u128 = 0xb60 | TEX_2D | LZ;
+    pub const TEX_LB_2D: u128 = 0xb60 | TEX_2D | 2 << 87;
+    pub const TEX_LL_2D: u128 = 0xb60 | TEX_2D | 3 << 87;
+    pub const TEX_LC_2D: u128 = 0xb60 | TEX_2D | 4 << 87;
+    pub const TEX_LB_LC_2D: u128 = 0xb60 | TEX_2D | 5 << 87;
+    pub const TEX_LC_FDV_2D: u128 = 0xb60 | TEX_2D | 6 << 87;
+    pub const TEX_DC: u128 = 1 << 78;
     pub const TXQ_DIMENSION: u128 = 0xb6f;
     const SU_2D_NEAR: u128 = 3 << 61 | 1 << 59;
     const SU_RGBA: u128 = 0xf << 72;
@@ -152,6 +158,7 @@ pub mod inst {
     const STS: u128 = 0x388;
     const ATOMS_ADD: u128 = 0x38c;
     const ATOMS_CAS: u128 = 0x38d;
+    const ATOMS_CAST: u128 = ATOMS_CAS | 1 << 87;
     const BAR_SYNC: u128 = 0xb1d;
     pub const BAR_RED_POPC: u128 = 2 << 77;
     pub const BAR_RED_AND: u128 = BAR_RED_POPC | 1 << 74;
@@ -346,6 +353,14 @@ pub mod inst {
 
     pub fn atoms_cas(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
         shared(ATOMS_CAS, rd, ra, rb, rc)
+    }
+
+    pub fn atoms_cast(rd: u32, ra: u32, rb: u32, rc: u32, wide: bool) -> u128 {
+        shared(ATOMS_CAST | (wide as u128) << 74, rd, ra, rb, rc)
+    }
+
+    pub fn atoms_add_f32(rd: u32, ra: u32, rb: u32) -> u128 {
+        shared(ATOMS_ADD | 3 << 73, rd, ra, rb, 0)
     }
 
     pub fn bar_sync() -> u128 {
@@ -557,6 +572,12 @@ pub mod inst {
     const STRONG_GPU: u128 = 7 << 77;
     const ATOMIC: u128 = ADDR_64 | STRONG_GPU | PU_PT | COP_EN | NO_WRITE_SCOREBOARD;
     pub const ATOM: u128 = 0x38a | ATOMIC;
+    pub const ATOM_CAST: u128 = 0x38b | ATOMIC | 1 << 87;
+    pub const ATOM_CAST_64: u128 = ATOM_CAST | 2 << 73;
+    pub const ATOM_ADD_F32: u128 = ATOM | 3 << 73;
+    pub const ATOM_ADD_F16X2: u128 = ATOM | 4 << 73;
+    pub const ATOM_MIN_F16X2: u128 = ATOM_ADD_F16X2 | 1 << 87;
+    pub const ATOM_MAX_F16X2: u128 = ATOM_ADD_F16X2 | 2 << 87;
     pub const ATOMG: u128 = 0x3a8 | ATOMIC;
     pub const ATOMG_CAS: u128 = 0x3a9 | ATOMIC;
     pub const RED: u128 = 0x98e | ATOMIC;
@@ -904,6 +925,9 @@ fn fixtures_match_nvdisasm() {
         (inst::lds(6, 255), "LDS R6, [RZ] ;"),
         (inst::atoms_add(4, 255, 5), "ATOMS.ADD R4, [RZ], R5 ;"),
         (inst::atoms_cas(7, 255, 8, 9), "ATOMS.CAS R7, [RZ], R8, R9 ;"),
+        (inst::atoms_cast(4, 255, 5, 6, false), "ATOMS.CAST R4, [RZ], R5, R6 ;"),
+        (inst::atoms_cast(4, 255, 6, 8, true), "ATOMS.CAST.64 R4, [RZ], R6, R8 ;"),
+        (inst::atoms_add_f32(4, 255, 5), "ATOMS.ADD.INVALID3 R4, [RZ], R5 ;"),
         (inst::bar_sync(), "BAR.SYNC 0x0 ;"),
         (inst::W2J_BAR_RED_POPC, "BAR.RED.POPC R2, R2, P0 ;"),
         (inst::W2J_BAR_SCAN, "BAR.SCAN R2, R2, P0 ;"),
@@ -930,6 +954,12 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::ATOMG | inst::ATOM_MAX, 4, 2, 5), "ATOMG.E.MAX.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::alu(inst::ATOMG | inst::ATOM_MIN | inst::S32, 6, 8, 5), "ATOMG.E.MIN.S32.STRONG.GPU PT, R6, [R8], R5 ;"),
         (inst::alu3(inst::ATOMG_CAS, 4, 2, 5, 6), "ATOMG.E.CAS.STRONG.GPU PT, R4, [R2], R5, R6 ;"),
+        (inst::alu3(inst::ATOM_CAST, 4, 2, 5, 6), "ATOM.E.CAST.STRONG.GPU PT, R4, [R2], R5, R6 ;"),
+        (inst::alu3(inst::ATOM_CAST_64, 4, 2, 6, 8), "ATOM.E.CAST.64.STRONG.GPU PT, R4, [R2], R6, R8 ;"),
+        (inst::alu(inst::ATOM_ADD_F32, 4, 2, 5), "ATOM.E.ADD.F32.FTZ.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOM_ADD_F16X2, 4, 2, 5), "ATOM.E.ADD.F16x2.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOM_MIN_F16X2, 4, 2, 5), "ATOM.E.MIN.F16x2.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOM_MAX_F16X2, 4, 2, 5), "ATOM.E.MAX.F16x2.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::W2J_ATOMG_U64_ADD, "ATOMG.E.ADD.64.STRONG.GPU PT, R4, [R2], R6 ;"),
         (inst::W2J_ATOMS_U64_ADD, "ATOMS.ADD.64 R4, [RZ], R6 ;"),
         (inst::W2J_F2FP_RZ_RELU_SATFINITE, "F2FP.SATFINITE.RELU.PACK_AB.RZ R20, R6, R7;"),
@@ -954,6 +984,12 @@ fn fixtures_match_nvdisasm() {
         (inst::texture(inst::TLD_LZ_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD.LZ R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TLD_LZ_2D, 8, 0xff, 2, 3, 0x10, 0xa), "TLD.LZ RZ, R8, R2, 0x3, 0x4, 2D, 0xa ;"),
         (inst::texture(inst::TEX_LZ_2D, 8, 10, 2, 3, 0x10, 0xf), "TEX.LZ R10, R8, R2, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LB_2D, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LB R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LL_2D, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LL R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TEX_LC_2D, 8, 12, 4, 3, 0x10, 0xf), "TEX.LC R12, R8, R4, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LB_LC_2D, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LB.LC R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TEX_LC_FDV_2D, 8, 12, 4, 3, 0x10, 0xf), "TEX.LC.FDV R12, R8, R4, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LZ_2D | inst::TEX_DC, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LZ.DC R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TXQ_DIMENSION, 4, 6, 0xff, 3, 0x10, 0xb), "TXQ R6, R4, RZ, TEX_HEADER_DIMENSION, 0x3, 0x4, 0xb ;"),
         (inst::surface(inst::SUST_P_RGBA, 0xff, 2, 8, 3, 0x10), "SUST.P.2D [R2], R8, 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_D_32, 4, 2, 0xff, 3, 0x10), "SULD.D.2D R4, [R2], 0x3, 0x4 ;"),

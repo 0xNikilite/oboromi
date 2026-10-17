@@ -1803,7 +1803,7 @@ impl<'a> Decoder<'a> {
         let pp = (((inst >> 87) & 0x7) << 0) as u32;
         let pp_not = (((inst >> 90) & 0x1) << 0);
         assert!(pp == PT && pp_not == 0, "BRA Pp not implemented");
-        // .DIV and .CONV test the warp for divergence, and one invocation per register file is always converged.
+        // .DIV and .CONV branch on warp divergence, which is not tracked, so the warp counts as converged.
         if cond == 2 {
             return;
         }
@@ -1857,9 +1857,10 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn bssy(&mut self, _inst: u128) {
-        // BSSY and BSYNC reconverge a diverged warp, and one invocation per register file never diverges.
+        // BSSY and BSYNC reconverge a diverged warp, and every invocation already runs its own pc.
     }
-    pub fn bsync(&mut self, _inst: u128) {
+    pub fn bsync(&mut self, inst: u128) {
+        self.bssy(inst)
     }
     pub fn call(&mut self, inst: u128) {
         let pp = (((inst >> 87) & 0x7) << 0) as u32;
@@ -1875,10 +1876,10 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn cctl(&mut self, _inst: u128) {
-        // Cache control has no observable effect in the single-invocation model.
+        // Vulkan buffers are coherent without guest cache control.
     }
-    pub fn cctll(&mut self, _inst: u128) {
-        // Cache control has no observable effect in the single-invocation model.
+    pub fn cctll(&mut self, inst: u128) {
+        self.cctl(inst)
     }
     pub fn cctlt(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3386,7 +3387,7 @@ impl<'a> Decoder<'a> {
     }
     pub fn r2ur(&mut self, inst: u128) {
         assert!(inst >> 81 & 7 == 7, "R2UR with a predicate destination");
-        // One invocation is the whole warp, so the value is uniform as is and .OR has nothing to combine.
+        // Compilers only emit R2UR on warp-uniform values, so each lane holds the uniform value.
         let value = self.load_register((inst >> 24 & 0xff) as u32);
         self.store_ureg((inst >> 16 & 0x3f) as u32, value);
     }

@@ -77,6 +77,44 @@ impl<'a> Decoder<'a> {
         self.ir.emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
     }
 
+    // A view of the global window as a runtime array of `ty`, `stride` bytes each, aliasing the u32 one at its binding.
+    pub(super) fn global_element_at(&mut self, kind: ResourceKind, ty: u32, stride: u32, address: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
+        let var = match self.resource(kind) {
+            Some(var) => var,
+            None => {
+                let array = self.ir.emit_type_runtime_array(ty);
+                let block = self.ir.emit_type_struct(&[array]);
+                let ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
+                self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[stride]);
+                self.ir.emit_decorate(block, deco::BLOCK, &[]);
+                self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+                let var = self.ir.emit_variable(ptr, STORAGE_BUFFER);
+                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+                self.ir.emit_decorate(var, deco::BINDING, &[GLOBAL_BINDING]);
+                self.resources.push(Resource { kind, var });
+                var
+            }
+        };
+        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
+        let rel = self.ir.emit_isub(self.type_u32[1], address, base);
+        let shift = self.cached_const_u32(stride.trailing_zeros());
+        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, shift);
+        let ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, ty);
+        self.ir.emit_access_chain(ptr, var, &[self.const_u32_0, index])
+    }
+
+    // 64- and 128-bit global accesses stay one vector access: NVIDIA turns word accesses to a window in host memory into
+    // partial PCIe transactions, many times slower.
+    fn global_vector_at(&mut self, kind: ResourceKind, address: u32, size: u32) -> Option<(u32, u32)> {
+        if kind != ResourceKind::Global || !matches!(size, 5 | 6) {
+            return None;
+        }
+        let words = access_words(size);
+        let ty = self.type_u32[words as usize];
+        Some((self.global_element_at(ResourceKind::GlobalVector(words), ty, 4 * words, address), ty))
+    }
+
     pub(super) fn global_address(&mut self, inst: u128, uniform: u32, offset_shift: u32) -> u32 {
         let mut address = self.load_register((inst >> 24) as u32 & 0xff);
         if inst >> 91 & 1 != 0 && inst >> 76 & 1 == 0 {
@@ -221,6 +259,14 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn load_memory(&mut self, kind: ResourceKind, address: u32, size: u32, dst: u32) {
+        if let Some((ptr, ty)) = self.global_vector_at(kind, address, size) {
+            let vector = self.ir.emit_load(ty, ptr);
+            for i in 0..access_words(size) {
+                let word = self.ir.emit_composite_extract(self.type_u32[1], vector, &[i]);
+                self.store_register(nth_reg(dst, RZ, i), word);
+            }
+            return;
+        }
         for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);
@@ -232,6 +278,11 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn store_memory(&mut self, kind: ResourceKind, address: u32, size: u32, src: u32) {
+        if let Some((ptr, ty)) = self.global_vector_at(kind, address, size) {
+            let words: Vec<u32> = (0..access_words(size)).map(|i| self.load_register(nth_reg(src, RZ, i))).collect();
+            let vector = self.ir.emit_composite_construct(ty, &words);
+            return self.ir.emit_store(ptr, vector);
+        }
         for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);

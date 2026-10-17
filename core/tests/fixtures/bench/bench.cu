@@ -1,4 +1,4 @@
-// The perf example's kernels: fma_chain, stream_add and empty each have a GLSL twin <kernel>.comp doing the same work.
+// The perf example's kernels: fma_chain, stream_add, empty and mandelbrot each have a GLSL twin <kernel>.comp doing the same work.
 extern "C" __global__ void fma_chain(float* out, int iterations, float m, float c) {
     float a[8];
     for (int k = 0; k < 8; k++) a[k] = threadIdx.x + k;

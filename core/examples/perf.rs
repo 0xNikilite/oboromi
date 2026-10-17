@@ -64,12 +64,12 @@ fn values(args: &[Arg]) -> Vec<u8> {
 
 /// Runs a bench kernel translated and as its GLSL twin, which takes the kernel's values in the uniform at the cbuf
 /// binding and its buffers back to back in global memory, returning both GPU p50s in microseconds.
-fn versus(state: &VkState, name: &str, spv: &[u8], groups: [u32; 3], args: &[Arg]) -> [f64; 2] {
-    let (kernel, block) = (Kernel::load(BENCH, name).unwrap(), [256, 1, 1]);
+fn versus(state: &VkState, name: &str, spv: &[u8], groups: [u32; 3], block: [u32; 3], args: &[Arg]) -> [f64; 2] {
+    let kernel = Kernel::load(BENCH, name).unwrap();
     let mut grid = kernel_grid(state, &kernel, groups, block, args).0;
     let translated = bench(&format!("{name} translated"), 2, 20, Some(state), || drop(black_box(grid.run(groups))))[1];
     let words = ash::util::read_spv(&mut std::io::Cursor::new(spv)).unwrap();
-    let mut uniforms = HostBuffer::new(state, 16).unwrap();
+    let mut uniforms = HostBuffer::new(state, 32).unwrap();
     uniforms.write(&values(args)).unwrap();
     let mut out = vec![0; buffers(args).iter().map(|buffer| buffer.len()).sum()];
     let memory = HostBuffer::new(state, out.len() as u64).unwrap();
@@ -198,7 +198,7 @@ fn main() {
         drop(black_box(copy.to_vec()));
     })[0];
     let mandelbrot_present = bench("present 800x600", 2, 100, None, || present(mw, mh, &image))[0];
-    native("cubin mandelbrot native cuda", &mandelbrot, [50, 38, 1], [16, 16, 1], &args);
+    versus(state, "mandelbrot", include_bytes!("../tests/fixtures/bench/mandelbrot.spv"), [50, 38, 1], [16, 16, 1], &args);
     println!("breakdown, us");
     breakdown("julia frame", julia, julia_copy, julia_present, julia_cold - julia[0]);
     breakdown("mandelbrot frame", mandelbrot_frame, mandelbrot_copy, mandelbrot_present, mandelbrot_cold);
@@ -207,13 +207,13 @@ fn main() {
     let sums = vec![0; groups as usize * 256 * 4];
     let fma_values = [iterations.to_le_bytes(), 0.999f32.to_le_bytes(), 0.001f32.to_le_bytes()];
     let args: Vec<_> = [Arg::Buffer(&sums)].into_iter().chain(fma_values.iter().map(|value| Arg::Value(value))).collect();
-    let fma = versus(state, "fma_chain", include_bytes!("../tests/fixtures/bench/fma_chain.spv"), [groups, 1, 1], &args);
+    let fma = versus(state, "fma_chain", include_bytes!("../tests/fixtures/bench/fma_chain.spv"), [groups, 1, 1], [256, 1, 1], &args);
     let flops = 2.0 * f64::from(groups * 256) * f64::from(iterations * 256);
     let bytes = 64 << 20;
     let (source, sink, add) = (vec![0; bytes], vec![0; bytes], 1f32.to_le_bytes());
     let stream_args = [Arg::Buffer(&source), Arg::Buffer(&sink), Arg::Value(&add)];
-    let stream = versus(state, "stream_add", include_bytes!("../tests/fixtures/bench/stream_add.spv"), [(bytes / 16 / 256) as u32, 1, 1], &stream_args);
-    let empty = versus(state, "empty", include_bytes!("../tests/fixtures/bench/empty.spv"), [1, 1, 1], &[Arg::Buffer(&[0; 16])]);
+    let stream = versus(state, "stream_add", include_bytes!("../tests/fixtures/bench/stream_add.spv"), [(bytes / 16 / 256) as u32, 1, 1], [256, 1, 1], &stream_args);
+    let empty = versus(state, "empty", include_bytes!("../tests/fixtures/bench/empty.spv"), [1, 1, 1], [256, 1, 1], &[Arg::Buffer(&[0; 16])]);
     for (metric, [translated, glsl]) in [("GFLOP/s", fma.map(|us| flops / us / 1e3)), ("GB/s read+write", stream.map(|us| 2.0 * bytes as f64 / us / 1e3)), ("empty kernel gpu us", empty)] {
         println!("{metric:<30}translated {translated:.1}, glsl twin {glsl:.1}, ratio {:.2}", translated / glsl);
     }

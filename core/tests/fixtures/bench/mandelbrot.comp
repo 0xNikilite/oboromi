@@ -1,0 +1,18 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 1) uniform Params { int width; int height; int crunch; float xOff; float yOff; float scale; };
+layout(binding = 9) buffer Memory { uint data[]; };
+void main() {
+    int ix = int(gl_GlobalInvocationID.x), iy = int(gl_GlobalInvocationID.y);
+    if (ix >= width || iy >= height) return;
+    float xC = ix * scale + xOff, yC = iy * scale + yOff, x = 0, y = 0, xx = 0, yy = 0;
+    int i = crunch;
+    while (--i != 0 && xx + yy < 4.0) {
+        y = x * y * 2.0 + yC;
+        x = xx - yy + xC;
+        yy = y * y;
+        xx = x * x;
+    }
+    uint m = i > 0 ? uint(crunch - i) : 0;
+    data[width * iy + ix] = (m * 3 & 0xff) | (m * 5 & 0xff) << 8 | (m * 7 & 0xff) << 16;
+}

@@ -3,7 +3,7 @@
 use crate::gpu::VkState;
 use crate::gpu::engine::Gpu;
 use crate::gpu::memory::{MemoryError, PAGE};
-use crate::tests::gpu_test::inst::{self, ald, ast, bra, exit, ffma, fmul, ipa, mov_cbuf, mov_imm, texture};
+use crate::tests::gpu_test::inst::{self, ald, ast, bra, exit, ffma, fmul, ipa, mov_cbuf, mov_imm, stg, texture};
 
 pub const SET_OBJECT: u32 = 0x0000;
 pub const SET_VERTEX_STREAM_SIZE_A: u32 = 0x0600;
@@ -233,6 +233,7 @@ mod tests {
     const DEPTH: u64 = 0x1_0060_0000;
     const TARGET_B: u64 = 0x1_0200_0000;
     const INSTANCED_PROGRAM: u64 = 0x1_0010_3000;
+    const STORING_PROGRAM: u64 = 0x1_0010_4000;
     const SEMAPHORE_A: u32 = 0x0010;
     const SET_WINDOW_ORIGIN: u32 = 0x13ac;
     const OGL_SET_CULL: u32 = 0x1918;
@@ -348,6 +349,27 @@ mod tests {
         let uploaded = gpu.memory.uploaded;
         triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
         assert_eq!(gpu.memory.uploaded, uploaded);
+    }
+
+    #[test]
+    fn a_pixel_program_store_lands_in_guest_memory() {
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        for va in (PUSHBUFFER..TARGET).step_by(PAGE as usize) {
+            if gpu.space.resolve(va, 1).is_err() {
+                map(&mut gpu, va, PAGE);
+            }
+        }
+        let code = [mov_imm(4, REPORT as u32), mov_imm(5, 0xfeed), stg(4, 0, 5), ipa(0, 0x80, 0), ipa(1, 0x84, 0), ipa(2, 0x88, 0), ipa(3, 0x8c, 0), exit(), bra(-16)];
+        gpu.write(STORING_PROGRAM, &program([1, 7, 10, 12, 193, 195, 197, 199, 576, 577, 578, 579], &code)).unwrap();
+        let mut words = Vec::new();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &split(STORING_PROGRAM), &mut words);
+        inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
+        run(&mut gpu, &words).unwrap();
+        let mut stored = [0; 4];
+        gpu.read(REPORT, &mut stored).unwrap();
+        assert_eq!(u32::from_le_bytes(stored), 0xfeed);
     }
 
     #[test]

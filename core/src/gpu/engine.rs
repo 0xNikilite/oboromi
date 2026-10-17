@@ -68,6 +68,7 @@ struct Module {
     header: ProgramHeader,
     words: Vec<u32>,
     resources: Vec<ResourceKind>,
+    stores_global: bool,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -476,12 +477,13 @@ impl<'a> Gpu<'a> {
             }
             _ => return Err(format!("shader program at {:#x} with {header:?} is not implemented for shader type {shader_type}", program.address)),
         };
-        let mut resources = Vec::new();
+        let (mut resources, mut stores_global) = (Vec::new(), false);
         let module = emit_module(Some(self.state), stage, |decoder| {
             decoder.translate_program(&code);
             resources = decoder.resources.iter().map(|r| r.kind).collect();
+            stores_global = decoder.stores_global;
         });
-        self.modules.insert(key, Module { header, words: module.words(), resources });
+        self.modules.insert(key, Module { header, words: module.words(), resources, stores_global });
         Ok(key)
     }
 
@@ -630,6 +632,7 @@ impl<'a> Gpu<'a> {
             self.module(draw.shader_programs[PIXEL_PIPELINE], SHADER_TYPE_PIXEL, [0; 2])?,
         ];
         let [vs, fs] = shaders.map(|key| &self.modules[&key]);
+        let stores_global = vs.stores_global || fs.stores_global;
         if fs.header.inputs & !vs.header.outputs != 0 {
             return Err(format!("pixel shader reads attributes {:#x} the vertex shader does not write", fs.header.inputs & !vs.header.outputs));
         }
@@ -805,6 +808,9 @@ impl<'a> Gpu<'a> {
             target.pending = Some(target.pending.take().map_or(drawn.clone(), |pending| pending.start.min(drawn.start)..pending.end.max(drawn.end)));
         }
         target.generation = generation(&self.memory, &ranges);
+        if stores_global {
+            self.memory.download(self.window.as_mut().unwrap(), &mut self.ram).map_err(named)?;
+        }
         Ok(())
     }
 }

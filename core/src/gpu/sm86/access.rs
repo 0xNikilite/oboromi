@@ -219,6 +219,7 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn store_memory(&mut self, kind: ResourceKind, address: u32, size: u32, src: u32) {
+        self.stores_global |= kind == ResourceKind::Global;
         for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);

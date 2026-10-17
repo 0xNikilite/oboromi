@@ -42,6 +42,8 @@ pub struct DrawState<'a> {
     /// Without a clear the draw loads what the previous draw into the target left.
     pub clear: Option<[f32; 4]>,
     pub clear_depth: Option<f32>,
+    /// The colour starts from what `RenderTarget::write` staged, the target's guest memory.
+    pub load: bool,
     pub raster: RasterState,
 }
 
@@ -210,7 +212,7 @@ impl<'a> RenderTarget<'a> {
         let (d, extent) = (&state.device, vk::Extent2D { width, height });
         Ok(Self {
             extent,
-            color: Attachment::new(d, extent, COLOR_FORMAT, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC, Aspect::COLOR)?,
+            color: Attachment::new(d, extent, COLOR_FORMAT, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC | Usage::TRANSFER_DST, Aspect::COLOR)?,
             depth: depth
                 .map(|format| {
                     let stencil = if format == vk::Format::D24_UNORM_S8_UINT { Aspect::STENCIL } else { Aspect::empty() };
@@ -223,6 +225,10 @@ impl<'a> RenderTarget<'a> {
 
     pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
         self.staging.read(out)
+    }
+
+    pub fn write(&mut self, pixels: &[u8]) -> Result<(), VkError> {
+        self.staging.write(pixels)
     }
 }
 
@@ -239,9 +245,11 @@ impl VkState {
         };
         // A cleared attachment starts from UNDEFINED, a loaded one from where the previous draw left it.
         let discard_or = |clear: bool, layout| if clear { Layout::UNDEFINED } else { layout };
+        let to_upload = barrier(&target.color).new_layout(Layout::TRANSFER_DST_OPTIMAL).dst_access_mask(Access::TRANSFER_WRITE);
         let to_color = barrier(&target.color)
-            .old_layout(discard_or(draw.clear.is_some(), Layout::TRANSFER_SRC_OPTIMAL))
+            .old_layout(if draw.load { Layout::TRANSFER_DST_OPTIMAL } else { discard_or(draw.clear.is_some(), Layout::TRANSFER_SRC_OPTIMAL) })
             .new_layout(Layout::COLOR_ATTACHMENT_OPTIMAL)
+            .src_access_mask(if draw.load { Access::TRANSFER_WRITE } else { Access::empty() })
             .dst_access_mask(Access::COLOR_ATTACHMENT_READ | Access::COLOR_ATTACHMENT_WRITE);
         let color = [vk::RenderingAttachmentInfo::default()
             .image_view(target.color.view)
@@ -284,6 +292,10 @@ impl VkState {
         let none = vk::DependencyFlags::empty();
         let r = &draw.raster;
         self.submit_and_wait(|cmd| unsafe {
+            if draw.load {
+                d.cmd_pipeline_barrier(cmd, Stage::TOP_OF_PIPE, Stage::TRANSFER, none, &[], &[], &[to_upload]);
+                d.cmd_copy_buffer_to_image(cmd, target.staging.buffer, target.color.image, Layout::TRANSFER_DST_OPTIMAL, &copy);
+            }
             d.cmd_pipeline_barrier(
                 cmd,
                 Stage::TRANSFER | fragment_tests,

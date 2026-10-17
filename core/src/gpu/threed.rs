@@ -75,6 +75,7 @@ const SET_REPORT_SEMAPHORE_A: usize = 0x1b00;
 const SET_REPORT_SEMAPHORE_B: usize = 0x1b04;
 const SET_REPORT_SEMAPHORE_C: usize = 0x1b08;
 const SET_REPORT_SEMAPHORE_D: usize = 0x1b0c;
+const SET_WINDOW_ORIGIN: usize = 0x13ac;
 const SET_VERTEX_STREAM_A_FORMAT: usize = 0x1c00;
 const SET_VERTEX_STREAM_A_LOCATION_A: usize = 0x1c04;
 const SET_VERTEX_STREAM_A_LOCATION_B: usize = 0x1c08;
@@ -268,6 +269,10 @@ pub struct DrawSnapshot {
     pub depth_test_enabled: bool,
     pub depth_write_enabled: bool,
     pub depth_func: u32,
+    /// SET_WINDOW_ORIGIN MODE LOWER_LEFT: window y counts up from the target's last row.
+    pub lower_left_origin: bool,
+    /// SET_WINDOW_ORIGIN FLIP_Y: triangles face the other way.
+    pub flip_y: bool,
     pub cull_enabled: bool,
     pub cull_face: u32,
     pub front_face: u32,
@@ -293,7 +298,8 @@ impl DrawSnapshot {
 
 pub(crate) enum ThreeDEvent {
     Draw(DrawSnapshot),
-    Report { addr: u64, payload: u32 },
+    Report { addr: u64, payload: u32, one_word: bool },
+    SemaphoreAcquire { addr: u64, payload: u32, at_least: bool },
     Clear(Clear),
     LoadConstantBuffer { addr: u64, value: u32 },
 }
@@ -382,10 +388,15 @@ impl ThreeD {
                 self.set_index_size(byte);
                 Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, true)?)))
             }
-            SET_REPORT_SEMAPHORE_D => Ok(Some(ThreeDEvent::Report {
-                addr: self.address_pair(SET_REPORT_SEMAPHORE_A, SET_REPORT_SEMAPHORE_B),
-                payload: self.word(SET_REPORT_SEMAPHORE_C),
-            })),
+            // OPERATION RELEASE or ACQUIRE in bits 1:0, REDUCTION_ENABLE 3, COMPARISON GE 16, STRUCTURE_SIZE ONE_WORD 28.
+            SET_REPORT_SEMAPHORE_D => {
+                let (addr, payload) = (self.address_pair(SET_REPORT_SEMAPHORE_A, SET_REPORT_SEMAPHORE_B), self.word(SET_REPORT_SEMAPHORE_C));
+                match (value & 3, value >> 3 & 1) {
+                    (0, 0) => Ok(Some(ThreeDEvent::Report { addr, payload, one_word: value >> 28 & 1 != 0 })),
+                    (1, 0) => Ok(Some(ThreeDEvent::SemaphoreAcquire { addr, payload, at_least: value >> 16 & 1 != 0 })),
+                    _ => Err(format!("C797 report semaphore {value:#x} is not implemented, only a release or an acquire")),
+                }
+            }
             CLEAR_SURFACE => Ok(Some(ThreeDEvent::Clear(Clear {
                 value,
                 colour: [0, 4, 8, 12].map(|i| f32::from_bits(self.word(SET_COLOR_CLEAR_VALUE + i))),
@@ -541,6 +552,8 @@ impl ThreeD {
             depth_test_enabled: self.word(SET_DEPTH_TEST) & 1 != 0,
             depth_write_enabled: self.word(SET_DEPTH_WRITE) & 1 != 0,
             depth_func: self.word(SET_DEPTH_FUNC),
+            lower_left_origin: self.word(SET_WINDOW_ORIGIN) & 1 != 0,
+            flip_y: self.word(SET_WINDOW_ORIGIN) >> 4 & 1 != 0,
             cull_enabled: self.word(OGL_SET_CULL) & 1 != 0,
             cull_face: self.word(OGL_SET_CULL_FACE),
             front_face: self.word(OGL_SET_FRONT_FACE),

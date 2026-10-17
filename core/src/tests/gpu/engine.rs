@@ -233,6 +233,9 @@ mod tests {
     const DEPTH: u64 = 0x1_0060_0000;
     const TARGET_B: u64 = 0x1_0200_0000;
     const INSTANCED_PROGRAM: u64 = 0x1_0010_3000;
+    const SEMAPHORE_A: u32 = 0x0010;
+    const SET_WINDOW_ORIGIN: u32 = 0x13ac;
+    const OGL_SET_CULL: u32 = 0x1918;
     // A four-vertex strip with uv in the colour attribute's red and green.
     fn quad(half: f32) -> [Vertex; 4] {
         [([-half, -half], [0, 0, 0, 0]), ([half, -half], [255, 0, 0, 0]), ([-half, half], [0, 255, 0, 0]), ([half, half], [255, 255, 0, 0])]
@@ -488,6 +491,71 @@ mod tests {
         run(&mut gpu, &words).unwrap();
         for (x, y, want) in [(16, 32, RED), (48, 32, GREEN), (32, 32, WHITE), (16, 16, WHITE)] {
             assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn a_clear_no_draw_consumes_lands_in_guest_memory_and_the_next_draw_loads_it() {
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
+        let mut words = Vec::new();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        inc(SET_COLOR_CLEAR_VALUE, &[0.0, 0.0, 1.0, 1.0].map(f32::to_bits), &mut words);
+        inc(CLEAR_SURFACE, &[0x3c], &mut words);
+        run(&mut gpu, &words).unwrap();
+        assert_eq!([pixel(&gpu, TARGET, 20, 20), pixel(&gpu, TARGET, 40, 40)], [BLUE; 2]);
+        words.clear();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
+        run(&mut gpu, &words).unwrap();
+        assert_eq!([pixel(&gpu, TARGET, 20, 20), pixel(&gpu, TARGET, 40, 40)], [GREEN, BLUE]);
+    }
+
+    #[test]
+    fn reports_write_their_structure_size_and_acquires_need_the_value_released() {
+        const FOUR_WORDS: u32 = 0;
+        const ONE_WORD: u32 = 1 << 28;
+        const ACQUIRE: u32 = 1;
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let [hi, lo] = split(REPORT);
+        let mut report = [0xff; 16];
+        gpu.write(REPORT, &report).unwrap();
+        let mut words = Vec::new();
+        inc(SET_OBJECT, &[0xc797], &mut words);
+        inc(SET_REPORT_SEMAPHORE_A, &[hi, lo, 9, ONE_WORD], &mut words);
+        run(&mut gpu, &words).unwrap();
+        gpu.read(REPORT, &mut report).unwrap();
+        assert_eq!(report[..8], [9, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]);
+        inc(SET_REPORT_SEMAPHORE_A, &[hi, lo, 7, FOUR_WORDS], &mut words);
+        inc(SEMAPHORE_A, &[hi, lo, 7, ACQUIRE], &mut words);
+        run(&mut gpu, &words).unwrap();
+        gpu.read(REPORT, &mut report).unwrap();
+        assert_eq!(u64::from_le_bytes(report[..8].try_into().unwrap()), 7);
+        assert_ne!(report[8..], [0xff; 8]);
+        inc(SEMAPHORE_A, &[hi, lo, 8, ACQUIRE], &mut words);
+        let error = run(&mut gpu, &words).unwrap_err();
+        assert!(error.contains("semaphore acquire at 0x100400000 waits for 0x8 but memory holds 0x7"), "{error}");
+    }
+
+    #[test]
+    fn a_counter_clockwise_triangle_stays_front_facing_under_either_y_flip() {
+        const UPPER_LEFT: u32 = 0;
+        const LOWER_LEFT: u32 = 1;
+        const OGL_CCW: u32 = 0x901;
+        const OGL_BACK: u32 = 0x405;
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
+        for (scale_y, origin) in [(-32.0f32, UPPER_LEFT), (32.0, LOWER_LEFT)] {
+            let mut words = Vec::new();
+            frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+            clear_white(&mut words);
+            inc(SET_VIEWPORT_SCALE_X + 4, &[scale_y.to_bits()], &mut words);
+            inc(SET_WINDOW_ORIGIN, &[origin], &mut words);
+            inc(OGL_SET_CULL, &[1, OGL_CCW, OGL_BACK], &mut words);
+            inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
+            run(&mut gpu, &words).unwrap();
+            assert_eq!([pixel(&gpu, TARGET, 8, 50), pixel(&gpu, TARGET, 50, 8)], [GREEN, WHITE], "scale {scale_y} origin {origin}");
         }
     }
 }

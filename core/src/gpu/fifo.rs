@@ -32,8 +32,9 @@ impl GpFifoEntry {
 pub enum Event {
     Draw(DrawSnapshot),
     Dispatch(DispatchSnapshot),
-    Report { addr: u64, payload: u32 },
-    SemaphoreAcquire { addr: u64, payload: u32 },
+    Report { addr: u64, payload: u32, one_word: bool },
+    /// Satisfied once the word at `addr` equals `payload`, or with `at_least` reaches it.
+    SemaphoreAcquire { addr: u64, payload: u32, at_least: bool },
     SemaphoreRelease { addr: u64, payload: u32 },
     Clear(Clear),
     LoadConstantBuffer { addr: u64, value: u32 },
@@ -200,7 +201,8 @@ impl Pusher {
                 (Some(ThreeDEvent::Draw(draw)), Some(Event::Draw(last))) if last.continued_by(&draw) => last.instance_count += 1,
                 (Some(event), _) => events.push(match event {
                     ThreeDEvent::Draw(draw) => Event::Draw(draw),
-                    ThreeDEvent::Report { addr, payload } => Event::Report { addr, payload },
+                    ThreeDEvent::Report { addr, payload, one_word } => Event::Report { addr, payload, one_word },
+                    ThreeDEvent::SemaphoreAcquire { addr, payload, at_least } => Event::SemaphoreAcquire { addr, payload, at_least },
                     ThreeDEvent::Clear(clear) => Event::Clear(clear),
                     ThreeDEvent::LoadConstantBuffer { addr, value } => Event::LoadConstantBuffer { addr, value },
                 }),
@@ -231,8 +233,9 @@ impl Pusher {
                     ((self.semaphore[0] & 0xff) as u64) << 32 | (self.semaphore[1] & !3) as u64;
                 let payload = self.semaphore[2];
                 match value & 0x1f {
-                    1 => events.push(Event::SemaphoreAcquire { addr, payload }),
+                    1 => events.push(Event::SemaphoreAcquire { addr, payload, at_least: false }),
                     2 => events.push(Event::SemaphoreRelease { addr, payload }),
+                    4 => events.push(Event::SemaphoreAcquire { addr, payload, at_least: true }),
                     operation => {
                         return Err(format!(
                             "unsupported channel semaphore operation {operation:#x}"

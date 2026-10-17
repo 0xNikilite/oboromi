@@ -89,6 +89,7 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
             instance_count: 1,
             clear: Some([1.0; 4]),
             clear_depth: None,
+            load: false,
             raster,
         };
         state.draw(&pipeline, &target, &draw)?;

@@ -13,6 +13,7 @@ use super::VkState;
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::time::Instant;
 
 // SM 7.3 and later lead each graphics program with the 32-word SPHV4 header (NAK sph.rs), not the 20-word SPHV3 one.
 const SPH_BYTES: usize = 0x80;
@@ -115,6 +116,8 @@ pub struct Gpu<'a> {
     pending_clear: Option<(ColourTarget, [f32; 4])>,
     pending_depth_clear: Option<(DepthTarget, f32)>,
     pixels: Vec<u8>,
+    /// The report timestamp counts nanoseconds from here.
+    started: Instant,
 }
 
 fn named(e: impl std::fmt::Debug) -> String {
@@ -254,16 +257,27 @@ fn topology(topology: PrimitiveTopology) -> Result<vk::PrimitiveTopology, String
     })
 }
 
+fn colour_extent(ct: ColourTarget) -> Result<vk::Extent2D, String> {
+    if ct.format != A8B8G8R8 || ct.layout != MemoryLayout::Pitch {
+        return Err(format!("colour target format {:#x} with {:?} layout is not implemented", ct.format, ct.layout));
+    }
+    // A pitch-linear colour target's WIDTH holds its pitch in bytes (Ryujinx RtColorState.WidthOrStride).
+    Ok(vk::Extent2D { width: ct.width / 4, height: ct.height })
+}
+
 fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::PrimitiveTopology) -> RasterState {
-    let ([sx, sy, _], [ox, oy, _]) = (draw.viewport.scale, draw.viewport.offset);
+    let ([sx, mut sy, _], [ox, mut oy, _]) = (draw.viewport.scale, draw.viewport.offset);
     let s = draw.scissor;
-    let scissor = if s.enabled {
-        vk::Rect2D {
-            offset: vk::Offset2D { x: s.x_min.into(), y: s.y_min.into() },
-            extent: vk::Extent2D { width: s.x_max.saturating_sub(s.x_min).into(), height: s.y_max.saturating_sub(s.y_min).into() },
-        }
-    } else {
-        extent.into()
+    let [x_min, x_max, mut y_min, mut y_max] = match s.enabled {
+        true => [s.x_min, s.x_max, s.y_min, s.y_max].map(u32::from),
+        false => [0, extent.width, 0, extent.height],
+    };
+    if draw.lower_left_origin {
+        (sy, oy, y_min, y_max) = (-sy, extent.height as f32 - oy, extent.height.saturating_sub(y_max), extent.height.saturating_sub(y_min));
+    }
+    let scissor = vk::Rect2D {
+        offset: vk::Offset2D { x: x_min as i32, y: y_min as i32 },
+        extent: vk::Extent2D { width: x_max.saturating_sub(x_min), height: y_max.saturating_sub(y_min) },
     };
     // OGL_SET_CULL_FACE and OGL_SET_FRONT_FACE take GL enums, and SET_DEPTH_FUNC GL (0x200 + op) or D3D (1 + op) ones in Vulkan's order.
     let cull_face = match (draw.cull_enabled, draw.cull_face) {
@@ -288,7 +302,9 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
         },
         scissor,
         cull_face,
-        front_face: if draw.front_face == 0x900 { vk::FrontFace::CLOCKWISE } else { vk::FrontFace::COUNTER_CLOCKWISE },
+        // Facing is judged on the target's rows as Vulkan does (NVK passes Vulkan's front face through with an upper-left
+        // origin), which is GL's y-up judgement under a lower-left origin, so only FLIP_Y turns it (Ryujinx TriangleRastFlip).
+        front_face: if (draw.front_face == 0x900) != draw.flip_y { vk::FrontFace::CLOCKWISE } else { vk::FrontFace::COUNTER_CLOCKWISE },
         topology,
         depth_test: draw.depth_test_enabled && draw.depth_target.is_some(),
         depth_write: draw.depth_write_enabled && draw.depth_target.is_some(),
@@ -315,6 +331,7 @@ impl<'a> Gpu<'a> {
             pending_clear: None,
             pending_depth_clear: None,
             pixels: Vec::new(),
+            started: Instant::now(),
         }
     }
 
@@ -347,8 +364,12 @@ impl<'a> Gpu<'a> {
             match event {
                 Event::Draw(draw) => self.draw(&draw)?,
                 Event::Dispatch(dispatch) => self.dispatch(&dispatch)?,
-                Event::Report { addr, payload } | Event::SemaphoreRelease { addr, payload } => {
+                Event::Report { addr, payload, one_word: true } | Event::SemaphoreRelease { addr, payload } => {
                     self.store(addr, &payload.to_le_bytes(), Writer::Gpu).map_err(named)?
+                }
+                Event::Report { addr, payload, one_word: false } => {
+                    let report = [u64::from(payload), self.started.elapsed().as_nanos() as u64].map(u64::to_le_bytes).concat();
+                    self.store(addr, &report, Writer::Gpu).map_err(named)?
                 }
                 Event::LoadConstantBuffer { addr, value } => self.store(addr, &value.to_le_bytes(), Writer::Gpu).map_err(named)?,
                 Event::Clear(clear) if clear.value & !(CLEAR_Z | CLEAR_RGBA) == 0 && matches!(clear.value & CLEAR_RGBA, 0 | CLEAR_RGBA) => {
@@ -360,10 +381,28 @@ impl<'a> Gpu<'a> {
                     }
                 }
                 Event::Clear(clear) => return Err(format!("CLEAR_SURFACE {:#x} is not implemented, only Z and RGBA of target 0", clear.value)),
-                Event::SemaphoreAcquire { addr, .. } => return Err(format!("semaphore acquire at {addr:#x} is not implemented")),
+                Event::SemaphoreAcquire { addr, payload, at_least } => {
+                    let mut value = [0; 4];
+                    gather(&self.space, &self.ram, addr, &mut value).map_err(named)?;
+                    let value = u32::from_le_bytes(value);
+                    if !(value == payload || at_least && value.wrapping_sub(payload) as i32 > 0) {
+                        return Err(format!("semaphore acquire at {addr:#x} waits for {payload:#x} but memory holds {value:#x}, and nothing else runs to release it"));
+                    }
+                }
             }
         }
-        Ok(())
+        match self.pending_clear.take() {
+            Some((target, colour)) => self.fill(target, colour),
+            None => Ok(()),
+        }
+    }
+
+    /// Writes a clear no draw consumed into the target's guest memory, where the target's next draw loads it from.
+    fn fill(&mut self, target: ColourTarget, colour: [f32; 4]) -> Result<(), String> {
+        let extent = colour_extent(target)?;
+        let texel = colour.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let bytes = texel.repeat((extent.width * extent.height) as usize);
+        self.store(target.address, &bytes, Writer::Gpu).map_err(named)
     }
 
     /// Presents a pitch-linear RGBA8 surface from guest memory.
@@ -615,11 +654,7 @@ impl<'a> Gpu<'a> {
         }
 
         let ct = draw.colour_target;
-        if ct.format != A8B8G8R8 || ct.layout != MemoryLayout::Pitch {
-            return Err(format!("colour target format {:#x} with {:?} layout is not implemented", ct.format, ct.layout));
-        }
-        // A pitch-linear colour target's WIDTH holds its pitch in bytes (Ryujinx RtColorState.WidthOrStride).
-        let extent = vk::Extent2D { width: ct.width / 4, height: ct.height };
+        let extent = colour_extent(ct)?;
         let topology = topology(draw.topology)?;
         let pipeline_depth = draw.depth_target.map(|target| self.depth_format(target)).transpose()?;
         let key = PipelineKey {
@@ -697,8 +732,11 @@ impl<'a> Gpu<'a> {
                 entry.insert(Target { render_target, generation: u64::MAX, depth_cleared: false })
             }
         };
-        if clear.is_none() && target.generation != current {
-            return Err(format!("colour target at {:#x} changed outside its draws, and loading it is not implemented", ct.address));
+        let load = clear.is_none() && target.generation != current;
+        if load {
+            self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
+            gather(&self.space, &self.ram, ct.address, &mut self.pixels).map_err(named)?;
+            target.render_target.write(&self.pixels).map_err(named)?;
         }
         target.depth_cleared |= clear_depth.is_some();
         if let Some((address, _)) = depth.filter(|_| !target.depth_cleared) {
@@ -714,6 +752,7 @@ impl<'a> Gpu<'a> {
             instance_count: draw.instance_count,
             clear,
             clear_depth,
+            load,
             raster: raster_state(draw, extent, topology),
         };
         self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;

@@ -1,0 +1,31 @@
+#version 450
+layout(local_size_x=64) in;
+struct Light { vec4 position; vec4 colour; };
+struct Particle { vec4 position; vec4 size; vec4 colour; };
+layout(binding=0,std430) readonly buffer Lights { Light lights[]; };
+layout(binding=1,std430) writeonly buffer Particles { Particle particles[]; };
+layout(binding=2,std140) uniform Time { vec4 time_count; };
+float hash(float x){return fract(sin(x*127.1)*43758.5453);}
+void main(){
+    uint i=gl_GlobalInvocationID.x; if(i>=lights.length()*uint(time_count.y))return;
+    int count=int(time_count.y), emitter=int(i)/count,k=int(i)%count;
+    Light l=lights[emitter]; float seed=float(i)+1.,scale=max(l.position.w,.04);
+    float age=fract(time_count.x*(.16+hash(seed)*.24)+hash(seed+3.));
+    float type=k<6?0.:k%5==0?2.:1.;
+    vec3 p=l.position.xyz;
+    vec4 colour=vec4(1.,.28,.018,1.);
+    vec2 size;
+    if(type==0.) {
+        p+=vec3((hash(seed)-.5)*scale*.4,scale*.25,(hash(seed+2.)-.5)*scale*.4);
+        size=vec2(.34,.55+hash(seed)*.3)*scale; colour.a=.4;
+    }else if(type==2.) {
+        p+=vec3(sin(age*5.+seed)*age*.55,age*scale*3.2,cos(age*4.+seed)*age*.4);
+        size=vec2(.18+age*.5)*scale;colour=vec4(.08,.07,.06,(1.-age)*.16);
+    }else {
+        p+=vec3(sin(seed*5.+age*8.)*age*.45,age*scale*2.8,cos(seed+age*6.)*age*.4);
+        if(k%3==0)p.y-=age*age*scale*2.;
+        size=vec2(.007+.008*hash(seed))*sqrt(scale);colour.a=(1.-age)*.8;
+    }
+    if(l.position.w==0.)colour.a=0.;
+    particles[i]=Particle(vec4(p,type),vec4(size,seed,age),colour);
+}

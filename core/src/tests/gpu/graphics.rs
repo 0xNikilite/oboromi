@@ -111,6 +111,24 @@ mod tests {
     use crate::tests::gpu::harness::{spirv_val, vk_state};
 
     #[test]
+    fn hdr_target_preserves_values_above_one_and_full_row_stride() {
+        let Some(state) = vk_state() else { return };
+        let format=vk::Format::R16G16B16A16_SFLOAT;
+        let target=RenderTarget::with_format(&state,16,16,None,None,format).unwrap();
+        let [vertex,fragment]=[execution_model::VERTEX,execution_model::FRAGMENT].map(|s|pass_through(s).words());
+        let bindings=[vk::VertexInputBindingDescription{binding:0,stride:24,input_rate:vk::VertexInputRate::VERTEX}];
+        let attributes=[(0,vk::Format::R32G32_SFLOAT,0),(1,vk::Format::R32G32B32A32_SFLOAT,8)].map(|(location,format,offset)|vk::VertexInputAttributeDescription{location,binding:0,format,offset});
+        let pipeline=GraphicsPipeline::with_format(&state,&vertex,None,&fragment,[&[],&[]],&VertexLayout{bindings:&bindings,attributes:&attributes,topology:vk::PrimitiveTopology::TRIANGLE_LIST},&TargetState{blend:opaque(),depth:None},format).unwrap();
+        let mut buffer=HostBuffer::new(&state,72).unwrap();
+        let data:Vec<u8>=[[-1f32,-1.],[3.,-1.],[-1.,3.]].into_iter().flat_map(|p|[p[0],p[1],4.,2.,0.5,1.]).flat_map(|v|v.to_le_bytes()).collect();
+        buffer.write(&data).unwrap();
+        let raster=RasterState{viewport:vk::Viewport{x:0.,y:0.,width:16.,height:16.,min_depth:0.,max_depth:1.},scissor:target.extent.into(),cull_face:vk::CullModeFlags::NONE,front_face:vk::FrontFace::COUNTER_CLOCKWISE,topology:vk::PrimitiveTopology::TRIANGLE_LIST,depth_test:false,depth_write:false,depth_func:vk::CompareOp::ALWAYS,blend_const:[0.;4],blend:opaque()};
+        state.draw(&pipeline,&target,&DrawState{vertex_buffers:&[(&buffer,24)],index_buffer:None,vertex_count:3,first_vertex:0,first_instance:0,instance_count:1,clear:Some([0.;4]),clear_depth:None,load:false,raster}).unwrap();
+        let mut pixels=vec![0;16*16*8];target.read(&mut pixels).unwrap();
+        for pixel in pixels.chunks_exact(8) {assert_eq!(pixel,[0,0x44,0,0x40,0,0x38,0,0x3c]);}
+    }
+
+    #[test]
     fn triangle_interpolates_vertex_colours_over_the_clear_colour() {
         for stage in [execution_model::VERTEX, execution_model::FRAGMENT] {
             spirv_val(&pass_through(stage));

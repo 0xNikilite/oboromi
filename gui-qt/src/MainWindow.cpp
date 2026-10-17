@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 
 #include <QDesktopServices>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -94,7 +96,7 @@ void MainWindow::buildUi() {
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
     for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}, {"Post", RustBridge::renderPostFrame},
-                                {"Sprites", RustBridge::renderSpritesFrame}, {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Helmet", RustBridge::renderHelmetDemo},
+                                {"Dungeon", RustBridge::renderDungeonFrame}, {"Sprites", RustBridge::renderSpritesFrame}, {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Ray traced", RustBridge::renderRaytracedDemo}, {"Helmet", RustBridge::renderHelmetDemo},
                                 {"Particles", RustBridge::renderParticlesFrame}, {"Music", RustBridge::renderMusicDemo}, {"Bounce", RustBridge::renderBounceDemo}}) {
         auto *demoButton = new QPushButton(name, central);
         demoButton->setCheckable(true);
@@ -112,6 +114,26 @@ void MainWindow::buildUi() {
         });
         buttons->addWidget(demoButton);
     }
+    auto *rayTracing = new QCheckBox("Ray tracing", central);
+    rayTracing->setChecked(true);
+    connect(rayTracing, &QCheckBox::toggled, this, RustBridge::setRaytracingEnabled);
+    buttons->addWidget(rayTracing);
+    auto *quality = new QComboBox(central);
+    quality->addItems({"Dungeon: showcase", "Dungeon: realtime"});
+    auto *rays = new QCheckBox("Ray tracing", central);
+    rays->setEnabled(oboromi_dungeon_ray_queries());
+    rays->setChecked(rays->isEnabled());
+    connect(quality, &QComboBox::currentIndexChanged, this, [quality, rays](int index) {
+        rays->setChecked(index == 0 && rays->isEnabled());
+        oboromi_dungeon_settings(index == 0, rays->isChecked());
+    });
+    connect(rays, &QCheckBox::toggled, this, [quality](bool enabled) { oboromi_dungeon_settings(quality->currentIndex() == 0, enabled); });
+    buttons->addWidget(quality);
+    buttons->addWidget(rays);
+    auto *spatialMode = new QComboBox(central);
+    spatialMode->addItems({"Headphones", "Speakers"});
+    connect(spatialMode, &QComboBox::currentIndexChanged, this, [](int mode) { oboromi_set_dungeon_speakers(mode == 1); });
+    buttons->addWidget(spatialMode);
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
         if (m_demoFrame.isFinished()) {
             if (m_demoFrameClock.isValid()) m_frameLabel->setText(QString("%1 ms").arg(m_demoFrameClock.restart()));

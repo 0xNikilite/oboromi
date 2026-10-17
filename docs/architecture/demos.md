@@ -1,6 +1,6 @@
 # Demos
 
-The Qt window has buttons that draw through the GPU work today. Six bigger scenes show more of the engine: post-effect, sprites, particles, BoomBox, FlightHelmet and a ray-traced one. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
+The Qt window has buttons that draw through the GPU work today. Larger scenes show post effects, sprites, particles, BoomBox, FlightHelmet, ray tracing and a dungeon. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
 
 ## What runs today?
 
@@ -15,6 +15,7 @@ The Qt window has buttons that draw through the GPU work today. Six bigger scene
 | Sprites | `demo_sprites::render_sprites_frame` | NVIDIA-compiled sprite shaders draw a scrolling parallax scene of blended sprites as one instanced draw |
 | Music | `demo_music::play_music` | A 16-bar loop plays through the audio renderer: synthesised samples on voices, a low-pass and an echo on the final mix |
 | Bounce | `demo_bounce::render_bounce_frame` | Balls bounce in a box drawn with the particle shaders, and every hit plays a knock on a free voice |
+| Dungeon | `demo_dungeon::render_dungeon_frame` | A torchlit tour with PBR materials, simulated water, particles, two quality presets and spatial audren sound |
 
 The Julia set program loops with a predicated branch, a jump taken only where a one-bit flag is set. It reuses one pipeline built once, so a frame costs a dispatch, a readback and a present.
 
@@ -79,7 +80,7 @@ flowchart LR
 | particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag |
 | sprites2d | Scrolling hill layers and floating sprites, blended over a sky | sprite2d.vert, sprite2d.frag |
 | pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material | pbr.vert, pbr.frag |
-| raytraced | BoomBox on a ground plane with ray-query shadows, metallic reflections and ambient occlusion | pbr.vert, rt.frag |
+| raytraced | BoomBox in a red and green room with moving light, ray-query shadows, reflections and ambient occlusion | pbr.vert, rt.frag |
 
 The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture` example with `raytraced`. It requires ray queries and fragment subgroup operations.
 
@@ -103,7 +104,7 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced.mp4" type="video/mp4"></video>
 
-*Ray-traced BoomBox: shadows fall on the ground, four rays darken sheltered surfaces, and metallic surfaces reflect the sky where reflection rays miss.*
+*Ray-traced BoomBox: Red and green walls frame glossy floor reflections while warm and cool moving lights sweep shadows across the room.*
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet.mp4" type="video/mp4"></video>
 
@@ -117,7 +118,79 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 *Bounce: every hit plays a knock, higher for small balls and louder for hard hits, panned to where it happened.*
 
-Each scene document in `demos/scenes` lists its guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. NVIDIA's driver compiles them into the SM86 programs the scenes load.
+### Dungeon
+
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon.mp4" type="video/mp4"></video>
+
+*Showcase: a 20-second, 1080p tour rendered offline at fixed 60 Hz, with audio from the emulated renderer. Ray-query shadows, reflections and ambient occlusion run on Intel Arc MTL. Wet cobblestone and rock use ambientCG 2K PBR maps, with layered fire, embers, smoke, heat haze, simulated water, foam, bubbles, drifting leaves, drips, bloom and volumetric torchlight. Measured median frame time is 146.0 ms on Intel Arc MTL. This is the console-oriented preset; its native Switch 2 frame budget remains unverified.*
+
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
+
+*Realtime preset: also recorded offline at fixed 60 Hz. It keeps reduced versions of the effects, using baked shadow maps, half-resolution planar reflections, fewer particles and fog steps, and a smaller water grid. Measured median frame time is 57.2 ms on Intel Arc MTL; it does not yet run at 60 fps.*
+
+The Qt selector and `capture dungeon --quality realtime|showcase` select the presets;
+`--raytracing on|off` overrides ray queries. The checkbox is disabled on devices
+without ray-query support. The local Intel Arc MTL and lavapipe (LLVM 21.1.8)
+both advertise `VK_KHR_ray_query`; lavapipe runs it in software.
+
+These dungeon shaders use the existing GLSL-to-Vulkan path. They do not measure
+SASS translation efficiency. The audio continues through audren renderer parcels;
+recording drains its ring directly to WAV without opening an audio device.
+The [material manifest](https://github.com/jopdorp/oboromi/blob/audio-dungeon/demos/assets/dungeon-materials.md)
+records ambientCG asset IDs and the CC0 licence; `demos/assets/fetch.sh` fetches the maps.
+
+Fixed river view, release capture at 1920×1080, 30 frames with the first three
+excluded. GPU times below are Vulkan timestamp medians, summed by pass across
+main/reflected draws. CPU frame times include synchronous submission, copies and
+audio work but exclude writing the PPM file. This shared laptop had other work
+running, so small on/off differences are not reliable effect-cost deltas.
+
+| Pass | Realtime GPU ms | Showcase GPU ms | Translated/twin ratio | Native Switch 2 ms |
+|---|---:|---:|---|---|
+| Heightfield | 0.022 | 0.021 | N/A: direct GLSL | unverified |
+| Particle simulation | 0.020 | 0.015 | N/A: direct GLSL | unverified |
+| Planar reflection | 1.760 | 0.000 | N/A: direct GLSL | unverified |
+| Instanced cave formations | 0.635 | 0.968 | N/A: direct GLSL | unverified |
+| PBR, shadows and wet reflections | 8.228 | 39.149 | N/A: direct GLSL | unverified |
+| River surface | 0.957 | 8.450 | N/A: direct GLSL | unverified |
+| Flames, smoke and other sprites | 0.327 | 0.298 | N/A: direct GLSL | unverified |
+| Volumetric fog | 0.202 | 0.328 | N/A: direct GLSL | unverified |
+| Bloom, heat haze and tonemap | 2.053 | 1.314 | N/A: direct GLSL | unverified |
+
+| Effect setting | Realtime frame ms | Realtime GPU ms | Showcase frame ms | Showcase GPU ms |
+|---|---:|---:|---:|---:|
+| All enabled | 50.81 | 14.10 | 92.15 | 50.55 |
+| Ray queries off | 49.57 | 12.34 | 63.02 | 13.13 |
+| Fire sprites off | 58.13 | 15.08 | 91.23 | 51.18 |
+| Water surface off | 69.84 | 14.87 | 86.89 | 45.86 |
+| Bloom off | 59.00 | 13.66 | 98.19 | 51.00 |
+| Volumetric fog off | 52.41 | 12.07 | 90.34 | 48.75 |
+
+There is no measured translated/twin ratio for these direct GLSL passes and no
+native console trace. Dividing these times by an unrelated translator benchmark
+would give a misleading native estimate. An under-16.7 ms console total has **not**
+been established.
+
+[Switchbrew reports](https://switchbrew.org/wiki/Switch_2:_Tegra_T239) a 1536-core
+Ampere GPU, 12 GB memory and a 102 GB/s memory bus. The reported core count does not establish clocks or ray-query throughput.
+Assuming approximately 1 GHz docked gives a theoretical 3.07 TFLOPS,
+or 51.2 GFLOP/frame at 60 Hz, and the reported bus gives 1.70 GB/frame. Those are
+peak ceilings, not predicted frame times. The preset uses 96 particles per light,
+a 256×64 water grid, 24 fog samples per quarter-resolution pixel, four shadow
+rays per contributing light, one short AO ray and one reflection ray on wet
+surfaces. Ray work still needs a native measurement and sizing pass before the
+console target can be claimed. Realtime uses 32 particles per light, 128×32 water,
+eight fog samples and a 960×540 planar reflection.
+
+Full-tour release measurements on Intel Arc MTL, excluding the first three frames:
+
+| Preset | Median frame ms | p95 frame ms | Median summed GPU ms |
+|---|---:|---:|---:|
+| Realtime | 57.17 | 134.60 | 11.94 |
+| Showcase | 146.03 | 209.75 | 82.51 |
+
+
+The other scene documents in `demos/scenes` list their guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. NVIDIA's driver compiles them into the SM86 programs the scenes load.
 
 Compiling GLSL on a desktop card gives real SM86 code for each stage. It does not give the Switch 2's shader header or attribute conventions, so those stay tagged until a real game shows them.
 

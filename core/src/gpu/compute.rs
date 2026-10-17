@@ -540,18 +540,27 @@ impl Drop for ComputePipeline<'_> {
 
 impl VkState {
     pub fn dispatch(&self, pipeline: &ComputePipeline, groups: [u32; 3]) -> Result<(), VkError> {
+        self.dispatch_profiled(pipeline, groups, None)
+    }
+
+    pub fn dispatch_profiled(&self, pipeline: &ComputePipeline, groups: [u32; 3], timestamp: Option<vk::QueryPool>) -> Result<(), VkError> {
         let compute = vk::PipelineBindPoint::COMPUTE;
         let src = vk::PipelineStageFlags::COMPUTE_SHADER;
-        let dst = vk::PipelineStageFlags::HOST;
-        // Shader writes are not visible to host reads after the fence wait without this barrier.
+        let dst = vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::ALL_GRAPHICS;
+        // Make writes visible to readback and to later compute or graphics passes.
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags::HOST_READ);
+            .dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::SHADER_READ);
         let d = &self.device;
         self.submit_and_wait(|cmd| unsafe {
             d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
             d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.descriptors.set], &[]);
+            if let Some(pool)=timestamp {
+                d.cmd_reset_query_pool(cmd,pool,0,2);
+                d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::TOP_OF_PIPE,pool,0);
+            }
             d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
+            if let Some(pool)=timestamp {d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::BOTTOM_OF_PIPE,pool,1);}
             d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
         })
     }

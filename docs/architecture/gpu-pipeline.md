@@ -46,6 +46,7 @@ The words on this path:
 | Keep the drawing registers, freeze them at each draw | threed.rs `ThreeD::write` | `Event::Draw(DrawSnapshot)` |
 | Read the shader header (SPH) and code, translate | engine.rs `module`, sm86 `translate_program` | SPIR-V, cached by a hash of header and code |
 | Copy the buffers the draw reads | engine.rs `mirror` | Host buffers, keyed by where they sit in guest RAM |
+| Run compute launches | engine.rs `dispatch` | Guest memory pages the program changed |
 | Draw and read back | graphics.rs `VkState::draw` | RGBA8 pixels |
 | Write back and show | engine.rs `draw`, `present` | Guest memory, then `display::present` |
 
@@ -59,7 +60,7 @@ A draw must see the registers as they were when it was issued. The frozen copy, 
 
 ## Does compute work take the same road?
 
-Yes, through the compute class 0xC7C0. A QMD, the block in guest memory that describes one compute launch, becomes a dispatch snapshot (see [command processor](command-processor-and-memory.md)). The engine does not run it yet.
+Yes, through the compute class 0xC7C0. A QMD, the block in guest memory that describes one compute launch, becomes a dispatch snapshot (see [command processor](command-processor-and-memory.md)). The engine translates the program and runs it over a window onto all mapped guest memory. It then writes back the pages the program changed and releases the launch's semaphores.
 
 ## Which branch holds what?
 
@@ -70,7 +71,7 @@ flowchart LR
     instr --> gfx["gpu-graphics<br/>Drawing engine; no PR yet"]
     fam["Instruction family branches<br/>gpu/w*, gpu/tex-*, gpu/div-*"] -->|"Merge commits"| instr
     gfxb["Graphics branches<br/>gpu/guest-memory, gpu/fifo,<br/>gpu/graphics-*, gpu/texture-blocklinear"] -->|"Merge commits"| gfx
-    qmd["gpu/qmd-dispatch<br/>Compute launches"] -.->|"Held back"| gfx
+    qmd["Engine branches<br/>gpu/qmd-dispatch, gpu/engine-hooks,<br/>gpu/demo-scenes-2"] -->|"Merge commits"| gfx
 ```
 
 *Each branch stacks on the one to its left; side branches merge in with merge commits.*
@@ -79,11 +80,10 @@ flowchart LR
 |---|---|---|
 | gpu-dev | The SPIR-V writer, the Vulkan device and compute dispatch, the display widget, the test harness, the perf example and profile script, CI tools | PR #79, which contains #69 to #78 |
 | gpu-instructions | Every compute instruction family, divergence, textures, tensor cores, silicon fixtures (recordings from a real card), the Julia demo, the CUDA runners | PR #80, stacked on #79 |
-| gpu-graphics | Guest memory, the command reader and 3D class, the graphics backend and shader stages, the engine, tiled textures, demo assets and scenes | Not opened |
-| gpu/qmd-dispatch | The compute class and QMD reading | Pushed, waiting on the engine hooks |
+| gpu-graphics | Guest memory, the command reader, the 3D and compute classes, the graphics backend and shader stages, the engine, tiled textures, demo assets and scenes | Not opened |
 
 Each level merges the one below whenever it moves, with merge commits and never a rebase. The gpu-graphics branch last merged gpu-instructions before the CUDA commits. So `cubin.rs` and `cuda.rs` are only on gpu-instructions for now.
 
-Verified by: the engine acceptance test `pushbuffer_triangle_lands_in_guest_memory_and_follows_vertex_remaps` on Intel and lavapipe (Mesa's CPU-based Vulkan driver), with the Vulkan validation layer reporting no errors.
+Verified by: the engine tests in `core/src/tests/gpu/engine.rs` on Intel and lavapipe (Mesa's CPU-based Vulkan driver), with the Vulkan validation layer reporting no errors. They cover the pushbuffer triangle with a vertex remap, a QMD compute launch, indexed, instanced, depth-tested, blended and textured draws, render to texture, clears, reports and acquires, and both y-flips.
 
 Sources: core/src/gpu/{fifo,threed,engine,graphics}.rs, core/src/tests/gpu/engine.rs, PR #79 and #80 bodies, git history of the fork.

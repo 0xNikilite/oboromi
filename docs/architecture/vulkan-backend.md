@@ -8,7 +8,7 @@ flowchart TB
     Q --> SUB["Submit<br/>One command list and one done-flag, locked"]
     SUB --> CP["ComputePipeline<br/>A compute shader, ready to run"]
     SUB --> GP["GraphicsPipeline<br/>Vertex and pixel shaders, ready to draw"]
-    CP --> D0["Descriptors<br/>The numbered data slots, set 0"]
+    CP --> D0["Descriptors<br/>The numbered data slots, sets 0 and 1"]
     GP --> D0
     D0 --> HB["HostBuffer<br/>Constants, guest memory window, vertices"]
     D0 --> HI["HostImage<br/>Textures and writable images"]
@@ -26,7 +26,7 @@ All work goes through one queue, the place work is handed to the card. Each subm
 | `VkState` | gpu/mod.rs | The Vulkan instance, the chosen card, its queue and command pool, and which optional features it has |
 | `HostBuffer` | gpu/compute.rs | A buffer the CPU can read and write; cached memory preferred, flushed and refreshed explicitly |
 | `HostImage` | gpu/compute.rs | A 2D image with all its mip levels (smaller copies), uploaded through a staging buffer |
-| `Descriptors` | gpu/compute.rs | The layout of numbered data slots, shared by compute and drawing |
+| `Descriptors` | gpu/compute.rs | The layout of numbered data slots: set 0 for compute and vertex shaders, set 1 for pixel shaders |
 | `ComputePipeline` | gpu/compute.rs | A compiled compute shader; `VkState::dispatch` records, submits and waits |
 | `GraphicsPipeline` | gpu/graphics.rs | Compiled vertex and pixel shaders for one colour format, with optional depth |
 | `RenderTarget` | gpu/graphics.rs | Offscreen colour and depth images, read back after each draw |

@@ -18,12 +18,13 @@ SASS loads and stores use the game's own GPU addresses. Vulkan shaders cannot fo
 
 All main memory a run touches, called global memory, is one storage buffer at binding 9. A storage buffer is a large buffer a shader can read and write.
 
-The host looks the game's address range up in the page map, the table from GPU addresses to emulated RAM. It copies that range into one buffer and stores the window's start address in the helper slot, binding 0.
+The host looks the game's address range up in the page map, the table from GPU addresses to emulated RAM. It copies that range into one buffer and stores the window's start address in the helper slot, binding 0. For a compute launch from a command list, the range is all mapped guest memory. After the run, the pages the program changed are written back to guest RAM.
 
 | Window fact | Value |
 |---|---|
 | Start address | Rounded down to a 16-byte boundary |
 | Widest access | 128 bits |
+| Window for a launch from a command list | All mapped guest memory, at most 4 GiB |
 
 A translated `LDG` (load from global memory) or `STG` (store) subtracts the start and indexes the buffer. An address outside mapped memory fails with an error. Buffer device addresses are not used.
 
@@ -34,11 +35,11 @@ A translated `LDG` (load from global memory) or `STG` (store) subtracts the star
 
 ### What this makes hard
 
-* The window must hold every byte the program might touch, so scattered reads copy far more than they use.
+* The window must hold every byte the program might touch, so the first launch copies all mapped memory to the card; later launches only copy pages that changed.
 * Some loads carry a memory descriptor, an extra policy word from the compiler, and it must not be added to the address.
 
 ### Confirmation
 
-The compiled mul-add kernel and the gradient program match the real card through this window, and the memory tests cover remaps.
+The compiled mul-add kernel and the gradient program match the real card through this window. The engine test runs the gradient kernel from a QMD launch and finds its output in guest memory. The memory tests cover remaps.
 
 Sources: core/src/gpu/memory.rs `window`, core/src/gpu/sm86/access.rs, core/src/tests/gpu/harness.rs `run_grid`.

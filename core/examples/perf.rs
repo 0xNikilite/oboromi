@@ -6,7 +6,7 @@ use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::pipeline_cache::Disk;
 use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, Stage, emit_module};
-use oboromi_core::gpu::{VkState, demo_post::render_post_frame, surface_device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
+use oboromi_core::gpu::{VkState, demo, demo_post::render_post_frame, surface_device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
 use oboromi_core::tests::gpu::engine::{TARGET, TEXTURES, VERTICES, texture_header, textured_quad_frame, triangle_frame, triangle_guest, vertex_bytes};
 use oboromi_core::tests::gpu::{graphics, harness::translate_module};
 use oboromi_core::tests::gpu_test::inst;
@@ -129,6 +129,11 @@ fn main() {
     quad.write(TEXTURES + 0x1000, &(0..64 * 64 * 4).map(|i| i as u8).collect::<Vec<_>>()).unwrap();
     texture_header(&mut quad, TEXTURES + 0x1000, 64, 64, 64 * 4).unwrap();
     bench("pushbuffer textured quad 1080p", 2, 100, || textured_quad_frame(&mut quad, 1920, 1080, TARGET, 0).unwrap());
+    bench("demo boombox 1080p", 2, 100, || demo::render_boombox_frame(0.25).unwrap());
+    match demo::asset_dir("flighthelmet").exists() {
+        true => bench("demo helmet 1080p", 2, 100, || demo::render_helmet_frame(0.25).unwrap()),
+        false => println!("demo helmet 1080p skipped: run demos/assets/fetch.sh"),
+    }
     let headless = ash::ext::headless_surface::Instance::new(&state.entry, &state.instance);
     let surface = unsafe { headless.create_headless_surface(&Default::default(), None) }.unwrap();
     attach_surface(surface, w as u32, h as u32).unwrap();

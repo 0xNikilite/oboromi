@@ -1,6 +1,6 @@
 # Roadmap
 
-The compute side of the translator is done, and the drawing engine handles the core of a real frame: indexed and instanced draws, depth, blending, textures and compute launches. Around it, the CPU, kernel, services and audio are being built out on the foundations upstream laid. For example, a guest program of our own already runs on the emulated CPU, and the GPU driver services it calls are next.
+The compute side of the translator is done, and the drawing engine handles the core of a real frame: indexed and instanced draws, depth, blending, textures and compute launches. Around it, the CPU, kernel, services and audio are being built out on the foundations already in place. For example, a guest program of our own already runs on the emulated CPU, and the GPU driver services it calls are next.
 
 "By design" below means left out on purpose, with a named panic, until something needs it.
 
@@ -45,8 +45,8 @@ flowchart LR
 | Services | Display services and the binder | Planned |
 | Audio | Audio renderer and raw output, output through Qt, demos | Designed, implementation next |
 | Loaders | Game file formats | Planned, after the guest path |
-| Upstream | PR #79 and PR #80 | Open |
-| Upstream | A PR for gpu-graphics | Not opened |
+| Merge | PR #79 and PR #80 | Open |
+| Merge | A PR for gpu-graphics | Not opened |
 
 ## What are the honest limits?
 

@@ -1,6 +1,7 @@
 //! Frames drawn by translated SASS programs that write RGBA8 pixels into global memory, presented as is.
 use super::compute::{ComputePipeline, HostBuffer};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, SUPPORT_BINDING, Stage, emit_module};
+use super::demo::SCENE;
 use super::demo_post::POST;
 use super::engine::Gpu;
 use super::{VkError, device};
@@ -190,5 +191,6 @@ pub fn render_triangle_demo(seconds: f32) -> Result<(), String> {
 /// Saves the running demos' pipeline cache, so the next run starts warm.
 pub fn flush_demo_caches() -> std::io::Result<()> {
     TRIANGLE_DEMO.lock().unwrap().as_ref().map_or(Ok(()), Gpu::flush_caches)?;
-    POST.lock().unwrap().as_ref().map_or(Ok(()), |post| post.gpu.flush_caches())
+    POST.lock().unwrap().as_ref().map_or(Ok(()), |post| post.gpu.flush_caches())?;
+    SCENE.lock().unwrap().as_ref().map_or(Ok(()), |(_, scene)| scene.gpu.flush_caches())
 }

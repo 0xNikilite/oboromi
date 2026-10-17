@@ -55,7 +55,7 @@ pub fn render_test_frame() -> Result<(), VkError> {
     support.write(&BASE.to_le_bytes())?;
     let bindings = [(SUPPORT_BINDING, DescriptorType::UNIFORM_BUFFER), (GLOBAL_BINDING, DescriptorType::STORAGE_BUFFER)];
     let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings)?;
-    pipeline.bind(&[(SUPPORT_BINDING, &support), (GLOBAL_BINDING, &pixels_buffer)]);
+    pipeline.descriptors.bind(&[(SUPPORT_BINDING, &support), (GLOBAL_BINDING, &pixels_buffer)]);
     // Round up so 1080 rows get a partial last group; the program's guard drops the overhang.
     state.dispatch(&pipeline, [WIDTH.div_ceil(GROUP), HEIGHT.div_ceil(GROUP), 1])?;
     let mut pixels = vec![0; size as usize];

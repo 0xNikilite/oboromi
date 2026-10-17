@@ -5,7 +5,7 @@ use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::sm86::STATE_WORDS;
 use oboromi_core::gpu::{device, frame::render_test_frame};
-use oboromi_core::tests::gpu::harness::translate_module;
+use oboromi_core::tests::gpu::{graphics, harness::translate_module};
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
 use std::time::Instant;
@@ -22,11 +22,11 @@ fn bench(name: &str, warmup: usize, iters: usize, mut f: impl FnMut()) {
     us.sort_by(f64::total_cmp);
     let [p50, p95, p99, max] =
         [0.5, 0.95, 0.99, 1.0].map(|p| us[(p * iters as f64).ceil() as usize - 1]);
-    println!("{name:<26}{iters:>6}{p50:>11.1}{p95:>11.1}{p99:>11.1}{max:>11.1}");
+    println!("{name:<30}{iters:>6}{p50:>11.1}{p95:>11.1}{p99:>11.1}{max:>11.1}");
 }
 
 fn main() {
-    println!("path                           n     p50 us     p95 us     p99 us     max us");
+    println!("path                               n     p50 us     p95 us     p99 us     max us");
     // KILL is left out: OpKill terminates the block, so nothing may follow it.
     let fixtures = [
         inst::iadd_imm(1, 2, 42),
@@ -68,13 +68,16 @@ fn main() {
     let mut pipeline = ComputePipeline::new(state, &words, &bindings).unwrap();
     let mut input = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output)]);
+    pipeline.descriptors.bind(&[(10, &input), (11, &output)]);
     let mut out = [0u8; STATE_WORDS * 4];
     bench("dispatch+fence+readback", 50, 1000, || {
         input.write(&[0; STATE_WORDS * 4]).unwrap();
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         output.read(black_box(&mut out)).unwrap();
     });
+    let mut triangle = graphics::triangle(state).unwrap();
+    let mut pixels = vec![0; (graphics::SIZE * graphics::SIZE * 4) as usize];
+    bench("draw+readback 64x64 triangle", 50, 1000, || triangle(black_box(&mut pixels)).unwrap());
     bench("render_test_frame e2e", 2, 20, || {
         render_test_frame().unwrap()
     });

@@ -1,0 +1,316 @@
+//! Graphics pipelines drawing with dynamic rendering into an offscreen RGBA8 target that is read back after each draw.
+use super::compute::{Descriptors, HostBuffer};
+use super::{VkError, VkState};
+use ash::vk;
+
+const COLOR_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
+const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+
+pub struct VertexLayout<'a> {
+    pub bindings: &'a [vk::VertexInputBindingDescription],
+    pub attributes: &'a [vk::VertexInputAttributeDescription],
+    /// Draws may switch topology only within this one's class: points, lines, triangles or patches.
+    pub topology: vk::PrimitiveTopology,
+}
+
+pub struct TargetState {
+    pub blend: vk::PipelineColorBlendAttachmentState,
+    pub depth: bool,
+}
+
+/// The 3D state that is Vulkan dynamic state, so one pipeline serves every value of it.
+#[derive(Clone, Copy)]
+pub struct RasterState {
+    pub viewport: vk::Viewport,
+    pub scissor: vk::Rect2D,
+    pub cull_face: vk::CullModeFlags,
+    pub front_face: vk::FrontFace,
+    pub topology: vk::PrimitiveTopology,
+    pub depth_test: bool,
+    pub depth_write: bool,
+    pub depth_func: vk::CompareOp,
+    pub blend_const: [f32; 4],
+}
+
+pub struct DrawState<'a> {
+    pub vertex_buffers: &'a [&'a HostBuffer<'a>],
+    /// With an index buffer, `vertex_count` and `first_vertex` count indices.
+    pub index_buffer: Option<(&'a HostBuffer<'a>, vk::IndexType)>,
+    pub vertex_count: u32,
+    pub first_vertex: u32,
+    pub instance_count: u32,
+    /// Without a clear the draw loads what the previous draw into the target left.
+    pub clear: Option<[f32; 4]>,
+    pub raster: RasterState,
+}
+
+pub struct GraphicsPipeline<'a> {
+    device: &'a ash::Device,
+    pub descriptors: Descriptors<'a>,
+    shaders: [vk::ShaderModule; 2],
+    pub layout: vk::PipelineLayout,
+    pub pipeline: vk::Pipeline,
+}
+
+impl<'a> GraphicsPipeline<'a> {
+    pub fn new(
+        state: &'a VkState,
+        vertex_spirv: &[u32],
+        fragment_spirv: &[u32],
+        bindings: &[(u32, vk::DescriptorType)],
+        vertex_layout: &VertexLayout,
+        target: &TargetState,
+    ) -> Result<Self, VkError> {
+        use vk::ShaderStageFlags as Stage;
+        let d = &state.device;
+        let mut p = Self {
+            device: d,
+            descriptors: Descriptors::new(d, bindings, Stage::VERTEX | Stage::FRAGMENT)?,
+            shaders: Default::default(),
+            layout: vk::PipelineLayout::null(),
+            pipeline: vk::Pipeline::null(),
+        };
+        for (shader, code) in p.shaders.iter_mut().zip([vertex_spirv, fragment_spirv]) {
+            *shader = unsafe { d.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(code), None)? };
+        }
+        let set_layouts = [p.descriptors.set_layout];
+        let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+        p.layout = unsafe { d.create_pipeline_layout(&layout_info, None)? };
+        let stages = [(Stage::VERTEX, p.shaders[0]), (Stage::FRAGMENT, p.shaders[1])]
+            .map(|(stage, module)| vk::PipelineShaderStageCreateInfo::default().stage(stage).module(module).name(c"main"));
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(vertex_layout.bindings)
+            .vertex_attribute_descriptions(vertex_layout.attributes);
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default().topology(vertex_layout.topology);
+        let viewport = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
+        let rasterization = vk::PipelineRasterizationStateCreateInfo::default().line_width(1.0);
+        let multisample =
+            vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
+        let blend_attachments = [target.blend];
+        let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
+        use vk::DynamicState as Dynamic;
+        let dynamic_states = [
+            Dynamic::VIEWPORT,
+            Dynamic::SCISSOR,
+            Dynamic::CULL_MODE,
+            Dynamic::FRONT_FACE,
+            Dynamic::PRIMITIVE_TOPOLOGY,
+            Dynamic::DEPTH_TEST_ENABLE,
+            Dynamic::DEPTH_WRITE_ENABLE,
+            Dynamic::DEPTH_COMPARE_OP,
+            Dynamic::BLEND_CONSTANTS,
+        ];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let color_formats = [COLOR_FORMAT];
+        let mut rendering = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(if target.depth { DEPTH_FORMAT } else { vk::Format::UNDEFINED });
+        let info = [vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport)
+            .rasterization_state(&rasterization)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&blend)
+            .dynamic_state(&dynamic)
+            .layout(p.layout)
+            .push_next(&mut rendering)];
+        p.pipeline = unsafe { d.create_graphics_pipelines(vk::PipelineCache::null(), &info, None) }
+            .map_err(|(_, e)| e)?[0];
+        Ok(p)
+    }
+}
+
+impl Drop for GraphicsPipeline<'_> {
+    fn drop(&mut self) {
+        let d = self.device;
+        unsafe {
+            d.destroy_pipeline(self.pipeline, None);
+            d.destroy_pipeline_layout(self.layout, None);
+            self.shaders.iter().for_each(|&shader| d.destroy_shader_module(shader, None));
+        }
+    }
+}
+
+struct Attachment<'a> {
+    device: &'a ash::Device,
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+}
+
+impl<'a> Attachment<'a> {
+    fn new(
+        device: &'a ash::Device,
+        extent: vk::Extent2D,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<Self, VkError> {
+        let info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(extent.into())
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .usage(usage);
+        let mut a = Self {
+            device,
+            image: unsafe { device.create_image(&info, None)? },
+            memory: vk::DeviceMemory::null(),
+            view: vk::ImageView::null(),
+        };
+        let range = vk::ImageSubresourceRange::default().aspect_mask(aspect).level_count(1).layer_count(1);
+        unsafe {
+            let req = device.get_image_memory_requirements(a.image);
+            let alloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(req.size)
+                .memory_type_index(req.memory_type_bits.trailing_zeros());
+            a.memory = device.allocate_memory(&alloc, None)?;
+            device.bind_image_memory(a.image, a.memory, 0)?;
+            let view = vk::ImageViewCreateInfo::default()
+                .image(a.image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format)
+                .subresource_range(range);
+            a.view = device.create_image_view(&view, None)?;
+        }
+        Ok(a)
+    }
+}
+
+impl Drop for Attachment<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_image_view(self.view, None);
+            self.device.destroy_image(self.image, None);
+            self.device.free_memory(self.memory, None);
+        }
+    }
+}
+
+pub struct RenderTarget<'a> {
+    pub extent: vk::Extent2D,
+    color: Attachment<'a>,
+    depth: Option<Attachment<'a>>,
+    staging: HostBuffer<'a>,
+}
+
+impl<'a> RenderTarget<'a> {
+    pub fn new(state: &'a VkState, width: u32, height: u32, depth: bool) -> Result<Self, VkError> {
+        use vk::{ImageAspectFlags as Aspect, ImageUsageFlags as Usage};
+        let (d, extent) = (&state.device, vk::Extent2D { width, height });
+        Ok(Self {
+            extent,
+            color: Attachment::new(d, extent, COLOR_FORMAT, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC, Aspect::COLOR)?,
+            depth: depth
+                .then(|| Attachment::new(d, extent, DEPTH_FORMAT, Usage::DEPTH_STENCIL_ATTACHMENT, Aspect::DEPTH))
+                .transpose()?,
+            staging: HostBuffer::new(state, u64::from(width * height * 4))?,
+        })
+    }
+
+    pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
+        self.staging.read(out)
+    }
+}
+
+impl VkState {
+    pub fn draw(&self, pipeline: &GraphicsPipeline, target: &RenderTarget, draw: &DrawState) -> Result<(), VkError> {
+        use vk::{AccessFlags as Access, ImageLayout as Layout, PipelineStageFlags as Stage};
+        let d = &self.device;
+        let graphics = vk::PipelineBindPoint::GRAPHICS;
+        let load = if draw.clear.is_some() { vk::AttachmentLoadOp::CLEAR } else { vk::AttachmentLoadOp::LOAD };
+        let barrier = |image, aspect_mask| {
+            vk::ImageMemoryBarrier::default()
+                .image(image)
+                .subresource_range(vk::ImageSubresourceRange::default().aspect_mask(aspect_mask).level_count(1).layer_count(1))
+        };
+        // A cleared attachment starts from UNDEFINED, a loaded one from where the previous draw left it.
+        let discard_or = |layout| if draw.clear.is_some() { Layout::UNDEFINED } else { layout };
+        let to_color = barrier(target.color.image, vk::ImageAspectFlags::COLOR)
+            .old_layout(discard_or(Layout::TRANSFER_SRC_OPTIMAL))
+            .new_layout(Layout::COLOR_ATTACHMENT_OPTIMAL)
+            .dst_access_mask(Access::COLOR_ATTACHMENT_READ | Access::COLOR_ATTACHMENT_WRITE);
+        let color = [vk::RenderingAttachmentInfo::default()
+            .image_view(target.color.view)
+            .image_layout(Layout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(load)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: draw.clear.unwrap_or_default() } })];
+        let mut rendering = vk::RenderingInfo::default()
+            .render_area(target.extent.into())
+            .layer_count(1)
+            .color_attachments(&color);
+        let mut to_attachments = [to_color, to_color];
+        let depth_info;
+        if let Some(depth) = &target.depth {
+            to_attachments[1] = barrier(depth.image, vk::ImageAspectFlags::DEPTH)
+                .old_layout(discard_or(Layout::DEPTH_ATTACHMENT_OPTIMAL))
+                .new_layout(Layout::DEPTH_ATTACHMENT_OPTIMAL)
+                .src_access_mask(Access::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                .dst_access_mask(Access::DEPTH_STENCIL_ATTACHMENT_READ | Access::DEPTH_STENCIL_ATTACHMENT_WRITE);
+            depth_info = vk::RenderingAttachmentInfo::default()
+                .image_view(depth.view)
+                .image_layout(Layout::DEPTH_ATTACHMENT_OPTIMAL)
+                .load_op(load)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .clear_value(vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 } });
+            rendering = rendering.depth_attachment(&depth_info);
+        }
+        let to_attachments = &to_attachments[..1 + usize::from(target.depth.is_some())];
+        let to_transfer = barrier(target.color.image, vk::ImageAspectFlags::COLOR)
+            .old_layout(Layout::COLOR_ATTACHMENT_OPTIMAL)
+            .new_layout(Layout::TRANSFER_SRC_OPTIMAL)
+            .src_access_mask(Access::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(Access::TRANSFER_READ);
+        let copy = [vk::BufferImageCopy::default()
+            .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
+            .image_extent(target.extent.into())];
+        let to_host = vk::MemoryBarrier::default().src_access_mask(Access::TRANSFER_WRITE).dst_access_mask(Access::HOST_READ);
+        let fragment_tests = Stage::EARLY_FRAGMENT_TESTS | Stage::LATE_FRAGMENT_TESTS;
+        let none = vk::DependencyFlags::empty();
+        let r = &draw.raster;
+        self.submit_and_wait(|cmd| unsafe {
+            d.cmd_pipeline_barrier(
+                cmd,
+                Stage::TRANSFER | fragment_tests,
+                Stage::COLOR_ATTACHMENT_OUTPUT | fragment_tests,
+                none,
+                &[],
+                &[],
+                to_attachments,
+            );
+            d.cmd_begin_rendering(cmd, &rendering);
+            d.cmd_bind_pipeline(cmd, graphics, pipeline.pipeline);
+            d.cmd_bind_descriptor_sets(cmd, graphics, pipeline.layout, 0, &[pipeline.descriptors.set], &[]);
+            d.cmd_set_viewport(cmd, 0, &[r.viewport]);
+            d.cmd_set_scissor(cmd, 0, &[r.scissor]);
+            d.cmd_set_cull_mode(cmd, r.cull_face);
+            d.cmd_set_front_face(cmd, r.front_face);
+            d.cmd_set_primitive_topology(cmd, r.topology);
+            d.cmd_set_depth_test_enable(cmd, r.depth_test);
+            d.cmd_set_depth_write_enable(cmd, r.depth_write);
+            d.cmd_set_depth_compare_op(cmd, r.depth_func);
+            d.cmd_set_blend_constants(cmd, &r.blend_const);
+            for (binding, buffer) in (0..).zip(draw.vertex_buffers) {
+                d.cmd_bind_vertex_buffers(cmd, binding, &[buffer.buffer], &[0]);
+            }
+            match draw.index_buffer {
+                Some((buffer, ty)) => {
+                    d.cmd_bind_index_buffer(cmd, buffer.buffer, 0, ty);
+                    d.cmd_draw_indexed(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0, 0);
+                }
+                None => d.cmd_draw(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, 0),
+            }
+            d.cmd_end_rendering(cmd);
+            d.cmd_pipeline_barrier(cmd, Stage::COLOR_ATTACHMENT_OUTPUT, Stage::TRANSFER, none, &[], &[], &[to_transfer]);
+            d.cmd_copy_image_to_buffer(cmd, target.color.image, Layout::TRANSFER_SRC_OPTIMAL, target.staging.buffer, &copy);
+            d.cmd_pipeline_barrier(cmd, Stage::TRANSFER, Stage::HOST, none, &[to_host], &[], &[]);
+        })
+    }
+}

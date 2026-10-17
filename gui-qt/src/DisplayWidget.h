@@ -22,5 +22,5 @@ private:
     uint64_t m_generation = 0;
 };
 
-// a window the core presents into through vulkan, or a DisplayWidget where the platform has no vulkan
+// a window the core presents into through vulkan, or a DisplayWidget where the platform cannot present through it
 QWidget *createDisplay(QWidget *parent);

@@ -445,7 +445,7 @@ impl<'a> Gpu<'a> {
             Some((_, target)) => crate::display::present_image(target.render_target.color_image(), width, height),
             None => {
                 let ranges = self.mirror(va, len)?;
-                crate::display::present_buffer(&self.mirrors[&ranges].1.buffer, width, height)
+                crate::display::present_buffer(&self.mirrors[&ranges].buffer, width, height)
             }
         }
         .map_err(named)

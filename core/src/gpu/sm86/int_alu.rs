@@ -191,14 +191,6 @@ impl<'a> Decoder<'a> {
             let ty = self.type_u64();
             let [a, b] = [a, b].map(|x| if signed { self.ir.emit_s_convert(ty, x) } else { self.ir.emit_u_convert(ty, x) });
             let product = self.ir.emit_imul(ty, a, b);
-            if mode == 7 {
-                let shift = self.ir.emit_constant_typed(ty, 32u64);
-                let hi = self.ir.emit_shift_right_logical(ty, product, shift);
-                let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
-                let result = self.ir.emit_iadd(self.type_u32[1], hi, c32);
-                let result = self.ir.emit_iadd(self.type_u32[1], result, carry);
-                return self.store_alu(inst, result);
-            }
             let c = match form {
                 2 => self.ir.emit_s_convert(ty, c32),
                 3 | 7 => self.alu_src_pair(inst),
@@ -215,6 +207,12 @@ impl<'a> Decoder<'a> {
             let carry = self.ir.emit_u_convert(ty, carry);
             let result = self.ir.emit_iadd(ty, product, c);
             let result = self.ir.emit_iadd(ty, result, carry);
+            if mode == 7 {
+                let shift = self.ir.emit_constant_typed(ty, 32u64);
+                let hi = self.ir.emit_shift_right_logical(ty, result, shift);
+                let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
+                return self.store_alu(inst, hi);
+            }
             self.store_alu_pair(inst, result);
         } else {
             let product = self.ir.emit_imul(self.type_u32[1], a, b);

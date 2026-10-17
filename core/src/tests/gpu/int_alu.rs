@@ -191,8 +191,9 @@ mod tests {
         let high = 0x004fc800078e02060000000302017227;
         seed[2] = u32::MAX - 1;
         seed[3] = 3;
+        seed[7] = 5;
         let Some((regs, _)) = run_regs(&[high], &seed, &[], &[]) else { return };
-        assert_eq!(regs[1], 0);
+        assert_eq!(regs[1], 4);
 
         let x = 0x004fc800000e06060000000302017224;
         seed.resize(255, 0);

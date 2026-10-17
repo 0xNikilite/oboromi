@@ -1,5 +1,6 @@
 //! A synthetic guest the way the NVN driver lays one out: shader programs, vertices, a constant buffer, a colour
 //! target and a pushbuffer in guest memory mapped to scattered guest-physical pages, drawing one triangle a frame.
+use crate::cpu::GuestRam;
 use crate::gpu::VkState;
 use crate::gpu::engine::Gpu;
 use crate::gpu::memory::{MemoryError, PAGE};
@@ -116,7 +117,7 @@ fn textured_program() -> Vec<u8> {
 
 pub fn triangle_guest<'a>(state: &'a VkState, width: u32, height: u32, vertices: &[Vertex; 3]) -> Result<Gpu<'a>, MemoryError> {
     let target_pages = (u64::from(width * height) * 4).div_ceil(PAGE);
-    let mut gpu = Gpu::new(state, ((8 + target_pages) * PAGE) as usize);
+    let mut gpu = Gpu::new(state, GuestRam::new(((8 + target_pages) * PAGE) as usize));
     for (va, page, pages) in [(TEXTURES, 0, 1), (PUSHBUFFER, 3, 1), (VERTEX_PROGRAM, 1, 1), (VERTICES, 5, 1), (CBUF, 2, 1), (REPORT, 6, 1), (TARGET, 8, target_pages)] {
         gpu.space.map(va, page * PAGE, pages * PAGE);
     }
@@ -249,11 +250,6 @@ mod tests {
     const GREEN: [u8; 4] = [0, 255, 0, 255];
     const BLUE: [u8; 4] = [0, 0, 255, 255];
 
-    fn map(gpu: &mut Gpu, va: u64, len: u64) {
-        gpu.space.map(va, gpu.ram.len() as u64, len);
-        gpu.ram.resize(gpu.ram.len() + len as usize, 0);
-    }
-
     fn pixel(gpu: &Gpu, target: u64, x: u32, y: u32) -> [u8; 4] {
         let mut rgba = [0; 4];
         gpu.read(target + u64::from(y * SIZE + x) * 4, &mut rgba).unwrap();
@@ -303,7 +299,7 @@ mod tests {
             .chain([bra(-16)])
             .flat_map(u128::to_le_bytes)
             .collect();
-        let mut gpu = Gpu::new(&state, (128 * PAGE) as usize);
+        let mut gpu = Gpu::new(&state, GuestRam::new((128 * PAGE) as usize));
         gpu.space.map(0x2_0000_0000, 0, 128 * PAGE);
         let mut qmd = [0; 64];
         [qmd[12], qmd[13], qmd[14]] = [120, 68, 1];
@@ -347,7 +343,7 @@ mod tests {
         let Some(state) = vk_state() else { return };
         let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         gpu.write(VERTICES, &vertex_bytes(&[[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].map(|corner| (corner, RED)))).unwrap();
-        map(&mut gpu, INDICES, PAGE);
+        gpu.space.map(INDICES, 4 * PAGE, PAGE);
         gpu.write(INDICES, &bytes(&[0 | 1 << 16, 2 | 2 << 16, 1 | 3 << 16])).unwrap();
         let mut words = Vec::new();
         frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
@@ -434,7 +430,7 @@ mod tests {
     fn a_target_sampled_as_a_texture_shows_its_latest_draw() {
         let Some(state) = vk_state() else { return };
         let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
-        map(&mut gpu, TARGET_B, PAGE);
+        gpu.space.map(TARGET_B, 4 * PAGE, PAGE);
         texture_header(&mut gpu, TARGET, SIZE, SIZE, SIZE * 4).unwrap();
         let mut previous = Vec::new();
         for colours in [[RED, GREEN, BLUE], [GREEN, BLUE, RED]] {

@@ -160,6 +160,7 @@ pub mod inst {
     pub const SUST_D_32: u128 = 0xb9d | SZ_32;
     pub const SUST_P_RGBA: u128 = 0xb9b | SU_RGBA;
     pub const SU_BA: u128 = 1 << 72;
+    pub const SUQUERY: u128 = 0xbb3;
     pub const SURED_ADD: u128 = 0x59f;
     pub const SUATOM_ADD: u128 = 0x593;
     pub const SUATOM_CAS: u128 = 0x595;
@@ -1052,6 +1053,7 @@ fn fixtures_match_nvdisasm() {
         (inst::surface(inst::SUST_D_32, 0xff, 2, 5, 3, 0x10), "SUST.D.2D [R2], R5, 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_P_RGBA, 12, 2, 0xff, 3, 0x10), "SULD.P.2D R12, [R2], 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_D_32 | inst::SU_BA, 8, 6, 0xff, 0, 0x178), "SULD.D.BA.2D R8, [R6], 0x0, 0x5e ;"),
+        (inst::alu(inst::SUQUERY, 4, 2, 0) | 1 << 81 | 0x10 << 40, "SUQUERY.1D P1, R4, [R2], COMP_STATUS, 0x0, 0x10 ;"),
         (inst::texture(inst::TLD4_R_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.R R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TLD4_G_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.G R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::with_rb(inst::texture(inst::TXD_2D, 12, 14, 2, 3, 0x10, 0xf), 4), "TXD R14, R12, R2, R4, 0x3, 0x4, 2D ;"),

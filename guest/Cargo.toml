@@ -1,0 +1,14 @@
+[package]
+name = "guest"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+# Its own workspace: the image only builds for aarch64-unknown-none, so the host workspace never sees it.
+[workspace]

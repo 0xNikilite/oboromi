@@ -2,6 +2,7 @@ use ash::vk;
 
 pub mod compute;
 pub mod compute_class;
+pub mod demo_post;
 pub mod engine;
 pub mod fifo;
 pub mod frame;

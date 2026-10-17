@@ -1,6 +1,9 @@
-//! Minimal HLE Horizon kernel: one process with one thread whose SVCs are dispatched from the
+//! HLE Horizon kernel: one process with scheduled threads whose SVCs are dispatched from the
 //! core's run loop, outside the Unicorn lock. Guest virtual addresses equal offsets into the flat
 //! RAM block, so the regions below are bookkeeping over memory that is always mapped.
+
+mod threads;
+pub use threads::{Scheduler, Timer};
 
 use crate::cpu::UnicornCPU;
 use crate::cpu::cpu_manager::MEMORY_SIZE;
@@ -24,7 +27,7 @@ impl Region {
 // Our own layout, 2 MiB aligned like Horizon's ASLR regions: switchbrew documents no
 // Switch 2 region bases, so these need a capture before they can claim to match one.
 pub const CODE: Region = Region { base: 0x0800_0000, size: 0x0800_0000 };
-/// The one thread's TLS page, which TPIDRRO_EL0 points at; its first 0x100 bytes are the IPC buffer.
+/// TLS region with 0x200-byte thread slots; the first 0x100 bytes hold IPC.
 pub const TLS: u64 = 0x1000_0000;
 pub const MAIN_STACK: Region = Region { base: 0x1010_0000, size: 0x10_0000 };
 pub const STACK: Region = Region { base: 0x2000_0000, size: 0x2000_0000 };
@@ -46,7 +49,13 @@ pub enum Error {
     InvalidCurrentMemory = 106,
     InvalidNewMemoryPermission = 108,
     InvalidMemoryRegion = 110,
+    InvalidPriority = 112,
+    InvalidCpuCore = 113,
     InvalidHandle = 114,
+    InvalidCombination = 116,
+    TimedOut = 117,
+    Cancelled = 118,
+    InvalidState = 125,
     InvalidPointer = 115,
     OutOfRange = 119,
     InvalidEnumValue = 120,
@@ -61,6 +70,8 @@ impl Error {
 }
 
 pub enum Object {
+    Thread(usize),
+    WritableEvent(Rc<Cell<bool>>),
     Session(Rc<RefCell<dyn Service>>),
     TransferMemory { addr: u64, size: u64, perm: u32 },
     Event(Rc<Cell<bool>>),
@@ -107,6 +118,7 @@ pub struct Process {
 }
 
 pub struct Kernel {
+    pub scheduler: Scheduler,
     pub process: Process,
     pub ports: HashMap<String, Rc<RefCell<dyn Service>>>,
     /// OutputDebugString texts, for the caller to drain.
@@ -119,7 +131,7 @@ impl Default for Kernel {
         let hid = Rc::new(RefCell::new(hid::State::default()));
         let sm: Rc<RefCell<dyn Service>> = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
         let ports = HashMap::from([("sm:".into(), sm)]);
-        Self { process: Process::default(), ports, debug_output: vec![], hid }
+        Self { scheduler: Scheduler::default(), process: Process::default(), ports, debug_output: vec![], hid }
     }
 }
 
@@ -285,27 +297,20 @@ impl Kernel {
         cpu.set_pc(entry);
         cpu.set_sp(MAIN_STACK.base + MAIN_STACK.size);
         cpu.set_tls(TLS);
+        self.start_threads(cpu);
     }
 
-    /// Runs the thread until ExitProcess (true) or until the core stops for any other reason.
-    pub fn run(&mut self, cpu: &UnicornCPU) -> bool {
-        loop {
-            // No vsync drives the guest yet, so the pad is sampled each time it enters the kernel.
-            self.hid.borrow_mut().tick(cpu);
-            cpu.run();
-            let Some(nr) = cpu.svc_pending() else { return false };
-            let Some(x) = self.svc(cpu, nr, std::array::from_fn(|i| cpu.get_x(i as u32))) else { return true };
-            for (i, value) in x.into_iter().enumerate() {
-                cpu.set_x(i as u32, value);
-            }
-        }
-    }
+    /// Runs ready threads and deadlines until process exit or an unhandled stop.
+    pub fn run(&mut self, cpu: &UnicornCPU) -> bool { self.run_threads(cpu) }
 
     /// Returns x0-x7 after the call, or None once the process has exited.
     /// SVC ids and register use: yuzu src/core/hle/kernel/svc.h SvcId and svc.cpp SvcWrap_*64.
     pub fn svc(&mut self, cpu: &UnicornCPU, nr: u32, mut x: [u64; 8]) -> Option<[u64; 8]> {
+        if nr == 0x10 { x[0] = self.current_core(); return Some(x); }
+        if nr == 0x1e { x[0] = cpu.ticks(); return Some(x); }
         let process = &mut self.process;
         let result = match nr {
+            0x08..=0x12 | 0x17..=0x1d | 0x25 | 0x26 | 0x34 | 0x35 | 0x45 => self.thread_svc(cpu, nr, &mut x),
             0x01 => process.set_heap_size(x[1]).map(|base| x[1] = base),
             0x04 => process.map_memory(cpu, x[0], x[1], x[2]),
             0x05 => process.unmap_memory(cpu, x[0], x[1], x[2]),
@@ -351,7 +356,7 @@ impl Kernel {
 
     fn exchange(&mut self, cpu: &UnicornCPU, service: &RefCell<dyn Service>) -> Result<(), Error> {
         let mut message = [0; hipc::MESSAGE_SIZE];
-        cpu.read_mem(TLS, &mut message).map_err(|_| Error::InvalidPointer)?;
+        cpu.read_mem(if cpu.tls() == 0 { TLS } else { cpu.tls() }, &mut message).map_err(|_| Error::InvalidPointer)?;
         match hipc::command_type(&message) {
             hipc::CLOSE => return Ok(()),
             hipc::REQUEST | hipc::REQUEST_WITH_CONTEXT => {}
@@ -372,6 +377,6 @@ impl Kernel {
         };
         let (copy, moved) = (add(reply.copy_handles), add(reply.move_handles));
         let bytes = hipc::encode_reply(reply.result, &reply.data, &copy, &moved);
-        cpu.write_mem(TLS, &bytes).map_err(|_| Error::InvalidPointer)
+        cpu.write_mem(if cpu.tls() == 0 { TLS } else { cpu.tls() }, &bytes).map_err(|_| Error::InvalidPointer)
     }
 }

@@ -7,3 +7,6 @@ mod kernel;
 
 pub use run::run_tests;
 pub use gpu_test::run_gpu_tests;
+
+#[cfg(test)]
+mod threads;

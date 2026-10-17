@@ -1,68 +1,124 @@
 # SASS translator
 
-The translator turns SM86 machine code into one SPIR-V module per program. It decodes each 128-bit instruction with a table generated from NVIDIA's own instruction description, keeps the guest register file in shader memory, and runs the program as a loop over a program counter.
+The Switch 2's GPU runs NVIDIA machine code called SASS, which an Intel or AMD card cannot run. The translator rewrites each SASS program into SPIR-V, the shader format every Vulkan driver accepts. For example, `FADD R0, R1, R2` becomes "load the source registers from an array, add them as floats, store the sum".
 
-## Decoder
+## How are instructions decoded?
 
-`scripts/decoder_generator.rs` reads `scripts/sm_86_instructions.txt`, the instruction table nvdisasm carries (extracted the DocumentSASS way), and writes `sm86_decoder_generated.rs`: one branch per encoding class, keyed on bit 91 and bits 11:0, calling a handler per opcode family. Alternate-syntax classes are skipped so a pseudo-op never shadows the real instruction. An unknown word panics.
+A generator reads the instruction table NVIDIA's disassembler, nvdisasm, carries, and writes the decoder as Rust code. Each row of that table, an encoding class, becomes one branch of the decoder. Each branch calls a handler, the function that emits SPIR-V for one instruction family.
 
-Why the SM86 table for the Switch 2's T239: CUDA 13.1's nvdisasm ships byte-identical tables for SM86, SM87 and SM88, and SM88 is the T239's GA10F. No class, field or key differs. See [ADR-0007](../adr/0007-t239-decodes-with-the-sm86-table.md).
+| Decoder fact | Value |
+|---|---|
+| Instruction word | 128 bits, scheduling bits included |
+| Decoder key | Bit 91 plus bits 11:0 |
+| Generator | `scripts/decoder_generator.rs` reads `scripts/sm_86_instructions.txt` |
+| Output | `sm86_decoder_generated.rs` |
+| Alternate-syntax classes | Skipped, so a shorthand never hides the real instruction |
+| Unknown word | Panics |
 
-## State model
+Why the SM86 table works for the Switch 2: NVIDIA's disassembler ships byte-identical tables for the desktop chip and the Switch 2 chip. See [ADR-0007](../adr/0007-t239-decodes-with-the-sm86-table.md).
 
-| guest state | SPIR-V home | note |
+## Where does the guest's state live?
+
+SPIR-V has no direct way to name a GPU's hardware registers. So each guest register becomes an entry in an array the shader owns. "Private" below means one copy per thread, and "Workgroup" means one copy shared by a group of threads.
+
+| Guest state | Home in SPIR-V | Note |
 |---|---|---|
-| R0 to R253, RZ | Private u32 array per invocation | RZ reads zero |
-| P0 to P6, PT | one Private word of bits | PT is constant true |
-| UR0 to UR62, UP | same array, after the predicates | uniform datapath |
-| live | last word of the array | dead lanes start past the end |
-| pc, return pcs, BSSY tokens B0 to B15 | Private variables | |
-| local memory | Private array | 4 KiB per lane |
-| shared memory | Workgroup array | 1 KiB per workgroup |
-| warp exchange, schedule slots | Workgroup arrays | collectives and divergence |
+| Registers R0 to R253, RZ | Private array of 32-bit words | RZ always reads zero |
+| Predicates P0 to P6, PT | One Private word of bits | One-bit "run this?" flags; PT is always true |
+| Uniform registers UR0 to UR62, UP | The same array, after the predicates | Values shared by a whole warp |
+| Live flag | Last word of the array | Finished threads start past the end |
+| pc, return addresses, BSSY tokens B0 to B15 | Private variables | The program position and the rejoin markers |
+| Local memory | Private array | 4 KiB per thread |
+| Shared memory | Workgroup array | 1 KiB per workgroup |
+| Warp exchange, schedule slots | Workgroup arrays | Where threads swap values and vote |
 
-## Control flow
+## How do jumps work without goto?
 
 ```mermaid
 flowchart TB
-    start["pc = 0"] --> loop{"pc < program length?"}
-    loop -->|"no"| done["return"]
-    loop -->|"yes"| sw["switch on pc<br/>one case per basic block"]
-    sw --> blk["block: guarded instructions,<br/>a branch stores the next pc"]
+    start["pc = 0<br/>Start of the program"] --> loop{"Is the pc still inside the program?"}
+    loop -->|"No"| done["Return"]
+    loop -->|"Yes"| sw["Jump table on pc<br/>One entry per straight run of code"]
+    sw --> blk["Run that piece of code;<br/>A branch just sets the next pc"]
     blk --> loop
 ```
 
-Vulkan only takes structured control flow, so guest branches store a pc and one loop around a switch dispatches on it. Basic blocks start at 0, at branch targets, after branches and EXIT, at BSYNC and after BAR. A program with BRX, JMX or CALL through a register makes every pc a leader. EXIT stores a pc past the end. A predicated instruction `@Pg` is wrapped in a selection on its predicate; uniform ops guard on UP.
+*Guest jumps become one loop around a jump table.*
 
-## Divergence
+Vulkan only accepts structured control flow: nested loops and ifs, never a free jump. So a guest branch only stores the next program position, the pc. One loop around a switch then runs the piece of code at that pc.
 
-A warp is 32 consecutive invocations. Programs without collectives keep a free per-lane loop. Programs with VOTE, SHFL, MATCH, REDUX, BAR, tensor ops, LDSM, MOVM or R2UR.OR run workgroup-uniform: each step every invocation votes, the lowest runnable pc runs, lanes at other pcs sit the step out with their effects masked. Collectives trade values through a Workgroup array between two barriers. BSSY stores a token per lane; BSYNC blocks while a warp peer holds the same token elsewhere. BAR arrivals are counted per barrier id and released when complete. A stuck program reports live = 2 and the harness panics.
+Those pieces are basic blocks, runs of code with no jump in or out except at the ends. A block starts at the program start, at every jump target, after every branch and EXIT, at BSYNC and after BAR. A jump to an address held in a register (BRX, JMX, CALL) could land anywhere, so then every instruction starts a block. EXIT sets the pc past the end.
 
-Why: workgroup barriers must be reached by every invocation, and lavapipe's subgroups are 8 wide, so native subgroups cannot carry a 32-lane warp everywhere. See [ADR-0003](../adr/0003-uniform-workgroup-scheduling-for-divergence.md).
+An instruction with a predicate, such as `@P0 FADD`, is wrapped in an if on that predicate. Uniform instructions check their uniform predicate instead.
 
-## Set-0 binding ABI and stages
+## What happens when threads of a warp disagree?
 
-| binding | kind | holds |
+A warp is the team of threads the chip runs in lockstep. When teammates take different branches, that is divergence. Most programs never need teammates to meet, so each thread runs its own loop freely.
+
+Some instructions make teammates swap values or wait for each other: VOTE, SHFL, MATCH, REDUX, BAR, the tensor instructions, LDSM, MOVM and R2UR.OR. Programs with any of them run in turns. Each turn, the threads vote, the lowest waiting pc runs, and threads at other pcs skip the turn with their memory writes masked.
+
+- Swapped values travel through a shared array, with a barrier before and after.
+- BSSY gives each thread a token for where it should rejoin; BSYNC waits while a teammate holding the same token is still elsewhere.
+- BAR counts arrivals per barrier and releases the threads once all have arrived.
+- A program that can never make progress marks itself stuck, and the test harness panics.
+
+Why turns: every thread of a group must reach a Vulkan barrier together. And on lavapipe, Vulkan's own subgroups are narrower than a warp, so they cannot stand in for one. See [ADR-0003](../adr/0003-uniform-workgroup-scheduling-for-divergence.md).
+
+## Which slots does a shader read its data from?
+
+A Vulkan shader cannot follow pointers to its data. It reads from numbered slots, called bindings, and the host plugs a buffer or image into each slot before the run. All slots sit in one group, descriptor set 0.
+
+| Binding | Kind | Holds |
 |---|---|---|
-| 0 | uniform buffer | host support data, never a guest cbuf |
-| 1 to 8 | uniform buffers | guest cbuf slots 0 to 7, std140 uvec4 arrays |
-| 9 | storage buffer | the global memory window |
-| 10, 11 | storage buffers | register in and out, tests only |
-| 12 on | image samplers, storage images | textures and surfaces, dense in first-use order |
+| 0 | Uniform buffer, small and read-only | oboromi's own helper values, never game data |
+| 1 to 32 | Uniform buffers | The game's constant buffers 0 to 31, stored as `uvec4` arrays |
+| 33 | Storage buffer, large and read-write | The window onto guest memory |
+| 34, 35 | Storage buffers | Register values in and out, tests only |
+| 36 and up | Texture and image slots | Textures and writable images, in the order the shader first uses them |
 
-Stages: `Stage::Compute { local_size }`, `Vertex`, `Fragment { flat, screen_linear, depth }`. ALD and AST are vertex-only, IPA fragment-only. Attribute space: position at 0x70, generic n at 0x80 + 16n, instance id 0x2f8, vertex id 0x2fc, front facing 0x3fc. Interpolation comes from the pixel SPH, not from IPA.
+A constant buffer, or cbuf, is a small read-only table the game hands the shader, such as the camera matrix. Vulkan's std140 layout rule pads every uniform array element to a fixed width. A `uvec4` fills that width exactly, so nothing is wasted.
 
-## Coverage
-
-| measure | count |
+| Layout fact | Value |
 |---|---|
-| encoding classes decoded | 999 |
-| handler functions | 176 |
-| handlers left as named todos | 19 |
-| named sub-form todos inside implemented handlers | 13 |
+| std140 array element | Padded to 16 bytes |
+| `uvec4` | Four 32-bit words, 16 bytes | See [ADR-0001](../adr/0001-set-0-binding-abi.md).
 
-By design todo: graphics-only transport (ISBERD, ISBEWR, LDTRAM, OUT, PIXLD), ray tracing (six TTU ops), sparse tensor (GATHER, SCATTER, GENMETADATA, SPMETADATA, BITEXTRACT), FOOTPRINT, SUQUERY, UCLEA, float atomics, ATOM ARRIVE, CAST and SAFEADD, BAR.SCAN, implicit-LOD TEX in compute. Each panics with its reason.
+## Which kinds of shader are supported?
 
-Verified by: spirv-val on every emitted module, the nvdisasm check of every hand-built word, and the silicon scoreboards (see [verification](verification.md)).
+| Stage | Translator form | Stage-only instructions |
+|---|---|---|
+| Compute | `Stage::Compute { local_size }` | None |
+| Vertex | `Stage::Vertex` | ALD and AST, attribute load and store |
+| Fragment | `Stage::Fragment { flat, screen_linear, depth }` | IPA, attribute interpolation |
 
-Sources: scripts/decoder_generator.rs, core/src/gpu/sm86_decoder_generated.rs, core/src/gpu/sm86/{mod,access,memory,control,warp}.rs, design notes on divergence and the SM88 table diff, PR #80 body.
+How smoothly a value blends across a triangle comes from the pixel shader's header, the SPH, not from IPA. Attributes are named by address:
+
+| Attribute | Address |
+|---|---|
+| Position | 0x70 |
+| Generic attribute n | 0x80 + 16n |
+| Instance id | 0x2f8 |
+| Vertex id | 0x2fc |
+| Front facing | 0x3fc |
+
+## How much is covered?
+
+| Measure | Count |
+|---|---|
+| Encoding classes decoded | 999 |
+| Handler functions | 176 |
+| Handlers left as named todos | 19 |
+| Named sub-form todos inside implemented handlers | 13 |
+
+Left out on purpose until something needs them, each with a named panic:
+
+| Group | Instructions |
+|---|---|
+| Graphics-only data transport | ISBERD, ISBEWR, LDTRAM, OUT, PIXLD |
+| Ray tracing | The six TTU instructions |
+| Sparse tensor | GATHER, SCATTER, GENMETADATA, SPMETADATA, BITEXTRACT |
+| Other | FOOTPRINT, SUQUERY, UCLEA, float atomics, ATOM ARRIVE, CAST and SAFEADD, BAR.SCAN, texture reads with implicit level of detail in compute |
+
+Verified by: spirv-val, the Khronos SPIR-V checker, on every emitted module; nvdisasm on every hand-built instruction word; and the silicon scoreboards (see [verification](verification.md)).
+
+Sources: scripts/decoder_generator.rs, core/src/gpu/sm86_decoder_generated.rs, core/src/gpu/sm86/{mod,access,memory,control,warp}.rs, PR #80 body.

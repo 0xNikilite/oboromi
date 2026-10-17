@@ -106,9 +106,10 @@ mod tests {
             depth_write: false,
             depth_func: vk::CompareOp::ALWAYS,
             blend_const: [0.0; 4],
+            blend,
         };
         let draw = DrawState {
-            vertex_buffers: &[&buffer],
+            vertex_buffers: &[(&buffer, layout.bindings[0].stride)],
             index_buffer: None,
             vertex_count: count,
             first_vertex: 0,

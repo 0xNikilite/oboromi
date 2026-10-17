@@ -48,6 +48,12 @@ pub mod inst {
     const ALD: u128 = 0x321 | 0xff << 24 | 0xff << 32;
     const AST: u128 = 0x322 | 0xff << 24 | RC_RZ | NO_WRITE_SCOREBOARD;
     const IPA: u128 = 0x326 | 0xff << 32 | 7 << 81;
+    const OUT: u128 = 0x324 | 0xff << 32;
+    const ISBERD: u128 = 0x923;
+    pub const ATTR_PATCH: u128 = 1 << 76;
+    pub const ATTR_OUTPUT: u128 = 1 << 79;
+    pub const OUT_EMIT: u128 = 1 << 78;
+    pub const OUT_CUT: u128 = 2 << 78;
     pub const IPA_CONSTANT: u128 = 1 << 78;
     pub const FSETP_GT: u128 = 0x20b | 4 << 76 | 7 << 84 | PP_PT;
     pub const FP_ABS_B: u128 = 1 << 62;
@@ -520,6 +526,18 @@ pub mod inst {
 
     pub fn ast(attr: u32, rb: u32, words: u32) -> u128 {
         AST | PT_GUARD | (rb as u128) << 32 | (attr as u128) << 40 | (words as u128 - 1) << 74
+    }
+
+    pub fn ald_vertex(rd: u32, attr: u32, words: u32, vertex: u32) -> u128 {
+        ald(rd, attr, words) & !(0xff << 32) | (vertex as u128) << 32
+    }
+
+    pub fn out(rd: u32, handle: u32, kind: u128) -> u128 {
+        OUT | PT_GUARD | kind | (rd as u128) << 16 | (handle as u128) << 24
+    }
+
+    pub fn isberd(rd: u32, ra: u32, offset: u32) -> u128 {
+        ISBERD | PT_GUARD | (rd as u128) << 16 | (ra as u128) << 24 | (offset as u128) << 40
     }
 
     pub fn ipa(rd: u32, attr: u32, mode: u128) -> u128 {
@@ -1062,6 +1080,13 @@ fn fixtures_match_nvdisasm() {
         (inst::ast(0x70, 0, 4), "AST.128 a[0x70], R0 ;"),
         (inst::ipa(1, 0x84, 0), "IPA.PASS R1, a[0x84] ;"),
         (inst::ipa(3, 0x3fc, inst::IPA_CONSTANT), "IPA.CONSTANT R3, a[0x3fc] ;"),
+        (inst::ald_vertex(4, 0x70, 4, 1), "ALD.128 R4, a[0x70], R1 ;"),
+        (inst::ald_vertex(2, 0x2f0, 2, 0) | inst::ATTR_OUTPUT, "ALD.O.64 R2, a[0x2f0], R0 ;"),
+        (inst::ald(4, 0x0, 4) | inst::ATTR_PATCH, "ALD.P.128 R4, a[0x0] ;"),
+        (inst::ast(0x10, 8, 2) | inst::ATTR_PATCH, "AST.P.64 a[0x10], R8 ;"),
+        (inst::out(2, 2, inst::OUT_EMIT), "OUT.EMIT R2, R2, RZ ;"),
+        (inst::out(2, 2, inst::OUT_CUT), "OUT.CUT R2, R2, RZ ;"),
+        (inst::isberd(1, 0, 0), "ISBERD R1, [R0] ;"),
     ];
     use crate::tests::gpu::fp::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

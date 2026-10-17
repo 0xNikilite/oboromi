@@ -127,7 +127,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential
+          sudo apt-get install -y cmake build-essential libudev-dev
 
       - name: Build Release
         run: cargo build --release

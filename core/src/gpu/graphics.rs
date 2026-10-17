@@ -86,6 +86,14 @@ impl<'a> GraphicsPipeline<'a> {
         vertex_layout: &VertexLayout,
         target: &TargetState,
     ) -> Result<Self, VkError> {
+        Self::with_format(state, vertex_spirv, geometry_spirv, fragment_spirv, bindings, vertex_layout, target, COLOR_FORMAT)
+    }
+
+    pub fn with_format(
+        state: &'a VkState, vertex_spirv: &[u32], geometry_spirv: Option<&[u32]>, fragment_spirv: &[u32],
+        bindings: [&[(u32, vk::DescriptorType)]; 2], vertex_layout: &VertexLayout, target: &TargetState,
+        colour_format: vk::Format,
+    ) -> Result<Self, VkError> {
         use vk::ShaderStageFlags as Stage;
         let d = &state.device;
         let mut p = Self {
@@ -138,7 +146,7 @@ impl<'a> GraphicsPipeline<'a> {
         let dynamic3 = state.extended_dynamic_state3.is_some();
         let dynamic_states = &dynamic_states[..dynamic_states.len() - if dynamic3 { 0 } else { 3 }];
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(dynamic_states);
-        let color_formats = [COLOR_FORMAT];
+        let color_formats = [colour_format];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
             .depth_attachment_format(target.depth.unwrap_or_default());
@@ -163,7 +171,7 @@ impl<'a> GraphicsPipeline<'a> {
                 hash((streams, attributes, vertex_layout.topology)),
                 hash((vertex_spirv, geometry_spirv, bindings)),
                 hash((fragment_spirv, bindings, target.depth)),
-                hash((target.depth, blend, alpha)),
+                hash((target.depth, colour_format, blend, alpha)),
             ];
             state.link(info, &stages, keys)?
         } else {
@@ -251,24 +259,31 @@ pub struct RenderTarget<'a> {
     color: Attachment<'a>,
     depth: Option<Attachment<'a>>,
     pub staging: HostBuffer<'a>,
+    pixel_bytes: u32,
 }
 
 impl<'a> RenderTarget<'a> {
     pub fn new(state: &'a VkState, width: u32, height: u32, depth: Option<vk::Format>, staging: Option<HostBuffer<'a>>) -> Result<Self, VkError> {
+        Self::with_format(state, width, height, depth, staging, COLOR_FORMAT)
+    }
+
+    pub fn with_format(state: &'a VkState, width: u32, height: u32, depth: Option<vk::Format>, staging: Option<HostBuffer<'a>>, format: vk::Format) -> Result<Self, VkError> {
+        let pixel_bytes = if format == vk::Format::R16G16B16A16_SFLOAT { 8 } else { 4 };
         use vk::{ImageAspectFlags as Aspect, ImageUsageFlags as Usage};
         let (d, extent) = (&state.device, vk::Extent2D { width, height });
         Ok(Self {
             state,
             pending_rows: Default::default(),
             extent,
-            color: Attachment::new(d, extent, COLOR_FORMAT, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC | Usage::TRANSFER_DST, Aspect::COLOR)?,
+            color: Attachment::new(d, extent, format, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC | Usage::TRANSFER_DST, Aspect::COLOR)?,
             depth: depth
                 .map(|format| {
                     let stencil = if format == vk::Format::D24_UNORM_S8_UINT { Aspect::STENCIL } else { Aspect::empty() };
                     Attachment::new(d, extent, format, Usage::DEPTH_STENCIL_ATTACHMENT, Aspect::DEPTH | stencil)
                 })
                 .transpose()?,
-            staging: staging.map_or_else(|| HostBuffer::new(state, u64::from(width * height * 4)), Ok)?,
+            staging: staging.map_or_else(|| HostBuffer::new(state, u64::from(width * height * pixel_bytes)), Ok)?,
+            pixel_bytes,
         })
     }
 
@@ -290,15 +305,15 @@ impl<'a> RenderTarget<'a> {
     pub fn readback(&self) -> Result<(), VkError> {
         let Some((start, end)) = self.pending_rows.get() else { return Ok(()) };
         let copy = [vk::BufferImageCopy::default()
-            .buffer_offset(u64::from(start * self.extent.width * 4))
+            .buffer_offset(u64::from(start * self.extent.width * self.pixel_bytes))
             .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
             .image_offset(vk::Offset3D { y: start as i32, ..Default::default() })
             .image_extent(vk::Extent3D { width: self.extent.width, height: end - start, depth: 1 })];
-        let barrier = vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::TRANSFER_WRITE).dst_access_mask(vk::AccessFlags::HOST_READ);
+        let barrier = vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::TRANSFER_WRITE).dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::SHADER_READ);
         self.state.submit_and_wait(|cmd| unsafe {
             let d = &self.state.device;
             d.cmd_copy_image_to_buffer(cmd, self.color.image, vk::ImageLayout::TRANSFER_SRC_OPTIMAL, self.staging.buffer, &copy);
-            d.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::HOST, Default::default(), &[barrier], &[], &[]);
+            d.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER, Default::default(), &[barrier], &[], &[]);
         })?;
         self.pending_rows.set(None);
         Ok(())
@@ -312,6 +327,10 @@ impl<'a> RenderTarget<'a> {
 
 impl VkState {
     pub fn draw(&self, pipeline: &GraphicsPipeline, target: &RenderTarget, draw: &DrawState) -> Result<(), VkError> {
+        self.draw_profiled(pipeline, target, draw, None)
+    }
+
+    pub fn draw_profiled(&self, pipeline: &GraphicsPipeline, target: &RenderTarget, draw: &DrawState, timestamp: Option<vk::QueryPool>) -> Result<(), VkError> {
         use vk::{AccessFlags as Access, ImageLayout as Layout, PipelineStageFlags as Stage};
         let d = &self.device;
         let graphics = vk::PipelineBindPoint::GRAPHICS;
@@ -370,6 +389,10 @@ impl VkState {
         let none = vk::DependencyFlags::empty();
         let r = &draw.raster;
         self.submit_and_wait(|cmd| unsafe {
+            if let Some(pool)=timestamp {
+                d.cmd_reset_query_pool(cmd,pool,0,2);
+                d.cmd_write_timestamp(cmd,Stage::TOP_OF_PIPE,pool,0);
+            }
             if draw.load {
                 d.cmd_pipeline_barrier(cmd, Stage::TOP_OF_PIPE, Stage::TRANSFER, none, &[], &[], &[to_upload]);
                 d.cmd_copy_buffer_to_image(cmd, target.staging.buffer, target.color.image, Layout::TRANSFER_DST_OPTIMAL, &copy);
@@ -419,6 +442,7 @@ impl VkState {
                 None => d.cmd_draw(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, draw.first_instance),
             }
             d.cmd_end_rendering(cmd);
+            if let Some(pool)=timestamp {d.cmd_write_timestamp(cmd,Stage::BOTTOM_OF_PIPE,pool,1);}
             d.cmd_pipeline_barrier(cmd, Stage::COLOR_ATTACHMENT_OUTPUT, Stage::TRANSFER, none, &[], &[], &[to_transfer]);
         })?;
         if !rows.is_empty() {

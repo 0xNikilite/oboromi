@@ -229,6 +229,10 @@ bool oboromi_render_helmet_demo(float seconds);
 /// is missing or a draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_post_frame(float seconds);
 
+/// draws the sprites demo at `seconds` and presents it, false if vulkan is
+/// missing or the draw fails. blocks, so call it from a worker thread.
+bool oboromi_render_sprites_frame(float seconds);
+
 /// draws a frame of the particles demo at `seconds` and presents it, false if
 /// vulkan is missing or the frame fails. blocks, so call it from a worker thread.
 bool oboromi_render_particles_frame(float seconds);

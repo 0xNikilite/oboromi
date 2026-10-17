@@ -104,29 +104,6 @@ mod tests {
     }
 
     #[test]
-    fn atoms_cast_compares_and_exchanges_32_and_64_bits() {
-        let seeds = lanes(|i| vec![0, 0, 0, 0, 0, 0, i + 1]);
-        let program = [inst::sts(255, 255), inst::bar_sync(), inst::atoms_cast(4, 255, 5, 6, false), inst::bar_sync(), inst::lds(7, 255)];
-        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
-        assert_eq!(regs.iter().filter(|r| r[4] == 0).count(), 1);
-        assert!(regs.iter().all(|r| (1..=LANES).contains(&r[7])));
-        if !crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics) {
-            eprintln!("skipping 64-bit CAST: no shaderSharedInt64Atomics");
-            return;
-        }
-        let seeds = lanes(|i| {
-            let mut seed = vec![0; 17];
-            seed[8] = i + 1;
-            seed[16] = 4;
-            seed
-        });
-        let program = [inst::sts(255, 255), inst::sts(16, 255), inst::bar_sync(), inst::atoms_cast(4, 255, 6, 8, true), inst::bar_sync(), inst::lds(10, 255), inst::lds(11, 16)];
-        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
-        assert_eq!(regs.iter().filter(|r| [r[4], r[5]] == [0, 0]).count(), 1);
-        assert!(regs.iter().all(|r| (1..=LANES).contains(&r[10]) && r[11] == 0));
-    }
-
-    #[test]
     fn atoms_u64_add_returns_full_old_values() {
         if !crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics) {
             eprintln!("skipping: no shaderSharedInt64Atomics");

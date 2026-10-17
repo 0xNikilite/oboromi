@@ -2,13 +2,15 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use ash::vk;
 use crate::gpu::VkState;
 use crate::gpu::spirv::{self, storage_class};
 
 mod access;
 mod atomics;
+mod cfg;
+pub use cfg::{plan, Translation};
 mod compare;
 mod control;
 mod convert;
@@ -18,6 +20,7 @@ mod memory;
 mod operands;
 mod shared;
 mod special;
+mod structured;
 mod tensor;
 pub use tensor::{cooperative_tile, f16_hmma_shape};
 mod texture;
@@ -137,6 +140,7 @@ pub struct Decoder<'a> {
     mma_vars: [u32; 9],
     device: Option<&'a VkState>,
     pub force_cooperative_hmma: Option<bool>,
+    tensor: TensorMode,
     cooperative_types: HashMap<[u32; 4], u32>,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
@@ -148,11 +152,37 @@ pub struct Decoder<'a> {
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
     timing: Timing,
+    translation: Translation,
+    entry: usize,
+    type_ptr_local: u32,
+    locals: Option<Locals>,
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct Hints {
     pub timing: bool,
+    pub translation: Translation,
+    pub tensor: TensorMode,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum TensorMode {
+    Exact,
+    Fast,
+}
+
+impl Default for TensorMode {
+    fn default() -> Self {
+        if crate::gpu::SPEED_HACKS.lock().unwrap().fast_tensor { Self::Fast } else { Self::Exact }
+    }
+}
+
+// Function variables standing in for the state slots a structured program touches, declared at the function's
+// `entry` and seeded from the aggregate at `start`.
+struct Locals {
+    vars: BTreeMap<u32, u32>,
+    entry: usize,
+    start: usize,
 }
 
 enum Timing {
@@ -168,6 +198,17 @@ fn opcode(inst: u128) -> u32 {
 // In instructions: bits 81:34 hold a signed byte offset divided by four.
 fn branch_offset(inst: u128) -> i64 {
     ((inst >> 34) as i64) << 16 >> 18
+}
+
+fn dynamic_target(inst: u128) -> bool {
+    matches!(opcode(inst), CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950)
+}
+
+// Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
+fn guard_pred(inst: u128) -> Option<cfg::Pred> {
+    let (index, not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
+    let op = opcode(inst) & 0x1ff;
+    (index != PT).then(|| cfg::Pred { uniform: matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU, index, not })
 }
 
 fn branch_target(pc: u32, inst: u128) -> Option<u32> {
@@ -229,6 +270,7 @@ pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], hints: Hints,
     let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
     let func = decoder.ir.emit_function(void_ty, 0, func_ty);
     decoder.ir.emit_label();
+    decoder.entry = decoder.ir.function_len();
     decoder.invocations = local_size.iter().product();
     body(&mut decoder);
     decoder.emit_entry_point(func, device, local_size);
@@ -277,6 +319,7 @@ impl<'a> Decoder<'a> {
             mma_vars: [0; 9],
             device,
             force_cooperative_hmma: None,
+            tensor: hints.tensor,
             cooperative_types: HashMap::new(),
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
@@ -286,6 +329,10 @@ impl<'a> Decoder<'a> {
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
+            translation: hints.translation,
+            entry: 0,
+            type_ptr_local: 0,
+            locals: None,
             timing: if !hints.timing { Timing::Off } else if let Some(device) = device.filter(|d| d.shader_device_clock) {
                 Timing::Clock { period: device.timestamp_period, emitted: false }
             } else {
@@ -363,6 +410,7 @@ impl<'a> Decoder<'a> {
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
             self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(storage_class::PRIVATE, type_regs_array);
         }
+        self.type_ptr_local = self.ir.emit_type_pointer(storage_class::FUNCTION, self.type_u32[1]);
 
         // Define generic pointers
         for i in 1..=4 {
@@ -507,9 +555,15 @@ impl<'a> Decoder<'a> {
     // Warp collectives and BAR meet at workgroup barriers, so a program with them steps every invocation through the same
     // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
+        if self.translation != Translation::ForceDispatcher {
+            match plan(words) {
+                Ok(plan) => return self.translate_structured(words, &plan),
+                Err(reason) => assert!(self.translation == Translation::Auto, "no structured translation: {reason}"),
+            }
+        }
         let len = words.len() as u32;
         // BRX, JMX and CALL Ra only know their target at run time, so such a program dispatches on every pc; RET lands after a CALL.
-        let indirect = words.iter().any(|inst| matches!(opcode(*inst), CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));
+        let indirect = words.iter().any(|&inst| dynamic_target(inst));
         let mut leaders: Vec<u32> = if indirect { (0..=len).collect() } else { vec![0, len] };
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));
@@ -623,15 +677,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn guard(&mut self, inst: u128) -> Option<u32> {
-        let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
-        if pg == PT {
-            return None;
-        }
-        // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
-        let op = opcode(inst) & 0x1ff;
-        let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
-        let bit = self.pred_bit(uniform, pg, pg_not);
-        Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
+        guard_pred(inst).map(|pred| self.holds(&[pred]))
     }
 
     fn resource(&self, kind: ResourceKind) -> Option<u32> {
@@ -644,6 +690,34 @@ impl<'a> Decoder<'a> {
     }
 
     fn state_slot(&mut self, slot: u32) -> u32 {
+        match self.locals {
+            Some(_) if slot < STATE_WORDS as u32 - 1 => self.local(slot),
+            _ => self.aggregate_slot(slot),
+        }
+    }
+
+    fn local(&mut self, slot: u32) -> u32 {
+        let locals = self.locals.as_ref().unwrap();
+        if let Some(&var) = locals.vars.get(&slot) {
+            return var;
+        }
+        // SPIR-V 2.4: a function's OpVariables are the first instructions of its first block.
+        let (entry, len) = (locals.entry, self.ir.function_len());
+        let var = self.ir.emit_variable(self.type_ptr_local, storage_class::FUNCTION);
+        self.ir.move_tail(len, entry);
+        let start = self.locals.as_ref().unwrap().start + self.ir.function_len() - len;
+        let len = self.ir.function_len();
+        let ptr = self.aggregate_slot(slot);
+        let value = self.ir.emit_load(self.type_u32[1], ptr);
+        self.ir.emit_store(var, value);
+        self.ir.move_tail(len, start);
+        let locals = self.locals.as_mut().unwrap();
+        locals.start = start;
+        locals.vars.insert(slot, var);
+        var
+    }
+
+    fn aggregate_slot(&mut self, slot: u32) -> u32 {
         let (regs, uregs) = (MAX_REG_COUNT as u32, MAX_UNIFORM_REG_COUNT as u32);
         match slot {
             s if s < regs => self.state_ptr(&[0, s]),
@@ -654,29 +728,35 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    fn load_slot(&mut self, slot: u32) -> u32 {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_slot(&mut self, slot: u32, val: u32) {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_store(ptr, val);
+    }
+
     fn load_ureg(&mut self, ur: u32) -> u32 {
         if ur == URZ {
             return self.const_u32_0;
         }
-        let ptr = self.state_ptr(&[2, ur]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32 + 1 + ur)
     }
 
     fn store_ureg(&mut self, ur: u32, val: u32) {
         if ur != URZ {
-            let ptr = self.state_ptr(&[2, ur]);
-            self.ir.emit_store(ptr, val);
+            self.store_slot(MAX_REG_COUNT as u32 + 1 + ur, val);
         }
     }
 
     fn load_upredicate(&mut self) -> u32 {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(STATE_WORDS as u32 - 2)
     }
 
     fn store_upredicate(&mut self, val: u32) {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_store(ptr, val);
+        self.store_slot(STATE_WORDS as u32 - 2, val);
     }
 
     fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
@@ -702,29 +782,21 @@ impl<'a> Decoder<'a> {
             return self.const_u32_0;
         }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_load(self.type_u32[1], reg_ptr)
+        self.load_slot(reg)
     }
 
     fn store_register(&mut self, reg: u32, val: u32) {
         if reg == RZ { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_store(reg_ptr, val);
+        self.store_slot(reg, val);
     }
 
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32)
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_store(ptr, val)
+        self.store_slot(MAX_REG_COUNT as u32, val)
     }
 
     pub fn finish(&mut self) {

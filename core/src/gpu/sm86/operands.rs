@@ -213,6 +213,7 @@ impl<'a> Decoder<'a> {
         for i in 0..2 {
             let offset = self.cached_const_u32(16 * i as u32);
             if rtz {
+                self.ir.emit_decorate(halves[i], spirv::decoration::NO_CONTRACTION, &[]);
                 let back = self.ir.emit_f_convert(self.type_f32[1], halves[i]);
                 let source = self.fp_src(self.type_f32[1], lanes[i], true, false);
                 let back = self.fp_src(self.type_f32[1], back, true, false);
@@ -232,6 +233,8 @@ impl<'a> Decoder<'a> {
     pub(super) fn pack_f16_round(&mut self, val: u32, src_f64: bool, rnd: u32, ftz: bool) -> u32 {
         let half = self.type_f16();
         let nearest = self.ir.emit_f_convert(half, val);
+        // Without it ANV and the NVIDIA driver fold the f16 round trip below back to the source, so directed rounding never fires.
+        self.ir.emit_decorate(nearest, spirv::decoration::NO_CONTRACTION, &[]);
         let zero_half = self.ir.emit_constant_typed(half, 0.0f32);
         let half2_ty = self.type_f16x2();
         let half2 = self.ir.emit_composite_construct(half2_ty, &[nearest, zero_half]);
@@ -260,9 +263,12 @@ impl<'a> Decoder<'a> {
             if let Some(cond) = use_up { bits = self.ir.emit_select(self.type_u32[1], cond, up, bits); }
             if let Some(cond) = use_down { bits = self.ir.emit_select(self.type_u32[1], cond, down, bits); }
         }
-        let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
-        let canonical = self.cached_const_u32(0x7fff);
-        bits = self.ir.emit_select(self.type_u32[1], nan, canonical, bits);
+        // Session 6: F2F to and from f64 quiets a NaN and keeps its sign and payload, only f32 sources canonicalise.
+        if !src_f64 {
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+            let canonical = self.cached_const_u32(0x7fff);
+            bits = self.ir.emit_select(self.type_u32[1], nan, canonical, bits);
+        }
         if ftz {
             let [exponent, sign] = [0x7c00, 0x8000].map(|c| self.cached_const_u32(c));
             let exp = self.ir.emit_bitwise_and(self.type_u32[1], bits, exponent);

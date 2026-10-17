@@ -53,11 +53,23 @@ pub struct VkState {
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
 
+/// Accuracy traded for speed in every translation from the next one on.
+#[derive(Clone, Copy, Default)]
+pub struct SpeedHacks {
+    pub fast_tensor: bool,
+}
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false });
+
 /// `device`, but created with every window surface extension the loader has if this is the first call.
 pub fn surface_device() -> Result<&'static VkState, VkError> {
     SURFACES.store(true, Relaxed);
     device()
 }
+
+// The Vulkan loader unlinks a destroyed device under a different lock than vkGetDeviceProcAddr walks the device list
+// with, so creating a device while another thread destroys one reads freed memory.
+static DEVICE_LIFETIMES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn device() -> Result<&'static VkState, VkError> {
     static DEVICE: std::sync::OnceLock<VkState> = std::sync::OnceLock::new();
@@ -75,6 +87,7 @@ impl VkState {
     }
 
     pub fn new() -> Result<Self, VkError> {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
         let extensions = if SURFACES.load(Relaxed) {
@@ -279,6 +292,7 @@ impl VkState {
 
 impl Drop for VkState {
     fn drop(&mut self) {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let _ = self.device.device_wait_idle();
             let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());

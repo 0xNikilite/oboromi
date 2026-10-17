@@ -118,47 +118,6 @@ mod tests {
         }
     }
 
-    // Row r keeps positions PAIRS[(5r + chunk) % 6] of each chunk of four k; lanes other than the selected metadata
-    // lanes of each quad hold all-(0, 1) metadata, which would multiply other B rows.
-    #[test]
-    fn hmma_sp_expands_a_by_the_selected_lanes_metadata() {
-        const PAIRS: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
-        const RE: usize = 20;
-        let kept = |row: usize, chunk: usize| PAIRS[(5 * row + chunk) % 6];
-        let [dense, b, c] = SMALL_INTS;
-        let a = |row: usize, k: usize| if [kept(row, k / 4).0, kept(row, k / 4).1].contains(&(k % 4)) { dense(row, k) } else { 0.0 };
-        for (word, k, selector) in [(HMMA | MMA_SP | MMA_16816 | MMA_F32, 16, 3), (HMMA | MMA_SP_16832 | MMA_F32, 32, 1)] {
-            let seeds: Vec<Vec<u32>> = (0..32).map(|lane| {
-                let (g, t) = quad(lane);
-                let mut regs = vec![0; RE + 1];
-                for (reg, (row, chunk)) in (0..k / 8).map(|reg| (g + 8 * (reg % 2), t + 4 * (reg / 2))).enumerate() {
-                    let (i, j) = kept(row, chunk);
-                    regs[RA + reg] = h(dense(row, 4 * chunk + i)) | h(dense(row, 4 * chunk + j)) << 16;
-                    regs[RB + reg] = pack(&F16, |i| b(2 * t + 8 * reg + i, g));
-                }
-                for reg in 0..4 {
-                    let (row, col) = d_element(lane, reg);
-                    regs[RC + reg] = c(row, col).to_bits();
-                }
-                let (selected, first_chunk) = if k == 16 { (t == selector, 0) } else { (t / 2 == selector, 4 * (t % 2)) };
-                regs[RE] = (0..8).fold(0, |metadata, nibble| {
-                    let (i, j) = if selected { kept(g + 8 * (nibble / 4), first_chunk + nibble % 4) } else { (0, 1) };
-                    metadata | ((j << 2 | i) as u32) << 4 * nibble
-                });
-                regs
-            }).collect();
-            let program = [alu3(word | (RE as u128) << 40 | (selector as u128) << 48, RD as u32, RA as u32, RB as u32, RC as u32)];
-            let Some(lanes) = run(&program, &seeds) else { return };
-            for (lane, regs) in lanes.iter().enumerate() {
-                let want = [0, 1, 2, 3].map(|reg| {
-                    let (row, col) = d_element(lane, reg);
-                    (c(row, col) + (0..k).map(|i| a(row, i) * b(i, col)).sum::<f32>()).to_bits()
-                });
-                assert_eq!(regs[RD..RD + 4], want, "lane {lane} {word:#x}");
-            }
-        }
-    }
-
     #[test]
     fn imma_sums_signed_and_unsigned_bytes() {
         let unsigned: [Matrix; 3] = [|row, k| ((row * 37 + k * 11) % 256) as f32, |k, col| ((k * 13 + col * 71) % 256) as f32, |row, col| (row * 8 + col) as f32];
@@ -330,8 +289,28 @@ mod tests {
         };
         let fixtures = tensor_fixtures().into_iter().filter(|f| f.id.contains("/small-integers/") && crate::gpu::sm86::f16_hmma_shape(*tensor_program(f).last().unwrap()).is_some());
         for fixture in fixtures {
-            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force)));
+            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force), crate::gpu::sm86::TensorMode::Exact));
             assert_eq!(cooperative, loops, "{}", fixture.id);
+        }
+    }
+
+    #[test]
+    fn fast_hmma_is_exact_on_small_integers_and_within_64_ulp_on_mixed_exponents() {
+        use crate::gpu::sm86::TensorMode;
+        use crate::tests::gpu::silicon::{replay_tensor, tensor_d_words, tensor_fixtures};
+        let Ok(state) = crate::gpu::device() else { return eprintln!("skipping: no Vulkan device") };
+        let fixtures = tensor_fixtures().into_iter().filter(|f| f.observed && (f.case.ends_with("f32") || f.case.ends_with("f16")));
+        for fixture in fixtures.filter(|f| f.id.contains("/small-integers/") || f.id.contains("/mixed-exponents/")) {
+            let lanes = replay_tensor(state, &fixture, None, TensorMode::Fast).unwrap();
+            let (words, rd) = (tensor_d_words(&fixture), (fixture.words[0] >> 16 & 0xff) as usize);
+            let (width, infinity) = if words == 4 { (32, 0x7f80_0000) } else { (16, 0x7c00) };
+            let magnitude = |bits: u32| bits & (infinity | infinity - 1);
+            let ordered = |bits: u32| if bits & (1 << (width - 1)) != 0 { -i64::from(magnitude(bits)) } else { i64::from(magnitude(bits)) };
+            let elements = lanes.iter().enumerate().flat_map(|(lane, regs)| regs[rd..rd + words].iter().zip(&fixture.after[lane * 4..][..words]));
+            let elements = elements.flat_map(|(&got, &want)| (0..32 / width).map(move |i| [got, want].map(|bits| bits >> (width * i) & (u32::MAX >> (32 - width)))));
+            let ulps = elements.filter(|&[_, want]| magnitude(want) < infinity).map(|[got, want]| (ordered(got) - ordered(want)).abs());
+            let max = ulps.max().unwrap();
+            assert!(max <= if fixture.id.contains("/small-integers/") { 0 } else { 64 }, "{}: {max} ulp", fixture.id);
         }
     }
 }

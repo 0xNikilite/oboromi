@@ -2,7 +2,7 @@
 //! microbenchmarks against GLSL twins: `cargo run --release -p oboromi-core [--features cuda] --example perf`.
 use ash::vk::DescriptorType;
 use oboromi_core::display::{attach_surface, present, present_buffer};
-use oboromi_core::ffi::oboromi_frame_read;
+use oboromi_core::ffi::{oboromi_frame_read, oboromi_set_tensor_mode};
 use oboromi_core::gpu::VkState;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::cubin::{Arg, Kernel};
@@ -137,6 +137,19 @@ fn main() {
     println!("device: {:?}", props.device_name_as_c_str().unwrap());
     let exact = exact_cooperative_hmma(state);
     println!("hmma: cooperative matrices for (k, f32 accumulator) {exact:?} of f16 tiles {:?}, loops otherwise", state.cooperative_f16_tiles);
+    let (block, groups, chain) = ([128, 1, 1], [32, 1, 1], 16);
+    let sources = [8, 9, 12, 13].map(|reg| inst::s2r(reg, 33));
+    let hmmas = vec![inst::alu3(inst::HMMA | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 4); chain];
+    let store = [inst::mov_imm(2, GLOBAL_BASE as u32), inst::mov_imm(3, (GLOBAL_BASE >> 32) as u32), inst::stg(2, 0, 4), inst::stg(2, 4, 5), inst::stg(2, 8, 6), inst::stg(2, 12, 7), inst::exit()];
+    let hmma_program = [&sources[..], &hmmas, &store].concat();
+    let ops = f64::from(groups[0] * block[0] / 32) * chain as f64;
+    let [exact, fast] = [false, true].map(|fast| {
+        oboromi_set_tensor_mode(fast);
+        let mut grid = Grid::new(state, &hmma_program, block, &[], &[(GLOBAL_BASE, &[0; 16])]);
+        bench(if fast { "hmma fast" } else { "hmma exact" }, 2, 20, Some(state), || drop(black_box(grid.run(groups))))[1]
+    });
+    oboromi_set_tensor_mode(false);
+    println!("hmma 16816.F32 gpu ns per warp op: exact {:.0}, fast {:.0}", exact * 1e3 / ops, fast * 1e3 / ops);
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
     let words = translate_module(&program, true, Some(state), false).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;

@@ -1,11 +1,16 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer, HostImage};
 use crate::gpu::cubin::{Arg, Kernel};
-use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, Hints, PMTRIG_WORDS, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING};
+use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, Hints, PMTRIG_WORDS, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING, Translation};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::texture::TexturePool;
 use crate::gpu::{VkError, VkState};
 use ash::vk::{self, DescriptorType};
+use std::cell::Cell;
 use std::ops::Range;
+
+thread_local! {
+    pub static TRANSLATION: Cell<Translation> = Cell::default();
+}
 
 pub fn translate_module(
     instructions: &[u128],
@@ -13,17 +18,17 @@ pub fn translate_module(
     device: Option<&VkState>,
     timing_hints: bool,
 ) -> Emitter {
-    emit_module(register_io, device, 1, timing_hints, |decoder| decoder.translate_program(instructions))
+    emit_module(register_io, device, 1, Hints { timing: timing_hints, ..Default::default() }, |decoder| decoder.translate_program(instructions))
 }
 
 pub fn emit_module(
     register_io: bool,
     device: Option<&VkState>,
     lanes: u32,
-    timing_hints: bool,
+    hints: Hints,
     body: impl FnOnce(&mut Decoder),
 ) -> Emitter {
-    sm86::emit_module(device, [lanes, 1, 1], Hints { timing: timing_hints }, |decoder| {
+    sm86::emit_module(device, [lanes, 1, 1], Hints { translation: TRANSLATION.get(), ..hints }, |decoder| {
         if register_io {
             decoder.emit_register_io(10, 11);
         }
@@ -61,6 +66,16 @@ fn vk_state() -> Option<VkState> {
         }
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     }
+}
+
+/// Runs `run` once through the dispatcher and once through the structured plan.
+pub fn both_ways<T>(run: impl Fn() -> T) -> [T; 2] {
+    [Translation::ForceDispatcher, Translation::ForceStructured].map(|translation| {
+        TRANSLATION.set(translation);
+        let out = run();
+        TRANSLATION.set(Translation::default());
+        out
+    })
 }
 
 pub const GLOBAL_BASE: u64 = 0x2_0000_1000;
@@ -109,7 +124,7 @@ pub fn run_hints(
         cbuf0,
         global,
         &Textures::default(),
-        true,
+        Hints { timing: true, ..Default::default() },
     )?;
     Some((lanes.remove(0), global, counts))
 }
@@ -126,7 +141,7 @@ pub fn run_timed(
         &[],
         &[],
         &Textures::default(),
-        timing_hints,
+        Hints { timing: timing_hints, ..Default::default() },
     )?;
     Some(state.last_gpu_time_ns())
 }
@@ -164,7 +179,7 @@ pub struct Textures<'a> {
 }
 
 /// Runs `body` as one workgroup of whole warps with an invocation per seed, the state words of invocation i seeded
-/// from `seeds[i]`, cbuf slot 0 holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
+/// from `seeds[i]`, every cbuf slot holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
 /// surface the body declares resolved through `textures`, returning every seeded invocation's state words and the
 /// global words, or `None` when there is no Vulkan device.
 pub fn run_textured(
@@ -174,7 +189,7 @@ pub fn run_textured(
     global: &[u32],
     textures: &Textures,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
-    run_on(&vk_state()?, body, seeds, cbuf0, global, textures, false).map(|(lanes, global, _)| (lanes, global))
+    run_on(&vk_state()?, body, seeds, cbuf0, global, textures, Hints::default()).map(|(lanes, global, _)| (lanes, global))
 }
 
 pub fn run_on(
@@ -184,11 +199,11 @@ pub fn run_on(
     cbuf0: &[u32],
     global: &[u32],
     textures: &Textures,
-    timing_hints: bool,
+    hints: Hints,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>, Vec<u32>)> {
     let words = pad_to_warps(seeds);
     let mut resources = Vec::new();
-    let module = emit_module(true, Some(state), (words.len() / STATE_WORDS) as u32, timing_hints, |decoder| {
+    let module = emit_module(true, Some(state), (words.len() / STATE_WORDS) as u32, hints, |decoder| {
         body(decoder);
         resources = decoder.resources.clone();
     });
@@ -227,15 +242,20 @@ pub fn run_on(
         _ => None,
     });
     let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
+    let cbufs: Vec<u32> = resources.iter().filter_map(|r| match r.kind {
+        ResourceKind::Cbuf(slot) if slot > 0 => Some(CBUF_BINDING + slot),
+        _ => None,
+    }).collect();
     let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let hint_binding = TEXTURE_BINDING + images.len() as u32;
     let mut hints = resources.iter().any(|r| r.kind == ResourceKind::Hints).then(|| HostBuffer::new(state, 4 * (PMTRIG_WORDS + 1) as u64).unwrap());
     if let Some(hints) = &mut hints {
         hints.write(&vec![0; 4 * (PMTRIG_WORDS + 1)]).unwrap();
     }
-    let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).chain(hints.as_ref().map(|_| (hint_binding, ssbo))).collect();
+    let bindings: Vec<_> = buffers.into_iter().chain(cbufs.iter().map(|&binding| (binding, ubo))).chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).chain(hints.as_ref().map(|_| (hint_binding, ssbo))).collect();
     let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
     let mut bound = vec![(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)];
+    bound.extend(cbufs.iter().map(|&binding| (binding, &cbuf)));
     bound.extend(hints.as_ref().map(|buffer| (hint_binding, buffer)));
     pipeline.bind(&bound);
     pipeline.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
@@ -267,7 +287,7 @@ pub struct Grid<'a> {
 
 impl<'a> Grid<'a> {
     pub fn new(state: &'a VkState, instructions: &[u128], block: [u32; 3], banks: &[(u32, Vec<u8>)], regions: &[(u64, &[u8])]) -> Self {
-        let module = sm86::emit_module(Some(state), block, Hints::default(), |decoder| decoder.translate_program(instructions));
+        let module = sm86::emit_module(Some(state), block, Hints { translation: TRANSLATION.get(), ..Hints::default() }, |decoder| decoder.translate_program(instructions));
         spirv_val(&module);
         let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
         let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();

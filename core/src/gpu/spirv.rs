@@ -209,6 +209,13 @@ impl Emitter {
     pub fn words(&self) -> Vec<u32> { self.sections.concat() }
     pub fn len(&self) -> usize { self.sections.iter().map(Vec::len).sum() }
     pub fn id_bound(&self) -> u32 { self.next_id }
+    pub fn function_len(&self) -> usize { self.sections[10].len() }
+
+    /// Moves the function words emitted since `from` to `to`, before the words already there.
+    pub fn move_tail(&mut self, from: usize, to: usize) {
+        let moved = self.sections[10].len() - from;
+        self.sections[10][to..].rotate_right(moved);
+    }
 
     fn inst(&mut self, opcode: u32, operands: &[u32]) {
         let wc = (1 + operands.len()) as u32;

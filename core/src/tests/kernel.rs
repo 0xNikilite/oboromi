@@ -1,4 +1,5 @@
 use crate::cpu::cpu_manager::CpuManager;
+use crate::guest::load_flat_image;
 use crate::kernel::{ALIAS, CODE, CURRENT_PROCESS, Error, HEAP, Kernel, MAIN_STACK, STACK, TLS};
 use crate::nn::hipc::{Request, Response, Service};
 use crate::tests::run::arm64::*;
@@ -71,9 +72,11 @@ fn guest_calls_svcs_and_round_trips_ipc() {
     let cpu = cpus.get_core(0).unwrap();
     let mut kernel = Kernel::default();
     kernel.ports.insert("test".into(), Rc::new(RefCell::new(Echo)));
-    kernel.load(cpu, &image).unwrap();
+    let entry = load_flat_image(&cpus.ram, &image, CODE.base).unwrap();
+    kernel.start(cpu, entry, image.len() as u64);
     assert!(kernel.run(cpu), "guest stopped at {:#x} without ExitProcess", cpu.get_pc());
 
+    assert_eq!(kernel.debug_output, [String::from_utf8_lossy(HELLO)]);
     let x = |i| cpu.get_x(i);
     assert_eq!([x(20), x(21), x(22), x(23), x(25), x(27)], [0, 0, HEAP.base, 0, 0, 0]);
     assert_eq!(x(24), 0x1000 + MAIN_STACK.size + 0x40_0000);

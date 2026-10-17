@@ -23,7 +23,7 @@ impl Region {
 // Our own layout, 2 MiB aligned like Horizon's ASLR regions: switchbrew documents no
 // Switch 2 region bases, so these need a capture before they can claim to match one.
 pub const CODE: Region = Region { base: 0x0800_0000, size: 0x0800_0000 };
-/// The thread-local region TPIDRRO_EL0 points at; its first 0x100 bytes are the IPC buffer.
+/// The one thread's TLS page, which TPIDRRO_EL0 points at; its first 0x100 bytes are the IPC buffer.
 pub const TLS: u64 = 0x1000_0000;
 pub const MAIN_STACK: Region = Region { base: 0x1010_0000, size: 0x10_0000 };
 pub const STACK: Region = Region { base: 0x2000_0000, size: 0x2000_0000 };
@@ -107,6 +107,8 @@ pub struct Process {
 pub struct Kernel {
     pub process: Process,
     pub ports: HashMap<String, Rc<RefCell<dyn Service>>>,
+    /// OutputDebugString texts, for the caller to drain.
+    pub debug_output: Vec<String>,
 }
 
 fn overlap(ranges: &[(u64, u64)], start: u64, end: u64) -> u64 {
@@ -128,14 +130,15 @@ fn copy(cpu: &UnicornCPU, src: u64, dst: u64, size: u64) -> Result<(), Error> {
     cpu.read_mem(src, &mut bytes).and_then(|()| cpu.write_mem(dst, &bytes)).map_err(|_| Error::InvalidCurrentMemory)
 }
 
-fn output_debug_string(cpu: &UnicornCPU, addr: u64, len: u64) -> Result<(), Error> {
+fn output_debug_string(cpu: &UnicornCPU, addr: u64, len: u64) -> Result<String, Error> {
     if addr.checked_add(len).is_none_or(|end| end > MEMORY_SIZE) {
         return Err(Error::InvalidPointer);
     }
     let mut text = vec![0; len as usize];
     cpu.read_mem(addr, &mut text).map_err(|_| Error::InvalidPointer)?;
-    log::info!("guest: {}", String::from_utf8_lossy(&text));
-    Ok(())
+    let text = String::from_utf8_lossy(&text).into_owned();
+    log::info!("guest: {text}");
+    Ok(text)
 }
 
 impl Process {
@@ -238,17 +241,12 @@ impl Process {
 }
 
 impl Kernel {
-    /// Writes a flat image at the code base and points the thread at it.
-    pub fn load(&mut self, cpu: &UnicornCPU, image: &[u8]) -> Result<(), Error> {
-        if !CODE.contains(CODE.base, image.len() as u64) {
-            return Err(Error::InvalidSize);
-        }
-        cpu.write_mem(CODE.base, image).map_err(|_| Error::InvalidCurrentMemory)?;
-        self.process.image_size = (image.len() as u64).next_multiple_of(PAGE);
-        cpu.set_pc(CODE.base);
+    /// Points the thread at an image of `image_size` bytes loaded at `entry`.
+    pub fn start(&mut self, cpu: &UnicornCPU, entry: u64, image_size: u64) {
+        self.process.image_size = image_size.next_multiple_of(PAGE);
+        cpu.set_pc(entry);
         cpu.set_sp(MAIN_STACK.base + MAIN_STACK.size);
         cpu.set_tls(TLS);
-        Ok(())
     }
 
     /// Runs the thread until ExitProcess (true) or until the core stops for any other reason.
@@ -276,7 +274,7 @@ impl Kernel {
             0x16 => process.handles.remove(x[0] as u32).map(drop).ok_or(Error::InvalidHandle),
             0x1f => self.connect_to_named_port(cpu, x[1]).map(|h| x[1] = h.into()),
             0x21 => self.send_sync_request(cpu, x[0] as u32),
-            0x27 => output_debug_string(cpu, x[0], x[1]),
+            0x27 => output_debug_string(cpu, x[0], x[1]).map(|text| self.debug_output.push(text)),
             0x29 => process.info(x[1], x[2] as u32, x[3]).map(|value| x[1] = value),
             0x2c => process.map_physical_memory(x[0], x[1]),
             _ => Err(Error::NotImplemented),

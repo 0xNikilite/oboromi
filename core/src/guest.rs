@@ -17,17 +17,18 @@ pub fn load_flat_image(ram: &GuestRam, image: &[u8], base: u64) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::cpu::cpu_manager::CpuManager;
+    use crate::kernel::Kernel;
 
-    // guest.bin is what scripts/build-guest.sh builds from guest/. Without SVC dispatch Unicorn stops at the first svc.
+    // guest.bin is what scripts/build-guest.sh builds from guest/.
     #[test]
-    fn the_guest_image_reaches_its_debug_string_svc() {
+    fn the_guest_image_prints_its_debug_string_and_exits() {
         let cpu = CpuManager::new();
-        let entry = load_flat_image(&cpu.ram, include_bytes!("../tests/fixtures/guest/guest.bin"), BASE).unwrap();
+        let image = include_bytes!("../tests/fixtures/guest/guest.bin");
+        let entry = load_flat_image(&cpu.ram, image, BASE).unwrap();
         let core = cpu.get_core(0).unwrap();
-        core.set_pc(entry);
-        core.run();
-        let mut text = vec![0; core.get_x(1) as usize];
-        cpu.ram.read(core.get_x(0), &mut text);
-        assert_eq!(text, b"hello from guest");
+        let mut kernel = Kernel::default();
+        kernel.start(core, entry, image.len() as u64);
+        assert!(kernel.run(core));
+        assert_eq!(kernel.debug_output, ["hello from guest"]);
     }
 }

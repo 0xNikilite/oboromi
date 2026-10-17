@@ -44,4 +44,8 @@ bool renderPostFrame(float seconds) {
     return oboromi_render_post_frame(seconds);
 }
 
+bool renderSpritesFrame(float seconds) {
+    return oboromi_render_sprites_frame(seconds);
+}
+
 }

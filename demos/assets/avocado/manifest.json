@@ -50,9 +50,11 @@
    ],
    "width": 256,
    "height": 256,
-   "mips": 9,
+   "mips": 5,
    "color_space": "srgb",
-   "bytes": 349524
+   "bytes": 349184,
+   "layout": "block_linear",
+   "gob_height_log2": 1
   },
   {
    "file": "metallicRoughness.rgba8",
@@ -62,9 +64,11 @@
    ],
    "width": 256,
    "height": 256,
-   "mips": 9,
+   "mips": 5,
    "color_space": "linear",
-   "bytes": 349524
+   "bytes": 349184,
+   "layout": "block_linear",
+   "gob_height_log2": 1
   },
   {
    "file": "normal.rgba8",
@@ -74,9 +78,11 @@
    ],
    "width": 256,
    "height": 256,
-   "mips": 9,
+   "mips": 5,
    "color_space": "linear",
-   "bytes": 349524
+   "bytes": 349184,
+   "layout": "block_linear",
+   "gob_height_log2": 1
   }
  ],
  "source_url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/./Models/Avocado/glTF-Binary/Avocado.glb",

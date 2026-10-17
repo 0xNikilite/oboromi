@@ -3080,9 +3080,11 @@ impl<'a> Decoder<'a> {
     fn truncated_group_sum(&mut self, acc: u32, products: &[(&[u32; 5], &[u32; 5])]) -> u32 {
         let (ty, bool_ty, f32_ty) = (self.type_u32[1], self.type_bool[1], self.type_f32[1]);
         let [_, c_bits, c_exponent, c_significand, mut special] = self.mma_term(acc, -126, 23);
-        let [one, four, max_shift, twenty_three, twenty_four] = [1, 4, 31, 23, 24].map(|c| self.cached_const_u32(c));
+        let [one, four, max_shift, twenty_three, below_hidden_bias, max_finite, infinity, sign_bit] =
+            [1, 4, 31, 23, 125, 253, 0x7f80_0000, 0x8000_0000].map(|c| self.cached_const_u32(c));
         let mut terms = vec![(c_bits, c_exponent, c_significand, one)];
         let mut ieee_sum = acc;
+        let zero = self.ir.emit_constant_typed(f32_ty, 0.0f32);
         for &(&[x, x_bits, x_exponent, x_significand, x_special], &[y, y_bits, y_exponent, y_significand, y_special]) in products {
             let sign = self.ir.emit_bitwise_xor(ty, x_bits, y_bits);
             // A product's exponent is ea + eb, not that of the normalized product.
@@ -3092,6 +3094,7 @@ impl<'a> Decoder<'a> {
             let either = self.ir.emit_logical_or(bool_ty, x_special, y_special);
             special = self.ir.emit_logical_or(bool_ty, special, either);
             let product = self.ir.emit_fmul(f32_ty, x, y);
+            let product = self.ir.emit_select(f32_ty, either, product, zero);
             ieee_sum = self.ir.emit_fadd(f32_ty, ieee_sum, product);
         }
         let emax = terms[1..].iter().fold(c_exponent, |emax, term| self.glsl(spirv::glsl::S_MAX, ty, &[emax, term.1]));
@@ -3109,14 +3112,26 @@ impl<'a> Decoder<'a> {
         let msb = self.glsl(spirv::glsl::FIND_U_MSB, ty, &[magnitude]);
         let excess = self.ir.emit_isub(ty, msb, twenty_three);
         let dropped = self.glsl(spirv::glsl::S_MAX, ty, &[excess, self.const_u32_0]);
-        let kept = self.ir.emit_shift_right_logical(ty, magnitude, dropped);
-        let kept = self.ir.emit_shift_left_logical(ty, kept, dropped);
-        let negative = self.ir.emit_sless_than(bool_ty, total, self.const_u32_0);
-        let negated = self.ir.emit_snegate(ty, kept);
-        let kept = self.ir.emit_select(ty, negative, negated, kept);
-        let kept = self.ir.emit_convert_s_to_f(f32_ty, kept);
-        let scale = self.ir.emit_isub(ty, emax, twenty_four);
-        let exact = self.glsl(spirv::glsl::LDEXP, f32_ty, &[kept, scale]);
+        let shortfall = self.ir.emit_snegate(ty, excess);
+        let lifted = self.glsl(spirv::glsl::S_MAX, ty, &[shortfall, self.const_u32_0]);
+        let significand = self.ir.emit_shift_right_logical(ty, magnitude, dropped);
+        let significand = self.ir.emit_shift_left_logical(ty, significand, lifted);
+        let biased_below_hidden = self.ir.emit_iadd(ty, excess, emax);
+        let biased_below_hidden = self.ir.emit_iadd(ty, biased_below_hidden, below_hidden_bias);
+        let normal = self.ir.emit_shift_left_logical(ty, biased_below_hidden, twenty_three);
+        let normal = self.ir.emit_iadd(ty, normal, significand);
+        let overflow = self.ir.emit_sgreater_than(bool_ty, biased_below_hidden, max_finite);
+        let normal = self.ir.emit_select(ty, overflow, infinity, normal);
+        let subnormal_shift = self.ir.emit_snegate(ty, biased_below_hidden);
+        let subnormal_shift = self.glsl(spirv::glsl::U_MIN, ty, &[subnormal_shift, max_shift]);
+        let subnormal = self.ir.emit_shift_right_logical(ty, significand, subnormal_shift);
+        let tiny = self.ir.emit_sless_than(bool_ty, biased_below_hidden, self.const_u32_0);
+        let zero = self.ir.emit_iequal(bool_ty, magnitude, self.const_u32_0);
+        let tiny = self.ir.emit_logical_or(bool_ty, tiny, zero);
+        let bits = self.ir.emit_select(ty, tiny, subnormal, normal);
+        let sign = self.ir.emit_bitwise_and(ty, total, sign_bit);
+        let bits = self.ir.emit_bitwise_or(ty, bits, sign);
+        let exact = self.bitcast_f32(bits);
         self.ir.emit_select(f32_ty, special, ieee_sum, exact)
     }
     pub fn hmnmx2(&mut self, inst: u128) {

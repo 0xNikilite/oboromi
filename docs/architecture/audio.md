@@ -17,7 +17,7 @@ flowchart LR
 
 ## How does a game use the audio renderer?
 
-The renderer service is `audren`. Upstream's registry already has its entry, and this design fills it in.
+The renderer service is `audren`. The service registry already has its entry, and this design fills it in.
 
 1. The game fills in its settings: sample rate, frame size, how many voices, mixes, effects and sinks it wants, and a revision number.
 2. It asks the service how large a work buffer that needs, then hands over that memory.

@@ -3,6 +3,7 @@ pub mod harness;
 mod atomics;
 mod compare;
 mod control;
+pub mod demos;
 mod convert;
 mod demos_particles;
 mod demos_post;

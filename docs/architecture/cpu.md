@@ -21,7 +21,7 @@ flowchart TB
 
 ## What runs the ARM code?
 
-Unicorn is a CPU emulator library built on the CPU core of QEMU, the open-source machine emulator. Upstream built the CPU manager on it: each core is its own Unicorn instance, and every core maps the same RAM block at guest address 0. A guest address is therefore also the offset into that block.
+Unicorn is a CPU emulator library built on the CPU core of QEMU, the open-source machine emulator. The CPU manager builds on it: each core is its own Unicorn instance, and every core maps the same RAM block at guest address 0. A guest address is therefore also the offset into that block.
 
 | CPU fact | Value |
 |---|---|

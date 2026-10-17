@@ -66,7 +66,7 @@ Yes, through the compute class 0xC7C0. A QMD, the block in guest memory that des
 
 ```mermaid
 flowchart LR
-    main["main<br/>Upstream project"] --> dev["gpu-dev<br/>Shader writer, Vulkan, harness; PR 79"]
+    main["main"] --> dev["gpu-dev<br/>Shader writer, Vulkan, harness; PR 79"]
     dev --> instr["gpu-instructions<br/>All compute instructions; PR 80"]
     instr --> gfx["gpu-graphics<br/>Drawing engine; no PR yet"]
     fam["Instruction family branches<br/>gpu/w*, gpu/tex-*, gpu/div-*"] -->|"Merge commits"| instr
@@ -76,7 +76,7 @@ flowchart LR
 
 *Each branch stacks on the one to its left; side branches merge in with merge commits.*
 
-| Branch | Holds | Upstream |
+| Branch | Holds | PR |
 |---|---|---|
 | gpu-dev | The SPIR-V writer, the Vulkan device and compute dispatch, the display widget, the test harness, the perf example and profile script, CI tools | PR #79, which contains #69 to #78 |
 | gpu-instructions | Every compute instruction family, divergence, textures, tensor cores, silicon fixtures (recordings from a real card), the Julia demo, the CUDA runners | PR #80, stacked on #79 |
@@ -86,4 +86,4 @@ Each level merges the one below whenever it moves, with merge commits and never 
 
 Verified by: the engine tests in `core/src/tests/gpu/engine.rs` on Intel and lavapipe (Mesa's CPU-based Vulkan driver), with the Vulkan validation layer reporting no errors. They cover the pushbuffer triangle with a vertex remap and a QMD compute launch. They also cover indexed, instanced, depth-tested, blended and textured draws, render to texture, clears, reports, acquires and both y-flips.
 
-Sources: core/src/gpu/{fifo,threed,engine,graphics}.rs, core/src/tests/gpu/engine.rs, PR #79 and #80 bodies, git history of the fork.
+Sources: core/src/gpu/{fifo,threed,engine,graphics}.rs, core/src/tests/gpu/engine.rs, PR #79 and #80 bodies, git history.

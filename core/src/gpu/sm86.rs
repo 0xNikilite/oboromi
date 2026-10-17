@@ -1059,19 +1059,9 @@ impl<'a> Decoder<'a> {
         Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
     }
 
-    // Ra holds a byte address and the pc counts 16-byte instructions.
+    // Ra or URa holds a byte address and the pc counts 16-byte instructions.
     fn jump_to_register(&mut self, inst: u128, relative: bool) {
-        let ra = self.load_register((inst >> 24 & 0xff) as u32);
-        let four = self.cached_const_u32(4);
-        let ra = self.ir.emit_shift_right_logical(self.type_u32[1], ra, four);
-        let offset = branch_offset(inst);
-        let base = self.cached_const_u32((offset + if relative { self.pc as i64 + 1 } else { 0 }) as u32);
-        let target = self.ir.emit_iadd(self.type_u32[1], base, ra);
-        self.ir.emit_store(self.var_pc, target);
-    }
-
-    fn jump_to_uregister(&mut self, inst: u128, relative: bool) {
-        let ra = self.load_ureg((inst >> 24 & 0x3f) as u32);
+        let ra = if inst >> 91 & 1 != 0 { self.load_ureg((inst >> 24 & 0x3f) as u32) } else { self.load_register((inst >> 24 & 0xff) as u32) };
         let four = self.cached_const_u32(4);
         let ra = self.ir.emit_shift_right_logical(self.type_u32[1], ra, four);
         let offset = branch_offset(inst);
@@ -2392,7 +2382,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        self.jump_to_uregister(inst, true);
+        self.jump_to_register(inst, true);
     }
     pub fn bssy(&mut self, inst: u128) {
         let step = self.ir.emit_load(self.type_u32[1], self.var_step);
@@ -2404,8 +2394,7 @@ impl<'a> Decoder<'a> {
     }
     pub fn call(&mut self, inst: u128) {
         match opcode(inst) {
-            CALL_ABS_R | CALL_REL_R => self.jump_to_register(inst, opcode(inst) == CALL_REL_R),
-            0x1943 | 0x1944 => self.jump_to_uregister(inst, opcode(inst) == 0x1944),
+            CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 => self.jump_to_register(inst, matches!(opcode(inst), CALL_REL_R | 0x1944)),
             0xb43 => {
                 let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) as u32) << 2);
                 let address = self.load_cbuf(ResourceKind::Cbuf((inst >> 54 & 0x1f) as u32), offset);
@@ -3543,7 +3532,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        self.jump_to_uregister(inst, false);
+        self.jump_to_register(inst, false);
     }
     pub fn kill(&mut self, inst: u128) {
         // KILL is pixel-only on hardware, so a compute invocation that reaches one just ends like at EXIT.
@@ -4125,11 +4114,7 @@ impl<'a> Decoder<'a> {
         self.store_ureg((inst >> 16 & 0x3f) as u32, acc);
     }
     pub fn ret(&mut self, inst: u128) {
-        if opcode(inst) == 0x1950 {
-            self.jump_to_uregister(inst, inst >> 85 & 1 == 0);
-        } else {
-            self.jump_to_register(inst, inst >> 85 & 1 == 0);
-        }
+        self.jump_to_register(inst, inst >> 85 & 1 == 0);
     }
     pub fn rpcmov(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

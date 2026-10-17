@@ -3,3 +3,4 @@ One fixture per line, id is <capture>#<index in that capture> and word_hex the i
 observed:true means the outputs were captured on silicon, false marks a case that could not be run.
 The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
 mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.
+kernels.cubin is kernels.cu built with nvcc -arch=sm_86 -O3 -cubin (CUDA 13.1), its mul_add has the words of the mul-add fixtures and gradient draws the gradient fixture's frame.

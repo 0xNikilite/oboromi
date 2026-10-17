@@ -1,9 +1,11 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer, HostImage};
+use crate::gpu::cubin::{Arg, Kernel};
 use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::texture::TexturePool;
 use crate::gpu::{VkError, VkState};
 use ash::vk::{self, DescriptorType};
+use std::ops::Range;
 
 pub fn translate_module(
     instructions: &[u128],
@@ -195,30 +197,65 @@ pub fn run_textured(
     Some((lanes, read(&memory, global.len())))
 }
 
-/// Launches `instructions` the way a driver does: `grid` workgroups of `block` invocations without register io, cbuf
-/// slot 0 holding `cbuf0` and global memory holding each region's bytes at its guest address, returning every region's
-/// bytes after the launch, or `None` when there is no Vulkan device.
+/// A translated program launched the way a driver does, without register io: each of `banks` as the (bank, bytes) of a
+/// constant bank and global memory holding each region's bytes at its guest address.
+pub struct Grid<'a> {
+    state: &'a VkState,
+    pipeline: ComputePipeline<'a>,
+    global: HostBuffer<'a>,
+    _support: HostBuffer<'a>,
+    _cbufs: Vec<(u32, HostBuffer<'a>)>,
+    memory: Vec<u8>,
+    spans: Vec<Range<usize>>,
+}
+
+impl<'a> Grid<'a> {
+    pub fn new(state: &'a VkState, instructions: &[u128], block: [u32; 3], banks: &[(u32, Vec<u8>)], regions: &[(u64, &[u8])]) -> Self {
+        let module = sm86::emit_module(Some(state), block, |decoder| decoder.translate_program(instructions));
+        spirv_val(&module);
+        let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
+        let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();
+        let spans: Vec<_> = regions.iter().map(|&(address, bytes)| (address - base) as usize..(address - base) as usize + bytes.len()).collect();
+        let mut memory = vec![0; (end - base) as usize];
+        for (span, region) in spans.iter().zip(regions) {
+            memory[span.clone()].copy_from_slice(region.1);
+        }
+        let mut global = HostBuffer::new(state, memory.len() as u64).unwrap();
+        global.write(&memory).unwrap();
+        let buffer = |bytes: &[u8]| {
+            let mut buffer = HostBuffer::new(state, 16 + bytes.len() as u64).unwrap();
+            buffer.write(bytes).unwrap();
+            buffer
+        };
+        let support = buffer(&base.to_le_bytes());
+        let cbufs: Vec<_> = banks.iter().map(|(bank, bytes)| (CBUF_BINDING + bank, buffer(bytes))).collect();
+        let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
+        let bindings: Vec<_> = [(GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo)].into_iter().chain(cbufs.iter().map(|&(binding, _)| (binding, ubo))).collect();
+        let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
+        pipeline.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support)].into_iter().chain(cbufs.iter().map(|(binding, buffer)| (*binding, buffer))).collect::<Vec<_>>());
+        Self { state, pipeline, global, _support: support, _cbufs: cbufs, memory, spans }
+    }
+
+    /// Dispatches `groups` workgroups and returns every region's bytes after them.
+    pub fn run(&mut self, groups: [u32; 3]) -> Vec<Vec<u8>> {
+        self.state.dispatch(&self.pipeline, groups).unwrap();
+        self.global.read(&mut self.memory).unwrap();
+        self.spans.iter().map(|span| self.memory[span.clone()].to_vec()).collect()
+    }
+}
+
+/// Launches `instructions` as `grid` workgroups of `block` invocations with cbuf slot 0 holding `cbuf0`, returning every
+/// region's bytes after the launch, or `None` when there is no Vulkan device.
 pub fn run_grid(instructions: &[u128], block: [u32; 3], grid: [u32; 3], cbuf0: &[u8], regions: &[(u64, &[u8])]) -> Option<Vec<Vec<u8>>> {
     let state = vk_state()?;
-    let module = sm86::emit_module(Some(&state), block, |decoder| decoder.translate_program(instructions));
-    spirv_val(&module);
-    let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
-    let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();
-    let span = |&(address, bytes): &(u64, &[u8])| (address - base) as usize..(address - base) as usize + bytes.len();
-    let mut memory = vec![0; (end - base) as usize];
-    for region in regions {
-        memory[span(region)].copy_from_slice(region.1);
-    }
-    let mut global = HostBuffer::new(&state, memory.len() as u64).unwrap();
-    global.write(&memory).unwrap();
-    let mut cbuf = HostBuffer::new(&state, 16 + cbuf0.len() as u64).unwrap();
-    cbuf.write(cbuf0).unwrap();
-    let mut support = HostBuffer::new(&state, 16).unwrap();
-    support.write(&base.to_le_bytes()).unwrap();
-    let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
-    let mut pipeline = ComputePipeline::new(&state, &module.words(), &[(GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)]).unwrap();
-    pipeline.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
-    state.dispatch(&pipeline, grid).unwrap();
-    global.read(&mut memory).unwrap();
-    Some(regions.iter().map(|region| memory[span(region)].to_vec()).collect())
+    Some(Grid::new(&state, instructions, block, &[(0, cbuf0.to_vec())], regions).run(grid))
+}
+
+/// Launches kernel `name` of `cubin` the way cuLaunchKernel does with `args` in parameter order, each buffer placed in
+/// global memory from `GLOBAL_BASE` up, returning the buffers after the launch, or `None` when there is no Vulkan device.
+pub fn run_kernel(cubin: &[u8], name: &str, grid: [u32; 3], block: [u32; 3], args: &[Arg]) -> Option<Vec<Vec<u8>>> {
+    let kernel = Kernel::load(cubin, name).unwrap();
+    let (banks, regions) = kernel.launch(grid, block, args, GLOBAL_BASE);
+    let state = vk_state()?;
+    Some(Grid::new(&state, &kernel.words, block, &banks, &regions).run(grid))
 }

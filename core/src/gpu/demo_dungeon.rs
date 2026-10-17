@@ -1184,7 +1184,7 @@ impl Dungeon {
         files.insert("manifest.json".into(), manifest.into_bytes());
         files.insert("vertices.bin".into(), vertices);
         files.insert("indices.bin".into(), indices.iter().flat_map(|i| i.to_le_bytes()).collect());
-        let scene = Scene::with_files(state, None, &|name| files.get(name).cloned().ok_or_else(|| format!("missing dungeon asset {name}")), WIDTH, HEIGHT)?;
+        let scene = Scene::with_files(state, None, &|name| files.get(name).cloned().ok_or_else(|| format!("missing dungeon asset {name}")), WIDTH, HEIGHT, false)?;
         let eye = add(world.path[0], [0.0, EYE, 0.0]);
         let fire = world.sources.iter().find(|s| s.0 == Sfx::Fire).unwrap().1;
         let embers = Embers::new(state, fire)?;

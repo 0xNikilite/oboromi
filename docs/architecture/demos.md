@@ -68,10 +68,9 @@ flowchart LR
     PBR --> RT["raytraced<br/>Shadows and reflections by ray queries"]
     TRI --> SPR["sprites2d<br/>Layered 2D sprites"]
     TRI --> PART["particles<br/>Moved by a compute launch"]
-    RT -.->|"Still needs"| N1["Acceleration structures,<br/>Depth kept in guest memory"]
 ```
 
-*The six scenes. The ray-traced one still needs two engine features.*
+*The six scenes.*
 
 | Scene | Content | Shaders |
 |---|---|---|
@@ -80,9 +79,9 @@ flowchart LR
 | particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag |
 | sprites2d | Scrolling hill layers and floating sprites, blended over a sky | sprite2d.vert, sprite2d.frag |
 | pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material | pbr.vert, pbr.frag |
-| raytraced | BoomBox on a ground plane with ray-query shadows and reflections, plus ray-traced ambient occlusion | rt.frag, rt_ao.comp |
+| raytraced | BoomBox on a ground plane with ray-query shadows, metallic reflections and ambient occlusion | pbr.vert, rt.frag |
 
-The ray-traced scene is being built. It still needs two engine features.
+The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture` example with `raytraced`. It requires ray queries and fragment subgroup operations.
 
 ### What do the new scenes look like?
 
@@ -101,6 +100,10 @@ The ray-traced scene is being built. It still needs two engine features.
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-boombox-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-boombox.mp4" type="video/mp4"></video>
 
 *BoomBox: the model turns on a turntable under a still light, so the shine and the glowing display move across it.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced.mp4" type="video/mp4"></video>
+
+*Ray-traced BoomBox: shadows fall on the ground, four rays darken sheltered surfaces, and metallic surfaces reflect the sky where reflection rays miss.*
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet.mp4" type="video/mp4"></video>
 

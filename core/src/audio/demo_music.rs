@@ -251,7 +251,7 @@ pub fn play_music(seconds: f32) {
         }
         play(&[samples]);
     }
-    let (width, height) = (960, 540);
+    let (width, height) = (1920, 1080);
     let mut pixels = [12, 16, 24, 255].repeat(width * height);
     for channel in 0..2 {
         let top = height - 40 - usize::from(peak[channel]) * (height - 80) / 32768;

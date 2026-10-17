@@ -10,7 +10,7 @@ pub const RATE: u32 = 48_000;
 pub const CHANNELS: u32 = 2;
 /// the console renderer's update period.
 pub const PERIOD: u32 = 240;
-const CAPACITY: usize = 3 * PERIOD as usize;
+const CAPACITY: usize = 4 * PERIOD as usize;
 
 struct Ring {
     frames: [AtomicU32; CAPACITY],

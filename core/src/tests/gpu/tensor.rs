@@ -230,6 +230,4 @@ mod tests {
             assert_eq!(regs[RD], half(2 * t + 1, g) << 16 | half(2 * t, g), "lane {lane}");
         }
     }
-
-    }
 }

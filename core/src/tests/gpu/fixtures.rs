@@ -453,11 +453,6 @@ mod tests {
     // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
     const KNOWN_FAILURES: &[&str] = &[
         "s3#026/fp32/mufu-tanh-r1-r3",
-        "s5tensor#000/tensor/m16n8k16-f32/mixed-exponents/dst-f16",
-        "s5tensor#001/tensor/m16n8k16-f32/mixed-exponents/src-bf16",
-        "s5tensor#007/tensor/m16n8k16-f16/mixed-exponents/",
-        "s5tensor#009/tensor/m16n8k16-f32/mixed-exponents/",
-        "s5tensor#011/tensor/m16n8k8-f32/mixed-exponents/",
         "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
         "s5suatom#000/suatom/d-2d-add",
     ];

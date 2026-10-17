@@ -65,6 +65,12 @@ pub mod inst {
     pub const LDSM: u128 = 0x83b;
     pub const LDSM_X4: u128 = 2 << 72;
     pub const LDSM_MT88: u128 = 1 << 78;
+    pub const DMMA: u128 = 0x23f;
+    pub const BMMA: u128 = 0x23d | 1 << 74 | 1 << 80;
+    pub const BMMA_168128: u128 = 1 << 75;
+    pub const BMMA_168256: u128 = 2 << 75;
+    pub const BMMA_AND: u128 = 2 << 77;
+    pub const MOVM: u128 = 0x23a;
     pub const HSET2: u128 = 0x233 | PP_PT;
     pub const HSETP2: u128 = 0x234 | PP_PT;
     pub const HMNMX2: u128 = 0x240;
@@ -147,6 +153,10 @@ pub mod inst {
     const ATOMS_ADD: u128 = 0x38c;
     const ATOMS_CAS: u128 = 0x38d;
     const BAR_SYNC: u128 = 0xb1d;
+    pub const BAR_RED_POPC: u128 = 2 << 77;
+    pub const BAR_RED_AND: u128 = BAR_RED_POPC | 1 << 74;
+    const B2R_RESULT: u128 = 0x31c | 1 << 78;
+    const WARPSYNC_IMM: u128 = 0x948;
     const BRA: u128 = 0x947;
     const BRA_UREG: u128 = 0x947 | 1 << 91;
     const BRA_UPRED: u128 = 0x547 | 1 << 91;
@@ -338,6 +348,18 @@ pub mod inst {
 
     pub fn bar_sync() -> u128 {
         BAR_SYNC | PT_GUARD | NO_WRITE_SCOREBOARD
+    }
+
+    pub fn bar(mode: u128, count: u32) -> u128 {
+        bar_sync() | mode | (count as u128) << 42
+    }
+
+    pub fn b2r_result(rd: u32, pu: u32) -> u128 {
+        B2R_RESULT | PT_GUARD | NO_WRITE_SCOREBOARD | (rd as u128) << 16 | (pu as u128) << 81
+    }
+
+    pub fn warpsync(mask: u32) -> u128 {
+        WARPSYNC_IMM | PT_GUARD | PP_PT | NO_SCOREBOARD | (mask as u128) << 32
     }
 
     pub fn s2r(rd: u32, sr: u32) -> u128 {
@@ -899,6 +921,11 @@ fn fixtures_match_nvdisasm() {
         (inst::W2J_BAR_RED_POPC, "BAR.RED.POPC R2, R2, P0 ;"),
         (inst::W2J_BAR_SCAN, "BAR.SCAN R2, R2, P0 ;"),
         (inst::W2J_BAR_ARV, "BAR.ARV 0x0, 0x0 ;"),
+        (inst::bar(0, 0x20), "BAR.SYNC 0x0, 0x20 ;"),
+        (inst::bar(inst::BAR_RED_AND, 0), "BAR.RED.AND 0x0, P0 ;"),
+        (inst::bar(inst::BAR_RED_POPC, 0), "BAR.RED.POPC 0x0, P0 ;"),
+        (inst::b2r_result(5, 2), "B2R.RESULT R5, P2 ;"),
+        (inst::warpsync(0xffff), "WARPSYNC 0xffff;"),
         (inst::s2r(1, 33), "S2R R1, SR_TID.X ;"),
         (inst::cs2r(4, 80, false), "CS2R.32 R4, SR_CLOCKLO;"),
         (inst::cs2r(4, 80, true), "CS2R R4, SR_CLOCKLO;"),
@@ -962,6 +989,11 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S8.S8 R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4, 4, 2, 0), "LDSM.16.M88.4 R4, [R2] ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4 | inst::LDSM_MT88, 12, 2, 0), "LDSM.16.MT88.4 R12, [R2] ;"),
+        (inst::alu3(inst::DMMA, 4, 8, 12, 16), "DMMA.884 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::BMMA, 4, 8, 12, 16), "BMMA.88128.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::BMMA | inst::BMMA_168128 | inst::BMMA_AND, 4, 8, 12, 16), "BMMA.168128.AND.POPC R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::BMMA | inst::BMMA_168256, 4, 8, 12, 16), "BMMA.168256.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu(inst::MOVM, 4, 8, 0), "MOVM.16.MT88 R4, R8 ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

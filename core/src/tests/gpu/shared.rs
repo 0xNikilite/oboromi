@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::run_lanes;
+    use crate::tests::gpu::harness::{PRED, run_lanes};
     use crate::tests::gpu_test::inst;
 
     const LANES: u32 = 32;
@@ -95,26 +95,79 @@ mod tests {
         assert!(regs.iter().all(|r| [r[8], r[9]] == [32, 0]));
     }
 
-    #[test]
-    fn bar_red_and_scan_reduce_predicates() {
-        let seeds = lanes(|lane| {
-            let mut seed = vec![0; 255];
-            seed[254] = (lane % 2 == 0) as u32;
-            seed
-        });
-        let Some((regs, _)) = run_lanes(&[inst::W2J_BAR_ARV, inst::W2J_BAR_RED_POPC], &seeds, &[], &[]) else {
-            return;
-        };
-        assert!(regs.iter().all(|r| r[2] == 16));
+    fn seeds(seed: impl Fn(u32) -> Vec<(usize, u32)>) -> Vec<Vec<u32>> {
+        lanes(|lane| {
+            let mut regs = vec![0; PRED + 1];
+            for (slot, value) in seed(lane) {
+                regs[slot] = value;
+            }
+            regs
+        })
+    }
 
-        let seeds = lanes(|lane| {
-            let mut seed = vec![0; 255];
-            seed[254] = (lane == 5) as u32;
-            seed
-        });
-        let Some((regs, _)) = run_lanes(&[inst::W2J_BAR_SCAN], &seeds, &[], &[]) else {
-            return;
-        };
-        assert_eq!(regs.iter().map(|r| r[2]).collect::<Vec<_>>(), (0..LANES).map(|lane| (lane >= 5) as u32).collect::<Vec<_>>());
+    // Lanes 16..31 store on a detour after the BAR in pc order, so the scheduler reaches the BAR with lanes 0..15 first.
+    #[test]
+    fn bar_holds_early_lanes_until_the_late_writers_arrive() {
+        let seeds = seeds(|lane| vec![(1, 4 * lane), (2, 100 + lane), (3, 4 * (lane ^ 16)), (PRED, (lane >= 16) as u32)]);
+        let program = [
+            inst::guard(inst::bra(0x40), 0, false),
+            inst::sts(1, 2),
+            inst::bar_sync(),
+            inst::lds(4, 3),
+            inst::exit(),
+            inst::mov_imm(5, 1),
+            inst::sts(1, 2),
+            inst::bra(-0x60),
+        ];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
+        assert_eq!(regs.iter().map(|r| r[4]).collect::<Vec<_>>(), (0..LANES).map(|lane| 100 + (lane ^ 16)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn consecutive_bars_wait_for_each_generation_of_writers() {
+        let seeds = seeds(|lane| vec![(1, 4 * lane), (2, 100 + lane), (3, 4 * (lane ^ 16)), (PRED, (lane >= 16) as u32)]);
+        let program = [
+            inst::guard(inst::bra(0x60), 0, false),
+            inst::bar_sync(),
+            inst::lds(4, 3),
+            inst::guard(inst::bra(0x50), 0, true),
+            inst::bar_sync(),
+            inst::lds(5, 3),
+            inst::exit(),
+            inst::sts(1, 2),
+            inst::bra(-0x80),
+            inst::iadd_imm(6, 2, 1000),
+            inst::sts(1, 6),
+            inst::bra(-0x80),
+        ];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
+        for (lane, r) in (0..LANES).zip(&regs) {
+            let read = if lane < 16 { r[4] } else { r[5] - 1000 };
+            assert_eq!(read, 100 + (lane ^ 16), "lane {lane}");
+        }
+    }
+
+    #[test]
+    fn bar_red_reduces_over_arriving_lanes_only() {
+        let seeds = seeds(|lane| vec![(PRED, (lane != 31) as u32 | ((lane == 31) as u32) << 1)]);
+        let program = [
+            inst::guard(inst::exit(), 1, false),
+            inst::bar(inst::BAR_RED_AND, 0),
+            inst::b2r_result(5, 2),
+            inst::bar(inst::BAR_RED_POPC, 0),
+            inst::b2r_result(6, 3),
+        ];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
+        for r in &regs[..31] {
+            assert_eq!([r[5], r[6], r[PRED] >> 2 & 3], [1, 31, 3]);
+        }
+    }
+
+    #[test]
+    fn bar_short_of_its_thread_count_reports_the_stuck_lanes() {
+        let seeds = seeds(|lane| vec![(PRED, ((lane == 31) as u32) << 1)]);
+        let program = [inst::guard(inst::exit(), 1, false), inst::bar(0, LANES), inst::exit()];
+        let run = std::panic::catch_unwind(|| run_lanes(&program, &seeds, &[], &[]));
+        assert!(!matches!(run, Ok(Some(_))), "31 arrivals released a BAR waiting for 32");
     }
 }

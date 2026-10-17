@@ -74,6 +74,32 @@ mod tests {
         }
     }
 
+    // Lanes 16..31 wait at a BAR that lanes 0..15 only reach past WARPSYNC, so a full-warp WARPSYNC would deadlock.
+    #[test]
+    fn warpsync_holds_its_mask_and_lets_the_other_half_proceed() {
+        let seeds: Vec<Vec<u32>> = (0..32).map(|i| seeds_with(&[(4, i), (PRED, (8..16).contains(&i) as u32 | ((i >= 16) as u32) << 1)])).collect();
+        let program = [
+            guard(bra(0x30), 1, false),
+            guard(bra(0x40), 0, false),
+            warpsync(0xffff),
+            alu(SHFL_II | SHFL_BFLY | shfl_lanes(8, 0x1f) | preds(7, 0, 0, 0), 5, 4, 0),
+            bar_sync(),
+            exit(),
+            iadd_imm(4, 4, 100),
+            bra(-0x60),
+        ];
+        let Some(lanes) = run(&program, &seeds) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            let partner = lane ^ 8;
+            let expected = match lane {
+                0..8 => partner + 100,
+                8..16 => partner,
+                _ => 0,
+            };
+            assert_eq!(regs[5], expected, "lane {lane}");
+        }
+    }
+
     #[test]
     fn voteu_writes_ballot_and_result_to_uniform_registers() {
         let program = [alu(VOTEU | VOTE_EQ | preds(2, 0, 0, 0), 5, 0, 0), alu(VOTEU | VOTE_ANY | preds(3, 0, 0, 0), 6, 0, 0)];

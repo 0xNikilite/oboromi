@@ -1,6 +1,7 @@
 use super::*;
 
 impl<'a> Decoder<'a> {
+    // No-ops: ARRIVES(unmodeled), R2B(unmodeled).
     // The workgroup agrees on the lowest pc a lane can run through three rotating words, so one barrier per step keeps a
     // fast invocation's next vote out of the word a slow one is still reading. A lane waiting on BSYNC Bx cannot run while
     // another lane of its warp holds the same Bx token and is not at a BSYNC Bx itself. A lane past WARPSYNC waits until
@@ -201,7 +202,7 @@ impl<'a> Decoder<'a> {
             0 | 4 => (0, true),
             1 => (0, false),
             2 => (inst >> 74 & 3, true),
-            3 => todo!("BAR.SCAN has no published scan result or per-lane ordering in the SM86 table, Eden, Ryujinx, or NAK"),
+            3 => todo!("BAR.SCAN (class bar__SCAN_RR_RR: Rb, Rc, Pp with IDEST_SIZE = 0) writes no register, PTX has no bar.scan and ptxas never emits it, so the scan it leaves for B2R.RESULT is undocumented"),
             mode => panic!("BAR mode {mode} is invalid"),
         };
         assert!(op != 3, "BAR.RED operation 3 is invalid");
@@ -243,8 +244,8 @@ impl<'a> Decoder<'a> {
             return;
         }
         let mut target = self.cached_const_u32(branch_target(self.pc, inst).unwrap());
-        if opcode(inst) == BRA_UPRED {
-            let bit = self.pred_bit(true, upq, upq_not != 0);
+        if opcode(inst) == BRA_UPRED || inst >> 87 & 0xf != PT as u128 {
+            let bit = if opcode(inst) == BRA_UPRED { self.pred_bit(true, upq, upq_not != 0) } else { self.pp_bit(inst) };
             let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
             let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
             target = self.ir.emit_select(self.type_u32[1], taken, target, next);
@@ -285,6 +286,7 @@ impl<'a> Decoder<'a> {
             }
         }
     }
+    // The host driver owns dependency scoreboarding.
     pub fn depbar(&mut self, _inst: u128) {}
     pub fn exit(&mut self, _inst: u128) {
         let exit = self.cached_const_u32(u32::MAX);
@@ -333,7 +335,72 @@ impl<'a> Decoder<'a> {
         let address = self.ir.emit_u_convert(ty, address);
         self.store_pair(rd, address);
     }
-    pub fn nanosleep(&mut self, _inst: u128) {}
+    pub fn nanosleep(&mut self, inst: u128) {
+        const MAX_NS: u32 = 1_000_000;
+        const FALLBACK_ITERS: u32 = 4096;
+        if matches!(self.timing, Timing::Off) {
+            return;
+        }
+        let timing = std::mem::replace(&mut self.timing, Timing::Off);
+        let mut ns = self.alu_src(inst);
+        let cap = self.cached_const_u32(MAX_NS);
+        let over = self.ir.emit_ugreater_than(self.type_bool[1], ns, cap);
+        ns = self.ir.emit_select(self.type_u32[1], over, cap, ns);
+        match timing {
+            Timing::Off => {}
+            Timing::Clock { period, emitted } => {
+                if !emitted {
+                    self.ir.emit_capability(spirv::capability::SHADER_CLOCK);
+                    self.ir.emit_extension("SPV_KHR_shader_clock");
+                }
+                let scope = self.cached_const_u32(spirv::scope::DEVICE);
+                let start = self.ir.emit_read_clock(self.type_u32[2], scope);
+                let start = self.ir.emit_composite_extract(self.type_u32[1], start, &[0]);
+                let nanos = self.ir.emit_convert_u_to_f(self.type_f32[1], ns);
+                let period_id = self.ir.emit_constant_typed(self.type_f32[1], period);
+                let ticks = self.ir.emit_fdiv(self.type_f32[1], nanos, period_id);
+                let ticks = self.ir.emit_convert_f_to_u(self.type_u32[1], ticks);
+                let [header, body, done] = [(); 3].map(|_| self.ir.alloc_id());
+                self.ir.emit_branch(header);
+                self.ir.emit_label_id(header);
+                let now = self.ir.emit_read_clock(self.type_u32[2], scope);
+                let now = self.ir.emit_composite_extract(self.type_u32[1], now, &[0]);
+                let elapsed = self.ir.emit_isub(self.type_u32[1], now, start);
+                let elapsed = self.ir.emit_ugreater_than_equal(self.type_bool[1], elapsed, ticks);
+                self.ir.emit_loop_merge(done, body, 0);
+                self.ir.emit_branch_conditional(elapsed, done, body);
+                self.ir.emit_label_id(body);
+                self.ir.emit_branch(header);
+                self.ir.emit_label_id(done);
+                self.timing = Timing::Clock { period, emitted: true };
+            }
+            Timing::Fallback => {
+                let limit = self.cached_const_u32(FALLBACK_ITERS);
+                let over = self.ir.emit_ugreater_than(self.type_bool[1], ns, limit);
+                let limit = self.ir.emit_select(self.type_u32[1], over, limit, ns);
+                let counter = self.hint_buffer();
+                let ptr = self.ssbo_word(counter, self.const_u32_0, PMTRIG_WORDS as u32);
+                let [scope, relaxed] = [spirv::scope::DEVICE, spirv::memory_semantics::RELAXED].map(|v| self.cached_const_u32(v));
+                let old_step = self.ir.emit_load(self.type_u32[1], self.var_step);
+                self.ir.emit_store(self.var_step, self.const_u32_0);
+                let [header, body, done] = [(); 3].map(|_| self.ir.alloc_id());
+                self.ir.emit_branch(header);
+                self.ir.emit_label_id(header);
+                let i = self.ir.emit_load(self.type_u32[1], self.var_step);
+                let waits = self.ir.emit_uless_than(self.type_bool[1], i, limit);
+                self.ir.emit_loop_merge(done, body, 0);
+                self.ir.emit_branch_conditional(waits, body, done);
+                self.ir.emit_label_id(body);
+                self.ir.emit_atomic_iadd(self.type_u32[1], ptr, scope, relaxed, self.const_u32_0);
+                let i = self.ir.emit_iadd(self.type_u32[1], i, self.const_u32_1);
+                self.ir.emit_store(self.var_step, i);
+                self.ir.emit_branch(header);
+                self.ir.emit_label_id(done);
+                self.ir.emit_store(self.var_step, old_step);
+                self.timing = Timing::Fallback;
+            }
+        }
+    }
     pub fn nanotrap(&mut self, inst: u128) {
         self.exit(inst);
     }
@@ -395,5 +462,6 @@ impl<'a> Decoder<'a> {
         let ptr = self.barrier_token(WARPSYNC_MASK);
         self.ir.emit_store(ptr, waits);
     }
+    // SPIR-V and Vulkan expose no subgroup yield.
     pub fn yield_(&mut self, _inst: u128) {}
 }

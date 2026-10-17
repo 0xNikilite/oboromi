@@ -86,7 +86,7 @@ mod tests {
         let program = [
             sample(inst::TEX_LB_2D, 10, 8),
             sample(inst::TEX_LL_2D, 11, 8),
-            sample(inst::TEX_LC_2D, 12, 0xff),
+            sample(inst::TEX_LC_2D, 12, 8),
             sample(inst::TEX_LB_LC_2D, 13, 8),
         ];
         let Some(lanes) = run(&program, &vec![seed; 4], &texels, NEAREST) else { return };
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn tex_depth_compare_forms_pass_spirv_validation() {
         let word = inst::with_rb(texture(inst::TEX_LZ_2D | inst::TEX_DC, 8, 12, 4, 3, 0x10, 0xf), 6);
-        spirv_val(&translate_module(&[word], true, None));
+        spirv_val(&translate_module(&[word], true, None, false));
     }
 
     #[test]

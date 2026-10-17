@@ -118,6 +118,47 @@ mod tests {
         }
     }
 
+    // Row r keeps positions PAIRS[(5r + chunk) % 6] of each chunk of four k; lanes other than the selected metadata
+    // lanes of each quad hold all-(0, 1) metadata, which would multiply other B rows.
+    #[test]
+    fn hmma_sp_expands_a_by_the_selected_lanes_metadata() {
+        const PAIRS: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
+        const RE: usize = 20;
+        let kept = |row: usize, chunk: usize| PAIRS[(5 * row + chunk) % 6];
+        let [dense, b, c] = SMALL_INTS;
+        let a = |row: usize, k: usize| if [kept(row, k / 4).0, kept(row, k / 4).1].contains(&(k % 4)) { dense(row, k) } else { 0.0 };
+        for (word, k, selector) in [(HMMA | MMA_SP | MMA_16816 | MMA_F32, 16, 3), (HMMA | MMA_SP_16832 | MMA_F32, 32, 1)] {
+            let seeds: Vec<Vec<u32>> = (0..32).map(|lane| {
+                let (g, t) = quad(lane);
+                let mut regs = vec![0; RE + 1];
+                for (reg, (row, chunk)) in (0..k / 8).map(|reg| (g + 8 * (reg % 2), t + 4 * (reg / 2))).enumerate() {
+                    let (i, j) = kept(row, chunk);
+                    regs[RA + reg] = h(dense(row, 4 * chunk + i)) | h(dense(row, 4 * chunk + j)) << 16;
+                    regs[RB + reg] = pack(&F16, |i| b(2 * t + 8 * reg + i, g));
+                }
+                for reg in 0..4 {
+                    let (row, col) = d_element(lane, reg);
+                    regs[RC + reg] = c(row, col).to_bits();
+                }
+                let (selected, first_chunk) = if k == 16 { (t == selector, 0) } else { (t / 2 == selector, 4 * (t % 2)) };
+                regs[RE] = (0..8).fold(0, |metadata, nibble| {
+                    let (i, j) = if selected { kept(g + 8 * (nibble / 4), first_chunk + nibble % 4) } else { (0, 1) };
+                    metadata | ((j << 2 | i) as u32) << 4 * nibble
+                });
+                regs
+            }).collect();
+            let program = [alu3(word | (RE as u128) << 40 | (selector as u128) << 48, RD as u32, RA as u32, RB as u32, RC as u32)];
+            let Some(lanes) = run(&program, &seeds) else { return };
+            for (lane, regs) in lanes.iter().enumerate() {
+                let want = [0, 1, 2, 3].map(|reg| {
+                    let (row, col) = d_element(lane, reg);
+                    (c(row, col) + (0..k).map(|i| a(row, i) * b(i, col)).sum::<f32>()).to_bits()
+                });
+                assert_eq!(regs[RD..RD + 4], want, "lane {lane} {word:#x}");
+            }
+        }
+    }
+
     #[test]
     fn imma_sums_signed_and_unsigned_bytes() {
         let unsigned: [Matrix; 3] = [|row, k| ((row * 37 + k * 11) % 256) as f32, |k, col| ((k * 13 + col * 71) % 256) as f32, |row, col| (row * 8 + col) as f32];
@@ -151,6 +192,23 @@ mod tests {
             |row, col| [2147483520.0, -2147483520.0, (row * 8 + col) as f32][row % 3],
         ];
         assert_d(IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT, 32, &INT8, matrices, |x| x as i32 as u32);
+    }
+
+    #[test]
+    fn imma_sat_clamps_after_each_half_of_the_products() {
+        let seeds: Vec<Vec<u32>> = (0..32).map(|_| {
+            let mut regs = vec![0; RC + 4];
+            regs[RA..RA + 4].fill(u32::from_le_bytes([100; 4]));
+            regs[RB] = u32::from_le_bytes([1; 4]);
+            regs[RB + 1] = u32::from_le_bytes([u8::MAX; 4]);
+            regs[RC..RC + 4].fill((i32::MAX - 100) as u32);
+            regs
+        }).collect();
+        let word = IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT;
+        let Some(lanes) = run(&[alu3(word, RD as u32, RA as u32, RB as u32, RC as u32)], &seeds) else { return };
+        for (lane, regs) in lanes.iter().enumerate() {
+            assert_eq!(regs[RD..RD + 4], [(i32::MAX - 1600) as u32; 4], "lane {lane}");
+        }
     }
 
     // Lane L stores row L of the four 8x8 tiles at row slot 5L mod 32 and hands that address to LDSM, so a lane reading
@@ -260,6 +318,20 @@ mod tests {
         for (lane, regs) in (0..32).zip(lanes) {
             let (g, t) = quad(lane);
             assert_eq!(regs[RD], half(2 * t + 1, g) << 16 | half(2 * t, g), "lane {lane}");
+        }
+    }
+
+    // Small integers sum exactly in any order, so both paths agree exactly when the fragment-to-tile mapping is right.
+    #[test]
+    fn cooperative_hmma_matches_loops_on_exact_sums() {
+        use crate::tests::gpu::silicon::{replay_tensor, tensor_fixtures, tensor_program};
+        let Some(state) = crate::gpu::device().ok().filter(|d| !d.cooperative_f16_tiles.is_empty()) else {
+            return eprintln!("skipping: no VK_KHR_cooperative_matrix f16 tiles");
+        };
+        let fixtures = tensor_fixtures().into_iter().filter(|f| f.id.contains("/small-integers/") && crate::gpu::sm86::f16_hmma_shape(*tensor_program(f).last().unwrap()).is_some());
+        for fixture in fixtures {
+            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force)));
+            assert_eq!(cooperative, loops, "{}", fixture.id);
         }
     }
 }

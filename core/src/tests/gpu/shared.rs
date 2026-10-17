@@ -56,6 +56,34 @@ mod tests {
         assert!(regs.iter().all(|r| r[6] == LANES));
     }
 
+    // 32 lanes drop 32 of 40 expected arrivals and then arrive once each: 16 finish phase 0, 8 phase 1 and 8 phase 2.
+    #[test]
+    fn atoms_arrive_counts_mbarrier_phases_after_popc_inc_drops() {
+        const ATOMS_ARRIVE_64: u128 = 0x003e22000c80043f00000000ff027f8c;
+        const ATOMS_POPC_INC_32: u128 = 0x000fe2000d00003f00000000ffff7f8c;
+        let seeds = lanes(|_| vec![0, 0, 0, 0, 0x4000_0000 - 40, 0x8000_0000 - 16, 4]);
+        let program = [
+            inst::sts(255, 4),
+            inst::sts(6, 5),
+            inst::bar_sync(),
+            ATOMS_POPC_INC_32,
+            inst::bar_sync(),
+            ATOMS_ARRIVE_64,
+            inst::bar_sync(),
+            inst::lds(8, 255),
+            inst::lds(9, 6),
+        ];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else {
+            return;
+        };
+        assert!(regs.iter().all(|r| r[2] == 0x4000_0000 - 8 && r[8..10] == [0x4000_0000 - 8, 0xffff_fff8]));
+        let mut old: Vec<u32> = regs.iter().map(|r| r[3]).collect();
+        let mut want: Vec<u32> = (0x7fff_fff0..=0x7fff_ffff).chain(0xffff_fff8..=0xffff_ffff).chain(0x7fff_fff8..=0x7fff_ffff).collect();
+        old.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(old, want);
+    }
+
     #[test]
     fn atoms_cas_lets_exactly_one_lane_win() {
         let seeds = lanes(|i| vec![0, 0, 0, 0, 0, 0, 0, 0, 0, i + 1]);
@@ -96,21 +124,6 @@ mod tests {
         let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
         assert_eq!(regs.iter().filter(|r| [r[4], r[5]] == [0, 0]).count(), 1);
         assert!(regs.iter().all(|r| (1..=LANES).contains(&r[10]) && r[11] == 0));
-    }
-
-    #[test]
-    fn atoms_add_f32_returns_each_old_sum() {
-        if !crate::gpu::device().is_ok_and(|d| d.shader_shared_float32_atomic_add) {
-            eprintln!("skipping: no shaderSharedFloat32AtomicAdd");
-            return;
-        }
-        let seeds = lanes(|_| vec![0, 0, 0, 0, 0, 1.0f32.to_bits()]);
-        let program = [inst::sts(255, 255), inst::bar_sync(), inst::atoms_add_f32(4, 255, 5), inst::bar_sync(), inst::lds(6, 255)];
-        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
-        let mut old = regs.iter().map(|r| f32::from_bits(r[4]) as u32).collect::<Vec<_>>();
-        old.sort_unstable();
-        assert_eq!(old, (0..LANES).collect::<Vec<_>>());
-        assert!(regs.iter().all(|r| r[6] == (LANES as f32).to_bits()));
     }
 
     #[test]

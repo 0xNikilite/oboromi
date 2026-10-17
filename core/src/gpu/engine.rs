@@ -5,7 +5,7 @@ use super::compute::{ComputePipeline, HostBuffer, HostImage};
 use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
-use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Writer, within};
+use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Ram, Writer, ZeroCopy, within};
 use super::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy, hash};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
 use super::texture::TexturePool;
@@ -114,9 +114,10 @@ struct Target<'a> {
 
 pub struct Gpu<'a> {
     state: &'static VkState,
-    pub ram: Vec<u8>,
     pub space: PageMap,
     pub memory: MemoryTracker,
+    /// None where guest RAM cannot be imported, so buffers and render targets mirror it.
+    pub zero_copy: Option<ZeroCopy<'a>>,
     pusher: Pusher,
     modules: HashMap<u64, Module>,
     pipelines: PipelineBuilder<'static, PipelineKey, Pipeline>,
@@ -133,6 +134,8 @@ pub struct Gpu<'a> {
     pixels: Vec<u8>,
     /// The report timestamp counts nanoseconds from here.
     started: Instant,
+    // Declared after every imported Vulkan resource so their memory is freed before its host allocation.
+    ram: Ram,
 }
 
 fn named(e: impl std::fmt::Debug) -> String {
@@ -159,7 +162,11 @@ fn settle_ranges(targets: &mut HashMap<TargetKey, Target>, memory: &mut MemoryTr
     for (key, target) in targets {
         let Some(pending) = target.pending.take_if(|pending| within(&key.ranges, pending.clone()).any(|(_, piece)| overlaps(&piece))) else { continue };
         let pieces: Vec<_> = within(&key.ranges, pending.clone()).map(|(_, piece)| piece).collect();
-        memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);
+        if target.render_target.staging.imported.is_some() {
+            pieces.iter().for_each(|piece| memory.mark_gpu_written(piece.start, piece.end - piece.start));
+        } else {
+            memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);
+        }
         target.generation = generation(memory, &key.ranges);
     }
     Ok(())
@@ -344,6 +351,7 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
 impl<'a> Gpu<'a> {
     /// Keeps translated programs and the pipeline cache under `cache`'s root and title when given.
     pub fn new(state: &'static VkState, ram_bytes: usize, cache: Option<(&Path, &str)>, hacks: SpeedHacks) -> Result<Self, VkError> {
+        let alignment = state.external_memory_host.as_ref().map_or(align_of::<u128>(), |(_, alignment)| *alignment as usize);
         let policy = if hacks.skip_draw_while_compiling { PipelinePolicy::SkipDraw } else { PipelinePolicy::Wait };
         let disk = cache.and_then(|(root, title)| {
             let device = unsafe { state.instance.get_physical_device_properties(state.physical_device) };
@@ -351,7 +359,7 @@ impl<'a> Gpu<'a> {
         });
         Ok(Self {
             state,
-            ram: vec![0; ram_bytes],
+            zero_copy: ZeroCopy::new(state),
             space: PageMap::default(),
             memory: MemoryTracker::default(),
             pusher: Pusher::default(),
@@ -368,11 +376,23 @@ impl<'a> Gpu<'a> {
             pending_depth_clear: None,
             pixels: Vec::new(),
             started: Instant::now(),
+            ram: Ram::new(ram_bytes, alignment),
         })
     }
 
     pub fn flush_caches(&self) -> std::io::Result<()> {
         self.pipelines.flush()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn grow_ram(&mut self, bytes: usize) {
+        assert!(self.zero_copy.as_ref().is_none_or(|zero_copy| !zero_copy.imported()));
+        self.ram.resize(bytes);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ram_len(&self) -> usize {
+        self.ram.len()
     }
 
     /// A CPU write of guest memory at `va`.
@@ -545,10 +565,21 @@ impl<'a> Gpu<'a> {
             self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
         }
         self.support.as_mut().unwrap().write(&span.start.to_le_bytes()).map_err(named)?;
-        let ranges = self.space.resolve(span.start, len).map_err(|e| format!("the global window over all mapped guest memory: {e:?}"))?.collect();
+        let ranges: Vec<_> = self.space.resolve(span.start, len).map_err(|e| format!("the global window over all mapped guest memory: {e:?}"))?.collect();
         match &mut self.window {
-            Some(window) if window.buffer.size >= len => window.retarget(ranges),
-            window => *window = Some(Mapping::new(HostBuffer::new(self.state, len.next_power_of_two()).map_err(named)?, ranges)),
+            Some(window) if window.buffer.imported.is_some() && window.ranges == ranges => {}
+            Some(window) if window.buffer.imported.is_none() && window.buffer.size >= len => window.retarget(ranges),
+            window => {
+                let imported = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let buffer = match imported {
+                    Some(buffer) => buffer,
+                    None => HostBuffer::new(self.state, len.next_power_of_two()).map_err(named)?,
+                };
+                *window = Some(Mapping::new(buffer, ranges));
+            }
         }
         self.memory.refresh(self.window.as_mut().unwrap(), &self.ram).map_err(named)
     }
@@ -664,7 +695,14 @@ impl<'a> Gpu<'a> {
         match self.mirrors.get_mut(&ranges) {
             Some(mapping) => self.memory.refresh(mapping, &self.ram).map_err(named)?,
             None => {
-                let mapping = self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?;
+                let imported = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let mapping = match imported {
+                    Some(buffer) => Mapping::new(buffer, ranges.clone()),
+                    None => self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?,
+                };
                 self.mirrors.insert(ranges.clone(), mapping);
             }
         }
@@ -813,12 +851,17 @@ impl<'a> Gpu<'a> {
         let target = match self.targets.entry(target_key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth).map_err(named)?;
+                let staging = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth, staging).map_err(named)?;
                 entry.insert(Target { render_target, generation: u64::MAX, pending: None, depth_cleared: false })
             }
         };
         let load = clear.is_none() && target.generation != current;
-        if load {
+        let imported = target.render_target.staging.imported.is_some();
+        if load && !imported {
             self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
             gather(&self.space, &self.ram, ct.address, &mut self.pixels).map_err(named)?;
             target.render_target.write(&self.pixels).map_err(named)?;

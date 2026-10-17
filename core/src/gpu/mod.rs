@@ -5,6 +5,8 @@ pub mod bnsh;
 pub mod compute;
 pub mod compute_class;
 pub mod demo;
+pub mod demo_bounce;
+pub mod demo_particles;
 pub mod demo_post;
 pub mod demo_sprites;
 pub mod engine;
@@ -59,6 +61,8 @@ pub struct VkState {
     pub(crate) libraries: std::sync::Mutex<std::collections::HashMap<(vk::GraphicsPipelineLibraryFlagsEXT, u64), vk::Pipeline>>,
     /// Present when colour blend enable, blend equation and colour write mask are dynamic state.
     pub extended_dynamic_state3: Option<ash::ext::extended_dynamic_state3::Device>,
+    /// Present with VK_KHR_ray_query, which translated TTU programs need.
+    pub acceleration_structure: Option<ash::khr::acceleration_structure::Device>,
     pub signed_zero_inf_nan_preserve: [bool; 3],
     pub denorm_preserve: [bool; 3],
     pub shader_float16: bool,
@@ -67,6 +71,8 @@ pub struct VkState {
     pub index_type_uint8: bool,
     pub surface: Option<ash::khr::surface::Instance>,
     pub swapchain: Option<ash::khr::swapchain::Device>,
+    /// Present when host memory imports as buffer memory, with the alignment imported pointers and sizes need.
+    pub external_memory_host: Option<(ash::ext::external_memory_host::Device, u64)>,
 }
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
@@ -120,7 +126,7 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3]) =
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3, ray_query], host_pointer_alignment) =
             Self::open_device(&instance, surfaces)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
@@ -132,6 +138,8 @@ impl VkState {
             surface: surfaces.then(|| ash::khr::surface::Instance::new(&entry, &instance)),
             swapchain: surfaces.then(|| ash::khr::swapchain::Device::new(&instance, &device)),
             extended_dynamic_state3: extended_dynamic_state3.then(|| ash::ext::extended_dynamic_state3::Device::new(&instance, &device)),
+            acceleration_structure: ray_query.then(|| ash::khr::acceleration_structure::Device::new(&instance, &device)),
+            external_memory_host: host_pointer_alignment.map(|alignment| (ash::ext::external_memory_host::Device::new(&instance, &device), alignment)),
             entry,
             instance,
             physical_device,
@@ -181,7 +189,7 @@ impl VkState {
     fn open_device(
         instance: &ash::Instance,
         surfaces: bool,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, [bool; 2]), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, [bool; 3], Option<u64>), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -205,7 +213,13 @@ impl VkState {
         let mut uint8_indices = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default();
         let mut library = vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT::default();
         let mut dynamic3 = vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT::default();
+        let mut addresses = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+        let mut structures = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut queries = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut addresses)
+            .push_next(&mut structures)
+            .push_next(&mut queries)
             .push_next(&mut float16_int8)
             .push_next(&mut atomic_int64)
             .push_next(&mut derivatives)
@@ -238,6 +252,21 @@ impl VkState {
             dynamic3.extended_dynamic_state3_color_write_mask,
         ] == [vk::TRUE; 3]
             && has(vk::EXT_EXTENDED_DYNAMIC_STATE3_NAME);
+        let ray_query = [addresses.buffer_device_address, structures.acceleration_structure, queries.ray_query] == [vk::TRUE; 3]
+            && [vk::KHR_ACCELERATION_STRUCTURE_NAME, vk::KHR_RAY_QUERY_NAME, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME].into_iter().all(has);
+        let mut host_allocation = vk::ExternalBufferProperties::default();
+        let buffer_info = vk::PhysicalDeviceExternalBufferInfo::default()
+            .usage(compute::buffer_info(0).usage)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        unsafe { instance.get_physical_device_external_buffer_properties(physical_device, &buffer_info, &mut host_allocation) };
+        let device_type = unsafe { instance.get_physical_device_properties(physical_device) }.device_type;
+        let external_memory_host = matches!(device_type, vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU)
+            && has(vk::EXT_EXTERNAL_MEMORY_HOST_NAME)
+            && host_allocation.external_memory_properties.external_memory_features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE);
+        let mut host_pointer = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
+        if external_memory_host {
+            unsafe { instance.get_physical_device_properties2(physical_device, &mut vk::PhysicalDeviceProperties2::default().push_next(&mut host_pointer)) };
+        }
         let enabled_extensions: Vec<_> = [
             (linear_derivatives, derivatives_extension),
             (index_type_uint8, vk::KHR_INDEX_TYPE_UINT8_NAME),
@@ -245,6 +274,10 @@ impl VkState {
             (graphics_pipeline_library, vk::EXT_GRAPHICS_PIPELINE_LIBRARY_NAME),
             (extended_dynamic_state3, vk::EXT_EXTENDED_DYNAMIC_STATE3_NAME),
             (surfaces, ash::khr::swapchain::NAME),
+            (ray_query, vk::KHR_ACCELERATION_STRUCTURE_NAME),
+            (ray_query, vk::KHR_RAY_QUERY_NAME),
+            (ray_query, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME),
+            (external_memory_host, vk::EXT_EXTERNAL_MEMORY_HOST_NAME),
         ]
         .into_iter()
         .filter_map(|(enabled, name)| enabled.then_some(name.as_ptr()))
@@ -271,6 +304,9 @@ impl VkState {
             .extended_dynamic_state3_color_blend_equation(true)
             .extended_dynamic_state3_color_write_mask(true);
         let mut enabled_vulkan13 = vk::PhysicalDeviceVulkan13Features::default().dynamic_rendering(true);
+        let mut enabled_addresses = vk::PhysicalDeviceBufferDeviceAddressFeatures::default().buffer_device_address(true);
+        let mut enabled_structures = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
+        let mut enabled_queries = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&enabled_extensions)
@@ -288,12 +324,15 @@ impl VkState {
         if extended_dynamic_state3 {
             device_info = device_info.push_next(&mut enabled_dynamic3);
         }
+        if ray_query {
+            device_info = device_info.push_next(&mut enabled_addresses).push_next(&mut enabled_structures).push_next(&mut enabled_queries);
+        }
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3])),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3, ray_query], external_memory_host.then_some(host_pointer.min_imported_host_pointer_alignment))),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

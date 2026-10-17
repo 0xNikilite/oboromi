@@ -17,6 +17,7 @@ mod fp;
 mod int_alu;
 mod memory;
 mod operands;
+mod ray;
 mod shared;
 mod special;
 mod tensor;
@@ -54,12 +55,13 @@ const EXIT: u32 = 0x94d;
 const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
 const BSYNC: u32 = 0x941;
-// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT
-// and the WARPSYNC mask it waits on.
+// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT,
+// the WARPSYNC mask it waits on and the byte address its EXIT jumps to, 0 for none.
 const BAR_ARRIVALS: u32 = 16;
 const BAR_RESULT: u32 = 32;
 const WARPSYNC_MASK: u32 = 33;
-const SYNC_WORDS: u32 = 34;
+const ATEXIT_PC: u32 = 34;
+const SYNC_WORDS: u32 = 35;
 // A schedule slot holds the pc vote, then per guest barrier the arrivals plus their BAR.RED predicates in the high half,
 // and the arrivals' thread count OR-ed with bit 12 for a running lane yet to arrive.
 const SCHEDULE_STRIDE: u32 = 1 + 2 * 16;
@@ -93,6 +95,14 @@ pub enum ResourceKind {
     /// The vec4 at attribute `attr` of every vertex of the primitive or patch.
     PerVertex { attr: u32, output: bool },
     Patch { location: u32 },
+    Ttu,
+    RayQuery,
+    AccelerationStructure { cbuf_bank: u32, byte_offset: u32 },
+}
+
+/// A module binds its acceleration structure after its textures and surfaces.
+pub fn acceleration_structure_binding(kinds: &[ResourceKind]) -> u32 {
+    TEXTURE_BINDING + kinds.iter().filter(|kind| matches!(kind, ResourceKind::Texture2D { .. } | ResourceKind::Surface2D { .. })).count() as u32
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -158,6 +168,8 @@ pub struct Decoder<'a> {
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
+    type_acceleration_structure: u32,
+    acceleration_structure_address: Option<(u32, u32)>,
     derivatives: bool,
     invocations: u32,
     glsl_ext: u32,
@@ -300,6 +312,8 @@ impl<'a> Decoder<'a> {
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],
+            type_acceleration_structure: 0,
+            acceleration_structure_address: None,
             derivatives: false,
             invocations: 0,
             glsl_ext: 0,
@@ -326,6 +340,7 @@ impl<'a> Decoder<'a> {
             Stage::Geometry { .. } => model::GEOMETRY,
             Stage::Fragment { .. } => model::FRAGMENT,
         };
+        self.bind_acceleration_structure();
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
@@ -489,6 +504,28 @@ impl<'a> Decoder<'a> {
     fn warp_exchange(&mut self, val: u32, lanes: &[u32]) -> Vec<[u32; 2]> {
         const MAX_INVOCATIONS: u32 = 1024;
         let ty = self.type_u32[1];
+        if matches!(self.stage, Stage::Fragment { .. }) {
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_SHUFFLE);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_BALLOT);
+            let scope = self.cached_const_u32(spirv::scope::SUBGROUP);
+            let own = self.builtin(spirv::BuiltIn::SubgroupLocalInvocationId);
+            let yes = self.ir.emit_constant_true(self.type_bool[1]);
+            let present = self.ir.emit_group_non_uniform_ballot(self.type_u32[4], scope, yes);
+            let mask = self.cached_const_u32(!31);
+            let base = self.ir.emit_bitwise_and(ty, own, mask);
+            let value = self.ir.emit_select(ty, self.active, val, self.const_u32_0);
+            let active = self.bool_bit(self.active);
+            return lanes.iter().map(|&lane| {
+                let source = self.ir.emit_iadd(ty, base, lane);
+                let exists = self.ir.emit_group_non_uniform_ballot_bit_extract(self.type_bool[1], scope, present, source);
+                let source = self.ir.emit_select(ty, exists, source, own);
+                [value, active].map(|word| {
+                    let word = self.ir.emit_group_non_uniform_shuffle(ty, scope, word, source);
+                    self.ir.emit_select(ty, exists, word, self.const_u32_0)
+                })
+            }).collect();
+        }
         let invocation = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
         let flags = self.cached_const_u32(MAX_INVOCATIONS);
         let val = self.ir.emit_select(ty, self.active, val, self.const_u32_0);
@@ -558,9 +595,11 @@ impl<'a> Decoder<'a> {
     // Warp collectives and BAR meet at workgroup barriers, so a program with them steps every invocation through the same
     // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
+        self.acceleration_structure_address = ray::acceleration_structure_address(words);
         let len = words.len() as u32;
-        // BRX, JMX and CALL Ra only know their target at run time, so such a program dispatches on every pc; RET lands after a CALL.
-        let indirect = words.iter().any(|inst| matches!(opcode(*inst), CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));
+        // BRX, JMX, CALL Ra and BMOV ATEXIT_PC only know their target at run time, so such a program dispatches on every pc; RET
+        // lands after a CALL.
+        let indirect = words.iter().any(|inst| matches!(opcode(*inst), 0x357 | 0x957 | CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));
         let mut leaders: Vec<u32> = if indirect { (0..=len).collect() } else { vec![0, len] };
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));
@@ -588,7 +627,7 @@ impl<'a> Decoder<'a> {
         let end = self.cached_const_u32(len);
         let start = self.ir.emit_select(self.type_u32[1], dead, end, self.const_u32_0);
         self.ir.emit_store(self.var_pc, start);
-        if uniform {
+        if uniform && matches!(self.stage, Stage::Compute { .. }) {
             self.clear_schedule_slot(self.const_u32_0, &guest_barriers(words));
             self.workgroup_barrier();
         }

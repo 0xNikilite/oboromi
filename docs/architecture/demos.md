@@ -13,6 +13,8 @@ The Qt window has buttons that draw through the GPU work today. Six bigger scene
 | BoomBox | `demo::render_boombox_frame` | NVIDIA-compiled PBR shaders draw the BoomBox with five mipmapped textures and a depth buffer, turning once every eight seconds under a still light; run `demos/assets/fetch.sh` first |
 | Helmet | `demo::render_helmet_frame` | The same path draws FlightHelmet's six materials, one draw each; run `demos/assets/fetch.sh` first |
 | Sprites | `demo_sprites::render_sprites_frame` | NVIDIA-compiled sprite shaders draw a scrolling parallax scene of blended sprites as one instanced draw |
+| Music | `demo_music::play_music` | A 16-bar loop plays through the audio renderer: synthesised samples on voices, a low-pass and an echo on the final mix |
+| Bounce | `demo_bounce::render_bounce_frame` | Balls bounce in a box drawn with the particle shaders, and every hit plays a knock on a free voice |
 
 The Julia set program loops with a predicated branch, a jump taken only where a one-bit flag is set. It reuses one pipeline built once, so a frame costs a dispatch, a readback and a present.
 
@@ -66,10 +68,9 @@ flowchart LR
     PBR --> RT["raytraced<br/>Shadows and reflections by ray queries"]
     TRI --> SPR["sprites2d<br/>Layered 2D sprites"]
     TRI --> PART["particles<br/>Moved by a compute launch"]
-    RT -.->|"Still needs"| N1["Acceleration structures,<br/>Depth kept in guest memory"]
 ```
 
-*The six scenes. The ray-traced one still needs two engine features.*
+*The six scenes.*
 
 | Scene | Content | Shaders |
 |---|---|---|
@@ -78,9 +79,9 @@ flowchart LR
 | particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag |
 | sprites2d | Scrolling hill layers and floating sprites, blended over a sky | sprite2d.vert, sprite2d.frag |
 | pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material | pbr.vert, pbr.frag |
-| raytraced | BoomBox on a ground plane with ray-query shadows and reflections, plus ray-traced ambient occlusion | rt.frag, rt_ao.comp |
+| raytraced | BoomBox on a ground plane with ray-query shadows, metallic reflections and ambient occlusion | pbr.vert, rt.frag |
 
-The ray-traced scene is being built. It still needs two engine features.
+The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture` example with `raytraced`. It requires ray queries and fragment subgroup operations.
 
 ### What do the new scenes look like?
 
@@ -100,9 +101,21 @@ The ray-traced scene is being built. It still needs two engine features.
 
 *BoomBox: the model turns on a turntable under a still light, so the shine and the glowing display move across it.*
 
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced.mp4" type="video/mp4"></video>
+
+*Ray-traced BoomBox: shadows fall on the ground, four rays darken sheltered surfaces, and metallic surfaces reflect the sky where reflection rays miss.*
+
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet.mp4" type="video/mp4"></video>
 
 *FlightHelmet: six materials and fifteen textures through the same shaders, one draw per material.*
+
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-music-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-music.mp4" type="video/mp4"></video>
+
+*Music: four instruments made at startup play a looping tune through the audio renderer, with a low-pass and an echo on the mix.*
+
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-bounce-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-bounce.mp4" type="video/mp4"></video>
+
+*Bounce: every hit plays a knock, higher for small balls and louder for hard hits, panned to where it happened.*
 
 Each scene document in `demos/scenes` lists its guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. NVIDIA's driver compiles them into the SM86 programs the scenes load.
 
@@ -125,4 +138,4 @@ BoomBox, Avocado and FlightHelmet are CC0 1.0 by Microsoft, from KhronosGroup's 
 
 Verified by: an offscreen screenshot of each button's output, the engine acceptance test for the triangle, the Julia centre test, and the block-linear tiling matching the converter.
 
-Sources: core/src/gpu/frame.rs, core/src/gpu/demo.rs, core/src/ffi.rs, gui-qt/src/MainWindow.cpp, demos/README, demos/scenes/*.md, demos/assets/README, scripts/gltf_to_raw.py, core/examples/perf.rs.
+Sources: core/src/gpu/frame.rs, core/src/gpu/demo.rs, core/src/gpu/demo_bounce.rs, core/src/audio/demo_music.rs, core/src/ffi.rs, gui-qt/src/MainWindow.cpp, demos/README, demos/scenes/*.md, demos/assets/README, scripts/gltf_to_raw.py, core/examples/perf.rs.

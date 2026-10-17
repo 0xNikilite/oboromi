@@ -246,6 +246,9 @@ fn encode(kind: ResourceKind) -> [u32; 4] {
         FragmentOutput { location } => [15, location, 0, 0],
         PerVertex { attr, output } => [16, attr, output.into(), 0],
         Patch { location } => [17, location, 0, 0],
+        Ttu => [18, 0, 0, 0],
+        RayQuery => [19, 0, 0, 0],
+        AccelerationStructure { cbuf_bank, byte_offset } => [20, cbuf_bank, byte_offset, 0],
     }
 }
 
@@ -270,6 +273,9 @@ fn decode([tag, a, b, c]: [u32; 4]) -> Option<ResourceKind> {
         15 => FragmentOutput { location: a },
         16 => PerVertex { attr: a, output: b != 0 },
         17 => Patch { location: a },
+        18 => Ttu,
+        19 => RayQuery,
+        20 => AccelerationStructure { cbuf_bank: a, byte_offset: b },
         _ => return None,
     })
 }

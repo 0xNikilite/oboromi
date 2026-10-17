@@ -70,6 +70,10 @@ pub mod capability {
     pub const INT16: u32 = 22;
     pub const INT8: u32 = 39;
     pub const IMAGE_QUERY: u32 = 50;
+    pub const GROUP_NON_UNIFORM: u32 = 61;
+    pub const GROUP_NON_UNIFORM_ARITHMETIC: u32 = 63;
+    pub const GROUP_NON_UNIFORM_BALLOT: u32 = 64;
+    pub const GROUP_NON_UNIFORM_SHUFFLE: u32 = 65;
     pub const STORAGE_BUFFER_16BIT: u32 = 4433;
     pub const STORAGE_BUFFER_8BIT: u32 = 4448;
     pub const PHYSICAL_STORAGE_BUFFER_ADDRESSES: u32 = 5348;
@@ -77,6 +81,7 @@ pub mod capability {
     pub const VARIABLE_POINTERS: u32 = 4442;
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
+    pub const RAY_QUERY: u32 = 4472;
 }
 
 pub mod storage_class {
@@ -97,6 +102,7 @@ pub mod storage_class {
 pub mod scope {
     pub const DEVICE: u32 = 1;
     pub const WORKGROUP: u32 = 2;
+    pub const SUBGROUP: u32 = 3;
 }
 
 pub mod memory_semantics {
@@ -209,7 +215,7 @@ fn section(opcode: u32, operands: &[u32]) -> usize {
         16 | 331 => 6,                                     // OpExecutionMode(Id)
         2..=7 | 330 => 7,                                  // OpSource* to OpString, OpModuleProcessed
         71..=75 | 332 => 8,                                // OpDecorate* and OpGroup*Decorate
-        19..=39 | 41..=52 => 9,                            // OpType*, OpConstant*, OpSpecConstant*
+        19..=39 | 41..=52 | 4472 | 5341 => 9,              // OpType*, OpConstant*, OpSpecConstant*
         59 if operands[2] != storage_class::FUNCTION => 9, // global OpVariable
         _ => 10,                                           // function bodies
     }
@@ -437,6 +443,18 @@ impl Emitter {
     pub fn emit_type_sampled_image(&mut self, image_type: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(27, &[r, image_type]);
+        r
+    }
+
+    pub fn emit_type_acceleration_structure(&mut self) -> u32 {
+        let r = self.alloc_id();
+        self.inst(5341, &[r]);
+        r
+    }
+
+    pub fn emit_type_ray_query(&mut self) -> u32 {
+        let r = self.alloc_id();
+        self.inst(4472, &[r]);
         r
     }
 
@@ -766,6 +784,18 @@ impl Emitter {
         r
     }
 
+    pub fn emit_ray_query_initialize(&mut self, query: u32, accel: u32, flags: u32, cull_mask: u32, origin: u32, tmin: u32, direction: u32, tmax: u32) {
+        self.inst(4473, &[query, accel, flags, cull_mask, origin, tmin, direction, tmax]);
+    }
+
+    pub fn emit_ray_query_confirm_intersection(&mut self, query: u32) {
+        self.inst(4476, &[query]);
+    }
+
+    pub fn emit_ray_query_proceed(&mut self, ty: u32, query: u32) -> u32 { self.typed_un(4477, ty, query) }
+
+    pub fn emit_ray_query_get_intersection(&mut self, op: u32, ty: u32, query: u32, committed: u32) -> u32 { self.typed_bin(op, ty, query, committed) }
+
     pub fn emit_sampled_image(&mut self, ty: u32, image: u32, sampler: u32) -> u32 {
         self.typed_bin(86, ty, image, sampler)
     }
@@ -944,6 +974,10 @@ impl Emitter {
         let r = self.alloc_id();
         self.inst(339, &[ty, r, scope, predicate]);
         r
+    }
+
+    pub fn emit_group_non_uniform_ballot_bit_extract(&mut self, ty: u32, scope: u32, ballot: u32, index: u32) -> u32 {
+        self.typed_tri(341, ty, scope, ballot, index)
     }
 
     pub fn emit_group_non_uniform_shuffle(&mut self, ty: u32, scope: u32, value: u32, id: u32) -> u32 {

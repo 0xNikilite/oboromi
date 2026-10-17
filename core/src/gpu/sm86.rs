@@ -359,6 +359,7 @@ pub struct Decoder<'a> {
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
     derivatives: bool,
+    invocations: u32,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
@@ -437,6 +438,7 @@ pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl Fn
     let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
     let func = decoder.ir.emit_function(void_ty, 0, func_ty);
     decoder.ir.emit_label();
+    decoder.invocations = local_size.iter().product();
     body(&mut decoder);
     decoder.emit_entry_point(func, device, local_size);
     decoder.ir.emit_return();
@@ -485,6 +487,7 @@ impl<'a> Decoder<'a> {
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],
             derivatives: false,
+            invocations: 0,
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
@@ -627,7 +630,7 @@ impl<'a> Decoder<'a> {
     }
 
     // A warp is 32 consecutive invocations that trade values through a workgroup array, so every lane must reach the barriers.
-    // Each source lane yields its value, or 0 when it is not active this step, and its active bit.
+    // Each source lane yields its value, or 0 when it is not active this step or past the end of a partial last warp, and its active bit.
     fn warp_exchange(&mut self, val: u32, lanes: &[u32]) -> Vec<[u32; 2]> {
         const MAX_INVOCATIONS: u32 = 1024;
         let ty = self.type_u32[1];
@@ -646,11 +649,18 @@ impl<'a> Decoder<'a> {
         let mut values = Vec::new();
         for &lane in lanes {
             let index = self.ir.emit_iadd(ty, base, lane);
-            values.push([self.const_u32_0, flags].map(|offset| {
+            let words = [self.const_u32_0, flags].map(|offset| {
                 let index = self.ir.emit_iadd(ty, index, offset);
                 let slot = self.workgroup_word(ResourceKind::Warp, 2 * MAX_INVOCATIONS, index);
                 self.ir.emit_load(ty, slot)
-            }));
+            });
+            if self.invocations % 32 == 0 {
+                values.push(words);
+                continue;
+            }
+            let invocations = self.cached_const_u32(self.invocations);
+            let exists = self.ir.emit_uless_than(self.type_bool[1], index, invocations);
+            values.push(words.map(|word| self.ir.emit_select(ty, exists, word, self.const_u32_0)));
         }
         self.workgroup_barrier();
         values

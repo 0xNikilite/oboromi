@@ -310,7 +310,7 @@ impl World {
             last: chambers[4],
         };
         for (i, &(c, axis, at, ..)) in corridors.iter().enumerate() {
-            let shrunk = if axis == 0 { Box3 { lo: [c.lo[0] - 1.0, 0.0, at - 0.6], hi: [c.hi[0] + 1.0, 0.0, at + 0.6] } } else { Box3 { lo: [at - 0.6, 0.0, c.lo[2] - 1.0], hi: [at + 0.6, 0.0, c.hi[2] + 1.0] } };
+            let shrunk = if axis == 0 { Box3 { lo: [c.lo[0] - 1.6, 0.0, at - 0.6], hi: [c.hi[0] + 1.6, 0.0, at + 0.6] } } else { Box3 { lo: [at - 0.6, 0.0, c.lo[2] - 1.6], hi: [at + 0.6, 0.0, c.hi[2] + 1.6] } };
             world.walk.push(shrunk);
             if i == 3 {
                 world.sources.push((Sfx::Wind, add(c.centre(), [0.0, 1.0, 0.0]), 0.9));
@@ -322,7 +322,7 @@ impl World {
                 Kind::Cave => {
                     world.walk.push(Box3 { lo: [s.lo[0] + 1.6, 0.0, s.lo[2] + 1.6], hi: [s.hi[0] - 1.6, 0.0, river.lo[2] - 0.5] });
                     world.walk.push(Box3 { lo: [s.lo[0] + 1.6, 0.0, river.hi[2] + 0.5], hi: [s.hi[0] - 1.6, 0.0, s.hi[2] - 1.6] });
-                    world.walk.push(bridge.shrink(0.5));
+                    world.walk.push(Box3 { lo: [bridge.lo[0] + 0.5, 0.0, bridge.lo[2]], hi: [bridge.hi[0] - 0.5, 0.0, bridge.hi[2]] });
                 }
                 _ => world.walk.push(s.shrink(0.45)),
             }

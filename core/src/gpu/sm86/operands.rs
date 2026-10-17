@@ -290,7 +290,9 @@ impl<'a> Decoder<'a> {
         let compute_only = matches!(builtin, BuiltIn::LocalInvocationIndex | BuiltIn::LocalInvocationId | BuiltIn::WorkgroupId);
         assert!(compute_only == matches!(self.stage, Stage::Compute { .. }), "{builtin:?} is not an input of a {:?} module", self.stage);
         let ty = match builtin {
-            BuiltIn::LocalInvocationIndex => self.type_u32[1],
+            BuiltIn::LocalInvocationIndex | BuiltIn::VertexIndex | BuiltIn::InstanceIndex => self.type_u32[1],
+            BuiltIn::FragCoord => self.type_f32[4],
+            BuiltIn::FrontFacing => self.type_bool[1],
             _ => self.type_u32[3],
         };
         let builtin = builtin as u32;
@@ -305,6 +307,32 @@ impl<'a> Decoder<'a> {
             }
         };
         self.ir.emit_load(ty, var)
+    }
+
+    pub(super) fn interface_vec4(&mut self, kind: ResourceKind, storage: u32) -> u32 {
+        use spirv::decoration::{BUILTIN, FLAT, LOCATION};
+        if let Some(var) = self.resource(kind) {
+            return var;
+        }
+        let ptr = self.ir.emit_type_pointer(storage, self.type_f32[4]);
+        let var = self.ir.emit_variable(ptr, storage);
+        match kind {
+            ResourceKind::BuiltIn(builtin) => self.ir.emit_decorate(var, BUILTIN, &[builtin]),
+            ResourceKind::VertexInput { location } | ResourceKind::Varying { location, .. } | ResourceKind::FragmentOutput { location } => self.ir.emit_decorate(var, LOCATION, &[location]),
+            _ => unreachable!("{kind:?} is not a stage interface"),
+        }
+        if let ResourceKind::Varying { flat: true, .. } = kind {
+            self.ir.emit_decorate(var, FLAT, &[]);
+        }
+        self.resources.push(Resource { kind, var });
+        var
+    }
+
+    pub(super) fn interface_component(&mut self, kind: ResourceKind, storage: u32, attr: u32) -> u32 {
+        let var = self.interface_vec4(kind, storage);
+        let ptr = self.ir.emit_type_pointer(storage, self.type_f32[1]);
+        let component = self.cached_const_u32(attr / 4 % 4);
+        self.ir.emit_access_chain(ptr, var, &[component])
     }
 
     pub(super) fn special_register(&mut self, index: u32) -> u32 {

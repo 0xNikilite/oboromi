@@ -85,6 +85,9 @@ pub enum ResourceKind {
     Global64,
     Texture2D { cbuf_bank: u32, byte_offset: u32 },
     Surface2D { cbuf_bank: u32, byte_offset: u32, format: vk::Format },
+    VertexInput { location: u32 },
+    Varying { location: u32, flat: bool },
+    FragmentOutput { location: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

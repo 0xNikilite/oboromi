@@ -1,4 +1,7 @@
-use super::threed::{DrawSnapshot, ThreeD, ThreeDEvent, CLASS_ID};
+use super::{
+    compute_class::{CLASS_ID as COMPUTE_CLASS_ID, ComputeClass, DispatchSnapshot},
+    threed::{CLASS_ID as THREED_CLASS_ID, DrawSnapshot, ThreeD, ThreeDEvent},
+};
 
 const SET_OBJECT: usize = 0x00;
 const SEMAPHORE_A: usize = 0x10;
@@ -30,6 +33,7 @@ impl GpFifoEntry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Draw(DrawSnapshot),
+    Dispatch(DispatchSnapshot),
     Report { addr: u64, payload: u32 },
     SemaphoreAcquire { addr: u64, payload: u32 },
     SemaphoreRelease { addr: u64, payload: u32 },
@@ -57,6 +61,7 @@ pub struct Pusher {
     packet: Option<Packet>,
     classes: [Option<u16>; 8],
     semaphore: [u32; 3],
+    compute: ComputeClass,
     threed: ThreeD,
 }
 
@@ -95,8 +100,8 @@ impl Pusher {
             while let Some(bytes) = words.next() {
                 let word = u32::from_le_bytes(bytes.try_into().unwrap());
                 if self.packet.is_some() {
-                    self.data(word, &mut write_memory, &mut events)?;
-                } else if !self.header(word, &mut write_memory, &mut events)? {
+                    self.data(word, &mut fetch, &mut write_memory, &mut events)?;
+                } else if !self.header(word, &mut fetch, &mut write_memory, &mut events)? {
                     break;
                 }
             }
@@ -104,9 +109,10 @@ impl Pusher {
         Ok(events)
     }
 
-    fn header(
+    fn header<'a>(
         &mut self,
         word: u32,
+        fetch: &mut impl FnMut(u64, usize) -> Result<&'a [u8], String>,
         write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
         events: &mut Vec<Event>,
     ) -> Result<bool, String> {
@@ -135,6 +141,7 @@ impl Pusher {
                     method,
                     subchannel,
                     (word >> 16) & 0x1fff,
+                    fetch,
                     write_memory,
                     events,
                 )?;
@@ -162,9 +169,10 @@ impl Pusher {
         Ok(true)
     }
 
-    fn data(
+    fn data<'a>(
         &mut self,
         value: u32,
+        fetch: &mut impl FnMut(u64, usize) -> Result<&'a [u8], String>,
         write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
         events: &mut Vec<Event>,
     ) -> Result<(), String> {
@@ -174,18 +182,19 @@ impl Pusher {
             Mode::NonIncrement => packet.method,
             Mode::OneIncrement => packet.method + u16::from(packet.consumed != 0),
         };
-        self.dispatch(method, packet.subchannel, value, write_memory, events)?;
+        self.dispatch(method, packet.subchannel, value, fetch, write_memory, events)?;
         packet.remaining -= 1;
         packet.consumed += 1;
         self.packet = (packet.remaining != 0).then_some(packet);
         Ok(())
     }
 
-    fn dispatch(
+    fn dispatch<'a>(
         &mut self,
         method: u16,
         subchannel: usize,
         value: u32,
+        fetch: &mut impl FnMut(u64, usize) -> Result<&'a [u8], String>,
         write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
         events: &mut Vec<Event>,
     ) -> Result<(), String> {
@@ -198,18 +207,23 @@ impl Pusher {
                 method as usize * 4
             )
         })?;
-        if class != CLASS_ID {
+        if class == COMPUTE_CLASS_ID {
+            if let Some(dispatch) = self.compute.write(method, value, fetch)? {
+                events.push(Event::Dispatch(dispatch));
+            }
+        } else if class == THREED_CLASS_ID {
+            if let Some(event) = self.threed.write(method, value, write_memory)? {
+                events.push(match event {
+                    ThreeDEvent::Draw(draw) => Event::Draw(draw),
+                    ThreeDEvent::Report { addr, payload } => Event::Report { addr, payload },
+                    ThreeDEvent::Clear { value } => Event::Clear { value },
+                });
+            }
+        } else {
             return Err(format!(
                 "unsupported class method: class {class:#06x}, method {:#06x}",
                 method as usize * 4
             ));
-        }
-        if let Some(event) = self.threed.write(method, value, write_memory)? {
-            events.push(match event {
-                ThreeDEvent::Draw(draw) => Event::Draw(draw),
-                ThreeDEvent::Report { addr, payload } => Event::Report { addr, payload },
-                ThreeDEvent::Clear { value } => Event::Clear { value },
-            });
         }
         Ok(())
     }

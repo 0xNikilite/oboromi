@@ -232,7 +232,7 @@ fn names_unbound_subchannel_and_unsupported_class() {
     assert!(error.contains("unbound subchannel 0"), "{error}");
 
     words.clear();
-    inc(SET_OBJECT, &[0xc7c0], &mut words);
+    inc(SET_OBJECT, &[0xdead], &mut words);
     immediate(0x100, 1, &mut words);
     let memory = bytes(&words);
     let error = Pusher::default()
@@ -243,7 +243,7 @@ fn names_unbound_subchannel_and_unsupported_class() {
         )
         .unwrap_err();
     assert!(
-        error.contains("unsupported class method: class 0xc7c0, method 0x0100"),
+        error.contains("unsupported class method: class 0xdead, method 0x0100"),
         "{error}"
     );
 }

@@ -12,6 +12,7 @@ mod int_alu;
 mod memory;
 mod memory_map;
 mod program;
+mod qmd;
 mod shared;
 mod special;
 mod stages;

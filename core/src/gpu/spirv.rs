@@ -69,6 +69,7 @@ pub mod capability {
     pub const INT64: u32 = 11;
     pub const INT16: u32 = 22;
     pub const INT8: u32 = 39;
+    pub const MIN_LOD: u32 = 42;
     pub const IMAGE_QUERY: u32 = 50;
     pub const GROUP_NON_UNIFORM: u32 = 61;
     pub const GROUP_NON_UNIFORM_ARITHMETIC: u32 = 63;
@@ -82,6 +83,9 @@ pub mod capability {
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
     pub const RAY_QUERY: u32 = 4472;
+    pub const COOPERATIVE_MATRIX: u32 = 6022;
+    pub const VULKAN_MEMORY_MODEL: u32 = 5345;
+    pub const SHADER_CLOCK: u32 = 5055;
 }
 
 pub mod storage_class {
@@ -215,7 +219,7 @@ fn section(opcode: u32, operands: &[u32]) -> usize {
         16 | 331 => 6,                                     // OpExecutionMode(Id)
         2..=7 | 330 => 7,                                  // OpSource* to OpString, OpModuleProcessed
         71..=75 | 332 => 8,                                // OpDecorate* and OpGroup*Decorate
-        19..=39 | 41..=52 | 4472 | 5341 => 9,              // OpType*, OpConstant*, OpSpecConstant*
+        19..=39 | 41..=52 | 4456 | 4472 | 5341 => 9,       // OpType*, OpConstant*, OpSpecConstant*
         59 if operands[2] != storage_class::FUNCTION => 9, // global OpVariable
         _ => 10,                                           // function bodies
     }
@@ -245,6 +249,13 @@ impl Emitter {
     pub fn words(&self) -> Vec<u32> { self.sections.concat() }
     pub fn len(&self) -> usize { self.sections.iter().map(Vec::len).sum() }
     pub fn id_bound(&self) -> u32 { self.next_id }
+    pub fn function_len(&self) -> usize { self.sections[10].len() }
+
+    /// Moves the function words emitted since `from` to `to`, before the words already there.
+    pub fn move_tail(&mut self, from: usize, to: usize) {
+        let moved = self.sections[10].len() - from;
+        self.sections[10][to..].rotate_right(moved);
+    }
 
     fn inst(&mut self, opcode: u32, operands: &[u32]) {
         let wc = (1 + operands.len()) as u32;
@@ -332,6 +343,7 @@ impl Emitter {
     }
 
     pub fn emit_memory_model(&mut self, addressing: u32, memory: u32) {
+        self.sections[4].clear();
         self.inst(14, &[addressing, memory]);
     }
 
@@ -548,6 +560,26 @@ impl Emitter {
 
     pub fn emit_store(&mut self, pointer: u32, value: u32) {
         self.inst(62, &[pointer, value]);
+    }
+
+    pub fn emit_type_cooperative_matrix(&mut self, component: u32, scope: u32, rows: u32, columns: u32, usage: u32) -> u32 {
+        let r = self.alloc_id();
+        self.inst(4456, &[r, component, scope, rows, columns, usage]);
+        r
+    }
+
+    pub fn emit_cooperative_matrix_load(&mut self, ty: u32, pointer: u32, layout: u32, stride: u32) -> u32 {
+        let r = self.alloc_id();
+        self.inst(4457, &[ty, r, pointer, layout, stride]);
+        r
+    }
+
+    pub fn emit_cooperative_matrix_store(&mut self, pointer: u32, object: u32, layout: u32, stride: u32) {
+        self.inst(4458, &[pointer, object, layout, stride]);
+    }
+
+    pub fn emit_cooperative_matrix_mul_add(&mut self, ty: u32, a: u32, b: u32, c: u32) -> u32 {
+        self.typed_tri(4459, ty, a, b, c)
     }
 
     pub fn emit_access_chain(&mut self, ty: u32, base: u32, indexes: &[u32]) -> u32 {
@@ -776,6 +808,10 @@ impl Emitter {
         self.inst(225, &[memory, semantics]);
     }
 
+    pub fn emit_read_clock(&mut self, ty: u32, scope: u32) -> u32 {
+        self.typed_un(5056, ty, scope)
+    }
+
     pub fn emit_ext_inst(&mut self, ty: u32, set: u32, instruction: u32, operands: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r, set, instruction];
@@ -813,6 +849,22 @@ impl Emitter {
         let mut data = vec![ty, r, sampled_image, coord, image_ops];
         data.extend_from_slice(operands);
         self.inst(88, &data);
+        r
+    }
+
+    pub fn emit_image_sample_dref_implicit_lod(&mut self, ty: u32, sampled_image: u32, coord: u32, dref: u32, operands: &[u32]) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![ty, r, sampled_image, coord, dref];
+        data.extend_from_slice(operands);
+        self.inst(89, &data);
+        r
+    }
+
+    pub fn emit_image_sample_dref_explicit_lod(&mut self, ty: u32, sampled_image: u32, coord: u32, dref: u32, image_ops: u32, operands: &[u32]) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![ty, r, sampled_image, coord, dref, image_ops];
+        data.extend_from_slice(operands);
+        self.inst(90, &data);
         r
     }
 
@@ -891,6 +943,12 @@ impl Emitter {
     pub fn emit_atomic_iadd(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(234, &[ty, r, pointer, scope, semantics, value]);
+        r
+    }
+
+    pub fn emit_atomic_fadd(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
+        let r = self.alloc_id();
+        self.inst(6035, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 

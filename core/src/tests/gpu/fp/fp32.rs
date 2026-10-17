@@ -15,6 +15,46 @@ mod tests {
     }
 
     #[test]
+    fn deferred_nan_is_canonical_at_bit_observations() {
+        use crate::tests::gpu::harness::{GLOBAL_BASE, PRED, both_ways};
+        let payload = 0xffc1_2345;
+        let mut seed = vec![0; PRED + 1];
+        seed[0] = f32::INFINITY.to_bits();
+        seed[2] = 1.0f32.to_bits();
+        seed[6] = GLOBAL_BASE as u32;
+        seed[7] = (GLOBAL_BASE >> 32) as u32;
+        seed[10] = payload;
+        seed[14] = 0x3f80_0001;
+        seed[15] = 0x3f7f_fffe;
+        seed[16] = (-1.0f32).to_bits();
+        let program = [
+            inst::ffma(4, 0, 1, 2),
+            inst::fadd(4, 4, 2),
+            inst::fmul(4, 4, 2),
+            inst::ffma(5, 4, 2, 2),
+            inst::alu3(LOP3 | inst::lop3_fields(0xf0, 7, 7, false), 8, 4, 255, 255),
+            inst::stg(6, 0, 5),
+            inst::ffma(9, 0, 1, 2),
+            inst::mov_imm(9, payload),
+            inst::guard(inst::ffma(10, 0, 1, 2), 0, false),
+            inst::fmul(17, 14, 15),
+            inst::fadd(17, 17, 16),
+            inst::exit(),
+        ];
+        for predicate in [0, 1] {
+            seed[PRED] = predicate;
+            both_ways(|| {
+                let Some((regs, memory)) = run_regs(&program, &seed, &[], &[0]) else { return };
+                assert_eq!(memory, [0x7fff_ffff]);
+                assert_eq!(regs[8], 0x7fff_ffff);
+                assert_eq!(regs[9], payload);
+                assert_eq!(regs[17], 0);
+                assert_eq!(regs[10], if predicate == 0 { payload } else { 0x7fff_ffff });
+            });
+        }
+    }
+
+    #[test]
     fn fadd_fmul_ffma_round_to_nearest_like_ieee() {
         let x = [1.5, -2.25, 0.1, 3.0e38, -0.0, f32::INFINITY, f32::NAN, 7.0, f32::NEG_INFINITY];
         let program = [

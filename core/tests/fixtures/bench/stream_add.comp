@@ -1,0 +1,8 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(binding = 1) uniform Params { float add; };
+layout(binding = 9) buffer Memory { vec4 data[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x, half_len = uint(data.length()) / 2;
+    data[half_len + i] = data[i] + add;
+}

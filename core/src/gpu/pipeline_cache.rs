@@ -249,6 +249,9 @@ fn encode(kind: ResourceKind) -> [u32; 4] {
         Ttu => [18, 0, 0, 0],
         RayQuery => [19, 0, 0, 0],
         AccelerationStructure { cbuf_bank, byte_offset } => [20, cbuf_bank, byte_offset, 0],
+        Mma => [21, 0, 0, 0],
+        GlobalVector(words) => [22, words, 0, 0],
+        Hints => [23, 0, 0, 0],
     }
 }
 
@@ -276,6 +279,9 @@ fn decode([tag, a, b, c]: [u32; 4]) -> Option<ResourceKind> {
         18 => Ttu,
         19 => RayQuery,
         20 => AccelerationStructure { cbuf_bank: a, byte_offset: b },
+        21 => Mma,
+        22 => GlobalVector(a),
+        23 => Hints,
         _ => return None,
     })
 }

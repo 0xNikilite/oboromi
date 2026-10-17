@@ -14,7 +14,7 @@ mod tests {
     #[test]
     fn builder_skips_the_draw_until_its_pipeline_is_built_and_waits_when_told_to() {
         let Some(state) = shared_device() else { return };
-        let words = translate_module(&[inst::mov_imm(0, 42)], true, Some(state)).words();
+        let words = translate_module(&[inst::mov_imm(0, 42)], true, Some(state), false).words();
         let build = |gate: Option<mpsc::Receiver<()>>| {
             let words = words.clone();
             move || {
@@ -37,7 +37,7 @@ mod tests {
         let Some(state) = shared_device() else { return };
         let device = unsafe { state.instance.get_physical_device_properties(state.physical_device) };
         let (root, title) = (std::env::temp_dir().join(format!("oboromi-disk-{}", std::process::id())), "0100000000010000");
-        let words = translate_module(&[inst::mov_imm(0, 42)], true, Some(state)).words();
+        let words = translate_module(&[inst::mov_imm(0, 42)], true, Some(state), false).words();
         let disk = Disk::open(&root, title, &device).unwrap();
         let resources = [ResourceKind::Cbuf(2), ResourceKind::Varying { location: 3, flat: true }];
         disk.store_spirv(7, &words, &resources, true).unwrap();

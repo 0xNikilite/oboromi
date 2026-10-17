@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::texture::{TexturePool, block_linear_to_pitch, pitch_to_block_linear};
-    use crate::tests::gpu::harness::{Textures, run_textured};
+    use crate::tests::gpu::harness::{Textures, run_textured, spirv_val, translate_module};
     use crate::tests::gpu_test::inst::{self, texture};
 
     const TEXELS_ADDRESS: u64 = 0x1_0000_0400;
@@ -78,6 +78,32 @@ mod tests {
                 assert!((f32::from_bits(regs[4 + c]) * 255.0 - midpoint).abs() <= 1.0, "lane {t} component {c}");
             }
         }
+    }
+
+    #[test]
+    fn tex_lod_bias_explicit_lod_and_clamps_sample_the_only_mip() {
+        let texels: Vec<u8> = (0..64).map(|i| 4 * i + 3).collect();
+        let center = |i: u32| ((i as f32 + 0.5) / 4.0).to_bits();
+        let mut seed = vec![0; 9];
+        (seed[4], seed[5], seed[6], seed[8]) = (center(1), center(2), 0, 0);
+        let sample = |op, rd, rb| inst::with_rb(texture(op, rd, 0xff, 4, 3, 0x10, 1), rb);
+        let program = [
+            sample(inst::TEX_LB_2D, 10, 8),
+            sample(inst::TEX_LL_2D, 11, 8),
+            sample(inst::TEX_LC_2D, 12, 8),
+            sample(inst::TEX_LB_LC_2D, 13, 8),
+        ];
+        let Some(lanes) = run(&program, &vec![seed; 4], &texels, NEAREST) else { return };
+        let expected = texels[4 * (2 * 4 + 1)];
+        for regs in lanes {
+            assert!(regs[10..14].iter().all(|&r| (f32::from_bits(r) * 255.0).round() as u8 == expected));
+        }
+    }
+
+    #[test]
+    fn tex_depth_compare_forms_pass_spirv_validation() {
+        let word = inst::with_rb(texture(inst::TEX_LZ_2D | inst::TEX_DC, 8, 12, 4, 3, 0x10, 0xf), 6);
+        spirv_val(&translate_module(&[word], true, None, false));
     }
 
     #[test]

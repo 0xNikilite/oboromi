@@ -5,7 +5,7 @@ use crate::tests::gpu::harness::shared_device;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-fn particles(scene: &Particles) -> Vec<[f32; 12]> {
+fn particles(scene: &mut Particles) -> Vec<[f32; 12]> {
     let mut bytes = vec![0; COUNT as usize * 48];
     scene.gpu.read(PARTICLES, &mut bytes).unwrap();
     bytes.chunks(48).map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[4 * i..][..4].try_into().unwrap()))).collect()
@@ -15,14 +15,14 @@ fn particles(scene: &Particles) -> Vec<[f32; 12]> {
 fn update_moves_every_particle_one_integrator_step() {
     let Some(state) = shared_device() else { return };
     let mut scene = Particles::new(state).unwrap();
-    let before = particles(&scene);
+    let before = particles(&mut scene);
     scene.update(0.0).unwrap();
     let mut release = [0; 4];
     scene.gpu.read(RELEASE, &mut release).unwrap();
     assert_eq!(u32::from_le_bytes(release), 1);
     let [ax, ay, az, a, bx, by, bz, b, dt, gravity, damping, _] = update_uniforms(0.0);
     let mut respawned = 0;
-    for (i, (p, q)) in before.iter().zip(particles(&scene)).enumerate() {
+    for (i, (p, q)) in before.iter().zip(particles(&mut scene)).enumerate() {
         let pull = |x: f32, y: f32, z: f32, strength: f32| {
             let d = [x - p[0], y - p[1], z - p[2]];
             d.map(|c| c * (strength / (d.iter().map(|c| c * c).sum::<f32>() + 0.05)))

@@ -1,4 +1,4 @@
 pub mod dsp;
 pub mod sink;
 
-pub use sink::{CHANNELS, RATE, generation, pull, push, test_tone, underruns};
+pub use sink::{CHANNELS, PERIOD, RATE, generation, pull, push, queued, test_tone, underruns};

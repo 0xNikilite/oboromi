@@ -15,6 +15,7 @@ const ISETP_GE_U32: u128 = 0x20c | 6 << 76 | 7 << 68 | 7 << 84;
 const BOP_OR: u128 = 1 << 74;
 const P0: u32 = 0;
 const RZ: u32 = 255;
+const GROUP: u32 = 16;
 
 // r = x * 17 >> 7 and g = y * 495176 >> 21 are x * 255 / 1920 and y * 255 / 1080 exactly over the frame.
 // The u32 is stored little-endian, so r is byte 0 and a is byte 3 of each RGBA8 pixel.
@@ -25,8 +26,8 @@ fn gradient_program() -> [u128; 21] {
         s2r(1, 33),
         s2r(2, 38),
         s2r(3, 34),
-        alu3(IMAD ^ IMM_B, 0, 0, 16, 1),
-        alu3(IMAD ^ IMM_B, 2, 2, 16, 3),
+        alu3(IMAD ^ IMM_B, 0, 0, GROUP, 1),
+        alu3(IMAD ^ IMM_B, 2, 2, GROUP, 3),
         alu(ISETP_GE_U32 ^ IMM_B | PP_PT, 0, 0, WIDTH),
         alu(ISETP_GE_U32 ^ IMM_B | BOP_OR, 0, 2, HEIGHT),
         guard(exit(), P0, false),
@@ -48,7 +49,7 @@ fn gradient_program() -> [u128; 21] {
 pub fn render_test_frame() -> Result<(), VkError> {
     let state = device()?;
     let size = u64::from(WIDTH * HEIGHT * 4);
-    let module = emit_module(Some(state), [16, 16, 1], |decoder| decoder.translate_program(&gradient_program()));
+    let module = emit_module(Some(state), [GROUP, GROUP, 1], |decoder| decoder.translate_program(&gradient_program()));
     let pixels_buffer = HostBuffer::new(state, size)?;
     let mut support = HostBuffer::new(state, 16)?;
     support.write(&BASE.to_le_bytes())?;
@@ -56,7 +57,7 @@ pub fn render_test_frame() -> Result<(), VkError> {
     let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings)?;
     pipeline.bind(&[(SUPPORT_BINDING, &support), (GLOBAL_BINDING, &pixels_buffer)]);
     // Round up so 1080 rows get a partial last group; the program's guard drops the overhang.
-    state.dispatch(&pipeline, [WIDTH.div_ceil(16), HEIGHT.div_ceil(16), 1])?;
+    state.dispatch(&pipeline, [WIDTH.div_ceil(GROUP), HEIGHT.div_ceil(GROUP), 1])?;
     let mut pixels = vec![0; size as usize];
     pixels_buffer.read(&mut pixels)?;
     crate::display::present(WIDTH, HEIGHT, &pixels);

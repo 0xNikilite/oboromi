@@ -165,17 +165,17 @@ pub struct Emitter {
 // Index into `sections`, which are in SPIR-V logical layout order after the header at 0.
 fn section(opcode: u32, operands: &[u32]) -> usize {
     match opcode {
-        17 => 1,
-        10 => 2,
-        11 => 3,
-        14 => 4,
-        15 => 5,
-        16 | 331 => 6,
-        2..=7 | 330 => 7,
-        71..=75 | 332 => 8,
-        19..=39 | 41..=52 => 9,
-        59 if operands[2] != storage_class::FUNCTION => 9,
-        _ => 10,
+        17 => 1,                                           // OpCapability
+        10 => 2,                                           // OpExtension
+        11 => 3,                                           // OpExtInstImport
+        14 => 4,                                           // OpMemoryModel
+        15 => 5,                                           // OpEntryPoint
+        16 | 331 => 6,                                     // OpExecutionMode(Id)
+        2..=7 | 330 => 7,                                  // OpSource* to OpString, OpModuleProcessed
+        71..=75 | 332 => 8,                                // OpDecorate* and OpGroup*Decorate
+        19..=39 | 41..=52 => 9,                            // OpType*, OpConstant*, OpSpecConstant*
+        59 if operands[2] != storage_class::FUNCTION => 9, // global OpVariable
+        _ => 10,                                           // function bodies
     }
 }
 

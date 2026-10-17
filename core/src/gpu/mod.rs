@@ -59,58 +59,51 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        match Self::open_device(&instance) {
-            Ok((physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics)) => {
-                let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
-                let mut props =
-                    vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
-                unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
-                let mut state = Self {
-                    queue: unsafe { device.get_device_queue(queue_family, 0) },
-                    entry,
-                    instance,
-                    physical_device,
-                    shader_float64,
-                    device,
-                    command_pool,
-                    submit: Default::default(),
-                    signed_zero_inf_nan_preserve: [
-                        float_controls.shader_signed_zero_inf_nan_preserve_float16,
-                        float_controls.shader_signed_zero_inf_nan_preserve_float32,
-                        float_controls.shader_signed_zero_inf_nan_preserve_float64,
-                    ]
-                    .map(|b| b == vk::TRUE),
-                    denorm_preserve: {
-                        let [f16, f32, f64] = [
-                            float_controls.shader_denorm_preserve_float16,
-                            float_controls.shader_denorm_preserve_float32,
-                            float_controls.shader_denorm_preserve_float64,
-                        ]
-                        .map(|b| b == vk::TRUE);
-                        match float_controls.denorm_behavior_independence {
-                            vk::ShaderFloatControlsIndependence::ALL => [f16, f32, f64],
-                            vk::ShaderFloatControlsIndependence::TYPE_32_ONLY => [f16 && f64, f32, f16 && f64],
-                            _ => [f16 && f32 && f64; 3],
-                        }
-                    },
-                    shader_float16,
-                    shader_buffer_int64_atomics,
-                    shader_shared_int64_atomics,
-                };
-                let alloc = vk::CommandBufferAllocateInfo::default()
-                    .command_pool(command_pool)
-                    .command_buffer_count(1);
-                let submit = state.submit.get_mut().unwrap();
-                submit.command_buffer =
-                    unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
-                submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
-                Ok(state)
-            }
-            Err(e) => {
-                unsafe { instance.destroy_instance(None) };
-                Err(e)
-            }
-        }
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics) =
+            Self::open_device(&instance)
+                .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
+        let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
+        unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
+        let mut state = Self {
+            queue: unsafe { device.get_device_queue(queue_family, 0) },
+            entry,
+            instance,
+            physical_device,
+            shader_float64,
+            device,
+            command_pool,
+            submit: Default::default(),
+            signed_zero_inf_nan_preserve: [
+                float_controls.shader_signed_zero_inf_nan_preserve_float16,
+                float_controls.shader_signed_zero_inf_nan_preserve_float32,
+                float_controls.shader_signed_zero_inf_nan_preserve_float64,
+            ]
+            .map(|b| b == vk::TRUE),
+            denorm_preserve: {
+                let [f16, f32, f64] = [
+                    float_controls.shader_denorm_preserve_float16,
+                    float_controls.shader_denorm_preserve_float32,
+                    float_controls.shader_denorm_preserve_float64,
+                ]
+                .map(|b| b == vk::TRUE);
+                match float_controls.denorm_behavior_independence {
+                    vk::ShaderFloatControlsIndependence::ALL => [f16, f32, f64],
+                    vk::ShaderFloatControlsIndependence::TYPE_32_ONLY => [f16 && f64, f32, f16 && f64],
+                    _ => [f16 && f32 && f64; 3],
+                }
+            },
+            shader_float16,
+            shader_buffer_int64_atomics,
+            shader_shared_int64_atomics,
+        };
+        let alloc = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .command_buffer_count(1);
+        let submit = state.submit.get_mut().unwrap();
+        submit.command_buffer = unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
+        submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
+        Ok(state)
     }
 
     fn open_device(

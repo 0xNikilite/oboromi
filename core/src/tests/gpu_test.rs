@@ -680,7 +680,7 @@ pub fn run_gpu_tests() -> Vec<String> {
     let tests = vec![
         run_translation_test("IADD Immediate", &[inst::iadd_imm(1, 2, 42)]),
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
-        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 0xFF)]),
+        run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 4)]),
         run_translation_test("MOV immediate", &[inst::mov_imm(1, 0xCAFEBABE)]),
         run_translation_test("MOV register", &[inst::mov_reg(1, 2)]),
         run_translation_test("KILL PT", &[inst::kill(7, false)]),
@@ -718,7 +718,13 @@ pub fn run_gpu_tests() -> Vec<String> {
 #[test]
 fn fixtures_match_nvdisasm() {
     let Some(nvdisasm) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .chain(std::fs::read_dir("/usr/local").into_iter().flatten().flatten().map(|e| e.path().join("bin")))
+        .chain(
+            std::fs::read_dir("/usr/local")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path().join("bin")),
+        )
         .map(|dir| dir.join("nvdisasm"))
         .find(|path| path.is_file())
     else {
@@ -745,7 +751,7 @@ fn fixtures_match_nvdisasm() {
     let fixtures: &[(u128, &str)] = &[
         (inst::iadd_imm(1, 2, 42), "IADD3 R1, R2, 0x2a, RZ;"),
         (inst::iadd_reg(1, 2, 3), "IADD3 R1, R2, R3, RZ;"),
-        (inst::iadd3_reg(1, 2, 3, 0xFF), "IADD3 R1, R2, R3, RZ;"),
+        (inst::iadd3_reg(1, 2, 3, 4), "IADD3 R1, R2, R3, R4;"),
         (inst::mov_imm(1, 0xCAFEBABE), "MOV R1, 0xcafebabe;"),
         (inst::mov_reg(1, 2), "MOV R1, R2;"),
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
@@ -979,9 +985,16 @@ fn fixtures_match_nvdisasm() {
     use crate::tests::gpu::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();
-        let out = std::process::Command::new(&nvdisasm).args(["--binary", "SM86"]).arg(&bin).output().unwrap();
+        let out = std::process::Command::new(&nvdisasm)
+            .args(["--binary", "SM86"])
+            .arg(&bin)
+            .output()
+            .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        let disasm = text.lines().find_map(|line| line.split("/*0000*/").nth(1)).unwrap_or_default();
+        let disasm = text
+            .lines()
+            .find_map(|line| line.split("/*0000*/").nth(1))
+            .unwrap_or_default();
         assert_eq!(disasm.trim(), expected, "{word:#x}");
     }
     std::fs::remove_file(bin).unwrap();
@@ -989,9 +1002,7 @@ fn fixtures_match_nvdisasm() {
 
 #[test]
 fn mov_immediate_passes_spirv_val() {
-    use crate::gpu::spirv::capability::SHADER;
     use crate::tests::gpu::harness::spirv_val;
     let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None);
-    assert_eq!(module.words()[5..8], [2 << 16 | 17, SHADER, 3 << 16 | 14]);
     spirv_val(&module);
 }

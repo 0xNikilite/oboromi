@@ -7,7 +7,7 @@ use ash::vk;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const GROUP: u32 = 16;
-const PIXELS: u32 = 9;
+const PIXELS_BINDING: u32 = 9;
 
 fn gradient_shader() -> Vec<u32> {
     let mut e = Emitter::new();
@@ -64,7 +64,7 @@ fn gradient_shader() -> Vec<u32> {
     e.emit_decorate(block, deco::BLOCK, &[]);
     e.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
     e.emit_decorate(pixels, deco::DESCRIPTOR_SET, &[0]);
-    e.emit_decorate(pixels, deco::BINDING, &[PIXELS]);
+    e.emit_decorate(pixels, deco::BINDING, &[PIXELS_BINDING]);
     e.finalize();
     e.words()
 }
@@ -73,9 +73,9 @@ pub fn render_test_frame() -> Result<(), VkError> {
     let state = device()?;
     let size = u64::from(WIDTH * HEIGHT * 4);
     let buffer = HostBuffer::new(state, size)?;
-    let bindings = [(PIXELS, vk::DescriptorType::STORAGE_BUFFER)];
+    let bindings = [(PIXELS_BINDING, vk::DescriptorType::STORAGE_BUFFER)];
     let mut pipeline = ComputePipeline::new(state, &gradient_shader(), &bindings)?;
-    pipeline.bind(&[(PIXELS, &buffer)]);
+    pipeline.bind(&[(PIXELS_BINDING, &buffer)]);
     // Round up so 1080 rows get a partial last group; the shader guard drops the overhang.
     let groups = [WIDTH.div_ceil(GROUP), HEIGHT.div_ceil(GROUP), 1];
     state.dispatch(&pipeline, groups)?;

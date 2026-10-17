@@ -56,12 +56,13 @@ const EXIT: u32 = 0x94d;
 const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
 const BSYNC: u32 = 0x941;
-// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT
-// and the WARPSYNC mask it waits on.
+// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT,
+// the WARPSYNC mask it waits on and the byte address its EXIT jumps to, 0 for none.
 const BAR_ARRIVALS: u32 = 16;
 const BAR_RESULT: u32 = 32;
 const WARPSYNC_MASK: u32 = 33;
-const SYNC_WORDS: u32 = 34;
+const ATEXIT_PC: u32 = 34;
+const SYNC_WORDS: u32 = 35;
 // A schedule slot holds the pc vote, then per guest barrier the arrivals plus their BAR.RED predicates in the high half,
 // and the arrivals' thread count OR-ed with bit 12 for a running lane yet to arrive.
 const SCHEDULE_STRIDE: u32 = 1 + 2 * 16;
@@ -202,7 +203,7 @@ fn branch_offset(inst: u128) -> i64 {
 }
 
 fn dynamic_target(inst: u128) -> bool {
-    matches!(opcode(inst), CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950)
+    matches!(opcode(inst), 0x357 | 0x957 | CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950)
 }
 
 // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.

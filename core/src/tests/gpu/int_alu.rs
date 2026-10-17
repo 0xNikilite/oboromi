@@ -1,17 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{PRED, UPRED, UREG, run_regs, spirv_val, translate_module};
+    use crate::tests::gpu::harness::{PRED, UREG, run, run_regs, spirv_val, translate_module};
     use crate::tests::gpu_test::inst::{self, *};
 
     const RZ: u32 = 255;
-
-    fn run(program: &[u128], seed: &[(usize, u32)]) -> Option<Vec<u32>> {
-        let mut words = vec![0; UPRED + 1];
-        for &(slot, value) in seed {
-            words[slot] = value;
-        }
-        run_regs(program, &words, &[], &[]).map(|(regs, _)| regs)
-    }
 
     const IADD3_CARRY: u128 = 0x004fe2000791e0050000000004077210;
     const IADD3_NEG_C: u128 = 0x004fe2000791e8050000000004077210;

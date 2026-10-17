@@ -75,6 +75,14 @@ pub fn run_regs(
     Some((lanes.remove(0), global))
 }
 
+pub fn run(program: &[u128], seed: &[(usize, u32)]) -> Option<Vec<u32>> {
+    let mut words = vec![0; UPRED + 1];
+    for &(slot, value) in seed {
+        words[slot] = value;
+    }
+    run_regs(program, &words, &[], &[]).map(|(regs, _)| regs)
+}
+
 pub fn run_lanes(
     instructions: &[u128],
     seeds: &[Vec<u32>],

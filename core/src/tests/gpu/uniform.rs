@@ -1,17 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{UPRED, UREG, run_regs};
+    use crate::tests::gpu::harness::{UPRED, UREG, run};
     use crate::tests::gpu_test::inst::*;
 
     const URZ: u32 = 63;
-
-    fn run(program: &[u128], seed: &[(usize, u32)]) -> Option<Vec<u32>> {
-        let mut words = vec![0; UPRED + 1];
-        for &(slot, value) in seed {
-            words[slot] = value;
-        }
-        run_regs(program, &words, &[], &[]).map(|(regs, _)| regs)
-    }
 
     #[test]
     fn uiadd3_matches_iadd3_silicon() {

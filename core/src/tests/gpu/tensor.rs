@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::fp16::tests::h;
+    use crate::tests::gpu::fp::fp16::tests::h;
     use crate::tests::gpu::harness::run_lanes;
     use crate::tests::gpu_test::inst::*;
 

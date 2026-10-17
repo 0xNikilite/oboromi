@@ -982,7 +982,7 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::BMMA | inst::BMMA_168256, 4, 8, 12, 16), "BMMA.168256.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::MOVM, 4, 8, 0), "MOVM.16.MT88 R4, R8 ;"),
     ];
-    use crate::tests::gpu::fp16::tests as fp16;
+    use crate::tests::gpu::fp::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {
         std::fs::write(&bin, word.to_le_bytes()).unwrap();
         let out = std::process::Command::new(&nvdisasm)

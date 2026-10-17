@@ -4,7 +4,7 @@
 
 use crate::cpu::UnicornCPU;
 use crate::cpu::cpu_manager::MEMORY_SIZE;
-use crate::nn::hipc::{self, Service};
+use crate::nn::hipc::{self, ParsedRequest, Service};
 use crate::nn::{hid, sm::Sm};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -61,11 +61,22 @@ impl Error {
 }
 
 pub enum Object {
-    Session(Rc<RefCell<dyn Service>>),
+    Session(Rc<RefCell<Session>>),
     TransferMemory { addr: u64, size: u64, perm: u32 },
     Event(Rc<Cell<bool>>),
     /// Without an MMU a mapping only records the guest address its owner writes to.
     SharedMemory { size: u64, mapped: Rc<Cell<Option<u64>>> },
+}
+
+pub struct Session {
+    service: Rc<RefCell<dyn Service>>,
+    domain: Option<HandleTable<Rc<RefCell<dyn Service>>>>,
+}
+
+impl Session {
+    fn new(service: Rc<RefCell<dyn Service>>) -> Self {
+        Self { service, domain: None }
+    }
 }
 
 pub struct HandleTable<T> {
@@ -116,14 +127,15 @@ pub struct Kernel {
     /// OutputDebugString texts, for the caller to drain.
     pub debug_output: Vec<String>,
     pub hid: Rc<RefCell<hid::State>>,
+    pub sm: Rc<RefCell<Sm>>,
 }
 
 impl Default for Kernel {
     fn default() -> Self {
         let hid = Rc::new(RefCell::new(hid::State::default()));
-        let sm: Rc<RefCell<dyn Service>> = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
-        let ports = HashMap::from([("sm:".into(), sm)]);
-        Self { process: Process::default(), ports, debug_output: vec![], hid }
+        let sm = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
+        let ports = HashMap::from([("sm:".into(), sm.clone() as _)]);
+        Self { process: Process::default(), ports, debug_output: vec![], hid, sm }
     }
 }
 
@@ -341,7 +353,7 @@ impl Kernel {
         let len = name.iter().position(|&b| b == 0).ok_or(Error::OutOfRange)?;
         let port = std::str::from_utf8(&name[..len]).ok().and_then(|name| self.ports.get(name));
         let service = port.ok_or(Error::NotFound)?.clone();
-        Ok(self.process.handles.add(Object::Session(service)))
+        Ok(self.process.handles.add(Object::Session(Rc::new(RefCell::new(Session::new(service))))))
     }
 
     fn send_sync_request(&mut self, cpu: &UnicornCPU, handle: u32) -> Result<(), Error> {
@@ -353,19 +365,46 @@ impl Kernel {
         self.exchange(cpu, &service).inspect_err(|_| drop(self.process.handles.remove(handle)))
     }
 
-    fn exchange(&mut self, cpu: &UnicornCPU, service: &RefCell<dyn Service>) -> Result<(), Error> {
+    fn exchange(&mut self, cpu: &UnicornCPU, session: &RefCell<Session>) -> Result<(), Error> {
         let mut message = [0; hipc::MESSAGE_SIZE];
         cpu.read_mem(TLS, &mut message).map_err(|_| Error::InvalidPointer)?;
-        match hipc::command_type(&message) {
+        let command_type = hipc::command_type(&message);
+        match command_type {
             hipc::CLOSE => return Ok(()),
-            hipc::REQUEST | hipc::REQUEST_WITH_CONTEXT => {}
+            hipc::REQUEST | hipc::REQUEST_WITH_CONTEXT | hipc::CONTROL | hipc::CONTROL_WITH_CONTEXT => {}
             other => {
                 log::warn!("HIPC command type {other}: {:?}", Error::NotImplemented);
                 return Err(Error::NotImplemented);
             }
         }
-        let reply = match hipc::Request::parse(&message, cpu) {
-            Ok((cmd, mut request)) => service.borrow_mut().dispatch(cmd, &mut request),
+        let mut session = session.borrow_mut();
+        let domain_request = session.domain.is_some() && matches!(command_type, hipc::REQUEST | hipc::REQUEST_WITH_CONTEXT);
+        let reply = match hipc::Request::parse(&message, cpu, domain_request) {
+            Ok(ParsedRequest::Invoke { command, object: _, request }) if matches!(command_type, hipc::CONTROL | hipc::CONTROL_WITH_CONTEXT) => match command {
+                0 => {
+                    let mut objects = HandleTable::default();
+                    let id = objects.add(session.service.clone());
+                    session.domain = Some(objects);
+                    hipc::Response { data: id.to_le_bytes().into(), ..Default::default() }
+                }
+                1 => request.args.get(..4).and_then(|id| session.domain.as_ref()?.get(u32::from_le_bytes(id.try_into().ok()?))).cloned()
+                    .map(|service| hipc::Response { move_handles: vec![Object::Session(Rc::new(RefCell::new(Session::new(service))))], ..Default::default() })
+                    .unwrap_or_else(|| hipc::Response::error(hipc::SfError::InvalidInHeader.code())),
+                2 | 4 => hipc::Response { move_handles: vec![Object::Session(Rc::new(RefCell::new(Session::new(session.service.clone()))))], ..Default::default() },
+                3 => hipc::Response { data: 0x8000u16.to_le_bytes().into(), ..Default::default() },
+                _ => hipc::Response::unknown_command(command),
+            },
+            Ok(ParsedRequest::Invoke { command, object, mut request }) => {
+                let service = match object {
+                    Some(id) => session.domain.as_ref().and_then(|objects| objects.get(id)).cloned(),
+                    None => Some(session.service.clone()),
+                };
+                service.map_or_else(|| hipc::Response::error(hipc::SfError::InvalidInHeader.code()), |service| service.borrow_mut().dispatch(command, &mut request))
+            }
+            Ok(ParsedRequest::Close(id)) => {
+                session.domain.as_mut().and_then(|objects| objects.remove(id));
+                hipc::Response::default()
+            }
             Err(e) => {
                 log::warn!("CMIF request: {e:?}");
                 hipc::Response::error(e.code())
@@ -374,8 +413,15 @@ impl Kernel {
         let mut add = |objects: Vec<Object>| -> Vec<u32> {
             objects.into_iter().map(|o| self.process.handles.add(o)).collect()
         };
-        let (copy, moved) = (add(reply.copy_handles), add(reply.move_handles));
-        let bytes = hipc::encode_reply(reply.result, &reply.data, &copy, &moved);
+        let copy = add(reply.copy_handles);
+        let mut moved = add(reply.move_handles);
+        let objects = if let Some(domain) = session.domain.as_mut().filter(|_| domain_request) {
+            Some(reply.objects.into_iter().map(|object| domain.add(object)).collect::<Vec<_>>())
+        } else {
+            moved.extend(reply.objects.into_iter().map(|object| self.process.handles.add(Object::Session(Rc::new(RefCell::new(Session::new(object)))))));
+            None
+        };
+        let bytes = hipc::encode_reply(reply.result, &reply.data, &copy, &moved, objects.as_deref());
         cpu.write_mem(TLS, &bytes).map_err(|_| Error::InvalidPointer)
     }
 }

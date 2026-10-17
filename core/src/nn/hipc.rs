@@ -1,14 +1,16 @@
-//! HIPC messages with CMIF payloads for sessions to in-process services. Bit layout:
-//! yuzu src/core/hle/ipc.h (header, handle and buffer descriptors), libnx
-//! nx/include/switch/sf/cmif.h (SFCI/SFCO headers at the 16-byte aligned raw data).
+//! HIPC messages with CMIF payloads following switchbrew IPC_Marshalling.
 
 use crate::cpu::UnicornCPU;
 use crate::kernel::Object;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 pub const MESSAGE_SIZE: usize = 0x100;
 pub const CLOSE: u16 = 2;
 pub const REQUEST: u16 = 4;
+pub const CONTROL: u16 = 5;
 pub const REQUEST_WITH_CONTEXT: u16 = 6;
+pub const CONTROL_WITH_CONTEXT: u16 = 7;
 const SFCI: u32 = u32::from_le_bytes(*b"SFCI");
 const SFCO: u32 = u32::from_le_bytes(*b"SFCO");
 
@@ -41,6 +43,7 @@ pub struct Request<'a> {
     pub b: Vec<Buffer>,
     pub w: Vec<Buffer>,
     pub c: Vec<Buffer>,
+    pub objects: Vec<u32>,
     /// Raw words after the SFCI header, up to the end of the raw data section.
     pub args: Vec<u8>,
 }
@@ -51,6 +54,7 @@ pub struct Response {
     pub data: Vec<u8>,
     pub copy_handles: Vec<Object>,
     pub move_handles: Vec<Object>,
+    pub objects: Vec<Rc<RefCell<dyn Service>>>,
 }
 
 impl Response {
@@ -66,6 +70,11 @@ impl Response {
 
 pub trait Service {
     fn dispatch(&mut self, cmd: u32, request: &mut Request) -> Response;
+}
+
+pub enum ParsedRequest<'a> {
+    Invoke { command: u32, object: Option<u32>, request: Request<'a> },
+    Close(u32),
 }
 
 pub fn command_type(message: &[u8; MESSAGE_SIZE]) -> u16 {
@@ -109,7 +118,7 @@ fn receive_buffer(d: &[u32]) -> Buffer {
 
 impl<'a> Request<'a> {
     /// Decodes a CMIF request into its command id and arguments.
-    pub fn parse(message: &[u8; MESSAGE_SIZE], mem: &'a UnicornCPU) -> Result<(u32, Self), SfError> {
+    pub fn parse(message: &[u8; MESSAGE_SIZE], mem: &'a UnicornCPU, domain: bool) -> Result<ParsedRequest<'a>, SfError> {
         let words: Vec<u32> = message.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
         let (h0, h1) = (words[0], words[1]);
         let mut r = Words { words: &words, at: 2 };
@@ -135,17 +144,30 @@ impl<'a> Request<'a> {
             n => n - 2,
         };
         let c = r.buffers(c_count, 2, receive_buffer)?;
-        let cmif = raw.get(start.next_multiple_of(4) - start..).filter(|c| c.len() >= 4);
-        let cmif = cmif.ok_or(SfError::InvalidHeaderSize)?;
+        let payload = raw.get(start.next_multiple_of(4) - start..).ok_or(SfError::InvalidHeaderSize)?;
+        let (cmif, object, objects) = if domain {
+            let header = payload.get(..4).ok_or(SfError::InvalidHeaderSize)?;
+            let kind = header[0] & 0xff;
+            let count = bits(header[0], 8, 8) as usize;
+            let size = bits(header[0], 16, 16).div_ceil(4) as usize;
+            if kind == 2 { return Ok(ParsedRequest::Close(header[1])); }
+            if kind != 1 || size < 4 { return Err(SfError::InvalidInHeader); }
+            let cmif = payload.get(4..4 + size).ok_or(SfError::InvalidHeaderSize)?;
+            let objects = payload.get(4 + size..4 + size + count).ok_or(SfError::InvalidHeaderSize)?.to_vec();
+            (cmif, Some(header[1]), objects)
+        } else {
+            (payload, None, vec![])
+        };
+        if cmif.len() < 4 { return Err(SfError::InvalidHeaderSize); }
         if cmif[0] != SFCI {
             return Err(SfError::InvalidInHeader);
         }
         let args = cmif[4..].iter().flat_map(|w| w.to_le_bytes()).collect();
-        Ok((cmif[2], Self { mem, send_pid, copy_handles, move_handles, x, a, b, w, c, args }))
+        Ok(ParsedRequest::Invoke { command: cmif[2], object, request: Self { mem, send_pid, copy_handles, move_handles, x, a, b, w, c, objects, args } })
     }
 }
 
-pub fn encode_reply(result: u32, data: &[u8], copy: &[u32], moved: &[u32]) -> Vec<u8> {
+pub fn encode_reply(result: u32, data: &[u8], copy: &[u32], moved: &[u32], objects: Option<&[u32]>) -> Vec<u8> {
     let handles = !copy.is_empty() || !moved.is_empty();
     let mut words = vec![0, 0];
     if handles {
@@ -154,12 +176,16 @@ pub fn encode_reply(result: u32, data: &[u8], copy: &[u32], moved: &[u32]) -> Ve
     }
     let start = words.len();
     words.resize(start.next_multiple_of(4), 0);
+    if let Some(objects) = objects {
+        words.extend([objects.len() as u32, 0, 0, 0]);
+    }
     words.extend([SFCO, 0, result, 0]);
     words.extend(data.chunks(4).map(|c| {
         let mut word = [0; 4];
         word[..c.len()].copy_from_slice(c);
         u32::from_le_bytes(word)
     }));
+    words.extend(objects.into_iter().flatten());
     words[1] = (words.len() - start) as u32 | u32::from(handles) << 31;
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     assert!(bytes.len() <= MESSAGE_SIZE, "reply overflows the IPC buffer");

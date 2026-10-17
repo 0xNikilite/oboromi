@@ -2,6 +2,7 @@
 //! HIPC header, an optional special header with the pid placeholder and copy handles, X, A then B buffer descriptors, and
 //! the raw data aligned to 16 bytes starting with the SFCI or SFCO header.
 const REQUEST: u32 = 4;
+const CONTROL: u32 = 5;
 const SFCI: u32 = u32::from_le_bytes(*b"SFCI");
 const SFCO: u32 = u32::from_le_bytes(*b"SFCO");
 
@@ -29,10 +30,10 @@ pub struct Reply<'a> {
     pub data: &'a [u32],
 }
 
-pub fn write_request(ipc: &mut [u32; 64], request: &Request) {
+fn write(ipc: &mut [u32; 64], request: &Request, kind: u32, domain: Option<(u32, &[u32])>) {
     let special = request.send_pid || !request.copy_handles.is_empty();
-    ipc[0] = REQUEST | (request.pointer.len() as u32) << 16 | (request.send.len() as u32) << 20 | (request.receive.len() as u32) << 24;
-    ipc[1] = (8 + request.data.len() as u32) | u32::from(special) << 31;
+    ipc[0] = kind | (request.pointer.len() as u32) << 16 | (request.send.len() as u32) << 20 | (request.receive.len() as u32) << 24;
+    ipc[1] = (8 + request.data.len() as u32 + domain.map_or(0, |(_, objects)| 4 + objects.len() as u32)) | u32::from(special) << 31;
     let mut at = 2;
     if special {
         ipc[2] = u32::from(request.send_pid) | (request.copy_handles.len() as u32) << 1;
@@ -51,8 +52,29 @@ pub fn write_request(ipc: &mut [u32; 64], request: &Request) {
         at += 3;
     }
     let start = at.next_multiple_of(4);
-    ipc[start..][..4].copy_from_slice(&[SFCI, 0, request.command, 0]);
-    ipc[start + 4..][..request.data.len()].copy_from_slice(request.data);
+    let cmif = if let Some((object, objects)) = domain {
+        ipc[start..][..4].copy_from_slice(&[1 | (objects.len() as u32) << 8 | ((4 + request.data.len()) as u32 * 4) << 16, object, 0, 0]);
+        start + 4
+    } else {
+        start
+    };
+    ipc[cmif..][..4].copy_from_slice(&[SFCI, 0, request.command, 0]);
+    ipc[cmif + 4..][..request.data.len()].copy_from_slice(request.data);
+    if let Some((_, objects)) = domain {
+        ipc[cmif + 4 + request.data.len()..][..objects.len()].copy_from_slice(objects);
+    }
+}
+
+pub fn write_request(ipc: &mut [u32; 64], request: &Request) {
+    write(ipc, request, REQUEST, None);
+}
+
+pub fn write_control(ipc: &mut [u32; 64], command: u32, data: &[u32]) {
+    write(ipc, &Request { command, data, ..Default::default() }, CONTROL, None);
+}
+
+pub fn write_domain_request(ipc: &mut [u32; 64], object: u32, objects: &[u32], request: &Request) {
+    write(ipc, request, REQUEST, Some((object, objects)));
 }
 
 /// The reply in `ipc`, or None when its raw data does not start with SFCO.
@@ -86,5 +108,10 @@ mod tests {
         ipc[..9].copy_from_slice(&[0, 9 | 1 << 31, 1 << 5, 0x55, SFCO, 0, 0, 0, 3]);
         let reply = read_reply(&ipc).unwrap();
         assert_eq!((reply.result, reply.copy_handles, reply.move_handles, reply.data[0]), (0, &[][..], &[0x55][..], 3));
+        let mut ipc = [0; 64];
+        write_control(&mut ipc, 3, &[]);
+        assert_eq!(ipc[..8], [5, 8, 0, 0, SFCI, 0, 3, 0]);
+        write_domain_request(&mut ipc, 1, &[], &Request { data: &[0x1111, 0x2222], ..Default::default() });
+        assert_eq!(ipc[..14], [4, 14, 0, 0, 1 | 24 << 16, 1, 0, 0, SFCI, 0, 0, 0, 0x1111, 0x2222]);
     }
 }

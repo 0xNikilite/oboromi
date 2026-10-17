@@ -30,6 +30,7 @@ const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
 const VOTEU: u32 = 0x086;
 const S2UR: u32 = 0x1c3;
+const SHARED_WORDS: u32 = 256;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
@@ -349,11 +350,9 @@ fn nth_reg(reg: u32, zero: u32, i: u32) -> u32 {
     if reg == zero { reg } else { reg + i }
 }
 
+// Sizes 0 to 4 are U8, S8, U16, S16 and 32 bits in one word; 5 and 6 are 64 and 128 bits.
 fn access_words(sz: u32) -> u32 {
-    match sz {
-        4..=6 => 1 << (sz - 4),
-        _ => todo!("access size {sz}"),
-    }
+    if sz <= 4 { 1 } else { 1 << (sz - 4) }
 }
 
 // Uniform datapath ops set bit 91 with forms 1 (URb) and 2, 4 (imm32); vector ops with bit 91 read a UR through forms 5 to 7.
@@ -512,10 +511,6 @@ impl<'a> Decoder<'a> {
         self.ir.emit_imul(self.type_u32[1], invocation, stride)
     }
 
-    fn shared_mem(&mut self, word: u32) -> u32 {
-        self.workgroup_word(ResourceKind::Shared, 256, word)
-    }
-
     fn workgroup_word(&mut self, kind: ResourceKind, len: u32, word: u32) -> u32 {
         use spirv::storage_class::WORKGROUP;
         let var = match self.resource(kind) {
@@ -583,7 +578,7 @@ impl<'a> Decoder<'a> {
     fn shared_word_at(&mut self, address: u32) -> u32 {
         let two = self.cached_const_u32(2);
         let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, two);
-        self.shared_mem(index)
+        self.workgroup_word(ResourceKind::Shared, SHARED_WORDS, index)
     }
 
     fn atomic_update(&mut self, ptr: u32, scope: u32, sem: u32, update: impl Fn(&mut Self, u32) -> u32) -> u32 {
@@ -1061,24 +1056,22 @@ impl<'a> Decoder<'a> {
     }
 
     fn load_memory(&mut self, kind: ResourceKind, address: u32, size: u32, dst: u32) {
-        let words = if size <= 4 { 1 } else { 1 << (size - 4) };
-        for i in 0..words {
+        for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);
             let ptr = self.memory_word_at(kind, word_address);
             let word = self.ir.emit_load(self.type_u32[1], ptr);
             let value = if size <= 4 { self.load_narrow(word, address, size) } else { word };
-            self.store_register(if dst == 255 { dst } else { dst + i }, value);
+            self.store_register(nth_reg(dst, RZ, i), value);
         }
     }
 
     fn store_memory(&mut self, kind: ResourceKind, address: u32, size: u32, src: u32) {
-        let words = if size <= 4 { 1 } else { 1 << (size - 4) };
-        for i in 0..words {
+        for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);
             let ptr = self.memory_word_at(kind, word_address);
-            let value = self.load_register(if src == 255 { src } else { src + i });
+            let value = self.load_register(nth_reg(src, RZ, i));
             self.store_narrow(kind, ptr, address, size, value);
         }
     }
@@ -3133,8 +3126,7 @@ impl<'a> Decoder<'a> {
         } else {
             base
         };
-        let words = if sz <= 4 { 1 } else { 1 << (sz - 4) };
-        for i in 0..words {
+        for i in 0..access_words(sz) {
             let offset = self.cached_const_u32(ra_offset.wrapping_add(4 * i));
             let addr = self.ir.emit_iadd(self.type_u32[1], base, offset);
             let word = if bindless || stride >= 2 {
@@ -3143,7 +3135,7 @@ impl<'a> Decoder<'a> {
                 self.load_cbuf(ResourceKind::Cbuf(sc_bank), addr)
             };
             let value = if sz <= 4 { self.load_narrow(word, addr, sz) } else { word };
-            self.store_register(if rd == 255 { rd } else { rd + i }, value);
+            self.store_register(nth_reg(rd, RZ, i), value);
         }
     }
     pub fn ldg(&mut self, inst: u128) {
@@ -3217,16 +3209,13 @@ impl<'a> Decoder<'a> {
         }
         global = self.ir.emit_iadd(self.type_u32[1], global, ra_offset);
         shared = self.ir.emit_iadd(self.type_u32[1], shared, rb_offset);
-        let two = self.cached_const_u32(2);
-        let words = 1 << (sz - 4);
-        for i in 0..words {
+        for i in 0..access_words(sz) {
             let offset = self.cached_const_u32(4 * i);
             let global = self.ir.emit_iadd(self.type_u32[1], global, offset);
             let shared = self.ir.emit_iadd(self.type_u32[1], shared, offset);
             let src = self.global_word_at(global);
             let value = self.ir.emit_load(self.type_u32[1], src);
-            let word = self.ir.emit_shift_right_logical(self.type_u32[1], shared, two);
-            let dst = self.shared_mem(word);
+            let dst = self.shared_word_at(shared);
             self.ir.emit_store(dst, value);
         }
     }
@@ -4457,8 +4446,7 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let op = opcode(inst);
         let ura = (inst >> 24 & 0x3f) as u32;
-        let words = if sz <= 4 { 1 } else { 1 << (sz - 4) };
-        for i in 0..words {
+        for i in 0..access_words(sz) {
             let offset = match op {
                 0x18b8 => (inst >> 38) as u32,
                 _ => ra_offset,
@@ -4482,7 +4470,7 @@ impl<'a> Decoder<'a> {
                 _ => unreachable!(),
             };
             let value = if sz <= 4 { self.load_narrow(word, address, sz) } else { word };
-            self.store_ureg(if urd == 63 { urd } else { urd + i }, value);
+            self.store_ureg(nth_reg(urd, URZ, i), value);
         }
     }
     pub fn ulea(&mut self, inst: u128) {

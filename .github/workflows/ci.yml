@@ -91,7 +91,7 @@ jobs:
 
       - name: Install GPU test tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y spirv-tools mesa-vulkan-drivers libvulkan1
+        run: sudo apt-get update && sudo apt-get install -y spirv-tools mesa-vulkan-drivers libvulkan1 libudev-dev
 
       - name: Build project
         shell: bash

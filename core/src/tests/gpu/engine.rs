@@ -383,9 +383,10 @@ mod tests {
 
     #[test]
     fn imported_guest_ram_draws_a_cpu_store_without_uploading_and_the_mirror_still_does_without_import() {
-        let Some(state) = vk_state() else { return };
+        let Some(state) = shared_device() else { return };
         for imported in [true, false] {
-            let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+            let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+            let imported = imported && state.external_memory_host.is_some();
             if !imported {
                 gpu.zero_copy = None;
             }

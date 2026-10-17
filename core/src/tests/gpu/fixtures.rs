@@ -276,6 +276,10 @@ mod tests {
         "s5tex#010/tex/mask-a",
         // tmml: lavapipe scales the lod of unnormalized coordinates by the texture size once more.
         "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
+        // tex: lavapipe takes another level than silicon for one lane of the implicit lod case.
+        "tex#001/tex/lod-auto",
+        "s4tex#001/tex/lod-auto",
+        "s5tex#001/tex/lod-auto",
     ];
 
     fn destination_width(fixture: &WarpFixture) -> usize {

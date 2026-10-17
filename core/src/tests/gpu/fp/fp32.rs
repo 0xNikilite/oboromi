@@ -78,6 +78,18 @@ mod tests {
     }
 
     #[test]
+    fn fmul_rz_rounds_toward_zero() {
+        let x = [1.5, f32::from_bits(0x3f80_0001), -1.5, 3.0e38, 2.0];
+        let program = [inst::fmul(10, 0, 1) | FP_RZ, inst::fmul(11, 2, 1) | FP_RZ, inst::fmul(12, 3, 4) | FP_RZ, inst::fmul(13, 0, 0) | FP_RZ];
+        let Some((regs, _)) = run_regs(&program, &bits(&x), &[], &[]) else {
+            return;
+        };
+        // llvmpipe lowers Fma to a multiply and an add, so it keeps the nearest product.
+        let rounded_down = if crate::gpu::device().is_ok_and(|d| d.is_llvmpipe()) { 0 } else { 1 };
+        assert_eq!(regs[10..14], [0x3fc0_0002 - rounded_down, 0xbfc0_0002 - rounded_down, 0x7f80_0000 - rounded_down, 2.25f32.to_bits()]);
+    }
+
+    #[test]
     fn fmnmx_takes_min_on_true_predicate_and_skips_nan() {
         let mut seed = bits(&[1.0, -2.0, f32::NAN]);
         seed.resize(255, 0);

@@ -3,3 +3,4 @@ One fixture per line, id is <capture>#<index in that capture> and word_hex the i
 observed:true means the outputs were captured on silicon, false marks a case that could not be run.
 The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
 mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.
+driver-shaders holds NVIDIA driver 580 SM86 output (RTX A6000, Vulkan pipeline cache) for demos/shaders and a minimal pass-through triangle pair: each graphics file is the 0x80-byte program header followed by the code, the compute file is code only.

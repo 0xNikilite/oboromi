@@ -654,29 +654,35 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    fn load_slot(&mut self, slot: u32) -> u32 {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_slot(&mut self, slot: u32, val: u32) {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_store(ptr, val);
+    }
+
     fn load_ureg(&mut self, ur: u32) -> u32 {
         if ur == URZ {
             return self.const_u32_0;
         }
-        let ptr = self.state_ptr(&[2, ur]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32 + 1 + ur)
     }
 
     fn store_ureg(&mut self, ur: u32, val: u32) {
         if ur != URZ {
-            let ptr = self.state_ptr(&[2, ur]);
-            self.ir.emit_store(ptr, val);
+            self.store_slot(MAX_REG_COUNT as u32 + 1 + ur, val);
         }
     }
 
     fn load_upredicate(&mut self) -> u32 {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(STATE_WORDS as u32 - 2)
     }
 
     fn store_upredicate(&mut self, val: u32) {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_store(ptr, val);
+        self.store_slot(STATE_WORDS as u32 - 2, val);
     }
 
     fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
@@ -702,29 +708,21 @@ impl<'a> Decoder<'a> {
             return self.const_u32_0;
         }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_load(self.type_u32[1], reg_ptr)
+        self.load_slot(reg)
     }
 
     fn store_register(&mut self, reg: u32, val: u32) {
         if reg == RZ { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_store(reg_ptr, val);
+        self.store_slot(reg, val);
     }
 
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32)
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_store(ptr, val)
+        self.store_slot(MAX_REG_COUNT as u32, val)
     }
 
     pub fn finish(&mut self) {

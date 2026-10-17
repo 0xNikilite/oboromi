@@ -154,6 +154,8 @@ pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], 
 mod tests {
     use super::*;
     use crate::tests::gpu::harness::vk_state;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
 
     const SIZE: u32 = 64;
     // Pixel corners (4, 4), (60, 4) and (4, 60) in normalized device coordinates.
@@ -179,6 +181,51 @@ mod tests {
             let got = &pixels[((y * SIZE + x) * 4) as usize..][..4];
             assert!(got.iter().zip(want).all(|(&g, w)| g.abs_diff(w) <= 2), "({x}, {y}): {got:?} != {want:?}");
         }
+    }
+
+    // QMDV03_00 fields from clc7c0qmd.h: grid in words 12-14, block in 18-19, release 0 in 24-26, program in 48-49.
+    #[test]
+    fn qmd_launch_writes_the_gradient_kernel_output_into_guest_memory_and_releases() {
+        const SEND_PCAS_A: u32 = 0x02b4;
+        const SEND_SIGNALING_PCAS2_B: u32 = 0x02c0;
+        const INVALIDATE_COPY_SCHEDULE: u32 = 3;
+        // The kernel stores its 1920x1080 RGBA8 frame at the address its MOV R4, 0x1000 and MOV R5, 0x2 build.
+        const FRAME: u64 = 0x2_0000_1000;
+        const CONTROL: u64 = 0x2_007f_0000;
+        let [qmd_va, program_va, release_va] = [CONTROL + 0x100, CONTROL + 0x200, CONTROL + 0xf000];
+        let Some(state) = vk_state() else { return };
+        let json = include_str!("../../../tests/fixtures/gradient-sm86.json");
+        let field = |key: &str, open: char, close: char| json.split_once(&format!("\"{key}\":{open}")).unwrap().1.split_once(close).unwrap().0;
+        let code: Vec<u8> = field("words", '[', ']')
+            .split(',')
+            .map(|word| u128::from_str_radix(word.trim().trim_matches('"'), 16).unwrap())
+            .chain([bra(-16)])
+            .flat_map(u128::to_le_bytes)
+            .collect();
+        let mut gpu = Gpu::new(&state, (128 * PAGE) as usize);
+        gpu.space.map(0x2_0000_0000, 0, 128 * PAGE);
+        let mut qmd = [0; 64];
+        [qmd[12], qmd[13], qmd[14]] = [120, 68, 1];
+        [qmd[18], qmd[19]] = [16 << 16 | 3 << 4, 1 << 16 | 16];
+        [qmd[24], qmd[25], qmd[26]] = [release_va as u32, 1 << 30 | 1 << 23 | 2, 0xfeed_beef];
+        [qmd[48], qmd[49]] = [program_va as u32, 2];
+        let mut words = Vec::new();
+        inc(SET_OBJECT, &[0xc7c0], &mut words);
+        inc(SEND_PCAS_A, &[(qmd_va >> 8) as u32], &mut words);
+        inc(SEND_SIGNALING_PCAS2_B, &[INVALIDATE_COPY_SCHEDULE], &mut words);
+        gpu.write(program_va, &code).unwrap();
+        gpu.write(qmd_va, &bytes(&qmd)).unwrap();
+        gpu.write(CONTROL, &bytes(&words)).unwrap();
+        gpu.submit(&[entry(CONTROL, words.len())]).unwrap();
+        let mut frame = vec![0; 1920 * 1080 * 4];
+        gpu.read(FRAME, &mut frame).unwrap();
+        let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        sha256sum.stdin.take().unwrap().write_all(&frame).unwrap();
+        let digest = String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap();
+        assert_eq!(&digest[..64], field("sha256", '"', '"'));
+        let mut release = [0; 4];
+        gpu.read(release_va, &mut release).unwrap();
+        assert_eq!(u32::from_le_bytes(release), 0xfeed_beef);
     }
 
     #[test]

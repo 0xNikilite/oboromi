@@ -82,19 +82,20 @@ impl ComputeClass {
         }
         self.words[method as usize] = value;
         match byte {
-            SEND_SIGNALING_PCAS_B => {
-                let address = (self.word(SEND_PCAS_A) as u64) << 8;
-                let bytes = fetch(address, 256)?;
-                if bytes.len() != 256 {
-                    return Err(format!(
-                        "QMD fetch returned {} bytes, expected 256",
-                        bytes.len()
-                    ));
-                }
-                Ok(Some(self.decode_qmd(bytes)?))
-            }
+            // PCAS_B bit 1 and PCAS2_B actions SCHEDULE, INVALIDATE_COPY_SCHEDULE and the prefetching variants launch (clc7c0.h).
+            SEND_SIGNALING_PCAS_B if value & 2 != 0 => self.launch(fetch),
+            SEND_SIGNALING_PCAS2_B if matches!(value & 0xf, 2 | 3 | 9..=11) => self.launch(fetch),
             _ => Ok(None),
         }
+    }
+
+    fn launch<'a>(&self, fetch: &mut impl FnMut(u64, usize) -> Result<&'a [u8], String>) -> Result<Option<DispatchSnapshot>, String> {
+        let address = (self.word(SEND_PCAS_A) as u64) << 8;
+        let bytes = fetch(address, 256)?;
+        if bytes.len() != 256 {
+            return Err(format!("QMD fetch returned {} bytes, expected 256", bytes.len()));
+        }
+        Ok(Some(self.decode_qmd(bytes)?))
     }
 
     fn decode_qmd(&self, bytes: &[u8]) -> Result<DispatchSnapshot, String> {
@@ -102,14 +103,14 @@ impl ComputeClass {
         for (word, bytes) in words.iter_mut().zip(bytes.chunks_exact(4)) {
             *word = u32::from_le_bytes(bytes.try_into().unwrap());
         }
-        // QMDV02_03 layout from clc7c0qmd.h:145, QMD_VERSION (MW(579:576)).
+        // QMDV02_03 and QMDV03_00 layouts from clc7c0qmd.h, QMD_VERSION (MW(579:576)); they differ in the fields below.
         let version = field(&words, 576, 4);
         let major = field(&words, 580, 4);
-        if (major, version) != (2, 3) {
-            return Err(format!(
-                "unsupported C7C0 QMD version QMDV{major:02}_{version:02}"
-            ));
-        }
+        let (release, release_stride, barrier, registers, sass) = match (major, version) {
+            (2, 3) => (736, 96, 955, (984, 8), 1016),
+            (3, 0) => (768, 128, 763, (648, 9), 1656),
+            _ => return Err(format!("unsupported C7C0 QMD version QMDV{major:02}_{version:02}")),
+        };
         let valid = field(&words, 640, 8);
         let mut constant_buffers = [None; 8];
         for (i, buffer) in constant_buffers.iter_mut().enumerate() {
@@ -122,15 +123,12 @@ impl ComputeClass {
                 });
             }
         }
-        let releases = [138, 139].map(|enable| {
-            (field(&words, enable, 1) != 0).then(|| {
-                let slot = enable - 138;
-                let base = 736 + slot * 96;
-                ReleaseSemaphore {
-                    address: field(&words, base, 32) as u64
-                        | (field(&words, base + 32, 8) as u64) << 32,
-                    payload: field(&words, base + 64, 32),
-                }
+        let releases = [0, 1].map(|slot| {
+            let base = release + slot * release_stride;
+            let enable = if major == 2 { 138 + slot } else { base + 55 };
+            (field(&words, enable, 1) != 0).then(|| ReleaseSemaphore {
+                address: field(&words, base, 32) as u64 | (field(&words, base + 32, 8) as u64) << 32,
+                payload: field(&words, base + 64, 32),
             })
         });
         Ok(DispatchSnapshot {
@@ -149,9 +147,9 @@ impl ComputeClass {
             shared_memory_size: field(&words, 544, 18),
             constant_buffers,
             release_semaphores: releases,
-            barrier_count: field(&words, 955, 5) as u8,
-            register_count: field(&words, 984, 8) as u8,
-            sass_version: field(&words, 1016, 8) as u8,
+            barrier_count: field(&words, barrier, 5) as u8,
+            register_count: field(&words, registers.0, registers.1) as u8,
+            sass_version: field(&words, sass, 8) as u8,
             shared_memory_window: self.address_pair(
                 SET_SHADER_SHARED_MEMORY_WINDOW_A,
                 SET_SHADER_SHARED_MEMORY_WINDOW_B,

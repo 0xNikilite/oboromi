@@ -1,11 +1,12 @@
 //! A GPU channel over guest RAM: pushbuffers run through the pusher, and each draw translates the guest's shader
 //! programs, mirrors the vertex and constant buffers it reads, renders into colour target 0 and writes that back to
 //! guest memory, so guest-physical pages stay the only identity of every resource.
-use super::compute::HostBuffer;
+use super::compute::{ComputePipeline, HostBuffer};
+use super::compute_class::DispatchSnapshot;
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
-use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Writer};
-use super::sm86::{CBUF_BINDING, ResourceKind, Stage, branch_target, emit_module};
+use super::memory::{Mapping, MemoryError, MemoryTracker, PAGE, PaRange, PageMap, Writer};
+use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, branch_target, emit_module};
 use super::threed::{ColourTarget, ConstantBuffer, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::VkState;
 use ash::vk;
@@ -97,6 +98,8 @@ pub struct Gpu<'a> {
     pusher: Pusher,
     modules: HashMap<u64, Module>,
     pipelines: HashMap<PipelineKey, GraphicsPipeline<'a>>,
+    kernels: HashMap<u64, (Vec<(u32, vk::DescriptorType)>, ComputePipeline<'a>)>,
+    support: Option<HostBuffer<'a>>,
     targets: HashMap<TargetKey, Target<'a>>,
     mirrors: HashMap<Vec<PaRange>, (u64, Mapping<'a>)>,
     pending_clear: Option<(ColourTarget, [f32; 4])>,
@@ -211,6 +214,8 @@ impl<'a> Gpu<'a> {
             pusher: Pusher::default(),
             modules: HashMap::new(),
             pipelines: HashMap::new(),
+            kernels: HashMap::new(),
+            support: None,
             targets: HashMap::new(),
             mirrors: HashMap::new(),
             pending_clear: None,
@@ -246,7 +251,7 @@ impl<'a> Gpu<'a> {
         for event in events {
             match event {
                 Event::Draw(draw) => self.draw(&draw)?,
-                Event::Dispatch(_) => return Err("compute dispatches are not implemented".into()),
+                Event::Dispatch(dispatch) => self.dispatch(&dispatch)?,
                 Event::Report { addr, payload } | Event::SemaphoreRelease { addr, payload } => {
                     self.store(addr, &payload.to_le_bytes(), Writer::Gpu).map_err(named)?
                 }
@@ -267,19 +272,24 @@ impl<'a> Gpu<'a> {
         Ok(())
     }
 
-    fn module(&mut self, program: ShaderProgram, shader_type: u32) -> Result<u64, String> {
-        let mut sph = [0; SPH_BYTES];
-        gather(&self.space, &self.ram, program.address, &mut sph).map_err(named)?;
-        // Nothing records a program's length, but compiled programs end with a branch to itself after their last EXIT.
+    // Nothing records a program's length, but compiled programs end with a branch to itself after their last EXIT.
+    fn code(&self, address: u64) -> Result<Vec<u128>, String> {
         let mut code = Vec::new();
         while !code.last().is_some_and(|&inst: &u128| {
             let pc = code.len() as u32 - 1;
             inst >> 12 & 0xf == 7 && branch_target(pc, inst) == Some(pc)
         }) {
             let mut word = [0; 16];
-            gather(&self.space, &self.ram, program.address + (SPH_BYTES + 16 * code.len()) as u64, &mut word).map_err(named)?;
+            gather(&self.space, &self.ram, address + 16 * code.len() as u64, &mut word).map_err(named)?;
             code.push(u128::from_le_bytes(word));
         }
+        Ok(code)
+    }
+
+    fn module(&mut self, program: ShaderProgram, shader_type: u32) -> Result<u64, String> {
+        let mut sph = [0; SPH_BYTES];
+        gather(&self.space, &self.ram, program.address, &mut sph).map_err(named)?;
+        let code = self.code(program.address + SPH_BYTES as u64)?;
         let mut hasher = DefaultHasher::new();
         (sph, &code).hash(&mut hasher);
         let key = hasher.finish();
@@ -304,6 +314,87 @@ impl<'a> Gpu<'a> {
         });
         self.modules.insert(key, Module { header, words: module.words(), resources });
         Ok(key)
+    }
+
+    /// Runs a QMD launch over one global window spanning all mapped guest memory, then stores the pages it changed.
+    fn dispatch(&mut self, dispatch: &DispatchSnapshot) -> Result<(), String> {
+        let code = self.code(dispatch.program_address)?;
+        let mut hasher = DefaultHasher::new();
+        (&code, dispatch.block).hash(&mut hasher);
+        let key = hasher.finish();
+        if !self.kernels.contains_key(&key) {
+            let mut resources = Vec::new();
+            let module = emit_module(Some(self.state), Stage::Compute { local_size: dispatch.block }, |decoder| {
+                decoder.translate_program(&code);
+                resources = decoder.resources.iter().map(|r| r.kind).collect();
+            });
+            let (ubo, ssbo) = (vk::DescriptorType::UNIFORM_BUFFER, vk::DescriptorType::STORAGE_BUFFER);
+            let mut bindings = Vec::new();
+            for kind in resources {
+                let binding = match kind {
+                    ResourceKind::Support => (SUPPORT_BINDING, ubo),
+                    ResourceKind::Cbuf(slot) => (CBUF_BINDING + slot, ubo),
+                    ResourceKind::Global | ResourceKind::Global64 => (GLOBAL_BINDING, ssbo),
+                    ResourceKind::BuiltIn(_) | ResourceKind::Local | ResourceKind::Shared | ResourceKind::Shared64 | ResourceKind::Warp | ResourceKind::Schedule => continue,
+                    kind => return Err(format!("{kind:?} in a compute dispatch is not implemented")),
+                };
+                if !bindings.contains(&binding) {
+                    bindings.push(binding);
+                }
+            }
+            let pipeline = ComputePipeline::new(self.state, &module.words(), &bindings).map_err(named)?;
+            self.kernels.insert(key, (bindings, pipeline));
+        }
+        let span = self.space.span().ok_or("a compute dispatch needs mapped guest memory")?;
+        if span.end - span.start > 1 << 32 {
+            return Err(format!("mapped guest memory {span:#x?} spans more than the 4 GiB a global window addresses"));
+        }
+        let mut buffers = Vec::new();
+        for (binding, _) in self.kernels[&key].0.clone() {
+            let ranges = match binding {
+                GLOBAL_BINDING => self.mirror(span.start, span.end - span.start).map_err(|e| format!("the global window over all mapped guest memory: {e}"))?,
+                SUPPORT_BINDING => continue,
+                slot => {
+                    let slot = slot - CBUF_BINDING;
+                    let buffer = dispatch.constant_buffers[slot as usize].ok_or_else(|| format!("QMD constant buffer {slot} is not valid"))?;
+                    self.mirror(buffer.address, buffer.size.into())?
+                }
+            };
+            buffers.push((binding, ranges));
+        }
+        if self.support.is_none() {
+            self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
+        }
+        let support = self.support.as_mut().unwrap();
+        support.write(&span.start.to_le_bytes()).map_err(named)?;
+        let (bindings, pipeline) = self.kernels.get_mut(&key).unwrap();
+        let mut bound: Vec<_> = buffers.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();
+        if bindings.iter().any(|&(binding, _)| binding == SUPPORT_BINDING) {
+            bound.push((SUPPORT_BINDING, support));
+        }
+        pipeline.descriptors.bind(&bound);
+        self.state.dispatch(pipeline, dispatch.grid).map_err(named)?;
+        if let Some((_, window)) = buffers.iter().find(|&&(binding, _)| binding == GLOBAL_BINDING) {
+            let (seen, mapping) = self.mirrors.get_mut(window).unwrap();
+            self.pixels.resize((span.end - span.start) as usize, 0);
+            mapping.buffer.read(&mut self.pixels).map_err(named)?;
+            let mut bytes = &self.pixels[..];
+            for range in window {
+                for start in (range.start..range.end).step_by(PAGE as usize) {
+                    let page = start..range.end.min(start + PAGE);
+                    let (written, rest) = bytes.split_at((page.end - page.start) as usize);
+                    if self.ram[page.start as usize..page.end as usize] != *written {
+                        self.memory.store(&mut self.ram, &[page], written, Writer::Gpu);
+                    }
+                    bytes = rest;
+                }
+            }
+            *seen = generation(&self.memory, window);
+        }
+        for release in dispatch.release_semaphores.iter().flatten() {
+            self.store(release.address, &release.payload.to_le_bytes(), Writer::Gpu).map_err(named)?;
+        }
+        Ok(())
     }
 
     /// Mirrors guest memory at `va` into a host buffer, rewritten when any of its pages changed, keyed by its ranges.

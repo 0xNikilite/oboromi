@@ -4,6 +4,7 @@ mod atomics;
 mod compare;
 mod control;
 mod convert;
+mod demos_post;
 mod fifo;
 mod fixtures;
 pub mod fp;

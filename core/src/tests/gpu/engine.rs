@@ -212,7 +212,9 @@ pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cpu::UnicornCPU;
     use crate::tests::gpu::harness::vk_state;
+    use crate::tests::run::arm64;
     use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f};
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -249,6 +251,30 @@ mod tests {
     const RED: [u8; 4] = [255, 0, 0, 255];
     const GREEN: [u8; 4] = [0, 255, 0, 255];
     const BLUE: [u8; 4] = [0, 0, 255, 255];
+    // On a page the GPU leaves unmapped, so only the guest's stores mark the vertex page.
+    const GUEST_CODE: u64 = 7 * PAGE;
+    const GUEST_LOAD: u64 = GUEST_CODE + 20;
+
+    fn physical(gpu: &Gpu, va: u64) -> u64 {
+        gpu.space.resolve(va, 1).unwrap().next().unwrap().start
+    }
+
+    /// A core on the GPU's RAM that has copied `vertices` over the vertex buffer word by word with guest stores.
+    fn guest_store_vertices(gpu: &Gpu, vertices: &[Vertex]) -> UnicornCPU {
+        let cpu = UnicornCPU::new_with_shared_mem(0, gpu.ram.clone()).unwrap();
+        let code = [arm64::ldr_post(3, 1, 4), arm64::str_post(3, 2, 4), arm64::subs_imm(0, 0, 1), arm64::b_ne(-3), arm64::brk(0), arm64::ldr(5, 4), arm64::brk(0)];
+        for (pc, word) in (GUEST_CODE..).step_by(4).zip(code) {
+            cpu.write_u32(pc, word);
+        }
+        let bytes = vertex_bytes(vertices);
+        gpu.ram.write(GUEST_CODE + 0x100, &bytes);
+        for (reg, value) in [(0, bytes.len() as u64 / 4), (1, GUEST_CODE + 0x100), (2, physical(gpu, VERTICES))] {
+            cpu.set_x(reg, value);
+        }
+        cpu.set_pc(GUEST_CODE);
+        assert_eq!(cpu.run(), 1);
+        cpu
+    }
 
     fn pixel(gpu: &Gpu, target: u64, x: u32, y: u32) -> [u8; 4] {
         let mut rgba = [0; 4];
@@ -334,6 +360,29 @@ mod tests {
         gpu.map(VERTICES, 7 * PAGE, PAGE);
         gpu.write(VERTICES, &vertex_bytes(&[(CORNERS[0], GREEN), (CORNERS[1], BLUE), (CORNERS[2], RED)])).unwrap();
         draw_and_check(&mut gpu, 0x9abc_def0, [GREEN, BLUE, RED]);
+    }
+
+    #[test]
+    fn a_core_stores_the_vertices_the_gpu_draws_and_loads_the_report_the_gpu_wrote() {
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], WHITE); 3]).unwrap();
+        let mapped = gpu.memory.generation(physical(&gpu, VERTICES), PAGE);
+        let cpu = guest_store_vertices(&gpu, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]);
+        draw_and_check(&mut gpu, 0x1234_5678, [RED, GREEN, BLUE]);
+        assert!(gpu.memory.generation(physical(&gpu, VERTICES), PAGE) > mapped);
+        cpu.set_x(4, physical(&gpu, REPORT));
+        cpu.set_pc(GUEST_LOAD);
+        assert_eq!(cpu.run(), 1);
+        assert_eq!(cpu.get_x(5), 0x1234_5678);
+    }
+
+    #[test]
+    fn a_second_frame_draws_the_vertices_a_core_stored_after_the_first() {
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        draw_and_check(&mut gpu, 1, [RED, GREEN, BLUE]);
+        guest_store_vertices(&gpu, &[(CORNERS[0], GREEN), (CORNERS[1], BLUE), (CORNERS[2], RED)]);
+        draw_and_check(&mut gpu, 2, [GREEN, BLUE, RED]);
     }
 
     #[test]

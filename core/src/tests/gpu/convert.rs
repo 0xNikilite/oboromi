@@ -18,7 +18,7 @@ mod tests {
             (S32, RP, -1.5, -1i32 as u32),
             (S32, RZ, 2147483648.0, i32::MAX as u32),
             (U32, RZ, 4294967296.0, u32::MAX),
-            (S32, RZ, f32::NAN, 0),
+            (S32, RZ, f32::NAN, i32::MIN as u32),
             (S32, RZ, f32::NEG_INFINITY, i32::MIN as u32),
         ];
         let seed: Vec<_> = cases.iter().map(|case| case.2.to_bits()).collect();

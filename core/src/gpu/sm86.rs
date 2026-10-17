@@ -34,6 +34,7 @@ const JMXU: u32 = 0x1959;
 const EXIT: u32 = 0x94d;
 const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
+const BSYNC: u32 = 0x941;
 const VOTEU: u32 = 0x086;
 const UPLOP3: u32 = 0x89c;
 const P0_TO_P6: u32 = 0x7f;
@@ -295,6 +296,7 @@ pub enum ResourceKind {
     Shared,
     Shared64,
     Warp,
+    Schedule,
     Global64,
     Texture2D { cbuf_bank: u32, byte_offset: u32 },
     Surface2D { cbuf_bank: u32, byte_offset: u32, format: vk::Format },
@@ -323,6 +325,10 @@ pub struct Decoder<'a> {
     var_live: u32,
     var_pc: u32,
     var_rpc: [u32; 2],
+    var_step: u32,
+    var_tokens: u32,
+    here: Option<u32>,
+    active: u32,
     pc: u32,
     const_u32_0: u32,
     const_u32_1: u32,
@@ -390,6 +396,11 @@ fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
 
+// VOTE, VOTEU, SHFL, MATCH, REDUX and BAR, which every invocation of the workgroup must reach together.
+fn exchanges(inst: u128) -> bool {
+    matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d)
+}
+
 pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
     let mut emitter = spirv::Emitter::new();
     emitter.emit_header();
@@ -425,6 +436,10 @@ impl<'a> Decoder<'a> {
             var_live: 0,
             var_pc: 0,
             var_rpc: [0; 2],
+            var_step: 0,
+            var_tokens: 0,
+            here: None,
+            active: 0,
             pc: 0,
             const_u32_0: 0,
             const_u32_1: 0,
@@ -458,19 +473,23 @@ impl<'a> Decoder<'a> {
     pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, local_size: [u32; 3]) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live].into_iter().chain(resources).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
             .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &local_size);
         use spirv::{capability as cap, execution_mode as mode};
-        if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
-            self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);
-            self.ir.emit_execution_mode(func, mode::SIGNED_ZERO_INF_NAN_PRESERVE, &[32]);
-        }
-        if device.is_some_and(|d| d.denorm_preserve) {
-            self.ir.emit_capability(cap::DENORM_PRESERVE);
-            self.ir.emit_execution_mode(func, mode::DENORM_PRESERVE, &[32]);
+        let Some(device) = device else { return };
+        for (capability, execution_mode, widths) in [
+            (cap::SIGNED_ZERO_INF_NAN_PRESERVE, mode::SIGNED_ZERO_INF_NAN_PRESERVE, device.signed_zero_inf_nan_preserve),
+            (cap::DENORM_PRESERVE, mode::DENORM_PRESERVE, device.denorm_preserve),
+        ] {
+            if widths.contains(&true) {
+                self.ir.emit_capability(capability);
+            }
+            for (width, _) in [16, 32, 64].into_iter().zip(widths).filter(|&(_, supported)| supported) {
+                self.ir.emit_execution_mode(func, execution_mode, &[width]);
+            }
         }
         if self.derivatives {
             self.ir.emit_capability(cap::COMPUTE_DERIVATIVE_GROUP_LINEAR);
@@ -522,6 +541,12 @@ impl<'a> Decoder<'a> {
         self.var_pc = self.ir.emit_variable(self.type_ptr_u32[1], storage_class::PRIVATE);
         self.var_rpc = [(); 2].map(|_| self.ir.emit_variable(self.type_ptr_u32[1], storage_class::PRIVATE));
         self.var_live = self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_1);
+        self.var_step = self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_0);
+        let barriers = self.cached_const_u32(16);
+        let type_tokens = self.ir.emit_type_array(self.type_u32[1], barriers);
+        let no_tokens = self.ir.emit_constant_composite(type_tokens, &[self.const_u32_0; 16]);
+        let type_ptr_tokens = self.ir.emit_type_pointer(storage_class::PRIVATE, type_tokens);
+        self.var_tokens = self.ir.emit_variable_init(type_ptr_tokens, storage_class::PRIVATE, no_tokens);
 
 
     }
@@ -577,28 +602,42 @@ impl<'a> Decoder<'a> {
     }
 
     // A warp is 32 consecutive invocations that trade values through a workgroup array, so every lane must reach the barriers.
-    fn warp_exchange(&mut self, val: u32, lanes: &[u32]) -> Vec<u32> {
-        use spirv::memory_semantics::{ACQUIRE_RELEASE, WORKGROUP_MEMORY};
+    // Each source lane yields its value, or 0 when it is not active this step, and its active bit.
+    fn warp_exchange(&mut self, val: u32, lanes: &[u32]) -> Vec<[u32; 2]> {
         const MAX_INVOCATIONS: u32 = 1024;
         let ty = self.type_u32[1];
         let invocation = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
-        let own = self.workgroup_word(ResourceKind::Warp, MAX_INVOCATIONS, invocation);
-        self.ir.emit_store(own, val);
-        let [scope, semantics] = [spirv::scope::WORKGROUP, ACQUIRE_RELEASE | WORKGROUP_MEMORY].map(|c| self.cached_const_u32(c));
-        self.ir.emit_control_barrier(scope, scope, semantics);
+        let flags = self.cached_const_u32(MAX_INVOCATIONS);
+        let val = self.ir.emit_select(ty, self.active, val, self.const_u32_0);
+        let flag = self.bool_bit(self.active);
+        for (word, offset) in [(val, self.const_u32_0), (flag, flags)] {
+            let index = self.ir.emit_iadd(ty, invocation, offset);
+            let own = self.workgroup_word(ResourceKind::Warp, 2 * MAX_INVOCATIONS, index);
+            self.ir.emit_store(own, word);
+        }
+        self.workgroup_barrier();
         let first_lane = self.cached_const_u32(!31);
         let base = self.ir.emit_bitwise_and(ty, invocation, first_lane);
         let mut values = Vec::new();
         for &lane in lanes {
             let index = self.ir.emit_iadd(ty, base, lane);
-            let slot = self.workgroup_word(ResourceKind::Warp, MAX_INVOCATIONS, index);
-            values.push(self.ir.emit_load(ty, slot));
+            values.push([self.const_u32_0, flags].map(|offset| {
+                let index = self.ir.emit_iadd(ty, index, offset);
+                let slot = self.workgroup_word(ResourceKind::Warp, 2 * MAX_INVOCATIONS, index);
+                self.ir.emit_load(ty, slot)
+            }));
         }
-        self.ir.emit_control_barrier(scope, scope, semantics);
+        self.workgroup_barrier();
         values
     }
 
-    fn warp_values(&mut self, val: u32) -> Vec<u32> {
+    fn workgroup_barrier(&mut self) {
+        use spirv::memory_semantics::{ACQUIRE_RELEASE, WORKGROUP_MEMORY};
+        let [scope, semantics] = [spirv::scope::WORKGROUP, ACQUIRE_RELEASE | WORKGROUP_MEMORY].map(|c| self.cached_const_u32(c));
+        self.ir.emit_control_barrier(scope, scope, semantics);
+    }
+
+    fn warp_values(&mut self, val: u32) -> Vec<[u32; 2]> {
         let lanes: Vec<u32> = (0..32).map(|lane| self.cached_const_u32(lane)).collect();
         self.warp_exchange(val, &lanes)
     }
@@ -684,6 +723,8 @@ impl<'a> Decoder<'a> {
     }
 
     // Vulkan only takes structured control flow, so guest branches store a pc that one loop around a switch dispatches on.
+    // Warp collectives and BAR meet at workgroup barriers, so a program with them steps every invocation through the same
+    // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
         let len = words.len() as u32;
         // BRX, JMX and CALL Ra only know their target at run time, so such a program dispatches on every pc; RET lands after a CALL.
@@ -691,6 +732,9 @@ impl<'a> Decoder<'a> {
         let mut leaders: Vec<u32> = if indirect { (0..=len).collect() } else { vec![0, len] };
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));
+            if opcode(inst) == BSYNC {
+                leaders.push(pc);
+            }
             if matches!(
                 opcode(inst),
                 CALL_ABS_R | CALL_REL_R | CALL_ABS | CALL_REL | 0x1943 | 0x1944 | 0xb43 | BRA | BRA_UPRED | BRA_UREG | BRX | BRXU | JMP_ABS | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | JMX | JMXU | EXIT | RET | 0x1950 | KILL
@@ -701,6 +745,7 @@ impl<'a> Decoder<'a> {
         leaders.sort_unstable();
         leaders.dedup();
         assert_eq!(leaders.last(), Some(&len), "branch target outside the program");
+        let uniform = words.iter().any(|&inst| exchanges(inst));
         let [header, body, dispatched, cont, merge] = [(); 5].map(|_| self.ir.alloc_id());
         let blocks: Vec<(u32, u32)> = leaders[..leaders.len() - 1].iter().map(|&pc| (pc, self.ir.alloc_id())).collect();
         let live = self.ir.emit_load(self.type_u32[1], self.var_live);
@@ -708,17 +753,27 @@ impl<'a> Decoder<'a> {
         let end = self.cached_const_u32(len);
         let start = self.ir.emit_select(self.type_u32[1], dead, end, self.const_u32_0);
         self.ir.emit_store(self.var_pc, start);
+        if uniform {
+            let first = self.workgroup_word(ResourceKind::Schedule, 3, self.const_u32_0);
+            let none = self.cached_const_u32(u32::MAX);
+            self.ir.emit_store(first, none);
+            self.workgroup_barrier();
+        }
         self.ir.emit_branch(header);
         self.ir.emit_label_id(header);
         self.ir.emit_loop_merge(merge, cont, 0);
         self.ir.emit_branch(body);
         self.ir.emit_label_id(body);
         let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
+        let scheduled = if uniform { self.schedule(words, pc) } else { pc };
         self.ir.emit_selection_merge(dispatched, 0);
-        self.ir.emit_switch(pc, dispatched, &blocks);
+        self.ir.emit_switch(scheduled, dispatched, &blocks);
         for (&(start, label), &end) in blocks.iter().zip(&leaders[1..]) {
             self.ir.emit_label_id(label);
-            let next = self.cached_const_u32(end);
+            let mut next = self.cached_const_u32(end);
+            if let Some(here) = self.here {
+                next = self.ir.emit_select(self.type_u32[1], here, next, pc);
+            }
             self.ir.emit_store(self.var_pc, next);
             for pc in start..end {
                 self.pc = pc;
@@ -729,25 +784,114 @@ impl<'a> Decoder<'a> {
         self.ir.emit_label_id(dispatched);
         self.ir.emit_branch(cont);
         self.ir.emit_label_id(cont);
-        let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
-        let done = self.ir.emit_ugreater_than_equal(self.type_bool[1], pc, end);
+        let progress = if uniform {
+            let step = self.ir.emit_load(self.type_u32[1], self.var_step);
+            let step = self.ir.emit_iadd(self.type_u32[1], step, self.const_u32_1);
+            self.ir.emit_store(self.var_step, step);
+            scheduled
+        } else {
+            self.ir.emit_load(self.type_u32[1], self.var_pc)
+        };
+        let done = self.ir.emit_ugreater_than_equal(self.type_bool[1], progress, end);
         self.ir.emit_branch_conditional(done, merge, header);
         self.ir.emit_label_id(merge);
+        if self.here.take().is_some() {
+            // A lane still short of the end is stuck on a BSYNC nobody else can release, and reads back live = 2.
+            let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
+            let stuck = self.ir.emit_uless_than(self.type_bool[1], pc, end);
+            let stuck = self.bool_bit(stuck);
+            let live = self.ir.emit_iadd(self.type_u32[1], live, stuck);
+            self.ir.emit_store(self.var_live, live);
+        }
+    }
+
+    // The workgroup agrees on the lowest pc a lane can run through three rotating words, so one barrier per step keeps a
+    // fast invocation's next vote out of the word a slow one is still reading. A lane waiting on BSYNC Bx cannot run while
+    // another lane of its warp holds the same Bx token and is not at a BSYNC Bx itself.
+    fn schedule(&mut self, words: &[u128], pc: u32) -> u32 {
+        let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
+        let end = self.cached_const_u32(words.len() as u32);
+        let running = self.ir.emit_uless_than(bool_ty, pc, end);
+        let mut runnable = running;
+        let mut barriers: Vec<u32> = words.iter().filter(|&&inst| opcode(inst) == BSYNC).map(|&inst| (inst >> 16 & 0xf) as u32).collect();
+        barriers.sort_unstable();
+        barriers.dedup();
+        self.active = self.ir.emit_constant_true(bool_ty);
+        for barrier in barriers {
+            let mut arrived = self.ir.emit_constant_false(bool_ty);
+            for (at, &inst) in (0..).zip(words) {
+                if opcode(inst) == BSYNC && (inst >> 16 & 0xf) as u32 == barrier {
+                    let at = self.cached_const_u32(at);
+                    let mut here = self.ir.emit_iequal(bool_ty, pc, at);
+                    if let Some(guard) = self.guard(inst) {
+                        here = self.ir.emit_logical_and(bool_ty, here, guard);
+                    }
+                    arrived = self.ir.emit_logical_or(bool_ty, arrived, here);
+                }
+            }
+            let ptr = self.barrier_token(barrier);
+            let token = self.ir.emit_load(ty, ptr);
+            let away = self.ir.emit_logical_not(bool_ty, arrived);
+            let owing = self.ir.emit_logical_and(bool_ty, running, away);
+            let owed = self.ir.emit_select(ty, owing, token, self.const_u32_0);
+            let mut outstanding = self.ir.emit_constant_false(bool_ty);
+            for [other, _] in self.warp_values(owed) {
+                let same = self.ir.emit_iequal(bool_ty, other, token);
+                outstanding = self.ir.emit_logical_or(bool_ty, outstanding, same);
+            }
+            let held = self.ir.emit_inot_equal(bool_ty, token, self.const_u32_0);
+            let blocked = self.ir.emit_logical_and(bool_ty, held, outstanding);
+            let blocked = self.ir.emit_logical_and(bool_ty, arrived, blocked);
+            let free = self.ir.emit_logical_not(bool_ty, blocked);
+            runnable = self.ir.emit_logical_and(bool_ty, runnable, free);
+        }
+        let none = self.cached_const_u32(u32::MAX);
+        let candidate = self.ir.emit_select(ty, runnable, pc, none);
+        let step = self.ir.emit_load(ty, self.var_step);
+        let three = self.cached_const_u32(3);
+        let [now, next] = [self.const_u32_0, self.const_u32_1].map(|offset| {
+            let step = self.ir.emit_iadd(ty, step, offset);
+            let word = self.ir.emit_umod(ty, step, three);
+            self.workgroup_word(ResourceKind::Schedule, 3, word)
+        });
+        let [scope, relaxed] = [spirv::scope::WORKGROUP, spirv::memory_semantics::RELAXED].map(|c| self.cached_const_u32(c));
+        self.ir.emit_atomic_umin(ty, now, scope, relaxed, candidate);
+        self.ir.emit_atomic_store(next, scope, relaxed, none);
+        self.workgroup_barrier();
+        let scheduled = self.ir.emit_load(ty, now);
+        self.here = Some(self.ir.emit_iequal(bool_ty, candidate, scheduled));
+        scheduled
+    }
+
+    fn barrier_token(&mut self, barrier: u32) -> u32 {
+        let index = self.cached_const_u32(barrier);
+        self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_tokens, &[index])
+    }
+
+    // A lane holds the step of its BSSY Bx as the Bx token until it passes BSYNC Bx or leaves through BREAK Bx.
+    fn store_barrier_token(&mut self, inst: u128, token: u32) {
+        assert_eq!(inst >> 87 & 0xf, PT as u128, "{:#x} with a condition predicate", opcode(inst));
+        let ptr = self.barrier_token((inst >> 16 & 0xf) as u32);
+        self.ir.emit_store(ptr, token);
     }
 
     fn translate_guarded(&mut self, inst: u128) {
-        let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
-        if pg == PT {
-            if !pg_not {
-                self.translate(inst);
-            }
+        if inst >> 12 & 0xf == 0xf {
             return;
         }
-        // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
-        let op = opcode(inst) & 0x1ff;
-        let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
-        let bit = self.pred_bit(uniform, pg, pg_not);
-        let cond = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
+        let cond = match (self.guard(inst), self.here) {
+            (Some(guard), Some(here)) => Some(self.ir.emit_logical_and(self.type_bool[1], guard, here)),
+            (guard, here) => guard.or(here),
+        };
+        let Some(cond) = cond else { return self.translate(inst) };
+        if exchanges(inst) {
+            self.active = cond;
+            let before = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
+            self.translate(inst);
+            let after = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
+            let kept = self.ir.emit_select(self.type_abstract_state, cond, after, before);
+            return self.ir.emit_store(self.var_abstract_state, kept);
+        }
         let [then, after] = [(); 2].map(|_| self.ir.alloc_id());
         self.ir.emit_selection_merge(after, 0);
         self.ir.emit_branch_conditional(cond, then, after);
@@ -755,6 +899,18 @@ impl<'a> Decoder<'a> {
         self.translate(inst);
         self.ir.emit_branch(after);
         self.ir.emit_label_id(after);
+    }
+
+    fn guard(&mut self, inst: u128) -> Option<u32> {
+        let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
+        if pg == PT {
+            return None;
+        }
+        // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
+        let op = opcode(inst) & 0x1ff;
+        let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
+        let bit = self.pred_bit(uniform, pg, pg_not);
+        Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
     }
 
     // Ra holds a byte address and the pc counts 16-byte instructions.
@@ -1324,19 +1480,22 @@ impl<'a> Decoder<'a> {
         let ty = self.type_f16x2();
         let half2 = self.ir.emit_composite_construct(ty, &halves);
         let mut packed = self.bitcast_u32(half2);
-        if rtz {
-            let width = self.cached_const_u32(16);
-            for i in 0..2 {
+        let [width, canonical_nan] = [16, 0x7fff].map(|c| self.cached_const_u32(c));
+        for i in 0..2 {
+            let offset = self.cached_const_u32(16 * i as u32);
+            if rtz {
                 let back = self.ir.emit_f_convert(self.type_f32[1], halves[i]);
                 let source = self.fp_src(self.type_f32[1], lanes[i], true, false);
                 let back = self.fp_src(self.type_f32[1], back, true, false);
                 let above = self.ir.emit_ford_greater_than(self.type_bool[1], back, source);
-                let offset = self.cached_const_u32(16 * i as u32);
                 let bits = self.ir.emit_bit_field_u_extract(self.type_u32[1], packed, offset, width);
                 let down = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
                 let bits = self.ir.emit_select(self.type_u32[1], above, down, bits);
                 packed = self.ir.emit_bit_field_insert(self.type_u32[1], packed, bits, offset, width);
             }
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], lanes[i]);
+            let canonical = self.ir.emit_bit_field_insert(self.type_u32[1], packed, canonical_nan, offset, width);
+            packed = self.ir.emit_select(self.type_u32[1], nan, canonical, packed);
         }
         packed
     }
@@ -1369,7 +1528,7 @@ impl<'a> Decoder<'a> {
         } else {
             lanes
         };
-        let bits = if f32_out { self.bitcast_u32(lanes[0]) } else { self.pack_half2(lanes) };
+        let bits = if f32_out { self.canonical_nan_bits(lanes[0]) } else { self.pack_half2(lanes) };
         let bits = match (ftz, f32_out) {
             (false, _) => bits,
             (true, true) => self.flush_subnormal(bits),
@@ -1629,7 +1788,7 @@ impl<'a> Decoder<'a> {
             let hi = self.cached_const_u32(hi);
             let result = self.ir.emit_select(self.type_u32[1], below, lo, converted);
             let result = self.ir.emit_select(self.type_u32[1], above, hi, result);
-            let result = self.ir.emit_select(self.type_u32[1], nan, self.const_u32_0, result);
+            let result = self.ir.emit_select(self.type_u32[1], nan, lo, result);
             self.store_register(rd, result);
         } else {
             let u64_ty = self.type_u64();
@@ -1642,10 +1801,9 @@ impl<'a> Decoder<'a> {
             };
             let lo = self.ir.emit_constant_typed(u64_ty, if signed { i64::MIN as u64 } else { 0 });
             let hi = self.ir.emit_constant_typed(u64_ty, if signed { i64::MAX as u64 } else { u64::MAX });
-            let zero = self.ir.emit_constant_typed(u64_ty, 0u64);
             let result = self.ir.emit_select(u64_ty, below, lo, converted);
             let result = self.ir.emit_select(u64_ty, above, hi, result);
-            let result = self.ir.emit_select(u64_ty, nan, zero, result);
+            let result = self.ir.emit_select(u64_ty, nan, lo, result);
             self.store_pair(rd, result);
         }
     }
@@ -1694,8 +1852,35 @@ impl<'a> Decoder<'a> {
         } else {
             val
         };
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
         if ftz { self.flush_subnormal(bits) } else { bits }
+    }
+
+    fn canonical_nan_bits(&mut self, val: u32) -> u32 {
+        let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+        let canonical = self.cached_const_u32(0x7fff_ffff);
+        let bits = self.bitcast_u32(val);
+        self.ir.emit_select(self.type_u32[1], nan, canonical, bits)
+    }
+
+    // NVIDIA returns the first quiet NaN operand, else the first signaling one quieted, in both cases without its sign.
+    fn propagated_nan_bits(&mut self, val: u32, operands: &[u32]) -> u32 {
+        let (ty, bool_ty) = (self.type_u64(), self.type_bool[1]);
+        let [magnitude, infinity, quiet, default] = [0x7fff_ffff_ffff_ffffu64, 0x7ff0_0000_0000_0000, 0x7ff8_0000_0000_0000, 0xfff8_0000_0000_0000]
+            .map(|c| self.ir.emit_constant_typed(ty, c));
+        let mut nan_bits = default;
+        for quiet_only in [false, true] {
+            for &operand in operands.iter().rev() {
+                let bits = self.bitcast_u64(operand);
+                let bits = self.ir.emit_bitwise_and(ty, bits, magnitude);
+                let nan = if quiet_only { self.ir.emit_ugreater_than_equal(bool_ty, bits, quiet) } else { self.ir.emit_ugreater_than(bool_ty, bits, infinity) };
+                let quieted = self.ir.emit_bitwise_or(ty, bits, quiet);
+                nan_bits = self.ir.emit_select(ty, nan, quieted, nan_bits);
+            }
+        }
+        let nan = self.ir.emit_f_is_nan(bool_ty, val);
+        let bits = self.bitcast_u64(val);
+        self.ir.emit_select(ty, nan, nan_bits, bits)
     }
 
     fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
@@ -1912,7 +2097,7 @@ impl<'a> Decoder<'a> {
             assert!(bop != 3, "BAR.RED operation 3 is invalid");
             let mut reductions = Vec::with_capacity(32);
             let mut result = if bop == 1 { self.const_u32_1 } else { self.const_u32_0 };
-            for value in values {
+            for [value, _] in values {
                 result = match bop {
                     0 => self.ir.emit_iadd(self.type_u32[1], result, value),
                     1 => self.ir.emit_bitwise_and(self.type_u32[1], result, value),
@@ -2035,17 +2220,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_store(self.var_pc, target);
     }
     pub fn break_(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _barreg = (((inst >> 16) & 0xf) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        return;
+        self.store_barrier_token(inst, self.const_u32_0);
     }
     pub fn brev(&mut self, inst: u128) {
         let b = self.src_b(inst);
@@ -2071,11 +2246,13 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         self.jump_to_uregister(inst, true);
     }
-    pub fn bssy(&mut self, _inst: u128) {
-        // BSSY and BSYNC reconverge a diverged warp, and every invocation already runs its own pc.
+    pub fn bssy(&mut self, inst: u128) {
+        let step = self.ir.emit_load(self.type_u32[1], self.var_step);
+        let token = self.ir.emit_iadd(self.type_u32[1], step, self.const_u32_1);
+        self.store_barrier_token(inst, token);
     }
     pub fn bsync(&mut self, inst: u128) {
-        self.bssy(inst)
+        self.store_barrier_token(inst, self.const_u32_0);
     }
     pub fn call(&mut self, inst: u128) {
         match opcode(inst) {
@@ -2182,7 +2359,7 @@ impl<'a> Decoder<'a> {
         // DADD's second operand sits in the C slot, so a register comes from Rc.
         let b = if inst >> 9 & 7 == 1 { self.fp64_reg(inst, 64, 74, 75) } else { self.fp64_alu_src(inst) };
         let result = self.ir.emit_fadd(ty, a, b);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn depbar(&mut self, inst: u128) {
@@ -2207,7 +2384,7 @@ impl<'a> Decoder<'a> {
         let c = self.fp64_reg(inst, 64, 74, 75);
         let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [c, src] } else { [src, c] };
         let result = self.glsl(spirv::glsl::FMA, ty, &[a, b, c]);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b, c]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dmma(&mut self, inst: u128) {
@@ -2239,7 +2416,7 @@ impl<'a> Decoder<'a> {
         let a = self.fp64_reg(inst, 24, 73, 72);
         let b = self.fp64_alu_src(inst);
         let result = self.ir.emit_fmul(ty, a, b);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dsetp(&mut self, inst: u128) {
@@ -2371,12 +2548,15 @@ impl<'a> Decoder<'a> {
         let round = if inst >> 78 & 3 == 3 { spirv::glsl::TRUNC } else { spirv::glsl::ROUND_EVEN };
         let (b, c) = self.srcs_bc(inst);
         let a = self.load_register((inst >> 24 & 0xff) as u32);
+        let nan_byte = self.cached_const_u32(0x80);
         let [a, b] = [a, b].map(|x| {
             let x = self.bitcast_f32(x);
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], x);
             let x = self.glsl(round, self.type_f32[1], &[x]);
             let x = self.glsl(spirv::glsl::N_CLAMP, self.type_f32[1], &[x, lo, hi]);
             let x = self.ir.emit_convert_f_to_s(self.type_s32[1], x);
-            self.bitcast_u32(x)
+            let x = self.bitcast_u32(x);
+            self.ir.emit_select(self.type_u32[1], nan, nan_byte, x)
         });
         let c = self.high_half_if(c, inst >> 72 & 1 != 0);
         let word = self.pack_narrow(a, b, c, 8);
@@ -2406,9 +2586,11 @@ impl<'a> Decoder<'a> {
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn flo(&mut self, inst: u128) {
-        assert!(inst >> 81 & 7 == 7, "FLO predicate output not implemented");
         let ty = self.type_u32[1];
         let b = self.src_b_maybe_inverted(inst);
+        let nonzero = self.ir.emit_inot_equal(self.type_bool[1], b, self.const_u32_0);
+        let nonzero = self.bool_bit(nonzero);
+        self.store_pred_bit(is_uniform(inst), (inst >> 81 & 7) as u32, nonzero);
         let msb = self.glsl(if inst >> 73 & 1 != 0 { spirv::glsl::FIND_S_MSB } else { spirv::glsl::FIND_U_MSB }, ty, &[b]);
         let res = if inst >> 74 & 1 != 0 {
             let none = self.cached_const_u32(u32::MAX);
@@ -2430,7 +2612,7 @@ impl<'a> Decoder<'a> {
         // NMin and NMax return the other operand when one is NaN, like the hardware.
         let [min, max] = [spirv::glsl::N_MIN, spirv::glsl::N_MAX].map(|op| self.glsl(op, self.type_f32[1], &[a, b]));
         let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fmul(&mut self, inst: u128) {
@@ -2460,16 +2642,15 @@ impl<'a> Decoder<'a> {
             10 => {
                 let val = self.fp_alu_src(inst, ftz);
                 let val = self.glsl(ROUNDING[rnd], self.type_f32[1], &[val]);
-                let val = self.bitcast_u32(val);
+                let val = self.canonical_nan_bits(val);
                 self.store_register(rd, val);
             }
             15 => {
                 let val = self.fp64_alu_src(inst);
                 let ty = self.type_f64();
-                let val = self.glsl(ROUNDING[rnd], ty, &[val]);
-                let u64_ty = self.type_u64();
-                let val = self.ir.emit_bitcast(u64_ty, val);
-                self.store_pair(rd, val);
+                let rounded = self.glsl(ROUNDING[rnd], ty, &[val]);
+                let bits = self.propagated_nan_bits(rounded, &[val]);
+                self.store_pair(rd, bits);
             }
             _ => todo!("FRND format {fmt} requires f16 support"),
         }
@@ -2615,7 +2796,7 @@ impl<'a> Decoder<'a> {
             if inst >> 79 & 1 == 0 {
                 return val;
             }
-            let negative = self.ir.emit_ford_less_than(self.type_bool[1], val, zero);
+            let negative = self.ir.emit_ford_less_than_equal(self.type_bool[1], val, zero);
             self.ir.emit_select(self.type_f32[1], negative, zero, val)
         });
         self.store_half2(inst, val, ofmt == 1, inst >> 77 & 1 != 0, ftz);
@@ -3315,20 +3496,22 @@ impl<'a> Decoder<'a> {
         let ra = (inst >> 24 & 0xff) as u32;
         let words = if inst >> 73 & 1 != 0 { vec![ra, nth_reg(ra, RZ, 1)] } else { vec![ra] };
         let mut same = self.cached_const_u32(u32::MAX);
+        let mut all = same;
         for reg in words {
             let own = self.load_register(reg);
-            let bits = self.warp_values(own).into_iter().map(|v| {
+            let (bits, active) = self.warp_values(own).into_iter().map(|[v, active]| {
                 let eq = self.ir.emit_iequal(self.type_bool[1], v, own);
-                self.bool_bit(eq)
-            }).collect();
+                let bit = self.bool_bit(eq);
+                (self.ir.emit_bitwise_and(self.type_u32[1], bit, active), active)
+            }).unzip();
             let mask = self.pack_lanes(bits);
+            all = self.pack_lanes(active);
             same = self.ir.emit_bitwise_and(self.type_u32[1], same, mask);
         }
         let rd = (inst >> 16 & 0xff) as u32;
         if inst >> 79 & 1 != 0 {
             return self.store_register(rd, same);
         }
-        let all = self.cached_const_u32(u32::MAX);
         let uniform = self.ir.emit_iequal(self.type_bool[1], same, all);
         let mask = self.ir.emit_select(self.type_u32[1], uniform, all, self.const_u32_0);
         self.store_register(rd, mask);
@@ -3399,7 +3582,9 @@ impl<'a> Decoder<'a> {
             9 => self.glsl(TANH, ty, &[x]),
             op => panic!("MUFU op {op} (RCP64H, RSQ64H) is not implemented"),
         };
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
+        // RCP flushes a subnormal result to zero.
+        let bits = if inst >> 74 & 0xf == 4 { self.flush_subnormal(bits) } else { bits };
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn nanosleep(&mut self, inst: u128) {
@@ -3625,7 +3810,17 @@ impl<'a> Decoder<'a> {
         let ty = self.type_u32[1];
         let a = self.load_register((inst >> 24 & 0xff) as u32);
         let signed = inst >> 73 & 1 != 0;
-        let lanes = self.warp_values(a);
+        let identity = match (inst >> 78 & 7, signed) {
+            (0, _) | (4, false) => u32::MAX,
+            (4, true) => i32::MAX as u32,
+            (5, true) => i32::MIN as u32,
+            _ => 0,
+        };
+        let identity = self.cached_const_u32(identity);
+        let lanes: Vec<u32> = self.warp_values(a).into_iter().map(|[v, active]| {
+            let active = self.ir.emit_inot_equal(self.type_bool[1], active, self.const_u32_0);
+            self.ir.emit_select(ty, active, v, identity)
+        }).collect();
         let mut acc = lanes[0];
         for &v in &lanes[1..] {
             acc = match inst >> 78 & 7 {
@@ -3834,8 +4029,10 @@ impl<'a> Decoder<'a> {
             }
         };
         let src = self.ir.emit_select(ty, in_range, src, lane);
-        let val = self.warp_exchange(a, &[src])[0];
+        let [val, active] = self.warp_exchange(a, &[src])[0];
         self.store_register((inst >> 16 & 0xff) as u32, val);
+        let active = self.ir.emit_inot_equal(bool_ty, active, self.const_u32_0);
+        let in_range = self.ir.emit_logical_and(bool_ty, in_range, active);
         let bit = self.bool_bit(in_range);
         self.store_pred_bit(false, (inst >> 81 & 7) as u32, bit);
     }
@@ -4505,11 +4702,11 @@ impl<'a> Decoder<'a> {
     }
     fn vote_ballot(&mut self, inst: u128) -> (u32, u32) {
         let p = self.pp_bit(inst);
-        let bits = self.warp_values(p);
+        let (bits, active) = self.warp_values(p).into_iter().map(|[bit, active]| (bit, active)).unzip();
         let ballot = self.pack_lanes(bits);
+        let active = self.pack_lanes(active);
         let bool_ty = self.type_bool[1];
-        let all = self.cached_const_u32(u32::MAX);
-        let every = self.ir.emit_iequal(bool_ty, ballot, all);
+        let every = self.ir.emit_iequal(bool_ty, ballot, active);
         let none = self.ir.emit_iequal(bool_ty, ballot, self.const_u32_0);
         let result = match inst >> 72 & 3 {
             0 => every,

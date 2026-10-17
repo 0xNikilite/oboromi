@@ -105,7 +105,8 @@ pub fn tensor_program(fixture: &TensorFixture) -> Vec<u128> {
 pub fn tensor_seeds(fixture: &TensorFixture) -> Vec<Vec<u32>> {
     let mut seeds = vec![vec![0; PRED + 1]; 32];
     for (lane, seed) in seeds.iter_mut().enumerate() {
-        let before = &fixture.before[lane * 12..][..12];
+        let width = fixture.before.len() / 32;
+        let before = &fixture.before[lane * width..][..width];
         match fixture.case.as_str() {
             "m16n8k8-f32" => {
                 seed[6..8].copy_from_slice(&before[..2]);
@@ -120,6 +121,16 @@ pub fn tensor_seeds(fixture: &TensorFixture) -> Vec<Vec<u32>> {
                     seed[20 + word] = slot + 4 * word as u32;
                 }
                 seed[PRED] = (case == "ldmatrix-x4-trans") as u32;
+            }
+            // Sparse lanes hold A, B, C and the metadata word, A and B the same register count.
+            case if case.starts_with("sp-") => {
+                let [ra, rb, rc, re] = [24, 32, 64, 40].map(|bit| (fixture.words[0] >> bit & 0xff) as usize);
+                let c = if fixture.modifier == "dst-f16" { 2 } else { 4 };
+                let a = (width - c - 1) / 2;
+                seed[ra..ra + a].copy_from_slice(&before[..a]);
+                seed[rb..rb + a].copy_from_slice(&before[a..2 * a]);
+                seed[rc..rc + c].copy_from_slice(&before[2 * a..2 * a + c]);
+                seed[re] = before[width - 1];
             }
             case if case.starts_with("m8n8") || case.starts_with("m16n8k4") || case.starts_with("m16n8k32") || case.starts_with("m16n8k64") => {
                 let [ra, rb, rc] = [24, 32, 64].map(|bit| (fixture.words[0] >> bit & 0xff) as usize);

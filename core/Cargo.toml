@@ -20,3 +20,4 @@ ash = "0.38.0"
 [features]
 default = []
 trace = []
+cuda = []

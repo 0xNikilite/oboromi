@@ -79,12 +79,21 @@ fn main() {
     let out = std::path::PathBuf::from(flag("--out").expect("--out <dir>"));
     std::fs::create_dir_all(&out).unwrap();
     let mut wav = flag("--audio").map(Wav::new);
+    let audio_only = args.iter().any(|arg| arg == "--audio-only");
     let mut pixels = Vec::new();
     let frames = (seconds * fps).round() as usize;
     for i in 0..frames {
-        render(&args[0], i as f32 / fps).unwrap();
+        let seconds = (i + usize::from(args[0] == "dungeon")) as f32 / fps;
+        if audio_only && args[0] == "dungeon" {
+            demo_dungeon::render_dungeon_audio_frame(seconds);
+        } else {
+            render(&args[0], seconds).unwrap();
+        }
         if let Some(wav) = &mut wav {
             wav.drain();
+        }
+        if audio_only {
+            continue;
         }
         let (mut width, mut height) = (0, 0);
         pixels.resize(

@@ -190,6 +190,27 @@ fn snap(v: f32) -> f32 {
 }
 
 impl World {
+    pub fn acoustic_rooms(&self) -> Vec<crate::audio::spatial::Room> {
+        use crate::audio::spatial::{Doorway, Material, Room};
+        self.zones.iter().enumerate().map(|(zone, room)| {
+            let stone = if room.kind == Kind::Cave { Material::WET_STONE } else { Material::DRY_STONE };
+            let mut walls = [stone; 6];
+            if room.kind == Kind::Cave { walls[2] = Material::WATER; }
+            let doorways = self.doors.iter().filter(|door| door.zone == zone).map(|door| {
+                let (mut min, mut max) = (room.space.lo, room.space.hi);
+                let plane = if door.side == 0 { room.space.lo[door.axis] } else { room.space.hi[door.axis] };
+                min[door.axis] = plane - 0.05;
+                max[door.axis] = plane + 0.05;
+                min[2 - door.axis] = door.span[0];
+                max[2 - door.axis] = door.span[1];
+                min[1] = room.space.lo[1];
+                max[1] = door.top;
+                Doorway { min, max, material: Material::OPEN }
+            }).collect();
+            Room { min: room.space.lo, max: room.space.hi, walls, doorways }
+        }).collect()
+    }
+
     /// The zones containing `p`.
     pub fn zones_at(&self, p: V3) -> impl Iterator<Item = usize> + '_ {
         (0..self.zones.len()).filter(move |&z| self.zones[z].space.contains(p))
@@ -1342,6 +1363,64 @@ pub fn render_dungeon_frame(seconds: f32) -> Result<(), String> {
     let audio = dungeon.frame(seconds)?;
     for period in audio.chunks(480) { crate::audio::play(&[period]); }
     dungeon.scene.gpu.present(dungeon.scene.target, WIDTH, HEIGHT).map_err(|e| format!("{e:?}"))
+}
+
+struct AudioCapture {
+    world: World,
+    sound: Sound,
+    eye: V3,
+    yaw: f32,
+    time: f32,
+    audio_time: f32,
+    waypoint: usize,
+    foot_distance: f32,
+    scream: bool,
+}
+
+pub fn render_dungeon_audio_frame(seconds: f32) {
+    static CAPTURE: Mutex<Option<AudioCapture>> = Mutex::new(None);
+    let mut slot = CAPTURE.lock().unwrap();
+    let capture = slot.get_or_insert_with(|| {
+        let world = World::new(8);
+        let eye = add(world.path[0], [0.0, EYE, 0.0]);
+        let sound = Sound::new(&world, &world.sources);
+        AudioCapture { world, sound, eye, yaw: PI / 2.0, time: 0.0, audio_time: 0.0, waypoint: 1, foot_distance: 0.0, scream: false }
+    });
+    let dt = (seconds - capture.time).clamp(0.0, 0.1);
+    let old_eye = capture.eye;
+    let to = sub(add(capture.world.path[capture.waypoint], [0.0, EYE, 0.0]), capture.eye);
+    let distance = length(to);
+    if distance < 0.3 { capture.waypoint = (capture.waypoint + 1) % capture.world.path.len(); }
+    capture.eye = capture.world.clamp_walk(capture.eye, add(capture.eye, scale(unit(to), (dt * 4.8).min(distance))));
+    let angle = to[0].atan2(-to[2]);
+    capture.yaw += ((angle - capture.yaw + PI).rem_euclid(TAU) - PI) * (dt * 4.0).min(1.0);
+    capture.foot_distance += length(sub(capture.eye, old_eye));
+    if capture.foot_distance > 1.25 {
+        capture.foot_distance %= 1.25;
+        let wet = capture.world.river.contains(capture.eye) || capture.world.zones[capture.world.cave].space.contains(capture.eye);
+        capture.sound.play(if wet { super::demo_dungeon_sound::Sample::WetStep } else { super::demo_dungeon_sound::Sample::Step }, capture.eye, 1.0, 0.96 + 0.08 * (seconds * 7.0).sin());
+    }
+    if !capture.scream && capture.world.zones[capture.world.last].space.contains(capture.eye) {
+        capture.sound.play(super::demo_dungeon_sound::Sample::Scream, capture.world.zones[capture.world.last].space.centre(), 1.4, 1.0);
+        capture.scream = true;
+    }
+    for (i, &(tip, floor)) in capture.world.drips.iter().enumerate() {
+        let period = 2.4 + (i % 5) as f32 * 0.3;
+        let fall = ((tip[1] - floor) / 4.9).sqrt();
+        let age = (seconds + i as f32 * 0.71).rem_euclid(period);
+        let previous = (capture.time + i as f32 * 0.71).rem_euclid(period);
+        if previous < fall && age >= fall { capture.sound.play(super::demo_dungeon_sound::Sample::Drip, [tip[0], floor, tip[2]], 0.5, 0.8 + i as f32 * 0.03); }
+    }
+    let bats = capture.world.zones[capture.world.bats].space.centre();
+    let bat_source = capture.world.sources.iter().position(|source| source.0 == Sfx::Bats).unwrap();
+    capture.sound.move_source(bat_source, add(bats, [0.5 * (seconds * 1.8).cos(), 0.5 + 0.2 * (seconds * 2.0).sin(), 0.5 * (seconds * 2.2).sin()]));
+    capture.sound.listen(&capture.world, capture.eye, capture.yaw, dt);
+    capture.audio_time += dt;
+    let periods = (capture.audio_time / 0.005).floor() as usize;
+    capture.audio_time -= periods as f32 * 0.005;
+    capture.time = seconds;
+    let audio = capture.sound.render(periods);
+    for period in audio.chunks(480) { crate::audio::play(&[period]); }
 }
 
 const WATER_GRID: [usize; 2] = [128, 32];

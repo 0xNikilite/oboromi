@@ -6,7 +6,7 @@ pub mod compute;
 pub mod compute_class;
 pub mod demo;
 pub mod demo_dungeon;
-mod demo_dungeon_sound;
+pub(crate) mod demo_dungeon_sound;
 pub mod demo_bounce;
 pub mod demo_particles;
 pub mod demo_post;

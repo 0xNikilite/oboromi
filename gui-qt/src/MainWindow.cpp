@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QDesktopServices>
+#include <QComboBox>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -110,6 +111,10 @@ void MainWindow::buildUi() {
         });
         buttons->addWidget(demoButton);
     }
+    auto *spatialMode = new QComboBox(central);
+    spatialMode->addItems({"Headphones", "Speakers"});
+    connect(spatialMode, &QComboBox::currentIndexChanged, this, [](int mode) { oboromi_set_dungeon_speakers(mode == 1); });
+    buttons->addWidget(spatialMode);
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
         if (m_demoFrame.isFinished())
             m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);

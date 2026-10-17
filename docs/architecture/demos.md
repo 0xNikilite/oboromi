@@ -22,6 +22,28 @@ The Julia set program loops with a predicated branch, a jump taken only where a 
 
 Every frame ends in `display::present`, which the window shows.
 
+## What does it look like?
+
+![The Render Test Frame button: a 1080p gradient](https://raw.githubusercontent.com/jopdorp/oboromi/assets/test-frame.png)
+
+*Render Test Frame: three SASS instructions (S2R, IMAD, STG) write a gradient, translated to SPIR-V and run on an Intel laptop GPU.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/julia-demo-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/julia-demo.mp4" type="video/mp4"></video>
+
+*Demo: a 64-instruction SM86 program, translated to SPIR-V, redrawing a Julia set every frame on an Intel laptop GPU.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/triangle-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/triangle.mp4" type="video/mp4"></video>
+
+*Triangle: GPU commands written into emulated memory every frame, drawn through the whole engine on an Intel laptop GPU.*
+
+![NVIDIA's Mandelbrot sample, run through the translator](https://raw.githubusercontent.com/jopdorp/oboromi/assets/cuda-mandelbrot.png)
+
+*NVIDIA's cuda-samples Mandelbrot kernel, compiled by nvcc for SM86 and run unchanged through the translator on an Intel laptop GPU.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/cuda-mandelbrot-zoom-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/cuda-mandelbrot-zoom.mp4" type="video/mp4"></video>
+
+*The same CUDA kernel, launched once per frame with a smaller scale, zooming into the edge of the set.*
+
 Measured on an Intel Arc (MTL), p50 per frame:
 
 | Demo | Time |

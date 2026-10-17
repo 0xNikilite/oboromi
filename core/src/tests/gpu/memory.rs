@@ -15,6 +15,7 @@ mod tests {
     const LDG_U8: u128 = 0x00000000001e01000000010002047381;
     const LDG_S16: u128 = 0x00000000001e07000000020002057381;
     const LDG_UR: u128 = 0x000000000c1e09000000000402067981;
+    const LDG_DESC: u128 = 0x000ea8000c1e19000000000404047981;
 
     #[test]
     fn ldg_reads_global_word() {
@@ -82,6 +83,17 @@ mod tests {
     }
 
     #[test]
+    fn ldg_descriptor_form_ignores_uniform_register() {
+        let mut seed = vec![0; 254 + 1 + 5];
+        seed[4..6].copy_from_slice(&BASE);
+        seed[254 + 1 + 4] = 4;
+        let Some((regs, _)) = run_regs(&[LDG_DESC], &seed, &[], &[0x1234_5678, 0xdead_beef]) else {
+            return;
+        };
+        assert_eq!(regs[4], 0x1234_5678);
+    }
+
+    #[test]
     fn memory_words_match_nvdisasm() {
         let fixtures = [
             (STL_32, "STL [R0+0x8], R1 ;"),
@@ -95,6 +107,7 @@ mod tests {
             (LDG_U8, "LDG.E.U8 R4, [R2+0x1] ;"),
             (LDG_S16, "LDG.E.S16 R5, [R2+0x2] ;"),
             (LDG_UR, "LDG.E R6, [R2.64+UR4] ;"),
+            (LDG_DESC, "LDG.E R4, [R4.64] ;"),
         ];
         let bin = std::env::temp_dir().join(format!("oboromi-memory-{}.bin", std::process::id()));
         for (word, expected) in fixtures {

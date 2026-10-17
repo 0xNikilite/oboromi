@@ -1193,7 +1193,7 @@ impl<'a> Decoder<'a> {
 
     fn global_address(&mut self, inst: u128, uniform: u32, offset_shift: u32) -> u32 {
         let mut address = self.load_register((inst >> 24) as u32 & 0xff);
-        if inst >> 91 & 1 != 0 {
+        if inst >> 91 & 1 != 0 && inst >> 76 & 1 == 0 {
             let ur = (inst >> uniform & 0x3f) as u32;
             let value = self.load_ureg(ur);
             address = self.ir.emit_iadd(self.type_u32[1], address, value);

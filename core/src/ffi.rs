@@ -308,3 +308,26 @@ pub extern "C" fn oboromi_audio_generation() -> u64 {
 pub extern "C" fn oboromi_audio_test_tone(seconds: f32) -> usize {
     crate::audio::test_tone(seconds)
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_dungeon_frame(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo_dungeon::render_dungeon_frame(seconds)), Ok(Ok(())))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_dungeon_ray_queries() -> bool {
+    matches!(catch_unwind(|| crate::gpu::device().is_ok_and(|d| d.acceleration_structure.is_some())), Ok(true))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_dungeon_settings(showcase: bool, raytracing: bool) {
+    use crate::gpu::demo_dungeon::render::{SHOWCASE, RAYS};
+    use std::sync::atomic::Ordering::Relaxed;
+    SHOWCASE.store(showcase, Relaxed);
+    RAYS.store(raytracing, Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_dungeon_speakers(speakers: bool) {
+    crate::gpu::demo_dungeon_sound::set_mode(if speakers { crate::audio::spatial::Mode::Speakers } else { crate::audio::spatial::Mode::Headphones });
+}

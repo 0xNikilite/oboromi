@@ -25,6 +25,10 @@ const HALF: [f32; 2] = [1.6, 0.85];
 const VIEW: [f32; 2] = [1.75, 0.984_375];
 const GRAVITY: f32 = 3.0;
 const STEP: f32 = 1.0 / 200.0;
+const RESTITUTION: f32 = 0.8;
+const SLOP: f32 = 0.001;
+const CORRECTION: f32 = 0.8;
+const SOLVER_ITERATIONS: usize = 16;
 /// Impacts slower than this are a ball resting on another, not a knock.
 const SOFT: f32 = 0.4;
 const BEAD: f32 = 0.02;
@@ -89,52 +93,74 @@ impl Bounce {
         Self { sound: Sound::new(&[knock], 16), balls }
     }
 
+    fn physics(&mut self) -> Vec<(usize, f32)> {
+        let mut impacts = Vec::new();
+        let fastest = self.balls.iter().map(|ball| ball.velocity[0].hypot(ball.velocity[1])).fold(0.0, f32::max);
+        let smallest = self.balls.iter().map(|ball| ball.radius).fold(f32::INFINITY, f32::min);
+        let substeps = (fastest * STEP / (0.5 * smallest)).ceil().max(1.0) as usize;
+        let dt = STEP / substeps as f32;
+        for _ in 0..substeps {
+            for ball in &mut self.balls {
+                ball.velocity[1] -= GRAVITY * dt;
+                for axis in 0..2 {
+                    ball.at[axis] += ball.velocity[axis] * dt;
+                }
+            }
+            for _ in 0..SOLVER_ITERATIONS {
+                for i in 0..BALLS {
+                    for j in i + 1..BALLS {
+                        let (a, b) = (&self.balls[i], &self.balls[j]);
+                        let gap = [b.at[0] - a.at[0], b.at[1] - a.at[1]];
+                        let distance = gap[0].hypot(gap[1]);
+                        let overlap = a.radius + b.radius - distance;
+                        if overlap <= 0.0 {
+                            continue;
+                        }
+                        let normal = gap.map(|c| c / distance);
+                        let closing = (b.velocity[0] - a.velocity[0]) * normal[0] + (b.velocity[1] - a.velocity[1]) * normal[1];
+                        let [inv_a, inv_b] = [1.0 / (a.radius * a.radius), 1.0 / (b.radius * b.radius)];
+                        let correction = CORRECTION * (overlap - SLOP).max(0.0) / (inv_a + inv_b);
+                        for axis in 0..2 {
+                            self.balls[i].at[axis] -= correction * inv_a * normal[axis];
+                            self.balls[j].at[axis] += correction * inv_b * normal[axis];
+                        }
+                        if closing >= 0.0 {
+                            continue;
+                        }
+                        let restitution = if -closing < SOFT { 0.0 } else { RESTITUTION };
+                        let impulse = -(1.0 + restitution) * closing / (inv_a + inv_b);
+                        for axis in 0..2 {
+                            self.balls[i].velocity[axis] -= impulse * inv_a * normal[axis];
+                            self.balls[j].velocity[axis] += impulse * inv_b * normal[axis];
+                        }
+                        impacts.push((i, -closing));
+                    }
+                }
+                for (i, ball) in self.balls.iter_mut().enumerate() {
+                    for axis in 0..2 {
+                        let limit = HALF[axis] - ball.radius;
+                        if ball.at[axis].abs() > limit {
+                            ball.at[axis] = limit.copysign(ball.at[axis]);
+                            if ball.at[axis] * ball.velocity[axis] > 0.0 {
+                                let speed = ball.velocity[axis].abs();
+                                impacts.push((i, speed));
+                                ball.velocity[axis] = if speed < SOFT { 0.0 } else { -RESTITUTION * ball.velocity[axis] };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        impacts
+    }
+
     /// Advances the balls one period and knocks a voice for every impact in it.
     pub fn step(&mut self) {
-        let mut impacts = Vec::new();
-        for (i, ball) in self.balls.iter_mut().enumerate() {
-            ball.velocity[1] -= GRAVITY * STEP;
-            for axis in 0..2 {
-                ball.at[axis] += ball.velocity[axis] * STEP;
-                let limit = HALF[axis] - ball.radius;
-                if ball.at[axis].abs() > limit && ball.at[axis] * ball.velocity[axis] > 0.0 {
-                    ball.at[axis] = limit.copysign(ball.at[axis]);
-                    impacts.push((i, ball.velocity[axis].abs()));
-                    ball.velocity[axis] *= -0.9;
-                }
-            }
-        }
-        for i in 0..BALLS {
-            for j in i + 1..BALLS {
-                let (a, b) = (&self.balls[i], &self.balls[j]);
-                let gap = [b.at[0] - a.at[0], b.at[1] - a.at[1]];
-                let distance = gap[0].hypot(gap[1]);
-                let overlap = a.radius + b.radius - distance;
-                let normal = gap.map(|c| c / distance);
-                let closing = (b.velocity[0] - a.velocity[0]) * normal[0] + (b.velocity[1] - a.velocity[1]) * normal[1];
-                if overlap <= 0.0 || closing >= 0.0 {
-                    continue;
-                }
-                // Masses go as the area, the push as an impulse with 0.95 restitution.
-                let [ma, mb] = [a.radius * a.radius, b.radius * b.radius];
-                let push = -1.95 * closing / (1.0 / ma + 1.0 / mb);
-                for axis in 0..2 {
-                    self.balls[i].velocity[axis] -= push / ma * normal[axis];
-                    self.balls[j].velocity[axis] += push / mb * normal[axis];
-                    self.balls[i].at[axis] -= overlap * 0.5 * normal[axis];
-                    self.balls[j].at[axis] += overlap * 0.5 * normal[axis];
-                }
-                impacts.push((i, -closing));
-            }
-        }
+        let impacts = self.physics();
         for (i, speed) in impacts.into_iter().filter(|&(_, speed)| speed > SOFT) {
             let ball = &self.balls[i];
             let voice = self.sound.free_voice();
             self.sound.trigger(voice, 0, 0.08 / ball.radius, (speed / 8.0).min(0.6), ball.at[0] / HALF[0]);
-        }
-        // Every two seconds the next ball is thrown up again, so the box never settles.
-        if self.sound.periods % 400 == 399 {
-            self.balls[(self.sound.periods / 400) as usize % BALLS].velocity[1] += 4.5;
         }
     }
 
@@ -259,4 +285,41 @@ pub fn render_bounce_frame(seconds: f32) -> Result<(), String> {
     }
     scene.draw()?;
     scene.gpu.present(TARGET, WIDTH, HEIGHT).map_err(named)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounce_does_not_gain_energy_or_sink_into_contacts() {
+        let mut bounce = Bounce::new();
+        let energy = |bounce: &Bounce| bounce.balls.iter().map(|ball| {
+            ball.radius.powi(2) * (0.5 * ball.velocity.iter().map(|v| v * v).sum::<f32>() + GRAVITY * (ball.at[1] + HALF[1]))
+        }).sum::<f32>();
+        let mut previous = energy(&bounce);
+        let mut periods = 0;
+        let mut knocks = 0;
+        let mut most_knocks = 0;
+        for frame in 0..600 {
+            let target = (frame + 1) * 200 / 60;
+            while periods < target {
+                let period_knocks = bounce.physics().into_iter().filter(|&(_, speed)| speed > SOFT).count();
+                knocks += period_knocks;
+                most_knocks = most_knocks.max(period_knocks);
+                periods += 1;
+            }
+            let current = energy(&bounce);
+            assert!(current <= previous + 1e-5, "frame {frame} gained {} energy", current - previous);
+            previous = current;
+            let floor_overlap = bounce.balls.iter().map(|ball| ball.radius - ball.at[1] - HALF[1]).fold(0.0, f32::max);
+            let ball_overlap = (0..BALLS).flat_map(|i| (i + 1..BALLS).map(move |j| (i, j))).map(|(i, j)| {
+                let [x, y] = [0, 1].map(|axis| bounce.balls[j].at[axis] - bounce.balls[i].at[axis]);
+                bounce.balls[i].radius + bounce.balls[j].radius - x.hypot(y)
+            }).fold(0.0, f32::max);
+            assert!(floor_overlap.max(ball_overlap) <= SLOP + 1e-5, "frame {frame} overlap {}", floor_overlap.max(ball_overlap));
+        }
+        assert!(most_knocks <= 4, "{most_knocks} collision sounds in one period");
+        eprintln!("collision sounds: {knocks}, at most {most_knocks} per period");
+    }
 }

@@ -1048,63 +1048,43 @@ impl<'a> Decoder<'a> {
 
     fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
         use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY};
+        let wide = matches!(sz, 2 | 5);
+        if sz >= 2 && !wide {
+            todo!("floating-point global atomics require VK_EXT_shader_atomic_float");
+        }
         let address = self.global_address(inst, 64, 40);
         let scope = self.cached_const_u32(spirv::scope::DEVICE);
         let sem = self.cached_const_u32(ACQUIRE_RELEASE | UNIFORM_MEMORY);
-        if matches!(sz, 2 | 5) {
+        let ptr = if wide {
             assert!(crate::gpu::device().is_ok_and(|d| d.shader_buffer_int64_atomics), "64-bit global atomics require shaderBufferInt64Atomics");
-            let ptr = self.global_u64_at(address);
-            let value = self.load_pair(rb);
-            if inst & 1 != 0 {
-                let swap = self.load_pair((inst >> 64 & 0xff) as u32);
-                let ty = self.type_u64();
-                return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, self.const_u32_0, swap, value);
-            }
-            return self.atomic_op64(ptr, scope, sem, op, sz == 5, value);
-        }
-        if sz >= 2 {
-            todo!("floating-point global atomics require VK_EXT_shader_atomic_float");
-        }
-        let ptr = self.global_word_at(address);
-        let value = self.load_register(rb);
+            self.global_u64_at(address)
+        } else {
+            self.global_word_at(address)
+        };
+        let load = |this: &mut Self, reg| if wide { this.load_pair(reg) } else { this.load_register(reg) };
+        let value = load(self, rb);
         if inst & 1 != 0 {
-            let swap = self.load_register((inst >> 64 & 0xff) as u32);
-            return self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value);
+            let swap = load(self, (inst >> 64 & 0xff) as u32);
+            let ty = if wide { self.type_u64() } else { self.type_u32[1] };
+            return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, self.const_u32_0, swap, value);
         }
-        self.atomic_op(ptr, scope, sem, op, sz == 1, value)
+        self.atomic_op(wide, ptr, scope, sem, op, matches!(sz, 1 | 5), value)
     }
 
-    fn atomic_op64(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
-        let ty = self.type_u64();
+    fn atomic_op(&mut self, wide: bool, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
+        let ty = if wide { self.type_u64() } else { self.type_u32[1] };
         match op {
             0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, b),
             1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, b),
             1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, b),
             2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, b),
             2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, b),
-            5 => self.ir.emit_atomic_and(ty, ptr, scope, sem, b),
-            6 => self.ir.emit_atomic_or(ty, ptr, scope, sem, b),
-            7 => self.ir.emit_atomic_xor(ty, ptr, scope, sem, b),
-            8 => self.ir.emit_atomic_exchange(ty, ptr, scope, sem, b),
-            9 => todo!("ATOMG.SAFEADD has no public semantics; Eden also leaves it TODO"),
-            _ => todo!("64-bit atomic op {op}"),
-        }
-    }
-
-    fn atomic_op(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
-        let ty = self.type_u32[1];
-        match op {
-            0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, b),
-            1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, b),
-            1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, b),
-            2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, b),
-            2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, b),
-            3 => self.atomic_update(ptr, scope, sem, |d, old| {
+            3 if !wide => self.atomic_update(ptr, scope, sem, |d, old| {
                 let wraps = d.ir.emit_ugreater_than_equal(d.type_bool[1], old, b);
                 let next = d.ir.emit_iadd(ty, old, d.const_u32_1);
                 d.ir.emit_select(ty, wraps, d.const_u32_0, next)
             }),
-            4 => self.atomic_update(ptr, scope, sem, |d, old| {
+            4 if !wide => self.atomic_update(ptr, scope, sem, |d, old| {
                 let zero = d.ir.emit_iequal(d.type_bool[1], old, d.const_u32_0);
                 let above = d.ir.emit_ugreater_than(d.type_bool[1], old, b);
                 let wraps = d.ir.emit_logical_or(d.type_bool[1], zero, above);
@@ -1886,7 +1866,7 @@ impl<'a> Decoder<'a> {
                 let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
                 self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, relaxed, c, b)
             } else {
-                self.atomic_op64(ptr, scope, sem, op, sz == 5, b)
+                self.atomic_op(true, ptr, scope, sem, op, sz == 5, b)
             };
             self.ir.emit_control_barrier(scope, scope, sem);
             let final_value = self.ir.emit_load(ty, ptr);
@@ -1911,7 +1891,7 @@ impl<'a> Decoder<'a> {
             let c = self.load_register((inst >> 64) as u32 & 0xff);
             self.ir.emit_atomic_compare_exchange(ty, ptr, scope, relaxed, relaxed, c, b)
         } else {
-            self.atomic_op(ptr, scope, relaxed, op, signed, b)
+            self.atomic_op(false, ptr, scope, relaxed, op, signed, b)
         };
         self.store_register(rd, old);
     }
@@ -3991,7 +3971,7 @@ impl<'a> Decoder<'a> {
         let rb = (inst >> 32 & 0xff) as u32;
         let value = self.load_register(rb);
         match op {
-            Some(op) => self.atomic_op(ptr, scope, sem, op, size == 1, value),
+            Some(op) => self.atomic_op(false, ptr, scope, sem, op, size == 1, value),
             None => {
                 let swap = self.load_register(nth_reg(rb, RZ, 1));
                 self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value)

@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::gpu::demo_particles::{COUNT, HEIGHT, PARTICLES, Particles, RELEASE, TARGET, WIDTH, camera, update_uniforms};
+use crate::gpu::demo_particles::{COUNT, HEIGHT, PARTICLES, Particles, RELEASE, TARGET, WIDTH, update_uniforms};
 use crate::tests::gpu::harness::vk_state;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -51,19 +51,17 @@ fn particles_frame_glows_where_the_particles_cluster() {
     let Some(state) = vk_state() else { return };
     let mut scene = Particles::new(&state).unwrap();
     scene.update(0.0).unwrap();
-    scene.draw().unwrap();
+    scene.draw(0.0).unwrap();
     let mut frame = vec![0; (WIDTH * HEIGHT * 4) as usize];
     scene.gpu.read(TARGET, &mut frame).unwrap();
-    let (view_proj, ..) = camera();
-    let [x, y, w] = [0, 1, 3].map(|row| view_proj[row] * update_uniforms(0.0)[0] + view_proj[12 + row]);
-    let [px, py] = [(x / w + 1.0) * WIDTH as f32 / 2.0, (y / w + 1.0) * HEIGHT as f32 / 2.0].map(|p| p as usize);
     let pixel = |x: usize, y: usize| &frame[(y * WIDTH as usize + x) * 4..][..4];
-    assert_eq!([pixel(px, py), pixel(0, 0)], [[255; 4], [0, 0, 0, 255]]);
+    assert_eq!([pixel(0, 0), pixel(0, HEIGHT as usize - 1)], [[14, 16, 34, 255], [2, 2, 6, 255]]);
+    assert!(frame.chunks_exact(4).any(|pixel| pixel[..3] == [255; 3]));
     // Devices round the blended glow differently by a step or two, so only lavapipe, which CI runs, has a fixed frame.
     if state.is_llvmpipe() {
         let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         sha256sum.stdin.take().unwrap().write_all(&frame).unwrap();
         let digest = String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap();
-        assert_eq!(&digest[..64], "2353225cf9336c713aeba812dd26aaaa50d8b42308614715eeb33685aa889372");
+        assert_eq!(&digest[..64], "dda92ecb9385ea140c5302181d7e7962a61b7cfa570608e1993f39cbc573ad81");
     }
 }

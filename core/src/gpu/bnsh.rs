@@ -1,7 +1,7 @@
 //! Guest shader programs in game files: NintendoWare BNSH containers (layout from maierfelix/bnsh-decoder BNSH.ksy),
 //! and a raw scan for program headers elsewhere.
 use super::VkState;
-use super::sm86::{Stage, branch_target, emit_module};
+use super::sm86::{ResourceKind, Stage, branch_target, emit_module};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 const SPH_BYTES: usize = 0x80;
@@ -68,7 +68,17 @@ pub fn scan(file: &[u8]) -> Vec<Program> {
     candidates.filter(|program| translate(None, program).is_some()).collect()
 }
 
-/// The SPIR-V `program` translates to, or `None` where the translator rejects its code.
-pub fn translate(device: Option<&VkState>, program: &Program) -> Option<Vec<u32>> {
-    catch_unwind(AssertUnwindSafe(|| emit_module(device, program.stage, |decoder| decoder.translate_program(&program.words())).words())).ok()
+/// The SPIR-V, resources and whether it stores global memory, or `None` where the translator rejects `program`.
+pub fn translate(device: Option<&VkState>, program: &Program) -> Option<(Vec<u32>, Vec<ResourceKind>, bool)> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let (mut resources, mut stores_global) = (Vec::new(), false);
+        let words = emit_module(device, program.stage, |decoder| {
+            decoder.translate_program(&program.words());
+            resources = decoder.resources.iter().map(|resource| resource.kind).collect();
+            stores_global = decoder.stores_global;
+        })
+        .words();
+        (words, resources, stores_global)
+    }))
+    .ok()
 }

@@ -42,9 +42,9 @@ fn main() {
             let key = key(program);
             if disk.spirv(key).is_some() {
                 cached += 1;
-            } else if let Some(words) = bnsh::translate(Some(state), program) {
+            } else if let Some((words, resources, stores_global)) = bnsh::translate(Some(state), program) {
                 translated += 1;
-                cached += usize::from(disk.store_spirv(key, &words, &[], false).is_ok());
+                cached += usize::from(disk.store_spirv(key, &words, &resources, stores_global).is_ok());
             } else {
                 failed += 1;
             }

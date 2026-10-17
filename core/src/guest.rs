@@ -23,24 +23,33 @@ pub fn load_segments(ram: &GuestRam, base: u64, segments: &[(u64, &[u8])]) -> Op
 mod tests {
     use super::*;
     use crate::cpu::cpu_manager::CpuManager;
+    use crate::gpu::engine::Gpu;
     use crate::input::InputState;
     use crate::kernel::Kernel;
+    use crate::nn::nvdrv::Nvdrv;
+    use crate::tests::gpu::harness::vk_state;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    // guest.bin is what scripts/build-guest.sh builds from guest/.
+    // guest.bin is what scripts/build-guest.sh builds from guest/. nvdrv needs a GPU, which the kernel's own sm: lacks.
     #[test]
-    fn the_guest_image_initializes_applet_time_and_hid() {
+    fn the_guest_image_initializes_services_and_draws_through_nvdrv() {
+        let Some(state) = vk_state() else { return };
         let cpu = CpuManager::new();
         let image = include_bytes!("../tests/fixtures/guest/guest.bin");
         let entry = load_flat_image(&cpu.ram, image, BASE).unwrap();
         let core = cpu.get_core(0).unwrap();
         let mut kernel = Kernel::default();
         kernel.hid.borrow_mut().input = || InputState { buttons: 1, left: [0.5, -0.5], right: [0.0; 2], connected: true };
+        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::new(Box::leak(Box::new(state)), cpu.ram.clone()))));
+        kernel.sm.borrow_mut().0.insert("nvdrv".into(), nvdrv as _);
         kernel.start(core, entry, image.len() as u64);
         assert!(kernel.run(core));
         assert_eq!(kernel.debug_output[0], "hello from guest");
         let time: i64 = kernel.debug_output[1].strip_prefix("focus 1 time ").unwrap().parse().unwrap();
         assert!((time - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).abs() < 5);
         assert_eq!(kernel.debug_output[2], "buttons 0x1 left 16383 -16383");
+        assert_eq!(kernel.debug_output[3], "pixel ff8000ff");
         println!("{}", kernel.debug_output[1]);
     }
 }

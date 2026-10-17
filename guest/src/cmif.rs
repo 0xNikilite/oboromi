@@ -6,6 +6,7 @@ const CONTROL: u32 = 5;
 const SFCI: u32 = u32::from_le_bytes(*b"SFCI");
 const SFCO: u32 = u32::from_le_bytes(*b"SFCO");
 
+#[derive(Clone, Copy)]
 pub struct Buffer {
     pub address: u64,
     pub size: u64,

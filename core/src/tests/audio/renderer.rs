@@ -53,6 +53,7 @@ fn work_buffer_size_matches_the_reference_layout() {
     assert_eq!(set(48_000, 240, 24, 4, 32, 2, 4, 1, 2, 4, 13), 0x41000);
     assert_eq!(set(48_000, 240, 22, 1, 96, 1, 1, 0, 0, 0, 6), 0x34000);
     assert_eq!(set(32_000, 160, 6, 0, 24, 1, 0, 0, 0, 0, 2), 0xD000);
+    assert!(work_buffer_size(&parameter(14, 0)).is_err());
 }
 
 #[test]
@@ -162,5 +163,4 @@ fn rev1_parcel_without_rev8_fields_loops_forever() {
         .request_update(&scene.parcel(false), &mut next)
         .unwrap();
     assert_eq!(next[0x40 + 4 * 0x10 + 8..][..4], 0u32.to_le_bytes());
-    assert!(parameter(14, 0).revision != 0 && crate::audio::renderer::revision(magic(14)).is_err());
 }

@@ -11,7 +11,7 @@ pub mod sink;
 pub mod sink_device;
 pub mod voice;
 
-pub use sink::{CHANNELS, RATE, generation, pull, push, test_tone, underruns};
+pub use sink::{CHANNELS, PERIOD, RATE, generation, pull, push, queued, test_tone, underruns};
 
 /// guest memory as the renderer reads wave buffers and writes aux and circular-sink buffers.
 pub trait GuestMemory {

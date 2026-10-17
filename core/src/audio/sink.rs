@@ -8,7 +8,9 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 pub const RATE: u32 = 48_000;
 pub const CHANNELS: u32 = 2;
-const CAPACITY: usize = 1 << 14;
+/// the console renderer's update period.
+pub const PERIOD: u32 = 240;
+const CAPACITY: usize = 3 * PERIOD as usize;
 
 struct Ring {
     frames: [AtomicU32; CAPACITY],
@@ -74,6 +76,11 @@ pub fn pull(dst: &mut [i16]) -> usize {
 /// frames ever pushed.
 pub fn generation() -> u64 {
     RING.written.load(Acquire)
+}
+
+/// frames waiting for the consumer.
+pub fn queued() -> usize {
+    (RING.written.load(Acquire) - RING.read.load(Acquire)) as usize
 }
 
 /// pulls that ran out of queued frames.

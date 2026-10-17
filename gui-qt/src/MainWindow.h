@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+class AudioOutput;
 class QListWidget;
 class QPushButton;
 
@@ -42,5 +43,5 @@ private:
     bool (*m_demoRender)(float) = nullptr;
 
     QTimer m_toneTimer;
-    QElapsedTimer m_toneClock;
+    AudioOutput *m_audio = nullptr;
 };

@@ -243,8 +243,8 @@ impl<'a> Decoder<'a> {
             return;
         }
         let mut target = self.cached_const_u32(branch_target(self.pc, inst).unwrap());
-        if opcode(inst) == BRA_UPRED {
-            let bit = self.pred_bit(true, upq, upq_not != 0);
+        if opcode(inst) == BRA_UPRED || inst >> 87 & 0xf != PT as u128 {
+            let bit = if opcode(inst) == BRA_UPRED { self.pred_bit(true, upq, upq_not != 0) } else { self.pp_bit(inst) };
             let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
             let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
             target = self.ir.emit_select(self.type_u32[1], taken, target, next);

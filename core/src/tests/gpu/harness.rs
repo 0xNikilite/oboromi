@@ -102,7 +102,8 @@ pub fn run_hints(
     cbuf0: &[u32],
     global: &[u32],
 ) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>)> {
-    let (mut lanes, global, counts) = run_textured_inner(
+    let (mut lanes, global, counts) = run_on(
+        &vk_state()?,
         |decoder| decoder.translate_program(instructions),
         &[seed.to_vec()],
         cbuf0,
@@ -156,10 +157,11 @@ pub fn run_textured(
     global: &[u32],
     textures: &Textures,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
-    run_textured_inner(body, seeds, cbuf0, global, textures, false).map(|(lanes, global, _)| (lanes, global))
+    run_on(&vk_state()?, body, seeds, cbuf0, global, textures, false).map(|(lanes, global, _)| (lanes, global))
 }
 
-fn run_textured_inner(
+pub fn run_on(
+    state: &VkState,
     body: impl FnOnce(&mut Decoder),
     seeds: &[Vec<u32>],
     cbuf0: &[u32],
@@ -167,10 +169,9 @@ fn run_textured_inner(
     textures: &Textures,
     timing_hints: bool,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>, Vec<u32>)> {
-    let state = vk_state()?;
     let words = pad_to_warps(seeds);
     let mut resources = Vec::new();
-    let module = emit_module(true, Some(&state), (words.len() / STATE_WORDS) as u32, timing_hints, |decoder| {
+    let module = emit_module(true, Some(state), (words.len() / STATE_WORDS) as u32, timing_hints, |decoder| {
         body(decoder);
         resources = decoder.resources.clone();
     });
@@ -187,21 +188,21 @@ fn run_textured_inner(
             .collect::<Vec<_>>()
     };
     let size = 4 * words.len() as u64;
-    let mut input = HostBuffer::new(&state, size).unwrap();
+    let mut input = HostBuffer::new(state, size).unwrap();
     input.write(&bytes(&words)).unwrap();
-    let output = HostBuffer::new(&state, size).unwrap();
-    let mut cbuf = HostBuffer::new(&state, 16 + 4 * cbuf0.len() as u64).unwrap();
+    let output = HostBuffer::new(state, size).unwrap();
+    let mut cbuf = HostBuffer::new(state, 16 + 4 * cbuf0.len() as u64).unwrap();
     cbuf.write(&bytes(cbuf0)).unwrap();
-    let mut memory = HostBuffer::new(&state, 4 * global.len().max(1) as u64).unwrap();
+    let mut memory = HostBuffer::new(state, 4 * global.len().max(1) as u64).unwrap();
     memory.write(&bytes(global)).unwrap();
-    let mut support = HostBuffer::new(&state, 16).unwrap();
+    let mut support = HostBuffer::new(state, 16).unwrap();
     support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
     let image = |format: Option<vk::Format>| {
         let header = textures.pool.texture(textures.handle).unwrap();
         assert!(format.is_none_or(|f| f == header.format), "a {:?} header cannot back a {format:?} surface", header.format);
         let texels = textures.memory.iter().find(|(address, _)| *address == header.address).expect("no texels at the header address").1;
-        HostImage::new(&state, &header, texels, &textures.pool.sampler(textures.handle).unwrap()).unwrap()
+        HostImage::new(state, &header, texels, &textures.pool.sampler(textures.handle).unwrap()).unwrap()
     };
     let image_types = resources.iter().filter_map(|r| match r.kind {
         ResourceKind::Texture2D { .. } => Some((DescriptorType::COMBINED_IMAGE_SAMPLER, None)),
@@ -211,12 +212,12 @@ fn run_textured_inner(
     let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
     let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let hint_binding = TEXTURE_BINDING + images.len() as u32;
-    let mut hints = resources.iter().any(|r| r.kind == ResourceKind::Hints).then(|| HostBuffer::new(&state, 4 * (PMTRIG_WORDS + 1) as u64).unwrap());
+    let mut hints = resources.iter().any(|r| r.kind == ResourceKind::Hints).then(|| HostBuffer::new(state, 4 * (PMTRIG_WORDS + 1) as u64).unwrap());
     if let Some(hints) = &mut hints {
         hints.write(&vec![0; 4 * (PMTRIG_WORDS + 1)]).unwrap();
     }
     let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).chain(hints.as_ref().map(|_| (hint_binding, ssbo))).collect();
-    let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
+    let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
     let mut bound = vec![(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)];
     bound.extend(hints.as_ref().map(|buffer| (hint_binding, buffer)));
     pipeline.bind(&bound);

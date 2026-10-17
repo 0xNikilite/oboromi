@@ -6,6 +6,7 @@ use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::sm86::STATE_WORDS;
 use oboromi_core::gpu::{frame::{render_demo_frame, render_test_frame}, surface_device};
 use oboromi_core::tests::gpu::harness::translate_module;
+use oboromi_core::tests::gpu::silicon::exact_cooperative_hmma;
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
 use std::time::Instant;
@@ -61,6 +62,8 @@ fn main() {
             .get_physical_device_properties(state.physical_device)
     };
     println!("device: {:?}", props.device_name_as_c_str().unwrap());
+    let exact = exact_cooperative_hmma(state);
+    println!("hmma: cooperative matrices for (k, f32 accumulator) {exact:?} of f16 tiles {:?}, loops otherwise", state.cooperative_f16_tiles);
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
     let words = translate_module(&program, true, Some(state), false).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;

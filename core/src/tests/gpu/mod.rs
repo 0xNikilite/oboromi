@@ -13,6 +13,7 @@ mod int_alu;
 mod memory;
 mod program;
 mod shared;
+pub mod silicon;
 mod special;
 mod tensor;
 mod texture;

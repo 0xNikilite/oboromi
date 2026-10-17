@@ -76,6 +76,8 @@ pub mod capability {
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
     pub const ATOMIC_FLOAT32_ADD: u32 = 6033;
+    pub const COOPERATIVE_MATRIX: u32 = 6022;
+    pub const VULKAN_MEMORY_MODEL: u32 = 5345;
     pub const SHADER_CLOCK: u32 = 5055;
 }
 
@@ -97,6 +99,7 @@ pub mod storage_class {
 pub mod scope {
     pub const DEVICE: u32 = 1;
     pub const WORKGROUP: u32 = 2;
+    pub const SUBGROUP: u32 = 3;
 }
 
 pub mod memory_semantics {
@@ -176,7 +179,7 @@ fn section(opcode: u32, operands: &[u32]) -> usize {
         16 | 331 => 6,                                     // OpExecutionMode(Id)
         2..=7 | 330 => 7,                                  // OpSource* to OpString, OpModuleProcessed
         71..=75 | 332 => 8,                                // OpDecorate* and OpGroup*Decorate
-        19..=39 | 41..=52 => 9,                            // OpType*, OpConstant*, OpSpecConstant*
+        19..=39 | 41..=52 | 4456 => 9,                     // OpType*, OpConstant*, OpSpecConstant*
         59 if operands[2] != storage_class::FUNCTION => 9, // global OpVariable
         _ => 10,                                           // function bodies
     }
@@ -293,6 +296,7 @@ impl Emitter {
     }
 
     pub fn emit_memory_model(&mut self, addressing: u32, memory: u32) {
+        self.sections[4].clear();
         self.inst(14, &[addressing, memory]);
     }
 
@@ -497,6 +501,26 @@ impl Emitter {
 
     pub fn emit_store(&mut self, pointer: u32, value: u32) {
         self.inst(62, &[pointer, value]);
+    }
+
+    pub fn emit_type_cooperative_matrix(&mut self, component: u32, scope: u32, rows: u32, columns: u32, usage: u32) -> u32 {
+        let r = self.alloc_id();
+        self.inst(4456, &[r, component, scope, rows, columns, usage]);
+        r
+    }
+
+    pub fn emit_cooperative_matrix_load(&mut self, ty: u32, pointer: u32, layout: u32, stride: u32) -> u32 {
+        let r = self.alloc_id();
+        self.inst(4457, &[ty, r, pointer, layout, stride]);
+        r
+    }
+
+    pub fn emit_cooperative_matrix_store(&mut self, pointer: u32, object: u32, layout: u32, stride: u32) {
+        self.inst(4458, &[pointer, object, layout, stride]);
+    }
+
+    pub fn emit_cooperative_matrix_mul_add(&mut self, ty: u32, a: u32, b: u32, c: u32) -> u32 {
+        self.typed_tri(4459, ty, a, b, c)
     }
 
     pub fn emit_access_chain(&mut self, ty: u32, base: u32, indexes: &[u32]) -> u32 {

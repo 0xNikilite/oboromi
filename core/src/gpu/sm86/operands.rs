@@ -342,7 +342,9 @@ impl<'a> Decoder<'a> {
         assert!(compute_only == matches!(self.stage, Stage::Compute { .. }), "{builtin:?} is not an input of a {:?} module", self.stage);
         let ty = match builtin {
             BuiltIn::LocalInvocationIndex | BuiltIn::VertexIndex | BuiltIn::InstanceIndex => self.type_u32[1],
+            BuiltIn::InvocationId | BuiltIn::PrimitiveId | BuiltIn::PatchVertices => self.type_u32[1],
             BuiltIn::FragCoord => self.type_f32[4],
+            BuiltIn::TessCoord => self.type_f32[3],
             BuiltIn::FrontFacing => self.type_bool[1],
             _ => self.type_u32[3],
         };
@@ -360,16 +362,40 @@ impl<'a> Decoder<'a> {
         self.ir.emit_load(ty, var)
     }
 
-    pub(super) fn interface_vec4(&mut self, kind: ResourceKind, storage: u32) -> u32 {
-        use spirv::decoration::{BUILTIN, FLAT, LOCATION, NO_PERSPECTIVE};
+    pub(super) fn interface_var(&mut self, kind: ResourceKind, storage: u32) -> u32 {
+        use spirv::{BuiltIn, decoration::{BUILTIN, FLAT, LOCATION, NO_PERSPECTIVE, PATCH}};
         if let Some(var) = self.resource(kind) {
             return var;
         }
-        let ptr = self.ir.emit_type_pointer(storage, self.type_f32[4]);
+        let tess_level = |builtin| builtin == BuiltIn::TessLevelOuter as u32 || builtin == BuiltIn::TessLevelInner as u32;
+        let (ty, len) = match kind {
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::TessLevelOuter as u32 => (self.type_f32[1], 4),
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::TessLevelInner as u32 => (self.type_f32[1], 2),
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::Layer as u32 || builtin == BuiltIn::ViewportIndex as u32 => (self.type_u32[1], 0),
+            ResourceKind::PerVertex { output, .. } => {
+                let vertices = match self.stage {
+                    Stage::Geometry { input, .. } => geometry_input(input).1,
+                    Stage::TessControl { vertices } if output => vertices,
+                    // maxTessellationPatchSize, which every Vulkan device supports at least as 32.
+                    _ => 32,
+                };
+                (self.type_f32[4], vertices)
+            }
+            _ => (self.type_f32[4], 0),
+        };
+        let ty = if len == 0 { ty } else {
+            let len = self.cached_const_u32(len);
+            self.ir.emit_type_array(ty, len)
+        };
+        let ptr = self.ir.emit_type_pointer(storage, ty);
         let var = self.ir.emit_variable(ptr, storage);
         match kind {
             ResourceKind::BuiltIn(builtin) => self.ir.emit_decorate(var, BUILTIN, &[builtin]),
-            ResourceKind::VertexInput { location } | ResourceKind::Varying { location, .. } | ResourceKind::FragmentOutput { location } => self.ir.emit_decorate(var, LOCATION, &[location]),
+            ResourceKind::PerVertex { attr: 0x70, .. } => self.ir.emit_decorate(var, BUILTIN, &[BuiltIn::Position as u32]),
+            ResourceKind::PerVertex { attr, .. } => self.ir.emit_decorate(var, LOCATION, &[(attr - 0x80) / 16]),
+            ResourceKind::VertexInput { location } | ResourceKind::Varying { location, .. } | ResourceKind::FragmentOutput { location } | ResourceKind::Patch { location } => {
+                self.ir.emit_decorate(var, LOCATION, &[location])
+            }
             _ => unreachable!("{kind:?} is not a stage interface"),
         }
         match (kind, self.stage) {
@@ -377,6 +403,8 @@ impl<'a> Decoder<'a> {
             (ResourceKind::Varying { location, .. }, Stage::Fragment { screen_linear, .. }) if screen_linear >> location & 1 != 0 => {
                 self.ir.emit_decorate(var, NO_PERSPECTIVE, &[])
             }
+            (ResourceKind::Patch { .. }, _) => self.ir.emit_decorate(var, PATCH, &[]),
+            (ResourceKind::BuiltIn(builtin), _) if tess_level(builtin) => self.ir.emit_decorate(var, PATCH, &[]),
             _ => {}
         }
         self.resources.push(Resource { kind, var });
@@ -397,16 +425,30 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn interface_component(&mut self, kind: ResourceKind, storage: u32, attr: u32) -> u32 {
-        let var = self.interface_vec4(kind, storage);
+        self.vertex_component(kind, storage, &[], attr)
+    }
+
+    pub(super) fn vertex_component(&mut self, kind: ResourceKind, storage: u32, vertex: &[u32], attr: u32) -> u32 {
+        let var = self.interface_var(kind, storage);
         let ptr = self.ir.emit_type_pointer(storage, self.type_f32[1]);
         let component = self.cached_const_u32(attr / 4 % 4);
-        self.ir.emit_access_chain(ptr, var, &[component])
+        self.ir.emit_access_chain(ptr, var, &[vertex, &[component]].concat())
     }
 
     pub(super) fn special_register(&mut self, index: u32) -> u32 {
         use spirv::BuiltIn;
-        // SR_VIRTID holds the warp id at bit 8, SR_TID packs x, y and z at bits 0, 16 and 26.
+        // SR_VIRTID holds the warp id at bit 8, SR_TID packs x, y and z at bits 0, 16 and 26. TCS SASS indexes per-vertex outputs by
+        // lane and TES SASS reads TessCoord at a[SR_LANEID] (NAK nak_nir_lower_vtg_io.c, from_nir.rs), so a patch's invocations take
+        // lanes from 0; SR_PRIM_TYPE holds the patch size at bit 8 (NAK nak_nir.c).
         match index {
+            0 | 17 if matches!(self.stage, Stage::TessControl { .. }) => self.builtin(BuiltIn::InvocationId),
+            17 if matches!(self.stage, Stage::Geometry { .. }) => self.builtin(BuiltIn::InvocationId),
+            0 if matches!(self.stage, Stage::TessEval { .. }) => self.const_u32_0,
+            16 if matches!(self.stage, Stage::TessControl { .. } | Stage::TessEval { .. }) => {
+                let vertices = self.builtin(BuiltIn::PatchVertices);
+                let eight = self.cached_const_u32(8);
+                self.ir.emit_shift_left_logical(self.type_u32[1], vertices, eight)
+            }
             0 => {
                 let invocation = self.builtin(BuiltIn::LocalInvocationIndex);
                 let mask = self.cached_const_u32(31);

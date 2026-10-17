@@ -365,7 +365,7 @@ impl<'a> Gpu<'a> {
                             None => cbufs.push((slot, buffer)),
                         }
                     }
-                    ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
+                    ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } | ResourceKind::PerVertex { .. } | ResourceKind::Patch { .. } => {}
                     kind => return Err(format!("{kind:?} in a graphics stage is not implemented")),
                 }
             }

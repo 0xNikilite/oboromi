@@ -106,39 +106,11 @@ impl<'a> Decoder<'a> {
         };
         self.store_register(rd, val);
     }
-    pub fn isberd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffff) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _op = (((inst >> 79) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+    pub fn isberd(&mut self, _inst: u128) {
+        todo!("ISBERD reads the internal stage buffer of geometry and tessellation stages, which are not implemented");
     }
-    pub fn isbewr(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffff) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _op = (((inst >> 79) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+    pub fn isbewr(&mut self, _inst: u128) {
+        todo!("ISBEWR writes the internal stage buffer of geometry and tessellation stages, which are not implemented");
     }
     pub fn ld(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
@@ -193,19 +165,8 @@ impl<'a> Decoder<'a> {
         let address = self.global_address(inst, 32, 40);
         self.load_memory(ResourceKind::Local, address, sz, rd);
     }
-    pub fn ldtram(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _cbu_state = (((inst >> 24) & 0x3f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+    pub fn ldtram(&mut self, _inst: u128) {
+        todo!("LDTRAM reads tessellation attribute memory, which is not implemented");
     }
     pub fn membar(&mut self, inst: u128) {
         let dstfmt = (((inst >> 76) & 0x7) << 0) as u32;
@@ -218,32 +179,11 @@ impl<'a> Decoder<'a> {
         let semantics = self.cached_const_u32(semantics);
         self.ir.emit_memory_barrier(scope, semantics);
     }
-    pub fn out(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+    pub fn out(&mut self, _inst: u128) {
+        todo!("OUT emits and cuts geometry shader primitives, which are not implemented");
     }
-    pub fn pixld(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _mode = (((inst >> 78) & 0x7) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+    pub fn pixld(&mut self, _inst: u128) {
+        todo!("PIXLD needs SampleId or SampleMask inputs, which are not implemented");
     }
     pub fn setlmembase(&mut self, _inst: u128) {}
     pub fn st(&mut self, inst: u128) {

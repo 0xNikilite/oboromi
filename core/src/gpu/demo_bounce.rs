@@ -3,6 +3,7 @@
 //! the ball's size, as loud as the impact and panned by x. The NVIDIA driver's SM86 build of demos/shaders/particles.vert
 //! and particles.frag draws the walls and the balls as one instanced draw of round quads.
 use super::engine::Gpu;
+use super::frame::cache_root;
 use super::{VkState, device};
 use crate::audio::demo_music::{Sound, pcm};
 use crate::audio::play;
@@ -171,8 +172,8 @@ struct Scene<'a> {
 }
 
 impl<'a> Scene<'a> {
-    fn new(state: &'a VkState) -> Result<Self, String> {
-        let mut gpu = Gpu::new(state, MAPPED as usize);
+    fn new(state: &'static VkState) -> Result<Self, String> {
+        let mut gpu = Gpu::new(state, MAPPED as usize, Some((&cache_root(), "demos")), *super::SPEED_HACKS.lock().unwrap()).map_err(named)?;
         gpu.space.map(BASE, 0, MAPPED);
         let walls = walls();
         let count = (walls.len() + 2 * BALLS) as u32;

@@ -6,6 +6,7 @@ mod control;
 pub mod demos;
 mod convert;
 mod demos_post;
+mod demos_sprites;
 mod fifo;
 mod fixtures;
 pub mod fp;

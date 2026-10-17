@@ -120,14 +120,14 @@ impl VkState {
     pub(super) fn link(
         &self,
         info: vk::GraphicsPipelineCreateInfo,
-        stages: &[vk::PipelineShaderStageCreateInfo; 2],
+        stages: &[vk::PipelineShaderStageCreateInfo],
         keys: [u64; 4],
     ) -> Result<vk::Pipeline, VkError> {
         use vk::GraphicsPipelineLibraryFlagsEXT as Part;
         let parts = [
             (Part::VERTEX_INPUT_INTERFACE, &stages[..0]),
-            (Part::PRE_RASTERIZATION_SHADERS, &stages[..1]),
-            (Part::FRAGMENT_SHADER, &stages[1..]),
+            (Part::PRE_RASTERIZATION_SHADERS, &stages[..stages.len() - 1]),
+            (Part::FRAGMENT_SHADER, &stages[stages.len() - 1..]),
             (Part::FRAGMENT_OUTPUT_INTERFACE, &stages[..0]),
         ];
         let mut libraries = [vk::Pipeline::null(); 4];

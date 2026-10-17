@@ -11,4 +11,7 @@ std::vector<std::string> runCpuTests();
 // Runs the SM86 GPU decoder/translation test suite
 std::vector<std::string> runGpuTests();
 
+// Renders a GPU gradient into the display, false if Vulkan is unavailable
+bool renderTestFrame();
+
 }

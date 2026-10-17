@@ -3,10 +3,12 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use crate::gpu::spirv;
+use crate::gpu::VkState;
+use crate::gpu::spirv::{self, storage_class};
 
-static MAX_REG_COUNT: usize = 254;
-static MAX_UNIFORM_REG_COUNT: usize = 63;
+const MAX_REG_COUNT: usize = 254;
+const MAX_UNIFORM_REG_COUNT: usize = 63;
+pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1;
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
 
@@ -251,24 +253,29 @@ pub enum BitSize {
     B128 = 0b11,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResourceKind {
+    Cbuf(u32),
+    Ssbo(u32),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Resource {
+    pub kind: ResourceKind,
+    pub set: u32,
+    pub binding: u32,
+    pub var: u32,
+}
+
 pub struct Decoder<'a> {
     pub ir: &'a mut spirv::Emitter,
     type_void: u32,
     // Pointers
     type_ptr_u32: [u32; 5],
-    type_ptr_u8: [u32; 5],
     // Declared types for headers
-    type_u8: [u32; 5],
-    type_u16: [u32; 5],
     type_u32: [u32; 5],
-    type_u64: [u32; 5],
-    type_s8: [u32; 5],
-    type_s16: [u32; 5],
     type_s32: [u32; 5],
-    type_s64: [u32; 5],
-    type_f16: [u32; 5],
     type_f32: [u32; 5],
-    type_f64: [u32; 5],
     type_bool: [u32; 5],
     // abstract state
     type_abstract_state: u32,
@@ -276,6 +283,14 @@ pub struct Decoder<'a> {
     var_abstract_state: u32,
     const_u32_0: u32,
     const_u32_1: u32,
+    type_ptr_ssbo_u32: u32,
+    type_ptr_cbuf: u32,
+    type_ptr_cbuf_u32: u32,
+    type_u64: u32,
+    type_f16: u32,
+    type_f16x2: u32,
+    glsl_ext: u32,
+    pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
 }
@@ -285,24 +300,23 @@ impl<'a> Decoder<'a> {
             ir,
             type_void: 0,
             type_ptr_u32: [0; 5],
-            type_ptr_u8: [0; 5],
-            type_u8: [0; 5],
-            type_u16: [0; 5],
             type_u32: [0; 5],
-            type_u64: [0; 5],
-            type_s8: [0; 5],
-            type_s16: [0; 5],
             type_s32: [0; 5],
-            type_s64: [0; 5],
-            type_f16: [0; 5],
             type_f32: [0; 5],
-            type_f64: [0; 5],
             type_bool: [0; 5],
             type_abstract_state: 0,
             type_ptr_abstract_state_regs: 0,
             var_abstract_state: 0,
             const_u32_0: 0,
             const_u32_1: 0,
+            type_ptr_ssbo_u32: 0,
+            type_ptr_cbuf: 0,
+            type_ptr_cbuf_u32: 0,
+            type_u64: 0,
+            type_f16: 0,
+            type_f16x2: 0,
+            glsl_ext: 0,
+            resources: Vec::new(),
             const_cache: HashMap::new(),
         }
     }
@@ -311,19 +325,30 @@ impl<'a> Decoder<'a> {
         self.type_void
     }
 
+    pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>) {
+        // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
+        let resources = self.resources.iter().map(|r| r.var);
+        let interface: Vec<u32> = std::iter::once(self.var_abstract_state).chain(resources).collect();
+        self.ir
+            .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
+        self.ir
+            .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &[1, 1, 1]);
+        use spirv::{capability as cap, execution_mode as mode};
+        if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
+            self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);
+            self.ir.emit_execution_mode(func, mode::SIGNED_ZERO_INF_NAN_PRESERVE, &[32]);
+        }
+        if device.is_some_and(|d| d.denorm_preserve) {
+            self.ir.emit_capability(cap::DENORM_PRESERVE);
+            self.ir.emit_execution_mode(func, mode::DENORM_PRESERVE, &[32]);
+        }
+    }
+
     pub fn init(&mut self) {
         self.type_void = self.ir.emit_type_void();
-        self.type_u8[1] = self.ir.emit_type_int(8, 0);
-        self.type_u16[1] = self.ir.emit_type_int(16, 0);
         self.type_u32[1] = self.ir.emit_type_int(32, 0);
-        self.type_u64[1] = self.ir.emit_type_int(64, 0);
-        self.type_s8[1] = self.ir.emit_type_int(8, 1);
-        self.type_s16[1] = self.ir.emit_type_int(16, 1);
         self.type_s32[1] = self.ir.emit_type_int(32, 1);
-        self.type_s64[1] = self.ir.emit_type_int(64, 1);
-        self.type_f16[1] = self.ir.emit_type_float(16);
         self.type_f32[1] = self.ir.emit_type_float(32);
-        self.type_f64[1] = self.ir.emit_type_float(64);
         self.type_bool[1] = self.ir.emit_type_bool();
         self.const_cache = HashMap::new();
         self.const_u32_0 = self.ir.emit_constant_typed(self.type_u32[1], 0u32);
@@ -332,37 +357,260 @@ impl<'a> Decoder<'a> {
         self.const_cache.insert(1, self.const_u32_1);
         for i in 2..=4 {
             for type_sxx in [
-                self.type_u8, self.type_u16, self.type_u32, self.type_u64,
-                self.type_s8, self.type_s16, self.type_s32, self.type_s64,
-                self.type_f16, self.type_f32, self.type_f64, self.type_bool
+                &mut self.type_u32, &mut self.type_s32, &mut self.type_f32, &mut self.type_bool
             ] {
-                self.ir.emit_type_vector(type_sxx[i], i as u32);
+                type_sxx[i] = self.ir.emit_type_vector(type_sxx[1], i as u32);
             }
         }
 
         {
             let length_const = self.ir.emit_constant_typed(self.type_u32[1], MAX_REG_COUNT as u32);
             let type_regs_array = self.ir.emit_type_array(self.type_u32[1], length_const);
+            let ureg_count = self.cached_const_u32(MAX_UNIFORM_REG_COUNT as u32);
+            let type_uregs_array = self.ir.emit_type_array(self.type_u32[1], ureg_count);
             let members = &[
                 ("regs", type_regs_array),
-                ("pred", self.type_u8[1]),
+                ("pred", self.type_u32[1]),
+                ("uregs", type_uregs_array),
+                ("upred", self.type_u32[1]),
             ];
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
-            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(7, type_regs_array);
+            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(storage_class::PRIVATE, type_regs_array);
         }
 
         // Define generic pointers
-        // Storage class 7 = Function
         for i in 1..=4 {
-            self.type_ptr_u8[i] = self.ir.emit_type_pointer(7, self.type_u8[i]);
-            self.type_ptr_u32[i] = self.ir.emit_type_pointer(7, self.type_u32[i]);
+            self.type_ptr_u32[i] = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_u32[i]);
         }
-        let type_ptr_abstract_state = self.ir.emit_type_pointer(7, self.type_abstract_state);
-        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 7);
+        let type_ptr_abstract_state = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_abstract_state);
+        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, storage_class::PRIVATE);
 
 
     }
     
+
+    pub fn emit_register_io(&mut self, in_binding: u32, out_binding: u32) {
+        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
+        let array = self.ir.emit_type_runtime_array(self.type_u32[1]);
+        let block = self.ir.emit_type_struct(&[array]);
+        let block_ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
+        self.type_ptr_ssbo_u32 = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_u32[1]);
+        // std430 layout: a Block struct holding a stride-4 runtime array at offset 0.
+        self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
+        self.ir.emit_decorate(block, deco::BLOCK, &[]);
+        self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+        for (n, binding) in [(0, in_binding), (1, out_binding)] {
+            let var = self.ir.emit_variable(block_ptr, STORAGE_BUFFER);
+            self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+            self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+            self.resources.push(Resource { kind: ResourceKind::Ssbo(n), set: 0, binding, var });
+        }
+        // Every register is seeded because predicated stores read the old value.
+        let input = self.resource(ResourceKind::Ssbo(0)).unwrap();
+        for slot in 0..STATE_WORDS as u32 {
+            let word = self.ssbo_word(input, slot);
+            let value = self.ir.emit_load(self.type_u32[1], word);
+            let ptr = self.state_slot(slot);
+            self.ir.emit_store(ptr, value);
+        }
+    }
+
+    pub fn emit_register_dump(&mut self) {
+        let output = self.resource(ResourceKind::Ssbo(1)).unwrap();
+        for slot in 0..STATE_WORDS as u32 {
+            let ptr = self.state_slot(slot);
+            let value = self.ir.emit_load(self.type_u32[1], ptr);
+            let word = self.ssbo_word(output, slot);
+            self.ir.emit_store(word, value);
+        }
+    }
+
+    fn resource(&self, kind: ResourceKind) -> Option<u32> {
+        self.resources.iter().find(|r| r.kind == kind).map(|r| r.var)
+    }
+
+    fn state_ptr(&mut self, path: &[u32]) -> u32 {
+        let ids: Vec<u32> = path.iter().map(|&i| self.cached_const_u32(i)).collect();
+        self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &ids)
+    }
+
+    // Register io word order: regs[254], pred, uregs[63], upred.
+    fn state_slot(&mut self, slot: u32) -> u32 {
+        let (regs, uregs) = (MAX_REG_COUNT as u32, MAX_UNIFORM_REG_COUNT as u32);
+        match slot {
+            s if s < regs => self.state_ptr(&[0, s]),
+            s if s == regs => self.state_ptr(&[1]),
+            s if s <= regs + uregs => self.state_ptr(&[2, s - regs - 1]),
+            _ => self.state_ptr(&[3]),
+        }
+    }
+
+    // URZ is index 63: reads zero, writes are dropped.
+    fn load_ureg(&mut self, ur: u32) -> u32 {
+        if ur == 63 {
+            return self.const_u32_0;
+        }
+        let ptr = self.state_ptr(&[2, ur]);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_ureg(&mut self, ur: u32, val: u32) {
+        if ur != 63 {
+            let ptr = self.state_ptr(&[2, ur]);
+            self.ir.emit_store(ptr, val);
+        }
+    }
+
+    fn load_upredicate(&mut self) -> u32 {
+        let ptr = self.state_ptr(&[3]);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_upredicate(&mut self, val: u32) {
+        let ptr = self.state_ptr(&[3]);
+        self.ir.emit_store(ptr, val);
+    }
+
+    // Bits 11:9 say what bits 32..64 hold: Rb (1), imm32 (2, 4), c[bank][off] (3, 5), URb with bit 91 set (6, 7).
+    // Forms 2, 3 and 7 feed that operand to C and move B to Rc at 64..72. The immediate is the whole 32-bit operand.
+    fn alu_src(&mut self, inst: u128) -> u32 {
+        let field = (inst >> 32) as u32;
+        match ((inst >> 9) & 7, (inst >> 91) & 1) {
+            (1, 0) => self.load_register(field & 0xff),
+            (2 | 4, 0) => self.cached_const_u32(field),
+            (3 | 5, 0) => self.load_cbuf(field >> 22 & 0x1f, (field >> 8 & 0x3fff) << 2),
+            (6 | 7, 1) => self.load_ureg(field & 0x3f),
+            form => todo!("ALU source form {form:?}"),
+        }
+    }
+
+    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096].
+    fn load_cbuf(&mut self, slot: u32, offset: u32) -> u32 {
+        let var = match self.resource(ResourceKind::Cbuf(slot)) {
+            Some(var) => var,
+            None => self.declare_cbuf(slot),
+        };
+        let index = [0, offset / 16, offset % 16 / 4].map(|i| self.cached_const_u32(i));
+        let ptr = self.ir.emit_access_chain(self.type_ptr_cbuf_u32, var, &index);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn declare_cbuf(&mut self, slot: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::UNIFORM};
+        assert!(slot < 8, "cbuf slot {slot} has no compute binding");
+        if self.type_ptr_cbuf == 0 {
+            let len = self.cached_const_u32(4096);
+            let array = self.ir.emit_type_array(self.type_u32[4], len);
+            let block = self.ir.emit_type_struct(&[array]);
+            // std140 pads every array element to 16 bytes, so uvec4 is the only dense u32 array a UBO can hold.
+            self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[16]);
+            self.ir.emit_decorate(block, deco::BLOCK, &[]);
+            self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+            self.type_ptr_cbuf = self.ir.emit_type_pointer(UNIFORM, block);
+            self.type_ptr_cbuf_u32 = self.ir.emit_type_pointer(UNIFORM, self.type_u32[1]);
+        }
+        let var = self.ir.emit_variable(self.type_ptr_cbuf, UNIFORM);
+        let binding = 1 + slot;
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        self.resources.push(Resource { kind: ResourceKind::Cbuf(slot), set: 0, binding, var });
+        var
+    }
+
+    // Int64 is declared on first use so 32-bit shaders still run on devices without shaderInt64.
+    fn type_u64(&mut self) -> u32 {
+        if self.type_u64 == 0 {
+            self.ir.emit_capability(spirv::capability::INT64);
+            self.type_u64 = self.ir.emit_type_int(64, 0);
+        }
+        self.type_u64
+    }
+
+    // Float16 is declared on first use so fp32 shaders still run on devices without shaderFloat16.
+    fn type_f16(&mut self) -> u32 {
+        if self.type_f16 == 0 {
+            self.ir.emit_capability(spirv::capability::FLOAT16);
+            self.type_f16 = self.ir.emit_type_float(16);
+        }
+        self.type_f16
+    }
+
+    fn type_f16x2(&mut self) -> u32 {
+        if self.type_f16x2 == 0 {
+            let half = self.type_f16();
+            self.type_f16x2 = self.ir.emit_type_vector(half, 2);
+        }
+        self.type_f16x2
+    }
+
+    // Component 0 is bits 15:0 (H0), so bitcast_u32 is the inverse.
+    fn unpack_half2(&mut self, word: u32) -> u32 {
+        let ty = self.type_f16x2();
+        self.ir.emit_bitcast(ty, word)
+    }
+
+    // ISWZ: 0 = H1_H0, 2 = H0_H0, 3 = H1_H1; 1 (F32) reads a whole f32 and is not a swizzle.
+    fn half2_swizzle(&mut self, half2: u32, iswz: u32) -> u32 {
+        let lanes = match iswz {
+            0 => return half2,
+            2 => [0, 0],
+            3 => [1, 1],
+            _ => panic!("ISWZ {iswz} is not a half2 swizzle"),
+        };
+        let ty = self.type_f16x2();
+        self.ir.emit_vector_shuffle(ty, half2, half2, &lanes)
+    }
+
+    // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
+    fn load_pair(&mut self, reg: u32) -> u32 {
+        let hi = if reg == 255 { reg } else { reg + 1 };
+        let words = [self.load_register(reg), self.load_register(hi)];
+        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
+        let ty = self.type_u64();
+        self.ir.emit_bitcast(ty, pair)
+    }
+
+    fn store_pair(&mut self, reg: u32, val: u32) {
+        if reg == 255 {
+            return;
+        }
+        let pair = self.ir.emit_bitcast(self.type_u32[2], val);
+        for i in 0..2 {
+            let word = self.ir.emit_composite_extract(self.type_u32[1], pair, &[i]);
+            self.store_register(reg + i, word);
+        }
+    }
+
+    fn bitcast_f32(&mut self, val: u32) -> u32 {
+        self.ir.emit_bitcast(self.type_f32[1], val)
+    }
+
+    fn bitcast_u32(&mut self, val: u32) -> u32 {
+        self.ir.emit_bitcast(self.type_u32[1], val)
+    }
+
+    fn glsl(&mut self, op: u32, ty: u32, args: &[u32]) -> u32 {
+        if self.glsl_ext == 0 {
+            self.glsl_ext = self.ir.emit_ext_inst_import("GLSL.std.450");
+        }
+        self.ir.emit_ext_inst(ty, self.glsl_ext, op, args)
+    }
+
+    // Hardware applies |x| before negation; 4 is GLSL.std.450 FAbs.
+    fn fp_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
+        let val = if abs { self.glsl(4, self.type_f32[1], &[val]) } else { val };
+        if neg { self.ir.emit_fnegate(self.type_f32[1], val) } else { val }
+    }
+
+    fn int_src(&mut self, val: u32, neg: bool) -> u32 {
+        if neg { self.neg(val) } else { val }
+    }
+
+    fn ssbo_word(&mut self, var: u32, index: u32) -> u32 {
+        let index = self.cached_const_u32(index);
+        self.ir
+            .emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
+    }
 
     /// Return the SPIR-V id for an OpConstant(u32, value).
     /// Reuses a previously emitted constant if one exists.
@@ -373,6 +621,10 @@ impl<'a> Decoder<'a> {
         let id = self.ir.emit_constant_typed(self.type_u32[1], value);
         self.const_cache.insert(value, id);
         id
+    }
+
+    fn neg(&mut self, x: u32) -> u32 {
+        self.ir.emit_isub(self.type_u32[1], self.const_u32_0, x)
     }
 
     fn load_register(&mut self, reg: u32) -> u32 {
@@ -400,9 +652,8 @@ impl<'a> Decoder<'a> {
     /// %mask = 0 - ((%pred >> N) & 1)    -> 0x00000000 or 0xFFFFFFFF
     /// <do some things>
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
-        let res = self.ir.emit_load(self.type_u8[1], ptr);
-        self.ir.emit_u_convert(self.type_u32[1], res)
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
+        self.ir.emit_load(self.type_u32[1], ptr)
     }
 
     /// produces a full bitmask from a single predicate bit:
@@ -434,7 +685,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u8[1], self.var_abstract_state, &[self.const_u32_1]);
+        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
         self.ir.emit_store(ptr, val)
     }
 
@@ -1209,24 +1460,6 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn fadd32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
     pub fn fchk(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
@@ -1254,27 +1487,6 @@ impl<'a> Decoder<'a> {
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let _sc_absolute = (((inst >> 62) & 0x1) << 0);
         let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ffma32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
         let _rc = (((inst >> 64) & 0xff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
         let _sz = (((inst >> 73) & 0x1) << 0);
@@ -1341,23 +1553,6 @@ impl<'a> Decoder<'a> {
         let _sc_negate = (((inst >> 63) & 0x1) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
         let _sz = (((inst >> 73) & 0x1) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn fmul32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
         let _satfinite = (((inst >> 77) & 0x1) << 0);
         let _stride = (((inst >> 78) & 0x3) << 0);
         let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
@@ -1575,26 +1770,6 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn hadd2_32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sb = (((inst >> 32) & 0xffff) << 0);
-        let _sc = (((inst >> 48) & 0xffff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
     pub fn hfma2(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
@@ -1638,30 +1813,6 @@ impl<'a> Decoder<'a> {
         let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
         let _clear = (((inst >> 83) & 0x1) << 0);
         let _clear = (((inst >> 84) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn hfma2_32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sb = (((inst >> 32) & 0xffff) << 0);
-        let _sc = (((inst >> 48) & 0xffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _satrelu = (((inst >> 79) & 0x1) << 1) | (((inst >> 77) & 0x1) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _mode = (((inst >> 81) & 0x3) << 0);
-        let _clear = (((inst >> 83) & 0x1) << 0);
-        let _clear = (((inst >> 84) & 0x1) << 0);
-        let _ofmt = (((inst >> 85) & 0x1) << 1) | (((inst >> 78) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
@@ -1730,26 +1881,6 @@ impl<'a> Decoder<'a> {
         let _extract = (((inst >> 60) & 0x3) << 0);
         let _sc_absolute = (((inst >> 62) & 0x1) << 0);
         let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
-        let _merge = (((inst >> 78) & 0x1) << 0);
-        let _fmz = (((inst >> 80) & 0x1) << 1) | (((inst >> 76) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn hmul2_32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sb = (((inst >> 32) & 0xffff) << 0);
-        let _sc = (((inst >> 48) & 0xffff) << 0);
         let _e = (((inst >> 72) & 0x1) << 0);
         let _sz = (((inst >> 73) & 0x1) << 0);
         let _bop = (((inst >> 74) & 0x3) << 0);
@@ -1894,15 +2025,15 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn iadd(&mut self, inst: u128) {
+    pub fn iadd3(&mut self, inst: u128) {
         let pg = (((inst >> 12) & 0x7) << 0) as u32;
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
+        let rc = (((inst >> 64) & 0xff) << 0) as u32;
+        let negate_a = (((inst >> 72) & 0x1) << 0);
+        let x = (((inst >> 74) & 0x1) << 0);
+        let negate_c = (((inst >> 75) & 0x1) << 0);
         let _pq = (((inst >> 77) & 0x7) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
         let pu = (((inst >> 81) & 0x7) << 0) as u32;
@@ -1916,11 +2047,13 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
 
         // guards for unimplemented features
-        assert!(_rc == 0xFF, "IADD: rc (3rd source) not implemented");
-        assert!(_e == 0, "IADD: extended precision not implemented");
+        assert!(x == 0, "IADD3.X not implemented");
         // ftz is a no-op for integer operations
 
-        let a = self.load_register(ra);
+        let mut a = self.load_register(ra);
+        if negate_a != 0 {
+            a = self.neg(a);
+        }
 
         // Determine source encoding from opcode bits 9-11:
         //   4 (100) = immediate (ra_offset, bits 32-63)
@@ -1928,145 +2061,38 @@ impl<'a> Decoder<'a> {
         //   5 (101) = constant bank (sc_addr + sc_bank)
         //   6 (110) = uniform register bank
         let src_type = ((inst >> 9) & 0x7) as u32;
-        let mut b = match src_type {
+        let b = match src_type {
             4 => {
                 let ra_offset = (((inst >> 32) & 0xffffffff) << 0) as u32;
                 self.cached_const_u32(ra_offset)
             }
             1 => {
                 let rb = (((inst >> 32) & 0xff) << 0) as u32;
-                self.load_register(rb)
+                let negate_b = (((inst >> 63) & 0x1) << 0);
+                assert!(negate_a == 0 || negate_b == 0, "IADD3: -Ra with -Rb");
+                let b = self.load_register(rb);
+                if negate_b != 0 {
+                    self.neg(b)
+                } else {
+                    b
+                }
             }
             5 => {
-                todo!("IADD: constant bank source not yet implemented")
+                todo!("IADD3: constant bank source not yet implemented")
             }
             6 => {
-                todo!("IADD: uniform register bank source not yet implemented")
+                todo!("IADD3: uniform register bank source not yet implemented")
             }
-            _ => panic!("IADD: unknown source encoding type {}", src_type),
+            _ => panic!("IADD3: unknown source encoding type {}", src_type),
         };
 
-        // apply source modifiers
-        if _sc_absolute != 0 {
-            let shift = self.cached_const_u32(31);
-            let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
-            let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
-            let xor = self.ir.emit_bitwise_xor(self.type_u32[1], b, sign_mask);
-            b = self.ir.emit_isub(self.type_u32[1], xor, sign_mask);
-        }
-        if _sc_negate != 0 {
-            b = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, b);
+        let mut c = self.load_register(rc);
+        if negate_c != 0 {
+            c = self.neg(c);
         }
 
-        let res = self.ir.emit_iadd(self.type_u32[1], a, b);
-
-        // handle comparison op
-        if cop != 0 {
-            let cmp_result = self.emit_cmp_against_zero(cop, res);
-            self.combine_and_set_predicate_bit(pu, pp, cmp_result);
-        }
-
-        self.store_register_predicated(rd, pg, pg_not != 0, res);
-    }
-    pub fn iadd3(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
-        let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let rc = (((inst >> 64) & 0xff) << 0) as u32;
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _pq = (((inst >> 77) & 0x7) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let pu = (((inst >> 81) & 0x7) << 0) as u32;
-        let cop = (((inst >> 84) & 0x7) << 0) as u32;
-        let pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-
-        // guards for unimplemented features
-        assert!(_e == 0, "IADD3: extended precision not implemented");
-        // ftz is a no-op for integer operations
-
-        let a = self.load_register(ra);
-
-        // iadd3 always uses register source for B
-        let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let mut b = self.load_register(rb);
-
-        // apply source modifiers to B
-        if _sc_absolute != 0 {
-            let shift = self.cached_const_u32(31);
-            let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
-            let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
-            let xor = self.ir.emit_bitwise_xor(self.type_u32[1], b, sign_mask);
-            b = self.ir.emit_isub(self.type_u32[1], xor, sign_mask);
-        }
-        if _sc_negate != 0 {
-            b = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, b);
-        }
-
-        let c = self.load_register(rc);
-
-        // rd = ra + b + rc
         let ab = self.ir.emit_iadd(self.type_u32[1], a, b);
         let res = self.ir.emit_iadd(self.type_u32[1], ab, c);
-
-        // handle comparison op
-        if cop != 0 {
-            let cmp_result = self.emit_cmp_against_zero(cop, res);
-            self.combine_and_set_predicate_bit(pu, pp, cmp_result);
-        }
-
-        self.store_register_predicated(rd, pg, pg_not != 0, res);
-    }
-    pub fn iadd32i(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
-        let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let ra = (((inst >> 24) & 0xff) << 0) as u32;
-        let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _pq = (((inst >> 77) & 0x7) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let pu = (((inst >> 81) & 0x7) << 0) as u32;
-        let cop = (((inst >> 84) & 0x7) << 0) as u32;
-        let pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-
-        assert!(_e == 0, "IADD32I: extended precision not implemented");
-        // ftz is a no-op for integer operations
-
-        // Rd = Ra + imm32
-        let a = self.load_register(ra);
-        let mut b = self.cached_const_u32(imm32);
-
-        // apply source modifiers
-        if _sc_absolute != 0 {
-            let shift = self.cached_const_u32(31);
-            let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], b, shift);
-            let sign_mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, sign_bit);
-            let xor = self.ir.emit_bitwise_xor(self.type_u32[1], b, sign_mask);
-            b = self.ir.emit_isub(self.type_u32[1], xor, sign_mask);
-        }
-        if _sc_negate != 0 {
-            b = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, b);
-        }
-
-        let res = self.ir.emit_iadd(self.type_u32[1], a, b);
 
         // handle comparison op
         if cop != 0 {
@@ -2089,25 +2115,6 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn idp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn idp4a(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _rd = (((inst >> 16) & 0xff) << 0);
@@ -2188,45 +2195,6 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn imul(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn imul32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
     pub fn ipa(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
@@ -2270,50 +2238,6 @@ impl<'a> Decoder<'a> {
         let _dstfmt = (((inst >> 76) & 0x3) << 0);
         let _merge = (((inst >> 78) & 0x1) << 0);
         let _op = (((inst >> 79) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn iscadd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _scaleu5 = (((inst >> 75) & 0x1f) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn iscadd32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _scaleu5 = (((inst >> 75) & 0x1f) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
@@ -2613,45 +2537,7 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn lop(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _imm8 = (((inst >> 72) & 0xff) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
     pub fn lop3(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _imm8 = (((inst >> 72) & 0xff) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn lop32i(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _rd = (((inst >> 16) & 0xff) << 0);
@@ -2702,37 +2588,26 @@ impl<'a> Decoder<'a> {
         let pg = (((inst >> 12) & 0x7) << 0) as u32;
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        const MOV_RR: u32 = 0x202;
+        const MOV_RI: u32 = 0x802;
+        const MOV_RC: u32 = 0xa02;
+        const MOV_RU: u32 = 0x1c02;
 
         // MOV shares one primary opcode across several addressing-mode
         // variants (register, constant-bank, indexed constant-bank, immediate)
         // that real hardware disambiguates using bits inside the operand
         // field itself, not the opcode. Re-derive the same 13-bit selector
-        // the dispatcher used to route here; only the immediate form
-        // (key 0x1a02 / CLASS "mov__RI") is implemented so far.
+        // the dispatcher used to route here; every form but cx[UR] is the
+        // ALU source selector.
         let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
-        if variant_key == 0x1a02 {
-            // Rd = imm32
-            let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
-            let val = self.cached_const_u32(imm32);
+        if matches!(variant_key, MOV_RR | MOV_RI | MOV_RC | MOV_RU) {
+            let val = self.alu_src(inst);
             self.store_register_predicated(rd, pg, pg_not != 0, val);
             return;
         }
 
         let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn mov32i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
         let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
@@ -2914,25 +2789,6 @@ impl<'a> Decoder<'a> {
         let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let _rc = (((inst >> 64) & 0xff) << 0);
         let _pmode = (((inst >> 72) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn psetp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _up = (((inst >> 67) & 0x1) << 0);
-        let _pr = (((inst >> 68) & 0x7) << 0);
-        let _lop = (((inst >> 72) & 0x1f) << 11)
-            | (((inst >> 64) & 0x7) << 8)
-            | (((inst >> 16) & 0xff) << 0);
-        let _pq = (((inst >> 77) & 0x7) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
@@ -3195,44 +3051,6 @@ impl<'a> Decoder<'a> {
         let _sb = (((inst >> 53) & 0x1f) << 0);
         let _shflmd = (((inst >> 58) & 0x3) << 0);
         let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn shl(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sz = (((inst >> 73) & 0x3) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn shr(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sz = (((inst >> 73) & 0x3) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
@@ -3536,21 +3354,6 @@ impl<'a> Decoder<'a> {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ttuclose(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0);
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
@@ -3862,45 +3665,7 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn ulop(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _urd = (((inst >> 16) & 0x3f) << 0);
-        let _cbu_state = (((inst >> 24) & 0x3f) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _ra_urc = (((inst >> 64) & 0x3f) << 0);
-        let _imm8 = (((inst >> 72) & 0xff) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
     pub fn ulop3(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _urd = (((inst >> 16) & 0x3f) << 0);
-        let _cbu_state = (((inst >> 24) & 0x3f) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _ra_urc = (((inst >> 64) & 0x3f) << 0);
-        let _imm8 = (((inst >> 72) & 0xff) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ulop32i(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
         let _urd = (((inst >> 16) & 0x3f) << 0);
@@ -3994,24 +3759,6 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn upsetp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _pr = (((inst >> 68) & 0x7) << 0);
-        let _lop = (((inst >> 72) & 0x1f) << 11)
-            | (((inst >> 64) & 0x7) << 8)
-            | (((inst >> 16) & 0xff) << 0);
-        let _pq = (((inst >> 77) & 0x7) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
     pub fn ur2up(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
@@ -4061,42 +3808,6 @@ impl<'a> Decoder<'a> {
         let _urd = (((inst >> 16) & 0x3f) << 0);
         let _cbu_state = (((inst >> 24) & 0x3f) << 0);
         let _ra_urb = (((inst >> 32) & 0x3f) << 0);
-        let _ra_urc = (((inst >> 64) & 0x3f) << 0);
-        let _sz = (((inst >> 73) & 0x3) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ushl(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _urd = (((inst >> 16) & 0x3f) << 0);
-        let _cbu_state = (((inst >> 24) & 0x3f) << 0);
-        let _ra_urb = (((inst >> 32) & 0x3f) << 0);
-        let _ra_urc = (((inst >> 64) & 0x3f) << 0);
-        let _sz = (((inst >> 73) & 0x3) << 0);
-        let _sc_negate = (((inst >> 75) & 0x1) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ushr(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _urd = (((inst >> 16) & 0x3f) << 0);
-        let _cbu_state = (((inst >> 24) & 0x3f) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
         let _ra_urc = (((inst >> 64) & 0x3f) << 0);
         let _sz = (((inst >> 73) & 0x3) << 0);
         let _sc_negate = (((inst >> 75) & 0x1) << 0);
@@ -4174,24 +3885,6 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         todo!();
     }
-    pub fn vote_vtg(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _sa = (((inst >> 32) & 0xfffffff) << 0);
-        let _vtgmode = (((inst >> 62) & 0x3) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _dstfmt = (((inst >> 76) & 0x7) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
     pub fn warpsync(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
@@ -4222,3 +3915,30 @@ impl<'a> Decoder<'a> {
 }
 
 include!("sm86_decoder_generated.rs");
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::gpu::harness::run_body;
+
+    #[test]
+    fn half2_lanes_round_trip_through_a_register() {
+        if !crate::gpu::device().is_ok_and(|d| d.shader_float16) {
+            return eprintln!("skipping: no shaderFloat16");
+        }
+        let program = |d: &mut super::Decoder| {
+            let half2 = d.load_register(0);
+            let half2 = d.unpack_half2(half2);
+            let ty = d.type_f16x2();
+            let sum = d.ir.emit_fadd(ty, half2, half2);
+            let packed = d.bitcast_u32(sum);
+            d.store_register(1, packed);
+            let hi = d.half2_swizzle(sum, 3);
+            let hi = d.bitcast_u32(hi);
+            d.store_register(2, hi);
+        };
+        let Some(regs) = run_body(program, &[0xC000_3E00], &[]) else {
+            return;
+        };
+        assert_eq!(regs[1..3], [0xC400_4200, 0xC400_C400]);
+    }
+}

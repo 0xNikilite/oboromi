@@ -1,5 +1,4 @@
-use crate::gpu::sm86::Decoder;
-use crate::gpu::spirv::Emitter;
+use crate::tests::gpu::harness::translate_module;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
@@ -12,31 +11,36 @@ pub struct TestResult {
 }
 
 // helpers to build sm86 instructions
-mod inst {
-    // iadd rd, ra, imm32 (src_type=4, opcode=0x810)
+#[doc(hidden)]
+pub mod inst {
+    const IADD3_IMM: u128 = 0x810;
+    const IADD3_RRR: u128 = 0x210;
+    const MOV_RI: u128 = 0x802;
+    const MOV_RR: u128 = 0x202;
+    const MOV_RC: u128 = 0xa02;
+    const MOV_RU: u128 = 0xc02 | 1 << 91;
+    const KILL: u128 = 0x95b;
+    const PT_GUARD: u128 = 7 << 12;
+    const RC_RZ: u128 = 0xff << 64;
+    const PIXMASK_ALL: u128 = 0xf << 72;
+    const IADD3_NO_CARRY: u128 = 0x3fff << 77;
+    const PP_PT: u128 = 7 << 87;
+    const NO_SCOREBOARD: u128 = 0x3f << 110;
+
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0x810;
+        let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
-        inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
         inst
     }
 
-    // iadd rd, ra, rb (src_type=1, opcode=0x210)
     pub fn iadd_reg(rd: u32, ra: u32, rb: u32) -> u128 {
-        let mut inst: u128 = 0x210;
-        inst |= ((rd as u128) & 0xff) << 16;
-        inst |= ((ra as u128) & 0xff) << 24;
-        inst |= ((rb as u128) & 0xff) << 32;
-        inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
-        inst
+        iadd3_reg(rd, ra, rb, 0xff)
     }
 
-    // iadd3 rd, ra, rb, rc (opcode=0x510, variant 0x1510 via bit91)
     pub fn iadd3_reg(rd: u32, ra: u32, rb: u32, rc: u32) -> u128 {
-        let mut inst: u128 = 0x510;
-        inst |= 1u128 << 91; // use 0x1510 variant to avoid iadd overlap
+        let mut inst = IADD3_RRR | PT_GUARD | IADD3_NO_CARRY;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
@@ -44,27 +48,37 @@ mod inst {
         inst
     }
 
-    // iadd32i rd, ra, imm32 (opcode=0x410)
-    pub fn iadd32i(rd: u32, ra: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0x410;
-        inst |= ((rd as u128) & 0xff) << 16;
-        inst |= ((ra as u128) & 0xff) << 24;
-        inst |= ((imm32 as u128) & 0xffffffff) << 32;
-        inst
-    }
-
-    // mov rd, imm32 (immediate form, CLASS "mov__RI", key=0x1a02: bit91=1, low12=0xa02)
     pub fn mov_imm(rd: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0xa02;
-        inst |= 1u128 << 91;
+        let mut inst = MOV_RI | PT_GUARD | PIXMASK_ALL;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
         inst
     }
 
-    // kill (opcode=0x8e0)
+    pub fn mov_cbuf(rd: u32, bank: u32, off: u32) -> u128 {
+        let mut inst = MOV_RC | PT_GUARD | PIXMASK_ALL;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((off as u128 >> 2) & 0x3fff) << 40;
+        inst |= ((bank as u128) & 0x1f) << 54;
+        inst
+    }
+
+    pub fn mov_ureg(rd: u32, urb: u32) -> u128 {
+        let mut inst = MOV_RU | PT_GUARD | PIXMASK_ALL;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((urb as u128) & 0x3f) << 32;
+        inst
+    }
+
+    pub fn mov_reg(rd: u32, rb: u32) -> u128 {
+        let mut inst = MOV_RR | PT_GUARD | PIXMASK_ALL;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((rb as u128) & 0xff) << 32;
+        inst
+    }
+
     pub fn kill(pred: u32, invert: bool) -> u128 {
-        let mut inst: u128 = 0x8e0;
+        let mut inst = KILL | PP_PT | NO_SCOREBOARD;
         inst |= ((pred as u128) & 0x7) << 12;
         if invert {
             inst |= 1 << 15;
@@ -77,28 +91,7 @@ fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
     let start = Instant::now();
     println!("Running test: {} ({} instructions)", name, instructions.len());
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut emitter = Emitter::new();
-        emitter.emit_header();
-        emitter.emit_capability(crate::gpu::spirv::capability::SHADER);
-        emitter.emit_memory_model(0, 1);
-
-        let mut decoder = Decoder::new(&mut emitter);
-        decoder.init();
-
-        // set up a function so translated instructions have a valid context
-        let void_ty = decoder.get_type_void();
-        let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
-        let _func = decoder.ir.emit_function(void_ty, 0, func_ty);
-        decoder.ir.emit_label();
-
-        for &inst in instructions {
-            decoder.translate(inst);
-        }
-
-        decoder.ir.emit_return();
-        decoder.ir.emit_function_end();
-        decoder.ir.finalize();
-        decoder.ir.validate();
+        translate_module(instructions, false, None).validate()
     }));
 
     let duration = start.elapsed();
@@ -138,8 +131,8 @@ pub fn run_gpu_tests() -> Vec<String> {
         run_translation_test("IADD Immediate", &[inst::iadd_imm(1, 2, 42)]),
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
         run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 4)]),
-        run_translation_test("IADD32I", &[inst::iadd32i(1, 2, 100)]),
         run_translation_test("MOV immediate", &[inst::mov_imm(1, 0xCAFEBABE)]),
+        run_translation_test("MOV register", &[inst::mov_reg(1, 2)]),
         run_translation_test("KILL PT", &[inst::kill(7, false)]),
     ];
 
@@ -170,4 +163,55 @@ pub fn run_gpu_tests() -> Vec<String> {
     results.push(summary);
 
     results
+}
+
+#[test]
+fn fixtures_match_nvdisasm() {
+    let Some(nvdisasm) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .chain(
+            std::fs::read_dir("/usr/local")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path().join("bin")),
+        )
+        .map(|dir| dir.join("nvdisasm"))
+        .find(|path| path.is_file())
+    else {
+        eprintln!("nvdisasm not found, skipping");
+        return;
+    };
+    let bin = std::env::temp_dir().join(format!("oboromi-fixture-{}.bin", std::process::id()));
+    let fixtures: &[(u128, &str)] = &[
+        (inst::iadd_imm(1, 2, 42), "IADD3 R1, R2, 0x2a, RZ;"),
+        (inst::iadd_reg(1, 2, 3), "IADD3 R1, R2, R3, RZ;"),
+        (inst::iadd3_reg(1, 2, 3, 4), "IADD3 R1, R2, R3, R4;"),
+        (inst::mov_imm(1, 0xCAFEBABE), "MOV R1, 0xcafebabe;"),
+        (inst::mov_reg(1, 2), "MOV R1, R2;"),
+        (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
+        (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
+        (inst::kill(7, false), "KILL;"),
+    ];
+    for &(word, expected) in fixtures {
+        std::fs::write(&bin, word.to_le_bytes()).unwrap();
+        let out = std::process::Command::new(&nvdisasm)
+            .args(["--binary", "SM86"])
+            .arg(&bin)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let disasm = text
+            .lines()
+            .find_map(|line| line.split("/*0000*/").nth(1))
+            .unwrap_or_default();
+        assert_eq!(disasm.trim(), expected, "{word:#x}");
+    }
+    std::fs::remove_file(bin).unwrap();
+}
+
+#[test]
+fn mov_immediate_passes_spirv_val() {
+    use crate::tests::gpu::harness::spirv_val;
+    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None);
+    spirv_val(&module);
 }

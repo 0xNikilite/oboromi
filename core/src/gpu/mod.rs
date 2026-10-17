@@ -3,6 +3,7 @@ use ash::vk;
 pub mod compute;
 pub mod fifo;
 pub mod frame;
+pub mod memory;
 pub mod sm86;
 pub mod spirv;
 pub mod threed;

@@ -23,4 +23,11 @@ bool renderTriangleDemo(float seconds);
 // Draws the sprites demo at the given time into the display
 bool renderSpritesFrame(float seconds);
 
+// Draws the pbr BoomBox and FlightHelmet demos at the given time into the display
+bool renderBoomBoxDemo(float seconds);
+bool renderHelmetDemo(float seconds);
+
+// Draws the post-effect demo at the given time into the display
+bool renderPostFrame(float seconds);
+
 }

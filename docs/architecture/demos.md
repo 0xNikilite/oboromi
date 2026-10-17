@@ -1,6 +1,6 @@
 # Demos
 
-The Qt window has buttons that draw through the GPU work today. Six bigger scenes are prepared, and the first, a lit 3D model, is being wired now. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
+The Qt window has buttons that draw through the GPU work today. Six bigger scenes show more of the engine: post-effect, sprites, particles, BoomBox, FlightHelmet and a ray-traced one. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
 
 ## What runs today?
 
@@ -9,7 +9,10 @@ The Qt window has buttons that draw through the GPU work today. Six bigger scene
 | Render Test Frame | `frame::render_test_frame` | A translated SASS program (S2R, IMAD, STG) writes a 1080p gradient as a compute shader |
 | Demo | `frame::render_demo_frame` | A hand-written SASS Julia set animates every frame; the time arrives through constant buffer 0 |
 | Triangle | `frame::render_triangle_demo` | A command list in guest memory draws a turning triangle through the whole engine |
-| Sprites | `demo_sprites::render_sprites_frame` | NVIDIA-compiled sprite shaders draw a scrolling parallax scene of 199 blended quads as one instanced draw |
+| Post | `demo_post::render_post_frame` | NVIDIA-compiled shaders draw a pinwheel into one image, then sample it as a texture to add screen effects |
+| BoomBox | `demo::render_boombox_frame` | NVIDIA-compiled PBR shaders draw the BoomBox with five mipmapped textures and a depth buffer, turning once every eight seconds under a still light |
+| Helmet | `demo::render_helmet_frame` | The same path draws FlightHelmet's six materials, one draw each; run `demos/assets/fetch.sh` first |
+| Sprites | `demo_sprites::render_sprites_frame` | NVIDIA-compiled sprite shaders draw a scrolling parallax scene of blended sprites as one instanced draw |
 
 The Julia set program loops with a predicated branch, a jump taken only where a one-bit flag is set. It reuses one pipeline built once, so a frame costs a dispatch, a readback and a present.
 
@@ -57,35 +60,59 @@ Measured on an Intel Arc (MTL), p50 per frame:
 
 ```mermaid
 flowchart LR
-    TRI["Triangle<br/>Runs today"] --> PBR["pbr-boombox<br/>A lit 3D model, being wired"]
-    PBR --> POST["post-effect<br/>The model, then screen filters"]
-    PBR --> FH["pbr-flighthelmet<br/>A heavy model, to time throughput"]
+    TRI["Triangle<br/>Draws a triangle"] --> PBR["pbr-boombox<br/>A lit 3D model"]
+    TRI --> POST["post-effect<br/>Draw, then screen filters"]
+    PBR --> FH["pbr-flighthelmet<br/>A heavy model"]
     PBR --> RT["raytraced<br/>Shadows and reflections by ray queries"]
     TRI --> SPR["sprites2d<br/>Layered 2D sprites"]
-    TRI --> PART["particles<br/>Particles moved by a compute launch"]
+    TRI --> PART["particles<br/>Moved by a compute launch"]
     RT -.->|"Still needs"| N1["Acceleration structures,<br/>Depth kept in guest memory"]
 ```
 
-*The six prepared scenes. The engine has what they need, except two features for the ray-traced one.*
+*The six scenes. The ray-traced one still needs two engine features.*
 
 | Scene | Content | Shaders |
 |---|---|---|
 | pbr-boombox | The BoomBox or Avocado model, lit with physically based materials and normal maps, one light | pbr.vert, pbr.frag |
-| post-effect | The PBR scene drawn offscreen, then colour fringing, scanlines and a vignette | post.vert, post.frag |
+| post-effect | A scene drawn offscreen, then colour fringing, scanlines and a vignette | post.vert, post.frag |
 | particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag |
-| sprites2d | Scrolling layers and floating sprites, blended over a generated texture sheet | sprite2d.vert, sprite2d.frag |
-| pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material, timed against pbr-boombox | pbr.vert, pbr.frag |
+| sprites2d | Scrolling hill layers and floating sprites, blended over a sky | sprite2d.vert, sprite2d.frag |
+| pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material | pbr.vert, pbr.frag |
 | raytraced | BoomBox on a ground plane with ray-query shadows and reflections, plus ray-traced ambient occlusion | rt.frag, rt_ao.comp |
 
-Each scene document in `demos/scenes` lists its guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. The plan is to compile them with NVIDIA's driver on a rented card, which yields the SM86 programs the scenes load.
+The ray-traced scene is being built. It still needs two engine features.
 
-Why compile GLSL on a desktop card: it yields real SM86 code for each stage. But it does not yield the Switch 2's shader header or attribute conventions, so those stay tagged until a real game shows them.
+### What do the new scenes look like?
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-sprites-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-sprites.mp4" type="video/mp4"></video>
+
+*Sprites: NVIDIA-compiled sprite shaders draw scrolling hills and floating sprites, blended back to front, from a host-written command list.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-post-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-post.mp4" type="video/mp4"></video>
+
+*Post-effect: a pinwheel drawn into one image, then sampled as a texture by a second pass that adds the screen effects.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-particles-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-particles.mp4" type="video/mp4"></video>
+
+*Particles: a compute launch from the command list moves the particles, then one instanced draw shows them.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-boombox-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-boombox.mp4" type="video/mp4"></video>
+
+*BoomBox: the model turns on a turntable under a still light, so the shine and the glowing display move across it.*
+
+<video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet.mp4" type="video/mp4"></video>
+
+*FlightHelmet: six materials and fifteen textures through the same shaders, one draw per material.*
+
+Each scene document in `demos/scenes` lists its guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. NVIDIA's driver compiles them into the SM86 programs the scenes load.
+
+Compiling GLSL on a desktop card gives real SM86 code for each stage. It does not give the Switch 2's shader header or attribute conventions, so those stay tagged until a real game shows them.
 
 ## Where do the assets come from?
 
 ```mermaid
 flowchart LR
-    GLB["glTF-Binary model<br/>Khronos sample assets"] --> PY["Scripts/gltf_to_raw.py<br/>Converter"]
+    GLB["glTF-Binary model<br/>Khronos sample assets"] --> PY["scripts/gltf_to_raw.py<br/>Converter"]
     PY --> V["vertices.bin<br/>Position, normal, tangent, uv"]
     PY --> I["indices.bin<br/>Which vertices form each triangle"]
     PY --> T["slot.rgba8<br/>Textures, NVIDIA-tiled, with mip levels"]
@@ -98,4 +125,4 @@ BoomBox, Avocado and FlightHelmet are CC0 1.0 by Microsoft, from KhronosGroup's 
 
 Verified by: an offscreen screenshot of each button's output, the engine acceptance test for the triangle, the Julia centre test, and the block-linear tiling matching the converter.
 
-Sources: core/src/gpu/frame.rs, core/src/ffi.rs, gui-qt/src/MainWindow.cpp, demos/README, demos/scenes/*.md, demos/assets/README, scripts/gltf_to_raw.py, core/examples/perf.rs.
+Sources: core/src/gpu/frame.rs, core/src/gpu/demo.rs, core/src/ffi.rs, gui-qt/src/MainWindow.cpp, demos/README, demos/scenes/*.md, demos/assets/README, scripts/gltf_to_raw.py, core/examples/perf.rs.

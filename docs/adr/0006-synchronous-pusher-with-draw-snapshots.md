@@ -12,7 +12,7 @@ A game's command list mixes settings changes, draws, constant updates, clears an
 
 ## Context and Problem Statement
 
-A pushbuffer, the game's command list, interleaves state writes, draws, constant buffer updates, clears and semaphore releases, the GPU's "got this far" signals. The order they take effect in matters, and a host GPU queue runs on its own clock. There is no emulated OS yet to wait on fences, the host's done-flags, or syncpoints, the Switch's hardware counters.
+A pushbuffer, the game's command list, interleaves state writes, draws, constant buffer updates, clears and semaphore releases, the GPU's "got this far" signals. The order they take effect in matters, and a host GPU queue runs on its own clock. The emulated OS layer that would wait on fences, the host's done-flags, or syncpoints, the Switch's hardware counters, is still being built.
 
 ## Decision Outcome
 

@@ -44,4 +44,16 @@ bool renderSpritesFrame(float seconds) {
     return oboromi_render_sprites_frame(seconds);
 }
 
+bool renderBoomBoxDemo(float seconds) {
+    return oboromi_render_boombox_demo(seconds);
+}
+
+bool renderHelmetDemo(float seconds) {
+    return oboromi_render_helmet_demo(seconds);
+}
+
+bool renderPostFrame(float seconds) {
+    return oboromi_render_post_frame(seconds);
+}
+
 }

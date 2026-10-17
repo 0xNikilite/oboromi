@@ -38,6 +38,7 @@ pub const CBUF_BINDING: u32 = 1;
 pub const CBUF_BANKS: u32 = 32;
 pub const GLOBAL_BINDING: u32 = CBUF_BINDING + CBUF_BANKS;
 pub const TEXTURE_BINDING: u32 = GLOBAL_BINDING + 3;
+pub const PMTRIG_WORDS: usize = 1 << 16;
 const RZ: u32 = 255;
 const URZ: u32 = 63;
 const SRZ: u32 = 255;
@@ -245,6 +246,16 @@ pub fn branch_target(pc: u32, inst: u128) -> Option<u32> {
     }
 }
 
+fn dynamic_target(inst: u128) -> bool {
+    matches!(opcode(inst), 0x357 | 0x957 | CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950)
+}
+
+fn guard_pred(inst: u128) -> Option<cfg::Pred> {
+    let (index, not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
+    let op = opcode(inst) & 0x1ff;
+    (index != PT).then(|| cfg::Pred { uniform: matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU, index, not })
+}
+
 fn nth_reg(reg: u32, zero: u32, i: u32) -> u32 {
     if reg == zero { reg } else { reg + i }
 }
@@ -310,16 +321,25 @@ fn guest_barriers(words: &[u128]) -> Vec<u32> {
 }
 
 pub fn emit_module(device: Option<&VkState>, stage: Stage, body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
+    let mut hints = Hints::default();
+    if !matches!(stage, Stage::Compute { .. }) {
+        hints.translation = Translation::ForceDispatcher;
+    }
+    emit_module_hinted(device, stage, hints, body)
+}
+
+pub fn emit_module_hinted(device: Option<&VkState>, stage: Stage, hints: Hints, body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
     let mut emitter = spirv::Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(spirv::capability::SHADER);
     emitter.emit_memory_model(0, 1);
-    let mut decoder = Decoder::new(&mut emitter, stage);
+    let mut decoder = Decoder::new(&mut emitter, stage, hints, device);
     decoder.init();
     let void_ty = decoder.get_type_void();
     let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
     let func = decoder.ir.emit_function(void_ty, 0, func_ty);
     decoder.ir.emit_label();
+    decoder.entry = decoder.ir.function_len();
     if let Stage::Compute { local_size } = stage {
         decoder.invocations = local_size.iter().product();
     }
@@ -332,7 +352,7 @@ pub fn emit_module(device: Option<&VkState>, stage: Stage, body: impl FnOnce(&mu
 }
 
 impl<'a> Decoder<'a> {
-    pub fn new(ir: &'a mut spirv::Emitter, stage: Stage) -> Self {
+    pub fn new(ir: &'a mut spirv::Emitter, stage: Stage, hints: Hints, device: Option<&'a VkState>) -> Self {
         Self {
             ir,
             stage,
@@ -400,9 +420,13 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>) {
+        if let Some(var) = self.resource(ResourceKind::Hints) {
+            let textures = self.resources.iter().filter(|r| matches!(r.kind, ResourceKind::Texture2D { .. } | ResourceKind::Surface2D { .. })).count() as u32;
+            self.ir.emit_decorate(var, spirv::decoration::BINDING, &[TEXTURE_BINDING + textures]);
+        }
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).chain(self.pending_nan.values().copied()).collect();
         use spirv::{capability as cap, execution_mode as mode, execution_model as model};
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
@@ -658,7 +682,9 @@ impl<'a> Decoder<'a> {
         }
         let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
         self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
-        self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        if kind != ResourceKind::Hints {
+            self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        }
         self.resources.push(Resource { kind, var });
         var
     }
@@ -668,10 +694,20 @@ impl<'a> Decoder<'a> {
     // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
         self.acceleration_structure_address = ray::acceleration_structure_address(words);
+        for &inst in words.iter().filter(|&&inst| deferred_nan(inst)) {
+            let reg = (inst >> 16 & 0xff) as u32;
+            if reg != RZ { self.nan_flag(reg); }
+        }
+        if self.translation != Translation::ForceDispatcher {
+            match plan(words) {
+                Ok(plan) => return self.translate_structured(words, &plan),
+                Err(reason) => assert!(self.translation == Translation::Auto, "no structured translation: {reason}"),
+            }
+        }
         let len = words.len() as u32;
         // BRX, JMX, CALL Ra and BMOV ATEXIT_PC only know their target at run time, so such a program dispatches on every pc; RET
         // lands after a CALL.
-        let indirect = words.iter().any(|inst| matches!(opcode(*inst), 0x357 | 0x957 | CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));
+        let indirect = words.iter().any(|&inst| dynamic_target(inst));
         let mut leaders: Vec<u32> = if indirect { (0..=len).collect() } else { vec![0, len] };
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));

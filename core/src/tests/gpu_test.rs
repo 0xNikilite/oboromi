@@ -157,7 +157,11 @@ pub mod inst {
     const LZ: u128 = 1 << 87;
     pub const TLD_LZ_2D: u128 = 0xb66 | TEX_2D | LZ;
     pub const TEX_LZ_2D: u128 = 0xb60 | TEX_2D | LZ;
+    pub const TEX_LB_2D: u128 = 0xb60 | TEX_2D | 2 << 87;
     pub const TEX_LL_2D: u128 = 0xb60 | TEX_2D | 3 << 87;
+    pub const TEX_LC_2D: u128 = 0xb60 | TEX_2D | 4 << 87;
+    pub const TEX_LB_LC_2D: u128 = 0xb60 | TEX_2D | 5 << 87;
+    pub const TEX_DC: u128 = 1 << 78;
     pub const TXQ_DIMENSION: u128 = 0xb6f;
     const SU_2D_NEAR: u128 = 3 << 61 | 1 << 59;
     const SU_RGBA: u128 = 0xf << 72;

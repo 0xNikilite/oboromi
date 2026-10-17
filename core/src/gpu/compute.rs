@@ -562,8 +562,9 @@ impl VkState {
 
     // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
     pub(super) fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
-        let submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
-        let (d, cmd, fence) = (&self.device, submit.command_buffer, submit.fence);
+        let mut submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
+        let (d, cmd, fence, queries) = (&self.device, submit.command_buffer, submit.fence, submit.queries);
+        let mut ticks = [0u64; 2];
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         let cmds = [cmd];

@@ -83,6 +83,9 @@ pub mod capability {
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
     pub const RAY_QUERY: u32 = 4472;
+    pub const COOPERATIVE_MATRIX: u32 = 6022;
+    pub const VULKAN_MEMORY_MODEL: u32 = 5345;
+    pub const SHADER_CLOCK: u32 = 5055;
 }
 
 pub mod storage_class {
@@ -216,7 +219,7 @@ fn section(opcode: u32, operands: &[u32]) -> usize {
         16 | 331 => 6,                                     // OpExecutionMode(Id)
         2..=7 | 330 => 7,                                  // OpSource* to OpString, OpModuleProcessed
         71..=75 | 332 => 8,                                // OpDecorate* and OpGroup*Decorate
-        19..=39 | 41..=52 | 4472 | 5341 => 9,              // OpType*, OpConstant*, OpSpecConstant*
+        19..=39 | 41..=52 | 4456 | 4472 | 5341 => 9,       // OpType*, OpConstant*, OpSpecConstant*
         59 if operands[2] != storage_class::FUNCTION => 9, // global OpVariable
         _ => 10,                                           // function bodies
     }

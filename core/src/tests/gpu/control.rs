@@ -3,7 +3,7 @@ mod tests {
     use crate::gpu::sm86::plan;
     use crate::tests::gpu::harness::{PRED, UPRED, UREG, both_ways, run_regs};
     use crate::tests::gpu_test::inst::{
-        IMM_B, UIADD3, alu3, bmov_atexit, bra, bra_conv, bra_div, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, preds, ret_rel,
+        IMM_B, UIADD3, alu3, bmov_atexit, bra, bra_conv, bra_div, bra_pp, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, preds, ret_rel,
         uldc64, W2I_ARRIVES, W2I_BREAK, W2I_CCTLT, W2I_CSMTEST, W2I_DEPBAR, W2I_ERRBAR, W2I_IDE, W2I_JMP,
         W2I_LEPC, W2I_NANOSLEEP, W2I_PMTRIG, W2I_QSPC, W2I_R2B, W2I_RPCMOV_HI, W2I_RPCMOV_LO, W2I_RPCMOV_SET_HI,
         W2I_RPCMOV_SET_LO, W2I_RTT, W2I_SETLMEMBASE, W2I_YIELD,

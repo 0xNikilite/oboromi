@@ -118,7 +118,7 @@ impl<'a> Decoder<'a> {
     // 64- and 128-bit global accesses stay one vector access: NVIDIA turns word accesses to a window in host memory into
     // partial PCIe transactions, many times slower.
     fn global_vector_at(&mut self, kind: ResourceKind, address: u32, size: u32) -> Option<(u32, u32)> {
-        if kind != ResourceKind::Global || !matches!(size, 5 | 6) {
+        if kind != ResourceKind::Global || !matches!(self.stage, Stage::Compute { .. }) || !matches!(size, 5 | 6) {
             return None;
         }
         let words = access_words(size);

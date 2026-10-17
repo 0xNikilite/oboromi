@@ -118,7 +118,7 @@ impl<'a> Decoder<'a> {
             product = self.ir.emit_fmul(self.type_f32[1], product, factor);
         }
         let bits = self.fp_arith_result(if rounding == 3 { inst & !(3 << 78) } else { inst }, product, ftz);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     // Fma gives the exact residual a * b - p, whose sign says whether p was rounded away from zero; a device that does not
     // fuse Fma gets a zero residual and so the nearest product.

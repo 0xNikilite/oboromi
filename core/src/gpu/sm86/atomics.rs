@@ -3,28 +3,8 @@ use super::*;
 impl<'a> Decoder<'a> {
     fn global_u64_at(&mut self, address: u32) -> u32 {
         self.ir.emit_capability(INT64_ATOMICS);
-        let var = match self.resource(ResourceKind::Global64) {
-            Some(var) => var,
-            None => {
-                let array = self.ir.emit_type_runtime_array(ty);
-                let block = self.ir.emit_type_struct(&[array]);
-                self.type_ptr_ssbo64 = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
-                self.type_ptr_ssbo_u64 = self.ir.emit_type_pointer(STORAGE_BUFFER, ty);
-                self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[8]);
-                self.ir.emit_decorate(block, deco::BLOCK, &[]);
-                self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
-                let var = self.ir.emit_variable(self.type_ptr_ssbo64, STORAGE_BUFFER);
-                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
-                self.ir.emit_decorate(var, deco::BINDING, &[GLOBAL_BINDING]);
-                self.resources.push(Resource { kind: ResourceKind::Global64, var });
-                var
-            }
-        };
-        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
-        let rel = self.ir.emit_isub(self.type_u32[1], address, base);
-        let three = self.cached_const_u32(3);
-        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, three);
-        self.ir.emit_access_chain(self.type_ptr_ssbo_u64, var, &[self.const_u32_0, index])
+        let ty = self.type_u64();
+        self.global_element_at(ResourceKind::Global64, ty, 8, address)
     }
 
     fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {

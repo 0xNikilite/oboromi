@@ -12,7 +12,7 @@ mod tests {
         let Some(state) = shared_device() else { return };
         let mut post = Post::new(state, None, SIZE, SIZE).unwrap();
         post.frame(0.0).unwrap();
-        let green = |va: u64, x: u32, y: u32| {
+        let mut green = |va: u64, x: u32, y: u32| {
             let mut rgba = [0; 4];
             post.gpu.read(va + u64::from(y * SIZE[0] + x) * 4, &mut rgba).unwrap();
             rgba[1]

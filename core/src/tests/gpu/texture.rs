@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::texture::{TexturePool, block_linear_to_pitch, pitch_to_block_linear};
-    use crate::tests::gpu::harness::{Textures, run_textured};
+    use crate::tests::gpu::harness::{Textures, run_textured, spirv_val, translate_module};
     use crate::tests::gpu_test::inst::{self, texture};
 
     const TEXELS_ADDRESS: u64 = 0x1_0000_0400;

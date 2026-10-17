@@ -52,8 +52,7 @@ fn pass_through(stage: u32) -> Emitter {
     e
 }
 
-/// Draws the triangle over a white clear into a SIZE x SIZE target and reads it back, once per call.
-pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), VkError> + '_, VkError> {
+pub fn triangle_pipeline(state: &VkState) -> Result<GraphicsPipeline<'_>, VkError> {
     let [vertex, fragment] = [execution_model::VERTEX, execution_model::FRAGMENT].map(|stage| pass_through(stage).words());
     let bindings = [vk::VertexInputBindingDescription { binding: 0, stride: 12, input_rate: vk::VertexInputRate::VERTEX }];
     let attributes = [(0, vk::Format::R32G32_SFLOAT, 0), (1, vk::Format::R8G8B8A8_UNORM, 8)]
@@ -61,7 +60,12 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
     let topology = vk::PrimitiveTopology::TRIANGLE_LIST;
     let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
     let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-    let pipeline = GraphicsPipeline::new(state, &vertex, &fragment, &[], &layout, &TargetState { blend, depth: false })?;
+    GraphicsPipeline::new(state, &vertex, &fragment, &[], &layout, &TargetState { blend, depth: false })
+}
+
+/// Draws the triangle over a white clear into a SIZE x SIZE target and reads it back, once per call.
+pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), VkError> + '_, VkError> {
+    let pipeline = triangle_pipeline(state)?;
     let target = RenderTarget::new(state, SIZE, SIZE, false)?;
     let mut vertices = HostBuffer::new(state, 36)?;
     let data: Vec<u8> =
@@ -73,7 +77,7 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
         scissor: target.extent.into(),
         cull_face: vk::CullModeFlags::NONE,
         front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-        topology,
+        topology: vk::PrimitiveTopology::TRIANGLE_LIST,
         depth_test: false,
         depth_write: false,
         depth_func: vk::CompareOp::ALWAYS,

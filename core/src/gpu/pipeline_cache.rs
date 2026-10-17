@@ -1,9 +1,12 @@
-//! Pipelines built off the frame: worker threads run each pipeline's build while draws look it up by key.
-use super::VkError;
+//! Pipelines built off the frame: worker threads run each pipeline's build while draws look it up by key, and `Disk`
+//! keeps the translated SPIR-V and the device's VkPipelineCache per title so the next run starts warm.
+use super::{VkError, VkState};
+use ash::vk;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
+use std::{fs, io, thread};
 
 pub enum PipelinePolicy {
     /// A lookup blocks until its pipeline is built, so every draw lands.
@@ -19,7 +22,9 @@ pub enum Lookup<'p, P> {
 
 type Built<K, P> = (K, Result<P, VkError>);
 
-pub struct PipelineBuilder<K, P> {
+pub struct PipelineBuilder<'a, K, P> {
+    state: &'a VkState,
+    disk: Option<Disk>,
     pub policy: PipelinePolicy,
     /// `None` while the pipeline builds.
     pipelines: HashMap<K, Option<Result<P, VkError>>>,
@@ -28,8 +33,12 @@ pub struct PipelineBuilder<K, P> {
     workers: Vec<thread::JoinHandle<()>>,
 }
 
-impl<K: Hash + Eq + Clone + Send + 'static, P: Send + 'static> PipelineBuilder<K, P> {
-    pub fn new(policy: PipelinePolicy) -> Self {
+impl<'a, K: Hash + Eq + Clone + Send + 'static, P: Send + 'static> PipelineBuilder<'a, K, P> {
+    /// Starts from the pipeline cache `disk` saved, and saves the device's back to it on `flush` and drop.
+    pub fn new(state: &'a VkState, policy: PipelinePolicy, disk: Option<Disk>) -> Result<Self, VkError> {
+        if let Some(disk) = &disk {
+            disk.load(state)?;
+        }
         let (jobs, queue) = mpsc::channel::<Box<dyn FnOnce() -> Built<K, P> + Send>>();
         let (finished, done) = mpsc::channel();
         let queue = Arc::new(Mutex::new(queue));
@@ -45,7 +54,7 @@ impl<K: Hash + Eq + Clone + Send + 'static, P: Send + 'static> PipelineBuilder<K
                 })
             })
             .collect();
-        Self { policy, pipelines: HashMap::new(), jobs, done, workers }
+        Ok(Self { state, disk, policy, pipelines: HashMap::new(), jobs, done, workers })
     }
 
     /// `describe` runs only on a miss, and the build it returns runs on a worker thread.
@@ -86,9 +95,76 @@ impl<K: Hash + Eq + Clone + Send + 'static, P: Send + 'static> PipelineBuilder<K
     }
 }
 
-impl<K, P> Drop for PipelineBuilder<K, P> {
+impl<K, P> PipelineBuilder<'_, K, P> {
+    pub fn flush(&self) -> io::Result<()> {
+        self.disk.as_ref().map_or(Ok(()), |disk| disk.flush(self.state))
+    }
+}
+
+impl<K, P> Drop for PipelineBuilder<'_, K, P> {
     fn drop(&mut self) {
         self.jobs = mpsc::channel().0;
         self.workers.drain(..).for_each(|worker| drop(worker.join()));
+        let _ = self.flush();
     }
+}
+
+pub struct Disk {
+    dir: PathBuf,
+    /// headerVersion, vendorID, deviceID and pipelineCacheUUID of the VkPipelineCacheHeaderVersionOne this device writes.
+    header: Vec<u8>,
+}
+
+impl Disk {
+    /// Everything lives under `root/title/<pipelineCacheUUID>`, since the SPIR-V also depends on the device's features.
+    pub fn open(root: &Path, title: &str, device: &vk::PhysicalDeviceProperties) -> io::Result<Self> {
+        let uuid: String = device.pipeline_cache_uuid.iter().map(|b| format!("{b:02x}")).collect();
+        let dir = root.join(title).join(uuid);
+        fs::create_dir_all(&dir)?;
+        let words = [vk::PipelineCacheHeaderVersion::ONE.as_raw() as u32, device.vendor_id, device.device_id];
+        let header = words.iter().flat_map(|w| w.to_ne_bytes()).chain(device.pipeline_cache_uuid).collect();
+        Ok(Self { dir, header })
+    }
+
+    fn spirv_path(&self, code_hash: u64) -> PathBuf {
+        self.dir.join(format!("{code_hash:016x}-{}.spv", env!("TRANSLATOR_HASH")))
+    }
+
+    /// The module this translator build saved for the guest code with `code_hash`.
+    pub fn spirv(&self, code_hash: u64) -> Option<Vec<u32>> {
+        let bytes = fs::read(self.spirv_path(code_hash)).ok()?;
+        Some(bytes.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect())
+    }
+
+    pub fn store_spirv(&self, code_hash: u64, words: &[u32]) -> io::Result<()> {
+        write_atomically(&self.spirv_path(code_hash), &words.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<_>>())
+    }
+
+    /// The saved VkPipelineCache data, unless its header names another device or driver build.
+    pub fn pipeline_cache_data(&self) -> Option<Vec<u8>> {
+        let data = fs::read(self.dir.join("pipeline-cache")).ok()?;
+        (data.get(4..32) == Some(&self.header[..])).then_some(data)
+    }
+
+    pub fn load(&self, state: &VkState) -> Result<(), VkError> {
+        let Some(data) = self.pipeline_cache_data() else { return Ok(()) };
+        let d = &state.device;
+        unsafe {
+            let saved = d.create_pipeline_cache(&vk::PipelineCacheCreateInfo::default().initial_data(&data), None)?;
+            let merged = d.merge_pipeline_caches(state.pipeline_cache, &[saved]);
+            d.destroy_pipeline_cache(saved, None);
+            Ok(merged?)
+        }
+    }
+
+    pub fn flush(&self, state: &VkState) -> io::Result<()> {
+        let data = unsafe { state.device.get_pipeline_cache_data(state.pipeline_cache) }.map_err(io::Error::other)?;
+        write_atomically(&self.dir.join("pipeline-cache"), &data)
+    }
+}
+
+fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let partial = path.with_extension("partial");
+    fs::write(&partial, bytes)?;
+    fs::rename(partial, path)
 }

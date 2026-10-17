@@ -34,6 +34,7 @@ pub struct VkState {
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub submit: std::sync::Mutex<compute::Submit>,
+    pub pipeline_cache: vk::PipelineCache,
     pub signed_zero_inf_nan_preserve: [bool; 3],
     pub denorm_preserve: [bool; 3],
     pub shader_float16: bool,
@@ -80,6 +81,7 @@ impl VkState {
             device,
             command_pool,
             submit: Default::default(),
+            pipeline_cache: vk::PipelineCache::null(),
             signed_zero_inf_nan_preserve: [
                 float_controls.shader_signed_zero_inf_nan_preserve_float16,
                 float_controls.shader_signed_zero_inf_nan_preserve_float32,
@@ -109,6 +111,9 @@ impl VkState {
         let submit = state.submit.get_mut().unwrap();
         submit.command_buffer = unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
         submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
+        // Created without EXTERNALLY_SYNCHRONIZED_BIT, so the implementation synchronises it and any thread may create
+        // pipelines through it (VUID-vkCreateGraphicsPipelines-pipelineCache-02876, fundamentals-threadingbehavior).
+        state.pipeline_cache = unsafe { state.device.create_pipeline_cache(&Default::default(), None)? };
         Ok(state)
     }
 
@@ -193,6 +198,7 @@ impl Drop for VkState {
             let _ = self.device.device_wait_idle();
             let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());
             self.device.destroy_fence(submit.fence, None);
+            self.device.destroy_pipeline_cache(self.pipeline_cache, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

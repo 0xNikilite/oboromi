@@ -118,7 +118,7 @@ impl<'a> GraphicsPipeline<'a> {
             .dynamic_state(&dynamic)
             .layout(p.layout)
             .push_next(&mut rendering)];
-        p.pipeline = unsafe { d.create_graphics_pipelines(vk::PipelineCache::null(), &info, None) }
+        p.pipeline = unsafe { d.create_graphics_pipelines(state.pipeline_cache, &info, None) }
             .map_err(|(_, e)| e)?[0];
         Ok(p)
     }

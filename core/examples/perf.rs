@@ -1,10 +1,12 @@
-//! Latency of the hot paths in microseconds: `cargo run --release -p oboromi-core --example perf`.
+//! Latency of the hot paths in microseconds: `MESA_SHADER_CACHE_DISABLE=true cargo run --release -p oboromi-core --example perf`,
+//! where the variable keeps Mesa's own shader cache from warming the cold pipeline rows.
 use ash::vk::DescriptorType;
 use oboromi_core::display::present;
 use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
-use oboromi_core::gpu::sm86::STATE_WORDS;
-use oboromi_core::gpu::{device, frame::{render_demo_frame, render_test_frame, render_triangle_demo}};
+use oboromi_core::gpu::pipeline_cache::Disk;
+use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, Stage, emit_module};
+use oboromi_core::gpu::{VkState, device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
 use oboromi_core::tests::gpu::{graphics, harness::translate_module};
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
@@ -65,6 +67,21 @@ fn main() {
     bench("pipeline create (cold)", 0, 1, || {
         drop(ComputePipeline::new(state, &words, &bindings).unwrap());
     });
+    let julia = emit_module(Some(state), Stage::Compute { local_size: [16, 16, 1] }, |d| d.translate_program(&julia_program())).words();
+    let ubo = DescriptorType::UNIFORM_BUFFER;
+    let julia_bindings = [(SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo), (GLOBAL_BINDING, ssbo)];
+    let root = std::env::temp_dir().join(format!("oboromi-perf-{}", std::process::id()));
+    let disk = Disk::open(&root, "perf", &props).unwrap();
+    for start in ["cold", "from disk"] {
+        let fresh = VkState::new().unwrap();
+        if start != "cold" {
+            disk.load(&fresh).unwrap();
+        }
+        bench(&format!("triangle pipeline {start}"), 0, 1, || drop(graphics::triangle_pipeline(&fresh).unwrap()));
+        bench(&format!("julia pipeline {start}"), 0, 1, || drop(ComputePipeline::new(&fresh, &julia, &julia_bindings).unwrap()));
+        disk.flush(&fresh).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(root);
     let mut pipeline = ComputePipeline::new(state, &words, &bindings).unwrap();
     let mut input = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();

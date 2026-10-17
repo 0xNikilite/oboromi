@@ -76,4 +76,51 @@ mod tests {
         let program = [pixld(0, PIXLD_MY_INDEX), pixld(1, PIXLD_COVMASK), exit()];
         assert_eq!(stage_interface(Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &program), expected);
     }
+
+    #[test]
+    fn geometry_program_turns_a_point_into_a_triangle() {
+        use crate::gpu::compute::HostBuffer;
+        use crate::gpu::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
+        use ash::vk;
+        const SIZE: u32 = 64;
+        let corners = [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5)].map(|(x, y)| [fadd_imm(0, 4, x), fadd_imm(1, 5, y), ast(0x70, 0, 2), out(2, 2, OUT_EMIT)]);
+        let geometry = [&[isberd(1, 255, 0), ald_vertex(4, 0x70, 4, 1), ast(0x78, 6, 2)][..], &corners.concat(), &[out(2, 2, OUT_CUT), exit()]].concat();
+        let fragment = [mov_imm(0, 1.0f32.to_bits()), mov_imm(1, 0), mov_imm(2, 0), mov_imm(3, 1.0f32.to_bits()), exit()];
+        let stages = [
+            (Stage::Vertex, &[ald(0, 0x80, 4), ast(0x70, 0, 4), exit()][..]),
+            (Stage::Geometry { input: PrimitiveTopology::Points, output: 7, max_vertices: 3, invocations: 1 }, &geometry),
+            (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &fragment),
+        ];
+        for (stage, program) in stages {
+            stage_interface(stage, program);
+        }
+        let Some(state) = crate::tests::gpu::harness::vk_state() else { return };
+        let [vertex, geometry, fragment] = stages.map(|(stage, program)| emit_module(Some(&state), stage, |decoder| decoder.translate_program(program)).words());
+        let bindings = [vk::VertexInputBindingDescription { binding: 0, stride: 8, input_rate: vk::VertexInputRate::VERTEX }];
+        let attributes = [vk::VertexInputAttributeDescription { location: 0, binding: 0, format: vk::Format::R32G32_SFLOAT, offset: 0 }];
+        let topology = vk::PrimitiveTopology::POINT_LIST;
+        let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
+        let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
+        let pipeline = GraphicsPipeline::new(&state, &vertex, Some(&geometry), &fragment, &[], &layout, &TargetState { blend, depth: false }).unwrap();
+        let target = RenderTarget::new(&state, SIZE, SIZE, false).unwrap();
+        let mut point = HostBuffer::new(&state, 8).unwrap();
+        point.write(&[0u8; 8]).unwrap();
+        let raster = RasterState {
+            viewport: vk::Viewport { x: 0.0, y: 0.0, width: SIZE as f32, height: SIZE as f32, min_depth: 0.0, max_depth: 1.0 },
+            scissor: target.extent.into(),
+            cull_face: vk::CullModeFlags::NONE,
+            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            topology,
+            depth_test: false,
+            depth_write: false,
+            depth_func: vk::CompareOp::ALWAYS,
+            blend_const: [0.0; 4],
+        };
+        let draw = DrawState { vertex_buffers: &[&point], index_buffer: None, vertex_count: 1, first_vertex: 0, instance_count: 1, clear: Some([1.0; 4]), raster };
+        state.draw(&pipeline, &target, &draw).unwrap();
+        let mut pixels = vec![0; (SIZE * SIZE * 4) as usize];
+        target.read(&mut pixels).unwrap();
+        let pixel = |x: u32, y: u32| &pixels[((y * SIZE + x) * 4) as usize..][..4];
+        assert_eq!([pixel(17, 17), pixel(17, 45), pixel(45, 17), pixel(40, 40)], [[255, 0, 0, 255], [255, 0, 0, 255], [255, 0, 0, 255], [255; 4]]);
+    }
 }

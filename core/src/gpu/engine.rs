@@ -419,7 +419,7 @@ impl<'a> Gpu<'a> {
                 let ubo = vk::DescriptorType::UNIFORM_BUFFER;
                 let descriptor_bindings: Vec<_> = cbuf_ranges.iter().map(|&(binding, _)| (binding, ubo)).collect();
                 let [vs, fs] = key.shaders.map(|key| &self.modules[&key].words);
-                entry.insert(GraphicsPipeline::new(self.state, vs, fs, &descriptor_bindings, &layout, &target).map_err(named)?)
+                entry.insert(GraphicsPipeline::new(self.state, vs, None, fs, &descriptor_bindings, &layout, &target).map_err(named)?)
             }
         };
         let buffers: Vec<_> = cbuf_ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();

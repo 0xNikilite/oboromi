@@ -1,0 +1,138 @@
+[
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R5",
+      "input2": "R4",
+      "input3": "R6",
+      "output0": "R7",
+      "output1": "R9"
+    },
+    "family": "hsetp2",
+    "case": "lt-different-halves",
+    "word_hex": "004f5e00039010000000000500007234",
+    "template_word_hex": "004fc800039010000000000500007234",
+    "nvdisasm_text": "/*0080*/                   HSETP2.LT.AND P0, P1, R0, R5, PT ;",
+    "touches": {},
+    "notes": "",
+    "observer_word_hex": "004fde00000000000000007fff097803",
+    "observer_nvdisasm_text": "/*00b0*/                   P2R R9, PR, RZ, 0x7f ;",
+    "inputs": [
+      1006649344,
+      1073757184,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      2
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R5",
+      "input2": "R4",
+      "input3": "R6",
+      "output0": "R7",
+      "output1": "R9"
+    },
+    "family": "hsetp2",
+    "case": "lt-different-halves",
+    "word_hex": "004f5e00039010000000000500007234",
+    "template_word_hex": "004fc800039010000000000500007234",
+    "nvdisasm_text": "/*0080*/                   HSETP2.LT.AND P0, P1, R0, R5, PT ;",
+    "touches": {},
+    "notes": "",
+    "observer_word_hex": "004fde00000000000000007fff097803",
+    "observer_nvdisasm_text": "/*00b0*/                   P2R R9, PR, RZ, 0x7f ;",
+    "inputs": [
+      2113944576,
+      1006648320,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R5",
+      "input2": "R4",
+      "input3": "R6",
+      "output0": "R7",
+      "output1": "R9"
+    },
+    "family": "hsetp2",
+    "case": "lt-different-halves",
+    "word_hex": "004f5e00039010000000000500007234",
+    "template_word_hex": "004fc800039010000000000500007234",
+    "nvdisasm_text": "/*0080*/                   HSETP2.LT.AND P0, P1, R0, R5, PT ;",
+    "touches": {},
+    "notes": "",
+    "observer_word_hex": "004fde00000000000000007fff097803",
+    "observer_nvdisasm_text": "/*00b0*/                   P2R R9, PR, RZ, 0x7f ;",
+    "inputs": [
+      2147483648,
+      32768,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      0
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R0",
+      "input1": "R5",
+      "input2": "R4",
+      "input3": "R6",
+      "output0": "R7",
+      "output1": "R9"
+    },
+    "family": "hsetp2",
+    "case": "lt-different-halves",
+    "word_hex": "004f5e00039010000000000500007234",
+    "template_word_hex": "004fc800039010000000000500007234",
+    "nvdisasm_text": "/*0080*/                   HSETP2.LT.AND P0, P1, R0, R5, PT ;",
+    "touches": {},
+    "notes": "",
+    "observer_word_hex": "004fde00000000000000007fff097803",
+    "observer_nvdisasm_text": "/*00b0*/                   P2R R9, PR, RZ, 0x7f ;",
+    "inputs": [
+      3154164736,
+      1006648320,
+      0,
+      0
+    ],
+    "outputs": [
+      0,
+      3
+    ],
+    "observed": true
+  }
+]

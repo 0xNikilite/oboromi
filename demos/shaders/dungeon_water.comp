@@ -32,5 +32,5 @@ void main() {
     next_state[i] = vec2(h, velocity);
     vec2 slope = vec2(cell(p + ivec2(1, 0)).x - cell(p - ivec2(1, 0)).x,
                       cell(p + ivec2(0, 1)).x - cell(p - ivec2(0, 1)).x) * grid.xy / (2.0 * extent.xy);
-    surface[i] = vec4(h, slope, smoothstep(0.025, 0.12, length(slope)+abs(velocity)*.15));
+    surface[i] = vec4(h, slope, smoothstep(0.08, 0.3, length(slope)*.2+abs(velocity)*.1));
 }

@@ -8,7 +8,6 @@ use super::{VkState, device};
 use super::demo_dungeon_sound::Sound;
 use std::f32::consts::{PI, TAU};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type V3 = [f32; 3];
 pub fn add(a: V3, b: V3) -> V3 {
@@ -198,17 +197,29 @@ impl World {
 
     /// How many stretches of rock the segment from `a` to `b` passes through.
     pub fn walls_between(&self, a: V3, b: V3) -> u32 {
-        if self.zones.iter().any(|z| z.space.contains(a) && z.space.contains(b)) {
-            return 0;
+        let direction = sub(b, a);
+        let mut spans = Vec::new();
+        for zone in &self.zones {
+            let (mut enter, mut leave) = (0.0f32, 1.0f32);
+            for axis in 0..3 {
+                if direction[axis].abs() < 1e-7 {
+                    if a[axis] < zone.space.lo[axis] || a[axis] > zone.space.hi[axis] { leave = -1.0; }
+                } else {
+                    let p = (zone.space.lo[axis] - a[axis]) / direction[axis];
+                    let q = (zone.space.hi[axis] - a[axis]) / direction[axis];
+                    enter = enter.max(p.min(q));
+                    leave = leave.min(p.max(q));
+                }
+            }
+            if enter <= leave { spans.push((enter, leave)); }
         }
-        let steps = (length(sub(b, a)) / 0.1).ceil().max(1.0) as usize;
-        let (mut walls, mut inside) = (0, true);
-        for i in 1..=steps {
-            let here = self.zones.iter().any(|z| z.space.contains(mix3(a, b, i as f32 / steps as f32)));
-            walls += u32::from(inside && !here);
-            inside = here;
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut end, mut walls) = (0.0f32, 0);
+        for (enter, leave) in spans {
+            walls += u32::from(enter > end + 1e-5);
+            end = end.max(leave);
         }
-        walls
+        walls + u32::from(end < 1.0 - 1e-5)
     }
 
     /// The cave's inward wall and ceiling displacement at `p`, zero at doors so the corridors meet it.
@@ -591,7 +602,8 @@ impl Builder {
         }
         let uv = |s: f32, t: f32| {
             let p = f(s, t);
-            [(p[0] + p[2]) * 0.5, p[1] * 0.5]
+            let _ = p;
+            [0.15, 0.06]
         };
         self.grid(f, cells, &uv, &mut |_, _, n| {
             let n = scale(n, 1.0 / (n[0].abs() + n[1].abs() + n[2].abs()));
@@ -931,9 +943,9 @@ impl Stone {
         let albedo = paint(N, N, &|x, y| {
             let (h, id, joint) = heights[y * N + x];
             let (fx, fy) = (x as f32, y as f32);
-            let tone = mix3([0.33, 0.32, 0.3], [0.4, 0.34, 0.27], hash(id.to_bits() as i32, 0, 3));
+            let tone = mix3([0.22, 0.25, 0.26], [0.28, 0.26, 0.23], hash(id.to_bits() as i32, 0, 3));
             let mottle = 0.75 + 0.5 * fbm(fx / 128.0, fy / 128.0, 16, 4, 14);
-            let speck = 0.85 + 0.3 * noise(fx, fy, 2048, 15);
+            let speck = 0.55 + 0.9 * hash(x as i32, y as i32, 15);
             let mut c = scale(tone, mottle * speck * (0.85 + 0.3 * hash(id.to_bits() as i32, 1, 3)));
             let crevice = smooth(0.45, 0.1, h);
             let moss = smooth(0.45, 0.75, fbm(fx / 256.0, fy / 256.0, 8, 4, 16)) * crevice;
@@ -1013,7 +1025,7 @@ fn sprites() -> Vec<[u8; 4]> {
             let spoke = smooth(0.02, 0.0, ((angle / (PI / 2.0) * 9.0).fract() - 0.5).abs() * radius * 2.0 - 0.0);
             let ring = smooth(0.012, 0.0, ((radius * 11.0 + (angle * 9.0 * 2.0).sin().abs() * 0.3).fract() - 0.5).abs() / 11.0);
             let fade = smooth(1.0, 0.6, radius) * (0.6 + 0.4 * noise(u * 30.0, v * 30.0, 64, 23));
-            return scale([0.32, 0.32, 0.34], (spoke.max(ring) * fade).min(1.0));
+            return scale([0.012, 0.014, 0.018], (spoke.max(ring) * fade).min(1.0));
         }
         if let Some([u, v]) = inside(FACE, x, y) {
             let tri = |cx: f32, cy: f32, s: f32| (v > cy - s * 0.5 && v < cy + s * 0.5 && (u - cx).abs() < (v - (cy - s * 0.5)) * 0.6) as u8 as f32;
@@ -1055,4 +1067,375 @@ fn mips(level0: Vec<[u8; 4]>, size: [usize; 2], levels: usize, gob_height_log2: 
         [w, h] = [nw, nh];
     }
     out
+}
+
+fn floats(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+fn packed(vertices: &[Vertex], light: bool) -> Vec<u8> {
+    vertices.iter().flat_map(|v| floats(&[&v.pos[..], &v.normal, &v.tangent, &[1.0], if light { &v.light } else { &v.uv }].concat())).collect()
+}
+
+const WIDTH: u32 = 1920;
+const HEIGHT: u32 = 1080;
+const SPRITES: usize = 512;
+const VERTICES_VA: u64 = 0x1004_0000;
+
+pub struct Dungeon {
+    pub scene: Scene<'static>,
+    world: World,
+    stone: Stone,
+    sound: Sound,
+    eye: V3,
+    yaw: f32,
+    pitch: f32,
+    time: f32,
+    idle: f32,
+    waypoint: usize,
+    foot_distance: f32,
+    scream: bool,
+    audio_time: f32,
+    sprite_vertex: usize,
+    water_vertex: usize,
+    bat_vertex: usize,
+    river: River,
+    embers: Embers,
+    fire: V3,
+    light: Vec<(usize, V3, V3)>,
+}
+
+impl Dungeon {
+    pub fn new(state: &'static VkState) -> Result<Self, String> {
+        let world = World::new(8);
+        let mut mesh = Builder::default();
+        world.build(&mut mesh);
+        let stone = Stone::new();
+        let mut files = std::collections::HashMap::new();
+        let mut textures = Vec::new();
+        for (name, pixels, size, levels) in [
+            ("stone", stone.albedo.clone(), [STONE_SIZE; 2], 12),
+            ("normal", stone.normal.clone(), [STONE_SIZE; 2], 12),
+            ("rough", stone.rough.clone(), [STONE_SIZE; 2], 12),
+            ("light", vec![[0, 0, 0, 255]; LIGHTMAP[0] * LIGHTMAP[1]], LIGHTMAP, 1),
+            ("sprites", sprites(), [atlas::SIZE; 2], 1),
+            ("bat", paint(128, 128, &|x, y| {
+                let (x, y) = ((x as f32 - 64.0) / 64.0, (y as f32 - 64.0) / 64.0);
+                let wing = x.abs() < 0.94 && y > -0.35 + x.abs() * 0.4 && y < 0.32 - x.abs() * 0.25 + 0.12 * (x * 16.0).sin().abs();
+                let body = x.abs() < 0.09 && y.abs() < 0.4;
+                if wing || body { [0, 0, 0, 255] } else { [255; 4] }
+            }), [128, 128], 1),
+            ("water", vec![[10, 20, 24, 255]; WATER_GRID[0] * WATER_GRID[1]], WATER_GRID, 1),
+            ("flat", vec![[128, 128, 255, 255]], [1, 1], 1),
+        ] {
+            let data = mips(pixels, size, levels, 1);
+            textures.push(format!(r#"{{"file":"{name}","width":{},"height":{},"bytes":{},"mips":{levels},"gob_height_log2":1}}"#, size[0], size[1], data.len()));
+            files.insert(name.to_string(), data);
+        }
+        let mut light = Vec::with_capacity(mesh.texels.len());
+        for texel in &mesh.texels {
+            let mut colour = [0.004; 3];
+            for lamp in &world.lights {
+                let ray = sub(lamp.pos, texel.pos);
+                let d = length(ray);
+                let n = dot(texel.normal, unit(ray)).max(0.0);
+                if n > 0.0 && d < 15.0 && world.walls_between(add(texel.pos, scale(texel.normal, 0.03)), lamp.pos) == 0 {
+                    colour = add(colour, scale(lamp.colour, n / (1.0 + 0.35 * d * d)));
+                }
+            }
+            light.push((texel.at, texel.pos, std::array::from_fn(|i| colour[i] * texel.tint[i])));
+        }
+        let mut vertices = packed(&mesh.vertices, false);
+        vertices.extend(packed(&mesh.vertices, true));
+        let count = mesh.indices.len();
+        let mut indices = mesh.indices.clone();
+        indices.extend(mesh.indices.iter().map(|i| *i + mesh.vertices.len() as u32));
+        let water_vertex = vertices.len() / 48;
+        vertices.resize(vertices.len() + WATER_GRID[0] * WATER_GRID[1] * 48, 0);
+        for y in 0..WATER_GRID[1] - 1 {
+            for x in 0..WATER_GRID[0] - 1 {
+                let a = (water_vertex + y * WATER_GRID[0] + x) as u32;
+                let row = WATER_GRID[0] as u32;
+                indices.extend([a, a + row, a + 1, a + 1, a + row, a + row + 1]);
+            }
+        }
+        let water_indices = indices.len() - count * 2;
+        let bat_vertex = vertices.len() / 48;
+        vertices.resize(vertices.len() + 8 * 4 * 48, 0);
+        for i in 0..8 {
+            let v = (bat_vertex + i * 4) as u32;
+            indices.extend([v, v + 1, v + 2, v + 2, v + 1, v + 3]);
+        }
+        let sprite_vertex = vertices.len() / 48;
+        vertices.resize(vertices.len() + SPRITES * 4 * 48, 0);
+        for i in 0..SPRITES {
+            let v = (sprite_vertex + i * 4) as u32;
+            indices.extend([v, v + 1, v + 2, v + 2, v + 1, v + 3]);
+        }
+        let material = |base, normal, rough, emissive, ambient, blend: &str| format!(r#"{{"textures":{{"baseColor":"{base}","normal":"{normal}","metallicRoughness":"{rough}","emissive":"{emissive}"}},"baseColorFactor":[1,1,1,1],"emissiveFactor":[{ambient},{ambient},{ambient}],"metallicFactor":0,"roughnessFactor":1,"normalScale":1,"occlusionStrength":0,"light":[0,1,0,0,0,0,0,0,{ambient},{ambient},{ambient},0]{blend}}}"#);
+        let materials = [
+            material("stone", "normal", "rough", "stone", "0.3", ""),
+            material("light", "flat", "rough", "light", "1", ",\"blend\":[32774,17158,16384,0,0,0,0]"),
+            material("water", "flat", "rough", "water", "0.5", ""),
+            material("bat", "flat", "rough", "bat", "50", ",\"blend\":[32774,17158,16384,0,0,0,0]"),
+            material("sprites", "flat", "rough", "sprites", "1", ",\"blend\":[32774,16385,16385,0,0,0,0]"),
+        ];
+        let manifest = format!(r#"{{"textures":[{}],"materials":[{}],"primitives":[{{"first_index":0,"index_count":{count},"material":0}},{{"first_index":{count},"index_count":{count},"material":1}},{{"first_index":{},"index_count":{water_indices},"material":2}},{{"first_index":{},"index_count":48,"material":3}},{{"first_index":{},"index_count":{},"material":4}}]}}"#, textures.join(","), materials.join(","), count * 2, count * 2 + water_indices, count * 2 + water_indices + 48, SPRITES * 6);
+        files.insert("manifest.json".into(), manifest.into_bytes());
+        files.insert("vertices.bin".into(), vertices);
+        files.insert("indices.bin".into(), indices.iter().flat_map(|i| i.to_le_bytes()).collect());
+        let scene = Scene::with_files(state, None, &|name| files.get(name).cloned().ok_or_else(|| format!("missing dungeon asset {name}")), WIDTH, HEIGHT)?;
+        let eye = add(world.path[0], [0.0, EYE, 0.0]);
+        let fire = world.sources.iter().find(|s| s.0 == Sfx::Fire).unwrap().1;
+        let embers = Embers::new(state, fire)?;
+        let sound = Sound::new(&world, &world.sources);
+        Ok(Self { scene, world, stone, sound, eye, yaw: PI / 2.0, pitch: 0.0, time: 0.0, idle: 3.0, waypoint: 1, foot_distance: 0.0, scream: false, audio_time: 0.0, sprite_vertex, light, water_vertex, bat_vertex, river: River::new(state)?, embers, fire })
+    }
+
+    pub fn frame(&mut self, seconds: f32) -> Result<Vec<i16>, String> {
+        use super::demo_dungeon_sound::Sample;
+        let dt = (seconds - self.time).clamp(0.0, 0.1);
+        let old_eye = self.eye;
+        let input = crate::input::state().0;
+        let moving = input.left.into_iter().chain(input.right).any(|v| v.abs() > 0.1);
+        self.idle = if moving { 0.0 } else { self.idle + dt };
+        if self.idle >= 3.0 {
+            let to = sub(add(self.world.path[self.waypoint], [0.0, EYE, 0.0]), self.eye);
+            let d = length(to);
+            if d < 0.3 { self.waypoint = (self.waypoint + 1) % self.world.path.len(); }
+            let next = add(self.eye, scale(unit(to), (dt * 4.8).min(d)));
+            self.eye = self.world.clamp_walk(self.eye, next);
+            let angle = to[0].atan2(-to[2]);
+            let turn = (angle - self.yaw + PI).rem_euclid(TAU) - PI;
+            self.yaw += turn * (dt * 4.0).min(1.0);
+            self.pitch *= 1.0 - (dt * 2.0).min(1.0);
+        } else {
+            self.yaw += input.right[0] * dt * 2.0;
+            self.pitch = (self.pitch + input.right[1] * dt * 1.3).clamp(-0.8, 0.8);
+            let v = [self.yaw.cos() * input.left[0] + self.yaw.sin() * input.left[1], 0.0, self.yaw.sin() * input.left[0] - self.yaw.cos() * input.left[1]];
+            self.eye = self.world.clamp_walk(self.eye, add(self.eye, scale(v, dt * 2.6)));
+            self.waypoint = self.world.path.iter().enumerate().min_by(|(_, a), (_, b)| length(sub(**a, self.eye)).total_cmp(&length(sub(**b, self.eye)))).unwrap().0;
+        }
+        let mut impacts = Vec::new();
+        self.foot_distance += length(sub(self.eye, old_eye));
+        if self.foot_distance > 1.25 {
+            self.foot_distance %= 1.25;
+            let r = self.world.river;
+            if self.eye[0] > r.lo[0] && self.eye[0] < r.hi[0] && self.eye[2] > r.lo[2] - 1.0 && self.eye[2] < r.hi[2] + 1.0 {
+                impacts.push(([self.eye[0], WATER, self.eye[2].clamp(r.lo[2] + 0.2, r.hi[2] - 0.2)], 0.8));
+            }
+            let wet = self.stone.wet(self.eye[2] / 4.0, self.eye[0] / 4.0);
+            self.sound.play(if wet { Sample::WetStep } else { Sample::Step }, self.eye, 1.0, 0.96 + 0.08 * (seconds * 7.0).sin());
+        }
+        if !self.scream && self.world.zones[self.world.last].space.contains(self.eye) {
+            self.sound.play(Sample::Scream, self.world.zones[self.world.last].space.centre(), 1.4, 1.0);
+            self.scream = true;
+        }
+        let right = [self.yaw.cos(), 0.0, self.yaw.sin()];
+        let forward = [self.yaw.sin() * self.pitch.cos(), self.pitch.sin(), -self.yaw.cos() * self.pitch.cos()];
+        let up = cross(right, forward);
+        let mut bats = Vec::new();
+        let chamber = self.world.zones[self.world.bats].space;
+        let centre = chamber.centre();
+        let bat_position = |i: usize| add(centre, [0.5 * (seconds * 1.8 + i as f32).cos(), 0.5 + 0.2 * (seconds * 2.0 + i as f32).sin(), 0.5 * (seconds * 2.2 + i as f32 * 1.8).sin()]);
+        let bat_source = self.world.sources.iter().position(|s| s.0 == Sfx::Bats).unwrap();
+        self.sound.move_source(bat_source, bat_position(0));
+        for i in 0..8 {
+            let p = bat_position(i);
+            let flap = 0.025 + 0.12 * (seconds * TAU * 11.0 + i as f32).sin().abs();
+            for [x, y] in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]] {
+                bats.push(Vertex { pos: add(p, add(scale(right, x * 0.22), scale(UP, y * flap))), normal: scale(forward, -1.0), tangent: right, uv: [(x + 1.0) * 0.5, (y + 1.0) * 0.5], light: [0.0; 2] });
+            }
+        }
+        self.scene.gpu.write(VERTICES_VA + self.bat_vertex as u64 * 48, &packed(&bats, false)).map_err(|e| format!("{e:?}"))?;
+        let mut billboards = Vec::new();
+        let mut quad = |p: V3, axes: [V3; 2], size: [f32; 2], rect: [usize; 4]| {
+            for [x, y] in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]] {
+                let uv = [(rect[0] as f32 + (x + 1.0) * 0.5 * rect[2] as f32) / atlas::SIZE as f32, (rect[1] as f32 + (1.0 - y) * 0.5 * rect[3] as f32) / atlas::SIZE as f32];
+                billboards.push(Vertex { pos: add(p, add(scale(axes[0], x * size[0]), scale(axes[1], y * size[1]))), normal: scale(forward, -1.0), tangent: axes[0], uv, light: uv });
+            }
+        };
+        for (i, p) in self.embers.step(self.fire, seconds, dt)?.into_iter().enumerate() {
+            quad(p, [right, up], [if i % 3 == 0 { 0.025 } else { 0.012 }; 2], if i % 3 == 0 { atlas::DUST } else { atlas::EMBER });
+        }
+        for lamp in &self.world.lights {
+            if lamp.flame == 0.0 { continue; }
+            let frame = ((seconds * 12.0 + lamp.pos[0]) as usize % 8) * 64;
+            quad(add(lamp.pos, [0.0, lamp.flame * 0.4, 0.0]), [right, UP], [lamp.flame * 0.3, lamp.flame * 0.55], [frame, 0, 64, 128]);
+            quad(lamp.pos, [right, up], [lamp.flame * 0.5; 2], atlas::WARM);
+        }
+        for (i, &(tip, floor)) in self.world.drips.iter().enumerate() {
+            let period = 2.4 + (i % 5) as f32 * 0.3;
+            let fall = ((tip[1] - floor) / 4.9).sqrt();
+            let age = (seconds + i as f32 * 0.71).rem_euclid(period);
+            let previous = (self.time + i as f32 * 0.71).rem_euclid(period);
+            if age < fall {
+                quad([tip[0], tip[1] - 4.9 * age * age, tip[2]], [right, UP], [0.025, 0.065], atlas::DROP);
+            }
+            if previous < fall && age >= fall {
+                if floor == WATER { impacts.push(([tip[0], floor, tip[2]], 0.55)); }
+                self.sound.play(Sample::Drip, [tip[0], floor, tip[2]], 0.5, 0.8 + i as f32 * 0.03);
+            }
+        }
+        for prop in &self.world.props {
+            match *prop {
+                Prop::Web(p, size) => quad(p, [right, UP], size, atlas::WEB),
+                Prop::Lantern(p, yaw) => quad(add(p, turn(yaw, [0.23, 0.2, 0.0])), [turn(yaw, [0.0, 0.0, 1.0]), UP], [0.17, 0.13], atlas::FACE),
+                _ => {}
+            }
+        }
+        let moon = self.world.grate.centre();
+        quad(add(moon, [0.0, -2.2, 0.0]), [right, UP], [0.9, 2.2], atlas::BEAM);
+        billboards.resize(SPRITES * 4, Vertex::default());
+        self.scene.gpu.write(VERTICES_VA + self.sprite_vertex as u64 * 48, &packed(&billboards, false)).map_err(|e| format!("{e:?}"))?;
+        let mut pixels = vec![[0, 0, 0, 255]; LIGHTMAP[0] * LIGHTMAP[1]];
+        let flicker = 0.88 + 0.07 * (seconds * 11.7).sin() + 0.05 * (seconds * 23.1).sin();
+        for &(at, pos, colour) in &self.light {
+            let distance = length(sub(self.eye, pos));
+            let fog = (-distance * 0.045).exp();
+            let c = colour.map(|c| c * 0.12 * flicker * fog);
+            pixels[at] = [srgb(c[0]), srgb(c[1]), srgb(c[2]), 255];
+        }
+        self.scene.gpu.write(self.scene.textures[3], &mips(pixels, LIGHTMAP, 1, 1)).map_err(|e| format!("{e:?}"))?;
+        let back = scale(forward, -1.0);
+        let axes = [right, up, back];
+        let view: Matrix = std::array::from_fn(|column| std::array::from_fn(|row| if row == 3 { if column == 3 { 1.0 } else { 0.0 } } else if column == 3 { -dot(axes[row], self.eye) } else { axes[row][column] }));
+        let focal = 1.0 / (PI / 6.0).tan();
+        let projection = [[focal * HEIGHT as f32 / WIDTH as f32, 0.0, 0.0, 0.0], [0.0, -focal, 0.0, 0.0], [0.0, 0.0, -100.0 / 99.9, -1.0], [0.0, 0.0, -10.0 / 99.9, 0.0]];
+        let identity = std::array::from_fn(|c| std::array::from_fn(|r| if c == r { 1.0 } else { 0.0 }));
+        let waves = self.river.step(self.world.river, dt, &impacts)?;
+        let river = self.world.river;
+        let mut water_vertices = Vec::with_capacity(waves.len());
+        let mut water_pixels = Vec::with_capacity(waves.len());
+        for (i, &[h, sx, sz, foam]) in waves.iter().enumerate() {
+            let uv = [(i % WATER_GRID[0]) as f32 / (WATER_GRID[0] - 1) as f32, (i / WATER_GRID[0]) as f32 / (WATER_GRID[1] - 1) as f32];
+            let pos = [river.lo[0] + uv[0] * (river.hi[0] - river.lo[0]), WATER + h, river.lo[2] + uv[1] * (river.hi[2] - river.lo[2])];
+            let normal = unit([-sx, 1.0, -sz]);
+            water_vertices.push(Vertex { pos, normal, tangent: unit([1.0, sx, 0.0]), uv, light: uv });
+            let view = unit(sub(self.eye, pos));
+            let mut colour = add([0.006, 0.018, 0.024], [foam * 0.3; 3]);
+            for lamp in &self.world.lights {
+                let ray = sub(lamp.pos, pos);
+                if length(ray) > 12.0 { continue; }
+                let half = unit(add(unit(ray), view));
+                let specular = dot(normal, half).max(0.0).powf(150.0) * 3.0 / (1.0 + dot(ray, ray) * 0.1);
+                colour = add(colour, scale(lamp.colour, specular * flicker));
+            }
+            water_pixels.push([srgb(colour[0]), srgb(colour[1]), srgb(colour[2]), 255]);
+        }
+        self.scene.gpu.write(VERTICES_VA + self.water_vertex as u64 * 48, &packed(&water_vertices, false)).map_err(|e| format!("{e:?}"))?;
+        self.scene.gpu.write(self.scene.textures[6], &mips(water_pixels, WATER_GRID, 1, 1)).map_err(|e| format!("{e:?}"))?;
+        let nearest = self.world.lights.iter().min_by(|a, b| length(sub(a.pos, self.eye)).total_cmp(&length(sub(b.pos, self.eye)))).unwrap();
+        let direction = unit(sub(nearest.pos, self.eye));
+        let lighting = [&direction[..], &[0.0], &scale(nearest.colour, 0.6), &[0.0, 0.08, 0.09, 0.12, 0.0]].concat();
+        self.scene.gpu.write(Scene::uniforms(0), &floats(&lighting)).map_err(|e| format!("{e:?}"))?;
+        self.scene.gpu.write(Scene::uniforms(0) + 80, &floats(&[0.02, 0.02, 0.02, 0.0])).map_err(|e| format!("{e:?}"))?;
+        self.scene.draw(identity, multiply(projection, view), self.eye)?;
+        self.sound.listen(&self.world, self.eye, self.yaw, dt);
+        self.audio_time += dt;
+        let periods = (self.audio_time / 0.005).floor() as usize;
+        self.audio_time -= periods as f32 * 0.005;
+        self.time = seconds;
+        Ok(self.sound.render(periods))
+    }
+}
+
+pub fn render_dungeon_frame(seconds: f32) -> Result<(), String> {
+    static DUNGEON: Mutex<Option<Dungeon>> = Mutex::new(None);
+    let mut slot = DUNGEON.lock().unwrap();
+    if slot.is_none() { *slot = Some(Dungeon::new(device().map_err(|e| format!("{e:?}"))?)?); }
+    let dungeon = slot.as_mut().unwrap();
+    let audio = dungeon.frame(seconds)?;
+    for period in audio.chunks(480) { crate::audio::play(&[period]); }
+    dungeon.scene.gpu.present(dungeon.scene.target, WIDTH, HEIGHT).map_err(|e| format!("{e:?}"))
+}
+
+const WATER_GRID: [usize; 2] = [128, 32];
+
+struct River {
+    state: &'static VkState,
+    pipelines: [super::compute::ComputePipeline<'static>; 2],
+    _heights: [super::compute::HostBuffer<'static>; 2],
+    surface: super::compute::HostBuffer<'static>,
+    uniforms: super::compute::HostBuffer<'static>,
+    ping: usize,
+}
+
+impl River {
+    fn new(state: &'static VkState) -> Result<Self, String> {
+        use super::compute::{ComputePipeline, HostBuffer};
+        use ash::vk::DescriptorType as D;
+        let named = |e| format!("{e:?}");
+        let n = (WATER_GRID[0] * WATER_GRID[1]) as u64;
+        let mut heights = [HostBuffer::new(state, n * 8).map_err(named)?, HostBuffer::new(state, n * 8).map_err(named)?];
+        for h in &mut heights { h.write(&vec![0; n as usize * 8]).map_err(named)?; }
+        let surface = HostBuffer::new(state, n * 16).map_err(named)?;
+        let uniforms = HostBuffer::new(state, 32 + 32 * 16).map_err(named)?;
+        let code: Vec<u32> = include_bytes!("../../../demos/shaders/dungeon_water.spv").chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect();
+        let bindings = [(0, D::STORAGE_BUFFER), (1, D::STORAGE_BUFFER), (2, D::STORAGE_BUFFER), (3, D::UNIFORM_BUFFER)];
+        let mut pipelines = [ComputePipeline::new(state, &code, &bindings).map_err(named)?, ComputePipeline::new(state, &code, &bindings).map_err(named)?];
+        for i in 0..2 { pipelines[i].descriptors.bind(&[(0, &heights[i]), (1, &heights[1 - i]), (2, &surface), (3, &uniforms)]); }
+        Ok(Self { state, pipelines, _heights: heights, surface, uniforms, ping: 0 })
+    }
+
+    fn step(&mut self, river: Box3, dt: f32, impacts: &[(V3, f32)]) -> Result<Vec<[f32; 4]>, String> {
+        let named = |e| format!("{e:?}");
+        let size = sub(river.hi, river.lo);
+        let mut u = vec![WATER_GRID[0] as f32, WATER_GRID[1] as f32, dt.min(1.0 / 30.0), 2.0, size[0], size[2], impacts.len().min(32) as f32, 0.0];
+        for &(p, strength) in impacts.iter().take(32) {
+            u.extend([(p[0] - river.lo[0]) / size[0] * WATER_GRID[0] as f32, (p[2] - river.lo[2]) / size[2] * WATER_GRID[1] as f32, strength, 2.0]);
+        }
+        self.uniforms.write(&floats(&u)).map_err(named)?;
+        self.state.dispatch(&self.pipelines[self.ping], [WATER_GRID[0] as u32 / 8, WATER_GRID[1] as u32 / 8, 1]).map_err(named)?;
+        self.ping ^= 1;
+        let mut out = vec![0; WATER_GRID[0] * WATER_GRID[1] * 16];
+        self.surface.read(&mut out).map_err(named)?;
+        Ok(out.chunks_exact(16).map(|b| std::array::from_fn(|i| f32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap()))).collect())
+    }
+}
+
+struct Embers {
+    gpu: super::engine::Gpu<'static>,
+}
+
+impl Embers {
+    fn new(state: &'static VkState, origin: V3) -> Result<Self, String> {
+        use crate::tests::gpu::engine::bytes;
+        let mut gpu = super::engine::Gpu::new(state, 0x20000, None, *super::SPEED_HACKS.lock().unwrap()).map_err(|e| format!("{e:?}"))?;
+        gpu.space.map(0x1000_0000, 0, 0x20000);
+        let code = [include_bytes!("../../tests/fixtures/driver-shaders/particles_update.comp.bin").as_slice(), &crate::tests::gpu_test::inst::bra(-16).to_le_bytes()].concat();
+        gpu.write(0x1000_0000, &code).map_err(|e| format!("{e:?}"))?;
+        let mut c0 = [0u32; 19];
+        c0[12] = 0x1000_9000 >> 4;
+        c0[13] = 0x100 >> 4 << 13;
+        c0[16] = 0x1001_0000;
+        c0[18] = 256 * 48;
+        gpu.write(0x1000_8000, &bytes(&c0)).map_err(|e| format!("{e:?}"))?;
+        let mut r = Rng(63);
+        let initial: Vec<f32> = (0..256).flat_map(|_| [origin[0] + r.range(-0.3, 0.3), origin[1] + r.range(0.0, 2.0), origin[2] + r.range(-0.3, 0.3), r.next(), 0.0, 0.0, 0.0, r.range(0.3, 0.7), 0.0, 0.0, 0.0, 0.0]).collect();
+        gpu.write(0x1001_0000, &floats(&initial)).map_err(|e| format!("{e:?}"))?;
+        Ok(Self { gpu })
+    }
+
+    fn step(&mut self, origin: V3, seconds: f32, dt: f32) -> Result<Vec<V3>, String> {
+        use crate::tests::gpu::engine::{bytes, entry, header};
+        let named = |e| format!("{e:?}");
+        let mut uniforms = floats(&[origin[0], origin[1], origin[2], -0.2, origin[0], origin[1] + 3.0, origin[2], 0.3, dt, -0.25, 0.99, seconds]);
+        uniforms.extend(256u32.to_le_bytes());
+        self.gpu.write(0x1000_9000, &uniforms).map_err(named)?;
+        let mut qmd = [0u32; 64];
+        qmd[4] = 0x40;
+        qmd[5] = 0xfc00_0000;
+        [qmd[12], qmd[13], qmd[14]] = [1, 1, 1];
+        [qmd[18], qmd[19], qmd[20]] = [256 << 16 | 3 << 4, 1 << 16 | 1, 24 << 8 | 3];
+        [qmd[32], qmd[33], qmd[34], qmd[35]] = [0x1000_8000, 0x1000 >> 4 << 19, 0x1000_9000, 0x100 >> 4 << 19];
+        qmd[48] = 0x1000_0000;
+        self.gpu.write(0x1000_a000, &bytes(&qmd)).map_err(named)?;
+        let words = [header(1, 0, 1) | 1 << 13, 0xc7c0, header(1, 0x02b4, 1) | 1 << 13, 0x1000_a000 >> 8, header(1, 0x02c0, 1) | 1 << 13, 3];
+        self.gpu.write(0x1000_b000, &bytes(&words)).map_err(named)?;
+        self.gpu.submit(&[entry(0x1000_b000, words.len())])?;
+        let mut particles = vec![0; 256 * 48];
+        self.gpu.read(0x1001_0000, &mut particles).map_err(named)?;
+        Ok(particles.chunks_exact(48).map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()))).collect())
+    }
 }

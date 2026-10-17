@@ -442,3 +442,35 @@ impl Sound {
         self.renderer.rendered_updates() > 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_is_centred_and_walls_reduce_rms_and_high_band_energy() {
+        let world = World::new(8);
+        let source = world.zones[0].space;
+        let pos = [(source.lo[0] + source.hi[0]) * 0.5, 1.65, (source.lo[2] + source.hi[2]) * 0.5];
+        let measure = |eye| {
+            let mut sound = Sound::new(&world, &[(Sfx::River, pos, 1.0)]);
+            sound.listen(&world, eye, 0.0, 1.0);
+            let pcm = sound.render(80);
+            let channels: Vec<[f64; 2]> = pcm.chunks_exact(2).map(|p| [p[0] as f64, p[1] as f64]).collect();
+            let energy = channels.iter().map(|p| p[0] * p[0] + p[1] * p[1]).sum::<f64>() / channels.len() as f64;
+            let high = channels.windows(2).map(|p| (p[1][0] - p[0][0]).powi(2) + (p[1][1] - p[0][1]).powi(2)).sum::<f64>() / channels.len() as f64;
+            let rms = [0, 1].map(|c| (channels.iter().map(|p| p[c] * p[c]).sum::<f64>() / channels.len() as f64).sqrt());
+            let imbalance = (rms[0] - rms[1]).abs();
+            (energy.sqrt(), high / energy, imbalance)
+        };
+        let near = measure(pos);
+        let blocked_pos = [source.hi[0] + 1.0, pos[1], source.lo[2] + 0.5];
+        assert!(world.walls_between(pos, blocked_pos) > 0);
+        let blocked = measure(blocked_pos);
+        eprintln!("dungeon audio: near rms={} high={} imbalance={}; wall rms={} high={}", near.0, near.1, near.2, blocked.0, blocked.1);
+        assert!(near.0 > 100.0);
+        assert!(near.2 < near.0 * 0.02);
+        assert!(blocked.0 < near.0 * 0.5);
+        assert!(blocked.1 < near.1 * 0.5);
+    }
+}

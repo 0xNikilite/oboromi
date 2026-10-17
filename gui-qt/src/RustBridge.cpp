@@ -61,3 +61,7 @@ bool renderSpritesFrame(float seconds) {
 }
 
 }
+
+bool RustBridge::renderDungeonFrame(float seconds) {
+    return oboromi_render_dungeon_frame(seconds);
+}

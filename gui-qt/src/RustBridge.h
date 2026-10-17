@@ -32,5 +32,6 @@ bool renderPostFrame(float seconds);
 
 // Draws the sprites demo at the given time into the display
 bool renderSpritesFrame(float seconds);
+bool renderDungeonFrame(float seconds);
 
 }

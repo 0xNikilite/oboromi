@@ -181,11 +181,11 @@ impl<'a> Scene<'a> {
     /// Lays the asset in demos/assets/`asset` out in guest memory and runs the init segment.
     pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, asset: &str, width: u32, height: u32) -> Result<Self, String> {
         let dir = asset_dir(asset);
-        Self::with_files(state, &|file| std::fs::read(dir.join(file)).map_err(|e| format!("{}: {e}", dir.join(file).display())), width, height)
+        Self::with_files(state, cache, &|file| std::fs::read(dir.join(file)).map_err(|e| format!("{}: {e}", dir.join(file).display())), width, height)
     }
 
     /// Like `new`, with the asset's files from `read`.
-    pub fn with_files(state: &'a VkState, read: &dyn Fn(&str) -> Result<Vec<u8>, String>, width: u32, height: u32) -> Result<Self, String> {
+    pub fn with_files(state: &'static VkState, cache: Option<(&Path, &str)>, read: &dyn Fn(&str) -> Result<Vec<u8>, String>, width: u32, height: u32) -> Result<Self, String> {
         let text = String::from_utf8(read("manifest.json")?).map_err(|e| e.to_string())?;
         let manifest = Json::parse(&mut text.as_str()).ok_or("manifest.json does not parse")?;
         let [vertices, indices] = [read("vertices.bin")?, read("indices.bin")?];

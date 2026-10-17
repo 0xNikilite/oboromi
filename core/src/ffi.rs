@@ -275,3 +275,8 @@ pub extern "C" fn oboromi_audio_generation() -> u64 {
 pub extern "C" fn oboromi_audio_test_tone(seconds: f32) -> usize {
     crate::audio::test_tone(seconds)
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_dungeon_frame(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo_dungeon::render_dungeon_frame(seconds)), Ok(Ok(())))
+}

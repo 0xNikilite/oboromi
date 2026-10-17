@@ -10,7 +10,13 @@ impl<'a> Decoder<'a> {
             self.store_register(nth_reg(rd, RZ, i), val);
         }
     }
-    pub fn csmtest(&mut self, _inst: u128) {}
+    // CSMTEST votes on the clip space masks (CCMP F, CSM_TA/TR/MX, T, FCSM_TA/TR/MX in sm_86_instructions.txt) of the
+    // vertex batch, whose semantics are not public. Only T reads true, so a driver VS never takes its `@P0 EXIT` on
+    // FCSM_TR (trivially rejected) and always writes the position, which Vulkan then clips and culls itself.
+    pub fn csmtest(&mut self, inst: u128) {
+        let result = if inst >> 76 & 7 == 4 { self.const_u32_1 } else { self.const_u32_0 };
+        self.store_setp(inst, result);
+    }
     pub fn ide(&mut self, _inst: u128) {}
     pub fn mufu(&mut self, inst: u128) {
         use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};

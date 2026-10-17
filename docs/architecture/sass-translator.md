@@ -93,10 +93,10 @@ A Vulkan shader cannot follow pointers to its data. It reads from numbered slots
 | Binding | Kind | Holds |
 |---|---|---|
 | 0 | Uniform buffer, small and read-only | oboromi's own helper values, never game data |
-| 1 to 8 | Uniform buffers | The game's constant buffers 0 to 7, stored as `uvec4` arrays |
-| 9 | Storage buffer, large and read-write | The window onto guest memory |
-| 10, 11 | Storage buffers | Register values in and out, tests only |
-| 12 and up | Texture and image slots | Textures and writable images, in the order the shader first uses them |
+| 1 to 32 | Uniform buffers | The game's constant buffers 0 to 31, stored as `uvec4` arrays |
+| 33 | Storage buffer, large and read-write | The window onto guest memory |
+| 34, 35 | Storage buffers | Register values in and out, tests only |
+| 36 and up | Texture and image slots | Textures and writable images, in the order the shader first uses them |
 
 A constant buffer, or cbuf, is a small read-only table the game hands the shader, such as the camera matrix. Vulkan's std140 layout rule pads every uniform array element to a fixed width. A `uvec4` fills that width exactly, so nothing is wasted.
 

@@ -145,14 +145,14 @@ flowchart LR
 | Pipeline | A compiled bundle of shaders plus fixed settings, needed before any draw or dispatch. | Vertex shader, fragment shader, vertex layout and colour format. |
 | Dynamic state | Settings that can change per draw without building a new pipeline. | Viewport and cull mode. |
 | Dynamic rendering | Drawing straight into images, without Vulkan's older render pass objects. | One call names the colour and depth images. |
-| Descriptor | A small record telling a shader where one buffer or image is. | "binding 9 is this buffer". |
+| Descriptor | A small record telling a shader where one buffer or image is. | "binding 33 is this buffer". |
 | Binding | A numbered slot a shader reads a resource from; the host plugs a buffer or image into it. | Binding 9 holds the global memory window. |
 | Descriptor set | A group of bindings plugged in together. | oboromi uses only set 0. |
 | Uniform buffer | A small read-only buffer behind a binding. | A guest cbuf. |
 | Storage buffer, SSBO | A large buffer a shader can read and write. | The global memory window. |
 | std140 | Vulkan's layout rule for uniform buffers, which pads each array element to 16 bytes. | Why cbufs are declared as `uvec4` arrays. |
 | uvec4 | Four 32-bit unsigned integers, 16 bytes in total. | One row of a cbuf array. |
-| Resource list | The bindings a translated module declares, with what each one holds. | "binding 1 is cbuf 0, binding 12 is the texture at cbuf 0 offset 0x10". |
+| Resource list | The bindings a translated module declares, with what each one holds. | "binding 1 is cbuf 0, binding 36 is the texture at cbuf 0 offset 0x10". |
 | Validation layer | A Vulkan debug layer that reports misuse of the API. | Catching an image used in the wrong layout. |
 | spirv-val | The Khronos tool that checks a SPIR-V module is valid. | It rejected a compute shader that used `OpKill`. |
 | lavapipe | Mesa's Vulkan driver that runs on the CPU, also called llvmpipe. | The device in CI. |

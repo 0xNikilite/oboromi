@@ -1,16 +1,39 @@
 use std::sync::{Arc, Mutex};
-use unicorn_engine::{Arch, Mode, Prot, RegisterARM64, Unicorn};
+use unicorn_engine::{Arch, Mode, Prot, RegisterARM64, Unicorn, uc_error};
+
+const EXCP_SWI: u32 = 2;
+
+/// The emulator data holds the immediate of the SVC that stopped the core.
+type Emu = Unicorn<'static, Option<u32>>;
 
 /// Safe wrapper for Unicorn CPU emulator
 pub struct UnicornCPU {
-    emu: Arc<Mutex<Unicorn<'static, ()>>>,
+    emu: Arc<Mutex<Emu>>,
     pub core_id: u32,
+}
+
+/// The interrupt hook runs under the core's lock, so it only records the SVC and stops;
+/// every other exception (BRK, faults) just stops the core.
+fn new_emu() -> Result<Emu, uc_error> {
+    let mut emu = Unicorn::new_with_data(Arch::ARM64, Mode::LITTLE_ENDIAN, None)?;
+    emu.add_intr_hook(|uc, intno| {
+        if intno == EXCP_SWI {
+            // QEMU raises the SVC with PC already past it (translate-a64.c, gen_exception_insn with pc_next).
+            let mut insn = [0; 4];
+            let pc = uc.pc_read().unwrap_or(0);
+            if uc.mem_read(pc.wrapping_sub(4), &mut insn).is_ok() {
+                *uc.get_data_mut() = Some((u32::from_le_bytes(insn) >> 5) & 0xffff);
+            }
+        }
+        let _ = uc.emu_stop();
+    })?;
+    Ok(emu)
 }
 
 impl UnicornCPU {
     /// Create a new Unicorn instance with 8MB of memory (Legacy/Test mode)
     pub fn new() -> Option<Self> {
-        let mut emu = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN)
+        let mut emu = new_emu()
             .map_err(|e| {
                 eprintln!("Failed to create Unicorn instance: {e:?}");
                 e
@@ -41,7 +64,7 @@ impl UnicornCPU {
     /// The caller must ensure `memory_ptr` is valid for the lifetime of this CPU
     /// and has at least `memory_size` bytes.
     pub unsafe fn new_with_shared_mem(core_id: u32, memory_ptr: *mut u8, memory_size: u64) -> Option<Self> {
-        let mut emu = Unicorn::new(Arch::ARM64, Mode::LITTLE_ENDIAN)
+        let mut emu = new_emu()
             .map_err(|e| {
                 eprintln!("Failed to create Unicorn instance for core {}: {:?}", core_id, e);
                 e
@@ -219,6 +242,24 @@ impl UnicornCPU {
     pub fn set_pc(&self, value: u64) {
         let mut emu = self.emu.lock().unwrap();
         let _ = emu.reg_write(RegisterARM64::PC, value);
+    }
+
+    /// Take the immediate of the SVC that stopped the last run
+    pub fn svc_pending(&self) -> Option<u32> {
+        self.emu.lock().unwrap().get_data_mut().take()
+    }
+
+    /// Write TPIDRRO_EL0, the thread-local region pointer user code reads
+    pub fn set_tls(&self, value: u64) {
+        let _ = self.emu.lock().unwrap().reg_write(RegisterARM64::TPIDRRO_EL0, value);
+    }
+
+    pub fn read_mem(&self, vaddr: u64, buf: &mut [u8]) -> Result<(), uc_error> {
+        self.emu.lock().unwrap().mem_read(vaddr, buf)
+    }
+
+    pub fn write_mem(&self, vaddr: u64, bytes: &[u8]) -> Result<(), uc_error> {
+        self.emu.lock().unwrap().mem_write(vaddr, bytes)
     }
 
     /// Write a 32-bit value to emulated memory

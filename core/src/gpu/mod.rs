@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 pub mod compute;
 pub mod compute_class;
+pub mod demo_particles;
 pub mod engine;
 pub mod fifo;
 pub mod frame;

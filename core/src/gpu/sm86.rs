@@ -35,6 +35,10 @@ const EXIT: u32 = 0x94d;
 const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
 const BSYNC: u32 = 0x941;
+const BMOV_R_B: u32 = 0x355;
+const BMOV_B_R: u32 = 0x356;
+const BMOV_B_B_CLEAR: u32 = 0xf55;
+const BMOV_B_B: u32 = 0xf56;
 // Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT
 // and the WARPSYNC mask it waits on.
 const BAR_ARRIVALS: u32 = 16;
@@ -2297,38 +2301,29 @@ impl<'a> Decoder<'a> {
     }
     pub fn bmov(&mut self, inst: u128) {
         let state = (inst >> 24 & 0x3f) as u32;
-        match opcode(inst) {
-            0x355 => {
-                assert!(state < 16, "unsupported BMOV state {state}");
-                let ptr = self.barrier_token(state);
-                let token = self.ir.emit_load(self.type_u32[1], ptr);
+        let clear = inst >> 84 & 1 != 0;
+        let op = opcode(inst);
+        assert!(state < 16 && (op == BMOV_R_B || clear == (op == BMOV_B_B_CLEAR)), "unsupported BMOV state {state}");
+        let state_ptr = self.barrier_token(state);
+        match op {
+            BMOV_R_B => {
+                let token = self.ir.emit_load(self.type_u32[1], state_ptr);
                 self.store_register((inst >> 16 & 0xff) as u32, token);
-                if inst >> 84 & 1 != 0 {
-                    self.ir.emit_store(ptr, self.const_u32_0);
-                }
             }
-            0x356 => {
-                assert!(state < 16 && inst >> 84 & 1 == 0, "unsupported BMOV state {state}");
+            BMOV_B_R => {
                 let token = self.load_register((inst >> 32 & 0xff) as u32);
-                let ptr = self.barrier_token(state);
-                self.ir.emit_store(ptr, token);
+                self.ir.emit_store(state_ptr, token);
             }
-            0xf55 => {
-                assert!(state < 16 && inst >> 84 & 1 != 0, "unsupported BMOV state {state}");
-                let source = self.barrier_token(state);
+            BMOV_B_B_CLEAR | BMOV_B_B => {
+                let other = self.barrier_token((inst >> 16 & 0xf) as u32);
+                let (source, destination) = if clear { (state_ptr, other) } else { (other, state_ptr) };
                 let token = self.ir.emit_load(self.type_u32[1], source);
-                let destination = self.barrier_token((inst >> 16 & 0xf) as u32);
-                self.ir.emit_store(destination, token);
-                self.ir.emit_store(source, self.const_u32_0);
-            }
-            0xf56 => {
-                assert!(state < 16 && inst >> 84 & 1 == 0, "unsupported BMOV state {state}");
-                let source = self.barrier_token((inst >> 16 & 0xf) as u32);
-                let token = self.ir.emit_load(self.type_u32[1], source);
-                let destination = self.barrier_token(state);
                 self.ir.emit_store(destination, token);
             }
-            opcode => panic!("unsupported BMOV opcode {opcode:#x}"),
+            op => panic!("unsupported BMOV opcode {op:#x}"),
+        }
+        if clear {
+            self.ir.emit_store(state_ptr, self.const_u32_0);
         }
     }
     pub fn bmsk(&mut self, inst: u128) {

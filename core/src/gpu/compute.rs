@@ -23,7 +23,8 @@ impl<'a> HostBuffer<'a> {
         let info = vk::BufferCreateInfo::default().size(size).usage(
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::UNIFORM_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_SRC,
+                | vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST,
         );
         let mut buf = Self {
             device: d,
@@ -352,7 +353,7 @@ impl VkState {
     }
 
     // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
-    fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
+    pub(crate) fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
         let submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
         let (d, cmd, fence) = (&self.device, submit.command_buffer, submit.fence);
         let begin = vk::CommandBufferBeginInfo::default()

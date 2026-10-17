@@ -1,11 +1,12 @@
 //! Latency of the hot paths in microseconds: `cargo run --release -p oboromi-core --example perf`.
 use ash::vk::DescriptorType;
-use oboromi_core::display::present;
+use oboromi_core::display::{attach_surface, present, present_buffer};
 use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::sm86::STATE_WORDS;
-use oboromi_core::gpu::{device, frame::{render_demo_frame, render_test_frame}};
+use oboromi_core::gpu::{frame::{render_demo_frame, render_test_frame}, surface_device};
 use oboromi_core::tests::gpu::harness::translate_module;
+use oboromi_core::tests::gpu::silicon::exact_cooperative_hmma;
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
 use std::time::Instant;
@@ -36,7 +37,10 @@ fn main() {
     ];
     let program: Vec<u128> = fixtures.iter().copied().cycle().take(1000).collect();
     bench("translate 1000 inst", 20, 200, || {
-        black_box(translate_module(black_box(&program), true, None));
+        black_box(translate_module(black_box(&program), true, None, false));
+    });
+    bench("translate hints on", 20, 200, || {
+        black_box(translate_module(black_box(&program), true, None, true));
     });
     let (w, h) = (1920, 1080);
     let pixels = vec![0x80u8; w * h * 4];
@@ -47,8 +51,8 @@ fn main() {
         unsafe { oboromi_frame_read(dst.as_mut_ptr(), dst.len(), &mut fw, &mut fh) };
         black_box(&dst);
     });
-    bench("vk device init (cold)", 0, 1, || drop(device()));
-    let state = match device() {
+    bench("vk device init (cold)", 0, 1, || drop(surface_device()));
+    let state = match surface_device() {
         Ok(state) => state,
         Err(e) => return println!("gpu paths skipped: {e:?}"),
     };
@@ -58,8 +62,10 @@ fn main() {
             .get_physical_device_properties(state.physical_device)
     };
     println!("device: {:?}", props.device_name_as_c_str().unwrap());
+    let exact = exact_cooperative_hmma(state);
+    println!("hmma: cooperative matrices for (k, f32 accumulator) {exact:?} of f16 tiles {:?}, loops otherwise", state.cooperative_f16_tiles);
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
-    let words = translate_module(&program, true, Some(state)).words();
+    let words = translate_module(&program, true, Some(state), false).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (11, ssbo)];
     bench("pipeline create (cold)", 0, 1, || {
@@ -75,10 +81,20 @@ fn main() {
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         output.read(black_box(&mut out)).unwrap();
     });
+    let frame = HostBuffer::new(state, pixels.len() as u64).unwrap();
+    bench("present_buffer 1080p", 10, 200, || {
+        present_buffer(&frame, w as u32, h as u32).unwrap()
+    });
     bench("render_test_frame e2e", 2, 20, || {
         render_test_frame().unwrap()
     });
     bench("render_demo_frame e2e", 2, 100, || {
         render_demo_frame(0.25).unwrap()
+    });
+    let headless = ash::ext::headless_surface::Instance::new(&state.entry, &state.instance);
+    let surface = unsafe { headless.create_headless_surface(&Default::default(), None) }.unwrap();
+    attach_surface(surface, w as u32, h as u32).unwrap();
+    bench("render_test_frame+swapchain", 2, 20, || {
+        render_test_frame().unwrap()
     });
 }

@@ -146,7 +146,7 @@ mod tests {
             0x004f5e00001048000000000400070304,
             0x004f5e00001028000000000400070304,
         ] {
-            assert!(std::panic::catch_unwind(|| translate_module(&[word], true, None)).is_err());
+            assert!(std::panic::catch_unwind(|| translate_module(&[word], true, None, false)).is_err());
         }
     }
 

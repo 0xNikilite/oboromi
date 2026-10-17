@@ -20,6 +20,7 @@ const SET_VIEWPORT_CLIP_VERTICAL: usize = 0x0c04;
 const SET_VIEWPORT_CLIP_MIN_Z: usize = 0x0c08;
 const SET_VIEWPORT_CLIP_MAX_Z: usize = 0x0c0c;
 const SET_VERTEX_ARRAY_START: usize = 0x0d74;
+const SET_COLOR_CLEAR_VALUE: usize = 0x0d80;
 const DRAW_VERTEX_ARRAY: usize = 0x0d78;
 const SET_SCISSOR_ENABLE: usize = 0x0e00;
 const SET_SCISSOR_HORIZONTAL: usize = 0x0e04;
@@ -30,6 +31,8 @@ const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST: usize = 0x1214;
 const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x1218;
 const SET_DEPTH_TEST: usize = 0x12cc;
 const SET_BLEND_STATE_PER_TARGET: usize = 0x12e4;
+const SET_DEPTH_WRITE: usize = 0x12e8;
+const SET_DEPTH_FUNC: usize = 0x130c;
 const SET_BLEND: usize = 0x1360;
 const SET_INDEX_BUFFER_A: usize = 0x17c8;
 const SET_INDEX_BUFFER_B: usize = 0x17cc;
@@ -42,6 +45,9 @@ const DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_FIRST: usize = 0x17ec;
 const DRAW_INDEX_BUFFER32_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f0;
 const DRAW_INDEX_BUFFER16_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f4;
 const DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f8;
+const OGL_SET_CULL: usize = 0x1918;
+const OGL_SET_FRONT_FACE: usize = 0x191c;
+const OGL_SET_CULL_FACE: usize = 0x1920;
 const CLEAR_SURFACE: usize = 0x19d0;
 const SET_CT_WRITE: usize = 0x1a00;
 const SET_REPORT_SEMAPHORE_A: usize = 0x1b00;
@@ -52,6 +58,7 @@ const SET_VERTEX_STREAM_A_FORMAT: usize = 0x1c00;
 const SET_VERTEX_STREAM_A_LOCATION_A: usize = 0x1c04;
 const SET_VERTEX_STREAM_A_LOCATION_B: usize = 0x1c08;
 const SET_PIPELINE_SHADER: usize = 0x2000;
+const SET_PIPELINE_BINDING: usize = 0x2010;
 const SET_PIPELINE_PROGRAM_ADDRESS_A: usize = 0x2014;
 const SET_PIPELINE_PROGRAM_ADDRESS_B: usize = 0x2018;
 const SET_CONSTANT_BUFFER_SELECTOR_A: usize = 0x2380;
@@ -59,6 +66,8 @@ const SET_CONSTANT_BUFFER_SELECTOR_B: usize = 0x2384;
 const SET_CONSTANT_BUFFER_SELECTOR_C: usize = 0x2388;
 const LOAD_CONSTANT_BUFFER_OFFSET: usize = 0x238c;
 const LOAD_CONSTANT_BUFFER: usize = 0x2390;
+const BIND_GROUP_CONSTANT_BUFFER: usize = 0x2410;
+const BIND_GROUP_CONSTANT_BUFFER_LAST: usize = 0x2490;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DirtyFlags {
@@ -93,6 +102,13 @@ pub struct VertexAttribute {
 pub struct ShaderProgram {
     pub enabled: bool,
     pub address: u64,
+    pub binding_group: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConstantBuffer {
+    pub address: u64,
+    pub size: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -202,15 +218,22 @@ pub struct DrawSnapshot {
     pub scissor: Scissor,
     pub colour_write_mask: u8,
     pub depth_test_enabled: bool,
+    pub depth_write_enabled: bool,
+    pub depth_func: u32,
+    pub cull_enabled: bool,
+    pub cull_face: u32,
+    pub front_face: u32,
     pub blend_per_target: bool,
     pub blend_enabled: bool,
     pub index_buffer: IndexBuffer,
+    /// Per binding group, the buffer bound to each constant buffer slot.
+    pub constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
 }
 
 pub(crate) enum ThreeDEvent {
     Draw(DrawSnapshot),
     Report { addr: u64, payload: u32 },
-    Clear { value: u32 },
+    Clear { value: u32, colour: [f32; 4], target: ColourTarget },
     LoadConstantBuffer { addr: u64, value: u32 },
 }
 
@@ -219,6 +242,7 @@ pub struct ThreeD {
     dirty: DirtyFlags,
     topology: PrimitiveTopology,
     instances: u32,
+    constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
 }
 
 impl Default for ThreeD {
@@ -228,6 +252,7 @@ impl Default for ThreeD {
             dirty: DirtyFlags::default(),
             topology: PrimitiveTopology::Points,
             instances: 1,
+            constant_buffers: Default::default(),
         }
     }
 }
@@ -291,7 +316,24 @@ impl ThreeD {
                 addr: self.address_pair(SET_REPORT_SEMAPHORE_A, SET_REPORT_SEMAPHORE_B),
                 payload: self.word(SET_REPORT_SEMAPHORE_C),
             })),
-            CLEAR_SURFACE => Ok(Some(ThreeDEvent::Clear { value })),
+            CLEAR_SURFACE => Ok(Some(ThreeDEvent::Clear {
+                value,
+                colour: [0, 4, 8, 12].map(|i| f32::from_bits(self.word(SET_COLOR_CLEAR_VALUE + i))),
+                target: self.colour_target(),
+            })),
+            BIND_GROUP_CONSTANT_BUFFER..=BIND_GROUP_CONSTANT_BUFFER_LAST
+                if (byte - BIND_GROUP_CONSTANT_BUFFER) % 32 == 0 =>
+            {
+                let slot = (value >> 4) & 0x1f;
+                let buffer = (value & 1 != 0).then(|| ConstantBuffer {
+                    address: self.address_pair(SET_CONSTANT_BUFFER_SELECTOR_B, SET_CONSTANT_BUFFER_SELECTOR_C),
+                    size: self.word(SET_CONSTANT_BUFFER_SELECTOR_A) & 0x1ffff,
+                });
+                *self.constant_buffers[(byte - BIND_GROUP_CONSTANT_BUFFER) / 32]
+                    .get_mut(slot as usize)
+                    .ok_or_else(|| format!("C797 constant buffer slot {slot} out of range"))? = buffer;
+                Ok(None)
+            }
             LOAD_CONSTANT_BUFFER => {
                 let addr = self.address_pair(
                     SET_CONSTANT_BUFFER_SELECTOR_B,
@@ -363,6 +405,7 @@ impl ThreeD {
                     SET_PIPELINE_PROGRAM_ADDRESS_A + i * 64,
                     SET_PIPELINE_PROGRAM_ADDRESS_B + i * 64,
                 ),
+                binding_group: (self.word(SET_PIPELINE_BINDING + i * 64) & 7) as u8,
             };
         }
         let viewport_scale = [
@@ -381,7 +424,6 @@ impl ThreeD {
         let clip_v = self.word(SET_VIEWPORT_CLIP_VERTICAL);
         let scissor_h = self.word(SET_SCISSOR_HORIZONTAL);
         let scissor_v = self.word(SET_SCISSOR_VERTICAL);
-        let colour_memory = self.word(SET_COLOR_TARGET_MEMORY);
         let index_size = match self.word(SET_INDEX_BUFFER_E) & 3 {
             0 => 1,
             1 => 2,
@@ -398,17 +440,7 @@ impl ThreeD {
             vertex_streams: streams,
             vertex_attributes: attributes,
             shader_programs: shaders,
-            colour_target: ColourTarget {
-                address: self.address_pair(SET_COLOR_TARGET_A, SET_COLOR_TARGET_B),
-                width: self.word(SET_COLOR_TARGET_WIDTH) & 0x0fff_ffff,
-                height: self.word(SET_COLOR_TARGET_HEIGHT) & 0x1ffff,
-                format: self.word(SET_COLOR_TARGET_FORMAT) as u8,
-                layout: if colour_memory & 0x1000 != 0 {
-                    MemoryLayout::Pitch
-                } else {
-                    MemoryLayout::BlockLinear
-                },
-            },
+            colour_target: self.colour_target(),
             viewport: Viewport {
                 scale: viewport_scale,
                 offset: viewport_offset,
@@ -431,6 +463,11 @@ impl ThreeD {
                 | (ct_write >> 6) & 4
                 | (ct_write >> 9) & 8) as u8,
             depth_test_enabled: self.word(SET_DEPTH_TEST) & 1 != 0,
+            depth_write_enabled: self.word(SET_DEPTH_WRITE) & 1 != 0,
+            depth_func: self.word(SET_DEPTH_FUNC),
+            cull_enabled: self.word(OGL_SET_CULL) & 1 != 0,
+            cull_face: self.word(OGL_SET_CULL_FACE),
+            front_face: self.word(OGL_SET_FRONT_FACE),
             blend_per_target: self.word(SET_BLEND_STATE_PER_TARGET) & 1 != 0,
             blend_enabled: self.word(SET_BLEND) & 1 != 0,
             index_buffer: IndexBuffer {
@@ -438,7 +475,22 @@ impl ThreeD {
                 first: self.word(SET_INDEX_BUFFER_F),
                 element_size: index_size,
             },
+            constant_buffers: self.constant_buffers,
         })
+    }
+
+    fn colour_target(&self) -> ColourTarget {
+        ColourTarget {
+            address: self.address_pair(SET_COLOR_TARGET_A, SET_COLOR_TARGET_B),
+            width: self.word(SET_COLOR_TARGET_WIDTH) & 0x0fff_ffff,
+            height: self.word(SET_COLOR_TARGET_HEIGHT) & 0x1ffff,
+            format: self.word(SET_COLOR_TARGET_FORMAT) as u8,
+            layout: if self.word(SET_COLOR_TARGET_MEMORY) & 0x1000 != 0 {
+                MemoryLayout::Pitch
+            } else {
+                MemoryLayout::BlockLinear
+            },
+        }
     }
 
     fn word(&self, byte: usize) -> u32 {

@@ -1,4 +1,4 @@
-use super::threed::{DrawSnapshot, ThreeD, ThreeDEvent, CLASS_ID};
+use super::threed::{ColourTarget, DrawSnapshot, ThreeD, ThreeDEvent, CLASS_ID};
 
 const SET_OBJECT: usize = 0x00;
 const SEMAPHORE_A: usize = 0x10;
@@ -33,7 +33,7 @@ pub enum Event {
     Report { addr: u64, payload: u32 },
     SemaphoreAcquire { addr: u64, payload: u32 },
     SemaphoreRelease { addr: u64, payload: u32 },
-    Clear { value: u32 },
+    Clear { value: u32, colour: [f32; 4], target: ColourTarget },
     LoadConstantBuffer { addr: u64, value: u32 },
 }
 
@@ -186,7 +186,7 @@ impl Pusher {
             events.push(match event {
                 ThreeDEvent::Draw(draw) => Event::Draw(draw),
                 ThreeDEvent::Report { addr, payload } => Event::Report { addr, payload },
-                ThreeDEvent::Clear { value } => Event::Clear { value },
+                ThreeDEvent::Clear { value, colour, target } => Event::Clear { value, colour, target },
                 ThreeDEvent::LoadConstantBuffer { addr, value } => Event::LoadConstantBuffer { addr, value },
             });
         }

@@ -4,7 +4,7 @@ pub mod tests {
     use crate::tests::gpu_test::inst::{self, *};
 
     // Exact for the zeros, infinities, NaN and normal halves used here.
-    fn h(x: f32) -> u32 {
+    pub fn h(x: f32) -> u32 {
         let bits = x.to_bits();
         let mantissa = bits >> 13 & 0x3ff;
         let magnitude = match bits >> 23 & 0xff {

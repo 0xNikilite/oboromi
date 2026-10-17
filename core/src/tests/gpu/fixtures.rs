@@ -9,6 +9,8 @@ mod tests {
     use std::panic::catch_unwind;
 
     struct Fixture {
+        source: &'static str,
+        index: usize,
         family: String,
         case: String,
         words: Vec<u128>,
@@ -73,39 +75,73 @@ mod tests {
     }
 
     fn fixtures() -> Vec<Fixture> {
-        objects(include_str!("../../../tests/fixtures/sm86-silicon.json"))
-            .map(|object| {
-                let reg = |name: String| string(object, &name)[1..].parse().unwrap();
-                let mut words =
-                    vec![u128::from_str_radix(&string(object, "word_hex"), 16).unwrap()];
-                if object.contains("\"observer_word_hex\"") {
-                    words.push(
-                        u128::from_str_radix(&string(object, "observer_word_hex"), 16).unwrap(),
-                    );
-                }
-                Fixture {
-                    family: string(object, "family"),
-                    case: string(object, "case"),
-                    words,
-                    inputs: numbers(object, "inputs"),
-                    outputs: numbers(object, "outputs"),
-                    input_regs: (0..4).map(|i| reg(format!("input{i}"))).collect(),
-                    output_regs: (0..2).map(|i| reg(format!("output{i}"))).collect(),
-                }
-            })
-            .collect()
+        [
+            (
+                "silicon",
+                include_str!("../../../tests/fixtures/sm86-silicon.json"),
+            ),
+            (
+                "s4local",
+                include_str!("../../../tests/fixtures/sm86-s4-local-silicon.json"),
+            ),
+        ]
+        .into_iter()
+        .flat_map(|(source, json)| {
+            objects(json)
+                .enumerate()
+                .map(move |(index, object)| (source, index, object))
+        })
+        .map(|(source, index, object)| {
+            let reg = |name: String| string(object, &name)[1..].parse().unwrap();
+            let mut words = vec![u128::from_str_radix(&string(object, "word_hex"), 16).unwrap()];
+            if object.contains("\"observer_word_hex\"") {
+                words.push(u128::from_str_radix(&string(object, "observer_word_hex"), 16).unwrap());
+            }
+            Fixture {
+                source,
+                index,
+                family: string(object, "family"),
+                case: string(object, "case"),
+                words,
+                inputs: numbers(object, "inputs"),
+                outputs: numbers(object, "outputs"),
+                input_regs: (0..4).map(|i| reg(format!("input{i}"))).collect(),
+                output_regs: (0..2).map(|i| reg(format!("output{i}"))).collect(),
+            }
+        })
+        .collect()
     }
 
     fn predicate_fixtures() -> Vec<Fixture> {
         [
-            include_str!("../../../tests/fixtures/sm86-s3-predicate-silicon.json"),
-            include_str!("../../../tests/fixtures/sm86-s3-predicate-notpt-silicon.json"),
+            (
+                "s3predicate",
+                include_str!("../../../tests/fixtures/sm86-s3-predicate-silicon.json"),
+            ),
+            (
+                "s3notpt",
+                include_str!("../../../tests/fixtures/sm86-s3-predicate-notpt-silicon.json"),
+            ),
+            (
+                "s4predicate",
+                include_str!("../../../tests/fixtures/sm86-s4-predicate-silicon.json"),
+            ),
+            (
+                "s4dsetp",
+                include_str!("../../../tests/fixtures/sm86-s4-predicate-dsetp-silicon.json"),
+            ),
         ]
         .into_iter()
-        .flat_map(objects)
-        .map(|object| {
+        .flat_map(|(source, json)| {
+            objects(json)
+                .enumerate()
+                .map(move |(index, object)| (source, index, object))
+        })
+        .map(|(source, index, object)| {
             let reg = |name: String| string(object, &name)[1..].parse().unwrap();
             Fixture {
+                source,
+                index,
                 family: string(object, "family"),
                 case: string(object, "case"),
                 words: ["word_hex", "observer_word_hex"]
@@ -133,6 +169,15 @@ mod tests {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
         for fixture in fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
+            let id = format!(
+                "{}#{:03}/{}/{}",
+                fixture.source, fixture.index, fixture.family, fixture.case
+            );
+            if LOCAL_NOT_REPLAYABLE.contains(&id.as_str()) {
+                score.skipped += 1;
+                eprintln!("{id}: skipped, ptxas kept the local array in registers so the instruction has no observable result");
+                continue;
+            }
             if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
                 score.unimplemented += 1;
                 continue;
@@ -156,12 +201,17 @@ mod tests {
                 );
             }
         }
-        let mut vectors = BTreeMap::new();
         for fixture in predicate_fixtures() {
-            let vector = vectors.entry(fixture.case.clone()).or_insert(0);
-            let id = format!("predicate/{}/{}", fixture.case, *vector);
-            *vector += 1;
+            let id = format!(
+                "{}#{:03}/{}/{}",
+                fixture.source, fixture.index, fixture.family, fixture.case
+            );
             let score = scores.entry(fixture.family.clone()).or_default();
+            if PREDICATE_NOT_REPLAYABLE.contains(&id.as_str()) {
+                score.skipped += 1;
+                eprintln!("{id}: skipped, R1 held the stack pointer so the first fp64 operand was not recorded");
+                continue;
+            }
             if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
                 score.unimplemented += 1;
                 continue;
@@ -183,11 +233,11 @@ mod tests {
                 eprintln!("{id}: expected {expected:#010x}, got {actual:#010x}");
             }
         }
-        println!("family       pass fail unimplemented");
+        println!("family       pass fail unimplemented skipped");
         for (family, score) in &scores {
             println!(
-                "{family:<12} {:>4} {:>4} {:>13}",
-                score.pass, score.fail, score.unimplemented
+                "{family:<12} {:>4} {:>4} {:>13} {:>7}",
+                score.pass, score.fail, score.unimplemented, score.skipped
             );
         }
         assert_eq!(scores.values().map(|score| score.fail).sum::<usize>(), 0);
@@ -229,6 +279,10 @@ mod tests {
             (
                 "s3",
                 include_str!("../../../tests/fixtures/sm86-s3-silicon.json"),
+            ),
+            (
+                "s4warp",
+                include_str!("../../../tests/fixtures/sm86-s4-warpseed-silicon.json"),
             ),
         ]
         .into_iter()
@@ -300,6 +354,26 @@ mod tests {
         "s3#102/memory/ldl-s16-r6-r0-0x4",
         "warp3#053/sts/bank-conflict",
     ];
+    const LOCAL_NOT_REPLAYABLE: &[&str] = &[
+        "s4local#000/local/stl-32-0x0001c000001008000000080100007387-stl-r0",
+        "s4local#001/local/stl-32-0x0001c000001008000000080100007387-stl-r0",
+        "s4local#002/local/ldl-32-0x00000000001008000000080000047983-ldl-r4",
+        "s4local#003/local/ldl-32-0x00000000001008000000080000047983-ldl-r4",
+        "s4local#004/local/stl-u8-0x0001c000001000000000000100007387-stl-u8",
+        "s4local#005/local/stl-u8-0x0001c000001000000000000100007387-stl-u8",
+        "s4local#006/local/ldl-s8-0x00000000001002000000000000057983-ldl-s8",
+        "s4local#007/local/ldl-s8-0x00000000001002000000000000057983-ldl-s8",
+        "s4local#008/local/stl-u16-0x0001c000001004000000040100007387-stl-u",
+        "s4local#009/local/stl-u16-0x0001c000001004000000040100007387-stl-u",
+        "s4local#010/local/ldl-s16-0x00000000001006000000040000067983-ldl-s",
+        "s4local#011/local/ldl-s16-0x00000000001006000000040000067983-ldl-s",
+    ];
+    const PREDICATE_NOT_REPLAYABLE: &[&str] = &[
+        "s4predicate#000/dsetp/lt-distinct-pairs",
+        "s4predicate#001/dsetp/lt-distinct-pairs",
+        "s4predicate#002/dsetp/lt-distinct-pairs",
+        "s4predicate#003/dsetp/lt-distinct-pairs",
+    ];
     // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
     const KNOWN_FAILURES: &[&str] = &["s3#026/fp32/mufu-tanh-r1-r3"];
     const LLVMPIPE_FAILURES: &[&str] = &[
@@ -311,6 +385,11 @@ mod tests {
         "tex#007/tex/mask-r",
         "tex#009/tex/mask-rg",
         "tex#010/tex/mask-a",
+        "s4tex#003/tex/lod-lz",
+        "s4tex#005/tex/lod-ll",
+        "s4tex#007/tex/mask-r",
+        "s4tex#009/tex/mask-rg",
+        "s4tex#010/tex/mask-a",
     ];
 
     fn destination_width(fixture: &WarpFixture) -> usize {
@@ -334,6 +413,8 @@ mod tests {
     }
 
     struct TextureFixture {
+        source: &'static str,
+        index: usize,
         family: String,
         case: String,
         word: u128,
@@ -347,10 +428,25 @@ mod tests {
     }
 
     fn texture_fixtures() -> Vec<TextureFixture> {
-        objects(include_str!(
-            "../../../tests/fixtures/sm86-texture-silicon.json"
-        ))
-        .map(|object| TextureFixture {
+        [
+            (
+                "tex",
+                include_str!("../../../tests/fixtures/sm86-texture-silicon.json"),
+            ),
+            (
+                "s4tex",
+                include_str!("../../../tests/fixtures/sm86-s4-texture-silicon.json"),
+            ),
+        ]
+        .into_iter()
+        .flat_map(|(source, json)| {
+            objects(json)
+                .enumerate()
+                .map(move |(index, object)| (source, index, object))
+        })
+        .map(|(source, index, object)| TextureFixture {
+            source,
+            index,
             family: string(object, "family"),
             case: string(object, "case"),
             word: u128::from_str_radix(&string(object, "word_hex"), 16).unwrap(),
@@ -493,7 +589,8 @@ mod tests {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
         let mut unexpected = Vec::new();
         let llvmpipe = crate::gpu::device().is_ok_and(|d| d.is_llvmpipe());
-        let known = |id: &str| KNOWN_FAILURES.contains(&id) || llvmpipe && LLVMPIPE_FAILURES.contains(&id);
+        let known =
+            |id: &str| KNOWN_FAILURES.contains(&id) || llvmpipe && LLVMPIPE_FAILURES.contains(&id);
         for fixture in warp_fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
             if !fixture.observed {
@@ -545,7 +642,13 @@ mod tests {
                 seed[PRED] = 1;
                 seed[LIVE] = fixture.lanes_active >> lane & 1;
             }
-            let global_before: Vec<_> = (0..256).map(|i| 0x6100_0000 + i).collect();
+            let global_before: Vec<_> = if fixture.source == "s4warp" {
+                (0..256)
+                    .map(|i| if i & 1 == 0 { 0x7fff_ffff } else { 0x8000_0000 })
+                    .collect()
+            } else {
+                (0..256).map(|i| 0x6100_0000 + i).collect()
+            };
             let Some((lanes, global)) = run_lanes(&words, &seeds, &[32, 1], &global_before) else {
                 eprintln!("skipping warp silicon fixtures: no Vulkan device");
                 return;
@@ -604,13 +707,16 @@ mod tests {
                 }
             }
         }
-        for (index, fixture) in texture_fixtures().into_iter().enumerate() {
+        for fixture in texture_fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
             if !fixture.observed {
                 score.skipped += 1;
                 continue;
             }
-            let id = format!("tex#{index:03}/{}/{}", fixture.family, fixture.case);
+            let id = format!(
+                "{}#{:03}/{}/{}",
+                fixture.source, fixture.index, fixture.family, fixture.case
+            );
             match catch_unwind(|| run_texture_fixture(&fixture)) {
                 Err(_) => score.unimplemented += 1,
                 Ok(None) => {

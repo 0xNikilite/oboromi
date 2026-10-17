@@ -9,8 +9,8 @@ const BREAK: u32 = 0x942;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Translation {
-    #[default]
     ForceDispatcher,
+    #[default]
     Auto,
     ForceStructured,
 }

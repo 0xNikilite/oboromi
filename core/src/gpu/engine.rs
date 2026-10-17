@@ -738,7 +738,7 @@ impl<'a> Gpu<'a> {
                 }
                 fs_bindings.extend(textures.iter().map(|&(binding, _)| (binding, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)));
                 let [vs, fs] = key.shaders.map(|key| &self.modules[&key].words);
-                entry.insert(GraphicsPipeline::new(self.state, vs, fs, [&vs_bindings, &fs_bindings], &layout, &target).map_err(named)?)
+                entry.insert(GraphicsPipeline::new(self.state, vs, None, fs, [&vs_bindings, &fs_bindings], &layout, &target).map_err(named)?)
             }
         };
         for ((descriptors, ranges), stage_window) in pipeline.descriptors.iter_mut().zip(&cbuf_ranges).zip(windows) {

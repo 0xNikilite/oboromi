@@ -2293,7 +2293,42 @@ impl<'a> Decoder<'a> {
             s.ir.emit_bit_count(ty, bits)
         });
     }
-    pub fn bmov(&mut self, _inst: u128) {}
+    pub fn bmov(&mut self, inst: u128) {
+        let state = (inst >> 24 & 0x3f) as u32;
+        match opcode(inst) {
+            0x355 => {
+                assert!(state < 16, "unsupported BMOV state {state}");
+                let ptr = self.barrier_token(state);
+                let token = self.ir.emit_load(self.type_u32[1], ptr);
+                self.store_register((inst >> 16 & 0xff) as u32, token);
+                if inst >> 84 & 1 != 0 {
+                    self.ir.emit_store(ptr, self.const_u32_0);
+                }
+            }
+            0x356 => {
+                assert!(state < 16 && inst >> 84 & 1 == 0, "unsupported BMOV state {state}");
+                let token = self.load_register((inst >> 32 & 0xff) as u32);
+                let ptr = self.barrier_token(state);
+                self.ir.emit_store(ptr, token);
+            }
+            0xf55 => {
+                assert!(state < 16 && inst >> 84 & 1 != 0, "unsupported BMOV state {state}");
+                let source = self.barrier_token(state);
+                let token = self.ir.emit_load(self.type_u32[1], source);
+                let destination = self.barrier_token((inst >> 16 & 0xf) as u32);
+                self.ir.emit_store(destination, token);
+                self.ir.emit_store(source, self.const_u32_0);
+            }
+            0xf56 => {
+                assert!(state < 16 && inst >> 84 & 1 == 0, "unsupported BMOV state {state}");
+                let source = self.barrier_token((inst >> 16 & 0xf) as u32);
+                let token = self.ir.emit_load(self.type_u32[1], source);
+                let destination = self.barrier_token(state);
+                self.ir.emit_store(destination, token);
+            }
+            opcode => panic!("unsupported BMOV opcode {opcode:#x}"),
+        }
+    }
     pub fn bmsk(&mut self, inst: u128) {
         let ty = self.type_u32[1];
         let pos = self.alu_reg(inst, 24);

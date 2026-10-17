@@ -164,6 +164,9 @@ pub mod inst {
     const JMX: u128 = 0x94c;
     const BSSY: u128 = 0x945;
     const BSYNC: u128 = 0x941;
+    const BMOV_READ: u128 = 0x355;
+    const BMOV_WRITE: u128 = 0x356;
+    const BMOV_CLEAR: u128 = 1 << 84;
     const CALL_REL: u128 = 0x944;
     const RET: u128 = 0x950;
     const EXIT: u128 = 0x94d;
@@ -191,7 +194,6 @@ pub mod inst {
     pub const W2I_RTT: u128 = 0x000fc00000000000000000000000794f;
     pub const W2I_QSPC: u128 = 0x000fc000000e000000000000ff0073aa;
     pub const W2I_R2B: u128 = 0x000fc00000000000000000020000731e;
-    pub const W2I_BMOV: u128 = 0x000fc000000000000000000000007355;
     pub const W2I_ARRIVES: u128 = 0x000fc0000800000000000000ff0079b0;
     pub const W2I_BREAK: u128 = 0x000fc000038000000000000000007942;
     pub const W2I_SETLMEMBASE: u128 = 0x000fc0000000000000000000ff0073c1;
@@ -417,6 +419,14 @@ pub mod inst {
 
     pub fn bsync(bar: u32) -> u128 {
         control(BSYNC, 0, 0) | (bar as u128) << 16
+    }
+
+    pub fn bmov_read(rd: u32, bar: u32, clear: bool) -> u128 {
+        BMOV_READ | PT_GUARD | NO_SCOREBOARD | (rd as u128) << 16 | (bar as u128) << 24 | BMOV_CLEAR * clear as u128
+    }
+
+    pub fn bmov_write(bar: u32, reg: u32) -> u128 {
+        BMOV_WRITE | PT_GUARD | NO_SCOREBOARD | (bar as u128) << 24 | (reg as u128) << 32
     }
 
     pub fn call_rel(offset: i64) -> u128 {
@@ -748,6 +758,9 @@ fn fixtures_match_nvdisasm() {
         (inst::exit(), "EXIT;"),
         (inst::bssy(0, 0x40), "BSSY B0, 0x50;"),
         (inst::bsync(0), "BSYNC B0;"),
+        (inst::bmov_read(4, 1, false), "BMOV.32 R4, B1;"),
+        (inst::bmov_read(255, 1, true), "BMOV.32.CLEAR RZ, B1;"),
+        (inst::bmov_write(1, 4), "BMOV.32 B1, R4;"),
         (inst::call_rel(0x20), "CALL.REL 0x30;"),
         (inst::ret_rel(20, -0x60), "RET.REL.NODEC R20 -0x50;"),
         (inst::brx(4, -0x10), "BRX R4 -0x10;"),
@@ -772,7 +785,6 @@ fn fixtures_match_nvdisasm() {
         (inst::W2I_RTT, "__HIR0X1E0;"),
         (inst::W2I_QSPC, "QSPC.G PT, R0, [RZ];"),
         (inst::W2I_R2B, ""),
-        (inst::W2I_BMOV, "BMOV.32 R0, B0;"),
         (inst::W2I_ARRIVES, "ARRIVES.LDGSTSBAR.???0 [UR0];"),
         (inst::W2I_BREAK, "BREAK B0;"),
         (inst::W2I_SETLMEMBASE, "SETLMEMBASE RZ;"),

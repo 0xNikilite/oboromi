@@ -444,7 +444,7 @@ impl<'a> Decoder<'a> {
             let (b, c) = self.srcs_bc(inst);
             [self.alu_reg(inst, 24), b, c]
         };
-        let negated = [inst >> 72 & 1 != 0, inst >> 9 & 7 == 1 && inst >> 63 & 1 != 0, inst >> 75 & 1 != 0];
+        let negated = [inst >> 72 & 1 != 0, inst >> 9 & 7 != 4 && inst >> 63 & 1 != 0, inst >> 75 & 1 != 0];
         let [a, b, c] = [0, 1, 2].map(|i| if negated[i] { self.ir.emit_not(ty, srcs[i]) } else { srcs[i] });
         // -x is ~x + 1, so without .X every negated operand adds one; .X adds the carry predicates instead.
         let carry_in = if inst >> 74 & 1 != 0 {

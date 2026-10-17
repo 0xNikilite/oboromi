@@ -16,6 +16,7 @@ mod tests {
     const IDP2A_HI_S16_S8: u128 = 0x004fc800000036040000000302017226;
     const IADD3_CBUF: u128 = 0x004fc80007ffe0030000000002017a10;
     const IADD3_UREG: u128 = 0x004fc8000fffe0030000000402057c10;
+    const IADD3_NEG_CBUF: u128 = 0x004fc80007ffe0038000000002067a10;
     const VABSDIFF_S32: u128 = 0x004fc800000e02040000000302017214;
     const VABSDIFF4_S8: u128 = 0x004fc800000e00040000000302017215;
     const VABSDIFF4_S8_ACC: u128 = 0x004fc800000e08040000000302017215;
@@ -263,10 +264,10 @@ mod tests {
         seed[2] = 3;
         seed[3] = 5;
         seed[ur4] = 7;
-        let Some((regs, _)) = run_regs(&[IADD3_CBUF, IADD3_UREG], &seed, &[11], &[]) else {
+        let Some((regs, _)) = run_regs(&[IADD3_CBUF, IADD3_UREG, IADD3_NEG_CBUF], &seed, &[11], &[]) else {
             return;
         };
-        assert_eq!([regs[1], regs[5]], [19, 15]);
+        assert_eq!([regs[1], regs[5], regs[6]], [19, 15, -3i32 as u32]);
     }
 
     #[test]

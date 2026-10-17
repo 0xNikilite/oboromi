@@ -10,7 +10,7 @@ use super::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy, hash}
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
-use super::{VkError, VkState};
+use super::{SpeedHacks, VkError, VkState};
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
 use std::path::Path;
@@ -327,7 +327,8 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
 
 impl<'a> Gpu<'a> {
     /// Keeps translated programs and the pipeline cache under `cache`'s root and title when given.
-    pub fn new(state: &'static VkState, ram_bytes: usize, cache: Option<(&Path, &str)>) -> Result<Self, VkError> {
+    pub fn new(state: &'static VkState, ram_bytes: usize, cache: Option<(&Path, &str)>, hacks: SpeedHacks) -> Result<Self, VkError> {
+        let policy = if hacks.skip_draw_while_compiling { PipelinePolicy::SkipDraw } else { PipelinePolicy::Wait };
         let disk = cache.and_then(|(root, title)| {
             let device = unsafe { state.instance.get_physical_device_properties(state.physical_device) };
             Disk::open(root, title, &device).ok()
@@ -339,7 +340,7 @@ impl<'a> Gpu<'a> {
             memory: MemoryTracker::default(),
             pusher: Pusher::default(),
             modules: HashMap::new(),
-            pipelines: PipelineBuilder::new(state, PipelinePolicy::Wait, disk)?,
+            pipelines: PipelineBuilder::new(state, policy, disk)?,
             kernels: HashMap::new(),
             translated: 0,
             support: None,
@@ -351,10 +352,6 @@ impl<'a> Gpu<'a> {
             pixels: Vec::new(),
             started: Instant::now(),
         })
-    }
-
-    pub fn set_pipeline_policy(&mut self, policy: PipelinePolicy) {
-        self.pipelines.policy = policy;
     }
 
     pub fn flush_caches(&self) -> std::io::Result<()> {

@@ -90,7 +90,7 @@ impl<'a> Post<'a> {
     pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, scene: [u32; 2], out: [u32; 2]) -> Result<Self, String> {
         let target = (SCENE + u64::from(scene[0] * scene[1] * 4)).next_multiple_of(PAGE);
         let end = (target + u64::from(out[0] * out[1] * 4)).next_multiple_of(PAGE);
-        let mut gpu = Gpu::new(state, (end - BASE) as usize, cache).map_err(named)?;
+        let mut gpu = Gpu::new(state, (end - BASE) as usize, cache, Default::default()).map_err(named)?;
         gpu.space.map(BASE, 0, end - BASE);
         // The rig's programs stop at their last EXIT; the self-branch a compiled program ends with marks the end.
         for (va, program) in [

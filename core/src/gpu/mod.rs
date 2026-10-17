@@ -29,6 +29,13 @@ impl From<vk::Result> for VkError {
     }
 }
 
+/// Settings that trade accuracy for speed, all off by default.
+#[derive(Clone, Copy, Default)]
+pub struct SpeedHacks {
+    /// Skips draws whose pipeline is still compiling instead of waiting, so new shaders pop in.
+    pub skip_draw_while_compiling: bool,
+}
+
 pub struct VkState {
     pub entry: ash::Entry,
     pub instance: ash::Instance,

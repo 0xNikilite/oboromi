@@ -117,7 +117,7 @@ fn textured_program() -> Vec<u8> {
 
 pub fn triangle_guest(state: &'static VkState, cache: Option<(&Path, &str)>, width: u32, height: u32, vertices: &[Vertex; 3]) -> Result<Gpu<'static>, MemoryError> {
     let target_pages = (u64::from(width * height) * 4).div_ceil(PAGE);
-    let mut gpu = Gpu::new(state, ((8 + target_pages) * PAGE) as usize, cache)?;
+    let mut gpu = Gpu::new(state, ((8 + target_pages) * PAGE) as usize, cache, Default::default())?;
     for (va, page, pages) in [(TEXTURES, 0, 1), (PUSHBUFFER, 3, 1), (VERTEX_PROGRAM, 1, 1), (VERTICES, 5, 1), (CBUF, 2, 1), (REPORT, 6, 1), (TARGET, 8, target_pages)] {
         gpu.space.map(va, page * PAGE, pages * PAGE);
     }
@@ -302,7 +302,7 @@ mod tests {
             .chain([bra(-16)])
             .flat_map(u128::to_le_bytes)
             .collect();
-        let mut gpu = Gpu::new(state, (128 * PAGE) as usize, None).unwrap();
+        let mut gpu = Gpu::new(state, (128 * PAGE) as usize, None, Default::default()).unwrap();
         gpu.space.map(0x2_0000_0000, 0, 128 * PAGE);
         let mut qmd = [0; 64];
         [qmd[12], qmd[13], qmd[14]] = [120, 68, 1];

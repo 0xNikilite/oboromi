@@ -52,7 +52,7 @@ impl TestResult {
     }
 }
 
-mod arm64 {
+pub mod arm64 {
     pub fn add_imm(rd: u8, rn: u8, imm12: u16) -> u32 {
         0x91000000 | ((imm12 as u32) << 10) | ((rn as u32) << 5) | (rd as u32)
     }
@@ -87,6 +87,30 @@ mod arm64 {
 
     pub fn brk(imm16: u16) -> u32 {
         0xD4200000 | ((imm16 as u32) << 5)
+    }
+
+    pub fn svc(imm16: u16) -> u32 {
+        0xD4000001 | ((imm16 as u32) << 5)
+    }
+
+    pub fn movz(rd: u8, imm16: u16, shift: u8) -> u32 {
+        0xD2800000 | ((shift as u32 / 16) << 21) | ((imm16 as u32) << 5) | (rd as u32)
+    }
+
+    pub fn movk(rd: u8, imm16: u16, shift: u8) -> u32 {
+        0xF2800000 | ((shift as u32 / 16) << 21) | ((imm16 as u32) << 5) | (rd as u32)
+    }
+
+    pub fn mrs_tpidrro(rt: u8) -> u32 {
+        0xD53BD060 | (rt as u32)
+    }
+
+    pub fn ldp(rt: u8, rt2: u8, rn: u8, offset: i16) -> u32 {
+        0xA9400000 | ((((offset / 8) as u32) & 0x7F) << 15) | ((rt2 as u32) << 10) | ((rn as u32) << 5) | (rt as u32)
+    }
+
+    pub fn stp(rt: u8, rt2: u8, rn: u8, offset: i16) -> u32 {
+        0xA9000000 | ((((offset / 8) as u32) & 0x7F) << 15) | ((rt2 as u32) << 10) | ((rn as u32) << 5) | (rt as u32)
     }
 }
 

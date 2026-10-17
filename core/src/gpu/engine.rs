@@ -391,6 +391,9 @@ impl<'a> Gpu<'a> {
     }
 
     fn build_traversable(&mut self, va: u64) -> Result<(), String> {
+        if self.state.acceleration_structure.is_none() {
+            return Err("ray queries are not supported by this device".into());
+        }
         let entry = self.traversables.get_mut(&va).ok_or_else(|| format!("no acceleration structure is registered at {va:#x}"))?;
         let current = generation(&self.memory, &entry.ranges);
         if entry.built.is_some() && entry.generation == current {
@@ -751,6 +754,7 @@ impl<'a> Gpu<'a> {
         let mut cbufs: [Vec<(u32, ConstantBuffer)>; 2] = Default::default();
         let mut windows = [false; 2];
         let mut textures = Vec::new();
+        let mut traversables = [None; 2];
         for (stage, (module, pipeline)) in [(vs, VERTEX_PIPELINE), (fs, PIXEL_PIPELINE)].into_iter().enumerate() {
             let group = draw.shader_programs[pipeline].binding_group as usize;
             let bound = |slot: u32| draw.constant_buffers[group][slot as usize].ok_or_else(|| format!("constant buffer slot {slot} of binding group {group} is not bound"));
@@ -763,11 +767,21 @@ impl<'a> Gpu<'a> {
                         gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut handle).map_err(named)?;
                         textures.push((images.next().unwrap(), u32::from_le_bytes(handle)));
                     }
+                    ResourceKind::AccelerationStructure { cbuf_bank, byte_offset } => {
+                        let mut address = [0; 8];
+                        gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut address).map_err(named)?;
+                        traversables[stage] = Some((acceleration_structure_binding(&module.resources), u64::from_le_bytes(address)));
+                    }
                     ResourceKind::Global | ResourceKind::Support => windows[stage] = true,
+                    ResourceKind::Ttu | ResourceKind::RayQuery => {}
                     ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
                     kind => return Err(format!("{kind:?} in shader pipeline {pipeline} is not implemented")),
                 }
             }
+        }
+
+        for (_, va) in traversables.into_iter().flatten() {
+            self.build_traversable(va)?;
         }
 
         let ct = draw.colour_target;
@@ -832,6 +846,11 @@ impl<'a> Gpu<'a> {
                 for (bindings, _) in [&mut vs_bindings, &mut fs_bindings].into_iter().zip(windows).filter(|&(_, window)| window) {
                     bindings.extend([(GLOBAL_BINDING, vk::DescriptorType::STORAGE_BUFFER), (SUPPORT_BINDING, ubo)]);
                 }
+                for (bindings, traversable) in [&mut vs_bindings, &mut fs_bindings].into_iter().zip(traversables) {
+                    if let Some((binding, _)) = traversable {
+                        bindings.push((binding, vk::DescriptorType::ACCELERATION_STRUCTURE_KHR));
+                    }
+                }
                 fs_bindings.extend(textures.iter().map(|&(binding, _)| (binding, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)));
                 let [vs, fs] = key.shaders.map(|key| &self.modules[&key].words);
                 entry.insert(GraphicsPipeline::new(self.state, vs, None, fs, [&vs_bindings, &fs_bindings], &layout, &target).map_err(named)?)
@@ -843,6 +862,11 @@ impl<'a> Gpu<'a> {
                 buffers.extend([(GLOBAL_BINDING, &self.window.as_ref().unwrap().buffer), (SUPPORT_BINDING, self.support.as_ref().unwrap())]);
             }
             descriptors.bind(&buffers);
+        }
+        for (descriptors, traversable) in pipeline.descriptors.iter_mut().zip(traversables) {
+            if let Some((binding, va)) = traversable {
+                descriptors.bind_acceleration_structure(binding, self.traversables[&va].built.as_ref().unwrap());
+            }
         }
         pipeline.descriptors[1].bind_images(&textures.iter().map(|(binding, key)| (*binding, &self.textures[key].1)).collect::<Vec<_>>());
 

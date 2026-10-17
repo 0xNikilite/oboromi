@@ -8,7 +8,8 @@ buffer a post pass can multiply in. Conventions, init program and `(verify)` mea
 The shaders are `#version 460` (GL_EXT_ray_query requires it) and compile with `glslangValidator -V --target-env
 vulkan1.2` to SPIR-V 1.5 with the RayQueryKHR capability. The NVIDIA driver turns ray queries into one block of
 TTUOPEN, TTUMACROFUSE, TTUST, TTUGO and TTULD wrapped in its own candidate loop, which `core/src/gpu/sm86/ray.rs` runs
-on a Vulkan ray query; the rig has captured that block from compute shaders but not yet these two shaders (verify).
+on a Vulkan ray query. The SM86 programs for `rt.frag` and `rt_ao.comp` are still missing, so this scene is not
+executable yet.
 
 ## Scene
 
@@ -86,15 +87,15 @@ VK_KHR_acceleration_structure and VK_KHR_ray_query:
 - The TLAS every frame from the guest instance list at 0x1300_0000 (two instances, transform plus BLAS VA), with
   PREFER_FAST_BUILD; two instances are cheap enough that refit is not worth it.
 - The translated shader gets the TLAS as an `accelerationStructureEXT` descriptor bound after its textures, which
-  `Gpu::register_acceleration_structure` resolves from the TLAS address in the cbuf; compute launches bind it, draws
-  do not yet.
+  `Gpu::register_acceleration_structure` resolves from the TLAS address in the cbuf for compute launches and draws.
+  Guest instance metadata remains in guest memory for the shader's transform and custom-index loads.
 
 The TTU emulation resolves the guest's TLAS address through this same registry, so a real game whose BVH bytes the
 host cannot read still gets a host-built structure from its build inputs.
 
 Local devices, vulkaninfo, Mesa 26.0.8: Intel Arc (MTL, ANV) and lavapipe (LLVM 21.1.8) both expose
 VK_KHR_acceleration_structure and VK_KHR_ray_query with `accelerationStructure` and `rayQuery` true (lavapipe also
-VK_KHR_ray_tracing_pipeline), so the demo and its tests run on CI.
+VK_KHR_ray_tracing_pipeline). Ray-query tests skip devices without these features.
 
 ## What the pipeline must provide
 

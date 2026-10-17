@@ -4,4 +4,4 @@ observed:true means the outputs were captured on silicon, false marks a case tha
 The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
 mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.
 driver-shaders holds NVIDIA driver 580 SM86 output (RTX A6000, Vulkan pipeline cache) for demos/shaders and a minimal pass-through triangle pair: each graphics file is the 0x80-byte program header followed by the code, the compute file is code only.
-query-candidates.comp.bin is the code of the rig's GL_EXT_ray_query candidates compute shader, compiled by NVIDIA driver 580 for an RTX 3090.
+query-{candidates,hit,address,flags}.comp.bin are the rig's GL_EXT_ray_query compute shaders, compiled by NVIDIA driver 580 for an RTX 3090; they cover candidate confirmation, opaque hits, a push-constant TLAS address and ray flags.

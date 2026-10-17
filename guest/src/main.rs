@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
 
-use guest::svc;
+use core::fmt::Write;
+use guest::{hid, svc};
 
 core::arch::global_asm!(
     ".section .text._start, \"ax\"",
@@ -13,9 +14,29 @@ core::arch::global_asm!(
     "b .",
 );
 
+struct Text {
+    bytes: [u8; 64],
+    len: usize,
+}
+
+impl Write for Text {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let end = self.len + s.len();
+        self.bytes.get_mut(self.len..end).ok_or(core::fmt::Error)?.copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn main() -> ! {
     let _ = svc::output_debug_string("hello from guest");
+    let mut text = Text { bytes: [0; 64], len: 0 };
+    let _ = match hid::read_full_key() {
+        Ok(pad) => write!(text, "buttons {:#x} left {} {}", pad.buttons, pad.left[0], pad.left[1]),
+        Err(code) => write!(text, "hid error {code:#x}"),
+    };
+    let _ = svc::output_debug_string(core::str::from_utf8(&text.bytes[..text.len]).unwrap_or_default());
     svc::exit_process()
 }
 

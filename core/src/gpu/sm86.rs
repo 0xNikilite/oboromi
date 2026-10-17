@@ -794,14 +794,7 @@ impl<'a> Decoder<'a> {
 
     fn alu_pair(&mut self, inst: u128, bit: u32) -> u32 {
         let index = (inst >> bit) as u32;
-        if !is_uniform(inst) {
-            return self.load_pair(index & 0xff);
-        }
-        let ur = index & 0x3f;
-        let words = [self.load_ureg(ur), self.load_ureg(nth_reg(ur, URZ, 1))];
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-        let ty = self.type_u64();
-        self.ir.emit_bitcast(ty, pair)
+        if is_uniform(inst) { self.load_ureg_pair(index & 0x3f) } else { self.load_pair(index & 0xff) }
     }
 
     fn store_alu_pair(&mut self, inst: u128, val: u32) {
@@ -876,15 +869,10 @@ impl<'a> Decoder<'a> {
                 let hi_offset = self.cached_const_u32(offset + 4);
                 [self.load_cbuf(bank, lo_offset), self.load_cbuf(bank, hi_offset)]
             }
-            (6 | 7, 1) => {
-                let ur = field & 0x3f;
-                [self.load_ureg(ur), self.load_ureg((ur + 1).min(63))]
-            }
+            (6 | 7, 1) => return self.load_ureg_pair(field & 0x3f),
             form => todo!("64-bit ALU source form {form:?}"),
         };
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-        let ty = self.type_u64();
-        self.ir.emit_bitcast(ty, pair)
+        self.join_u64(words[0], words[1])
     }
 
     // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
@@ -1298,11 +1286,20 @@ impl<'a> Decoder<'a> {
     }
 
     // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
-    fn load_pair(&mut self, reg: u32) -> u32 {
-        let words = [self.load_register(reg), self.load_register(nth_reg(reg, RZ, 1))];
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
+    fn join_u64(&mut self, lo: u32, hi: u32) -> u32 {
+        let pair = self.ir.emit_composite_construct(self.type_u32[2], &[lo, hi]);
         let ty = self.type_u64();
         self.ir.emit_bitcast(ty, pair)
+    }
+
+    fn load_pair(&mut self, reg: u32) -> u32 {
+        let [lo, hi] = [0, 1].map(|i| self.load_register(nth_reg(reg, RZ, i)));
+        self.join_u64(lo, hi)
+    }
+
+    fn load_ureg_pair(&mut self, ur: u32) -> u32 {
+        let [lo, hi] = [0, 1].map(|i| self.load_ureg(nth_reg(ur, URZ, i)));
+        self.join_u64(lo, hi)
     }
 
     fn store_pair(&mut self, reg: u32, val: u32) {
@@ -2860,7 +2857,6 @@ impl<'a> Decoder<'a> {
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let form = (inst >> 9) & 7;
-        let swapped = matches!(form, 2 | 3 | 7);
         let a = self.alu_reg(inst, 24);
         let (b, c32) = self.srcs_bc(inst);
         let modify_c = match form {
@@ -2875,31 +2871,22 @@ impl<'a> Decoder<'a> {
         };
         let carry = if x { self.pp_bit(inst) } else { self.const_u32_0 };
         let mode = inst as u32 & 7;
-        if mode == 5 {
+        if mode == 5 || mode == 7 {
             let ty = self.type_u64();
-            let a = if signed { self.ir.emit_s_convert(ty, a) } else { self.ir.emit_u_convert(ty, a) };
-            let b = if signed { self.ir.emit_s_convert(ty, b) } else { self.ir.emit_u_convert(ty, b) };
-            let c = if swapped {
-                match form {
-                    2 => self.ir.emit_s_convert(ty, c32),
-                    3 => {
-                        let bank = (inst >> 54 & 0x1f) as u32;
-                        let offset = ((inst >> 40 & 0x3fff) << 2) as u32;
-                        let offsets = [offset, offset + 4].map(|v| self.cached_const_u32(v));
-                        let words = offsets.map(|v| self.load_cbuf(ResourceKind::Cbuf(bank), v));
-                        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-                        self.ir.emit_bitcast(ty, pair)
-                    }
-                    7 => {
-                        let ur = (inst >> 32 & 0x3f) as u32;
-                        let words = [self.load_ureg(ur), self.load_ureg((ur + 1).min(63))];
-                        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-                        self.ir.emit_bitcast(ty, pair)
-                    }
-                    _ => unreachable!(),
-                }
-            } else {
-                self.alu_pair(inst, 64)
+            let [a, b] = [a, b].map(|x| if signed { self.ir.emit_s_convert(ty, x) } else { self.ir.emit_u_convert(ty, x) });
+            let product = self.ir.emit_imul(ty, a, b);
+            if mode == 7 {
+                let shift = self.ir.emit_constant_typed(ty, 32u64);
+                let hi = self.ir.emit_shift_right_logical(ty, product, shift);
+                let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
+                let result = self.ir.emit_iadd(self.type_u32[1], hi, c32);
+                let result = self.ir.emit_iadd(self.type_u32[1], result, carry);
+                return self.store_alu(inst, result);
+            }
+            let c = match form {
+                2 => self.ir.emit_s_convert(ty, c32),
+                3 | 7 => self.alu_src_pair(inst),
+                _ => self.alu_pair(inst, 64),
             };
             let c = if x && modify_c {
                 self.ir.emit_not(ty, c)
@@ -2910,21 +2897,9 @@ impl<'a> Decoder<'a> {
                 c
             };
             let carry = self.ir.emit_u_convert(ty, carry);
-            let product = self.ir.emit_imul(ty, a, b);
             let result = self.ir.emit_iadd(ty, product, c);
             let result = self.ir.emit_iadd(ty, result, carry);
             self.store_alu_pair(inst, result);
-        } else if mode == 7 {
-            let ty = self.type_u64();
-            let a = if signed { self.ir.emit_s_convert(ty, a) } else { self.ir.emit_u_convert(ty, a) };
-            let b = if signed { self.ir.emit_s_convert(ty, b) } else { self.ir.emit_u_convert(ty, b) };
-            let product = self.ir.emit_imul(ty, a, b);
-            let shift = self.ir.emit_constant_typed(ty, 32u64);
-            let hi = self.ir.emit_shift_right_logical(ty, product, shift);
-            let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
-            let result = self.ir.emit_iadd(self.type_u32[1], hi, c32);
-            let result = self.ir.emit_iadd(self.type_u32[1], result, carry);
-            self.store_alu(inst, result);
         } else {
             let product = self.ir.emit_imul(self.type_u32[1], a, b);
             let result = self.ir.emit_iadd(self.type_u32[1], product, c32);
@@ -3341,9 +3316,8 @@ impl<'a> Decoder<'a> {
             let a = if sx32 {
                 self.ir.emit_s_convert(ty64, a)
             } else {
-                let words = [a, self.alu_reg(inst, 64)];
-                let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-                self.ir.emit_bitcast(ty64, pair)
+                let hi = self.alu_reg(inst, 64);
+                self.join_u64(a, hi)
             };
             let shift = self.ir.emit_constant_typed(ty64, (32 - scale) as u64);
             let a = self.ir.emit_shift_right_logical(ty64, a, shift);
@@ -3652,8 +3626,7 @@ impl<'a> Decoder<'a> {
         let a = self.alu_reg(inst, 24);
         let (sel, b) = self.srcs_bc(inst);
         let u64_ty = self.type_u64();
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &[a, b]);
-        let bytes = self.ir.emit_bitcast(u64_ty, pair);
+        let bytes = self.join_u64(a, b);
         let mode = inst >> 72 & 7;
         let [c1, c3, c7, c8] = [1, 3, 7, 8].map(|v| self.cached_const_u32(v));
         let n = self.ir.emit_bitwise_and(ty, sel, c3);
@@ -3914,8 +3887,7 @@ impl<'a> Decoder<'a> {
         let (fmt, right) = (inst >> 73 & 3, inst >> 76 & 1 != 0);
         let shift = self.shift_amount(inst, shift, if fmt < 2 { 64 } else { 32 });
         let u64_ty = self.type_u64();
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &[low, high]);
-        let mut x = self.ir.emit_bitcast(u64_ty, pair);
+        let mut x = self.join_u64(low, high);
         // A clamped 64 is a full-width shift, which SPIR-V leaves undefined, so it goes in two halves.
         let half = self.ir.emit_shift_right_logical(ty, shift, self.const_u32_1);
         let rest = self.ir.emit_isub(ty, shift, half);

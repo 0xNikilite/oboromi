@@ -99,7 +99,7 @@ Commands run one after another here, so nothing else could release a waiting acq
 | Item | Why it waits |
 |---|---|
 | MME64 macros, the GPU's built-in macro processor | No Ampere header exists; the only public MME64 docs are Turing's |
-| Syncpoint and channel calls, nvdrv, nvmap, address-space calls | No loader or game makes them yet |
+| Syncpoint and channel calls, nvdrv, nvmap, address-space calls | They arrive with the [guest path](guest-path.md) |
 | 2D, DMA and inline-to-memory classes | The first scenes do not need them |
 
 Verified by: `core/src/tests/gpu/fifo.rs`, `memory_map.rs` and `qmd.rs`, and the engine tests in `engine.rs` (draws, render to texture, clears, reports, acquires, VA remap).

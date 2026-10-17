@@ -94,9 +94,19 @@ pub struct Mapping<'a> {
 }
 
 impl Mapping<'_> {
-    pub fn refresh(&mut self, ram: &[u8]) -> Result<(), VkError> {
-        let bytes = self.ranges.iter().map(|range| &ram[range.start as usize..range.end as usize]).collect::<Vec<_>>().concat();
-        self.buffer.write(&bytes)
+    /// Copies the pages `changed` picks, given a guest-physical start and length, into the buffer.
+    pub fn refresh(&mut self, ram: &[u8], changed: impl Fn(u64, u64) -> bool) -> Result<(), VkError> {
+        let mut offset = 0;
+        for range in &self.ranges {
+            for page in pages(range.start, range.end - range.start) {
+                let piece = (page * PAGE).max(range.start)..((page + 1) * PAGE).min(range.end);
+                if changed(piece.start, piece.end - piece.start) {
+                    self.buffer.write_at(offset + piece.start - range.start, &ram[piece.start as usize..piece.end as usize]);
+                }
+            }
+            offset += range.end - range.start;
+        }
+        self.buffer.flush()
     }
 }
 
@@ -128,7 +138,7 @@ impl MemoryTracker {
         let ranges: Vec<_> = ranges.into_iter().collect();
         let len = ranges.iter().map(|range| range.end - range.start).sum::<u64>();
         let mut mapping = Mapping { buffer: HostBuffer::new(state, len.max(1))?, ranges };
-        mapping.refresh(ram)?;
+        mapping.refresh(ram, |_, _| true)?;
         Ok(mapping)
     }
 

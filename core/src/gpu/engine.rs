@@ -673,7 +673,7 @@ impl<'a> Gpu<'a> {
         match self.mirrors.get_mut(&ranges) {
             Some((seen, _)) if *seen == generation => {}
             Some((seen, mapping)) => {
-                mapping.refresh(&self.ram).map_err(named)?;
+                mapping.refresh(&self.ram, |pa, len| self.memory.generation(pa, len) > *seen).map_err(named)?;
                 *seen = generation;
             }
             None => {

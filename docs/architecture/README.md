@@ -1,6 +1,6 @@
 # Architecture
 
-The emulator is made of a Qt window, an emulated ARM CPU, stubs for the Switch's operating system services, and a GPU emulator. Only the GPU part does real work today. For example, the Triangle button writes GPU commands into the emulated console's memory, and the GPU part draws them on the PC's graphics card.
+The emulator is made of a Qt window, an emulated ARM CPU, a registry of the Switch's operating system services, and a GPU emulator. The GPU part is the furthest along, and the CPU, service and audio parts are being built out. For example, the Triangle button writes GPU commands into the emulated console's memory, and the GPU part draws them on the PC's graphics card.
 
 ```mermaid
 flowchart TB
@@ -8,7 +8,7 @@ flowchart TB
     FFI --> SYS["sys::State<br/>List of OS services"]
     FFI --> CPU["cpu<br/>Emulated ARM cores"]
     CPU --- RAM[("Guest RAM<br/>The console's memory")]
-    SYS --> NN["nn<br/>Empty service stubs"]
+    SYS --> NN["nn<br/>Service registry"]
     FFI --> ENG
     subgraph GPU["GPU"]
         FIFO["fifo + threed<br/>Reads the game's GPU commands"] --> ENG["Engine<br/>Runs each draw against console memory"]
@@ -31,7 +31,11 @@ flowchart TB
 
 | Page | Question it answers |
 |---|---|
-| [Emulator overview](oboromi-overview.md) | What works outside the GPU, and what is only a stub |
+| [Emulator overview](oboromi-overview.md) | What was already there, and what each part does today |
+| [CPU and shared memory](cpu.md) | How the cores run ARM code, share memory with the GPU, and what the kernel layer adds |
+| [Services](services.md) | How a game reaches a service, and which services are being built |
+| [Audio](audio.md) | How the audio renderer works, and the planned audio demos |
+| [Guest path](guest-path.md) | How our own guest program will drive the GPU through real system calls |
 | [GPU pipeline](gpu-pipeline.md) | How a game's draw command becomes pixels, and which branch holds what |
 | [SASS translator](sass-translator.md) | How NVIDIA shader machine code becomes a Vulkan shader |
 | [Vulkan backend](vulkan-backend.md) | How oboromi drives the PC's graphics card, and how it stays fast |
@@ -40,7 +44,7 @@ flowchart TB
 | [Verification](verification.md) | How each instruction is proven against a real chip |
 | [CUDA](cuda.md) | How compiled NVIDIA compute programs run as test programs |
 | [Demos](demos.md) | What the window draws today, and the scenes planned next |
-| [Roadmap](roadmap.md) | What is done, what is open, and the honest limits |
+| [Roadmap](roadmap.md) | What is done, what is in progress, and the honest limits |
 | [Glossary](../glossary.md) | Every term, in one plain sentence plus an example |
 
 ## Where are the design choices explained?

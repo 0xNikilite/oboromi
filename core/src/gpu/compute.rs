@@ -80,11 +80,18 @@ impl<'a> HostBuffer<'a> {
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<(), VkError> {
-        assert!(data.len() as u64 <= self.size);
-        unsafe {
-            self.ptr.copy_from_nonoverlapping(data.as_ptr(), data.len());
-            Ok(self.device.flush_mapped_memory_ranges(&self.mapped())?)
-        }
+        self.write_at(0, data);
+        self.flush()
+    }
+
+    /// A write without the flush, for several before one.
+    pub fn write_at(&mut self, offset: u64, data: &[u8]) {
+        assert!(offset + data.len() as u64 <= self.size);
+        unsafe { self.ptr.add(offset as usize).copy_from_nonoverlapping(data.as_ptr(), data.len()) }
+    }
+
+    pub fn flush(&self) -> Result<(), VkError> {
+        unsafe { Ok(self.device.flush_mapped_memory_ranges(&self.mapped())?) }
     }
 
     pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {

@@ -1,7 +1,7 @@
 //! fsp-srv (switchbrew Filesystem_services) as Ryujinx Services/Fs splits it: IFileSystemProxy hands out an
 //! IFileSystem over the host directory standing in for the SD card and an IStorage over the program's RomFS.
 use crate::cpu::cpu_manager::MEMORY_SIZE;
-use crate::kernel::{Error, Object};
+use crate::kernel::Error;
 use crate::nn::ServiceTrait;
 use crate::nn::hipc::{Buffer, Request, Response, Service};
 use crate::sys;
@@ -43,7 +43,7 @@ fn data(bytes: impl Into<Vec<u8>>) -> Response {
 }
 
 fn session(service: impl Service + 'static) -> Response {
-    Response { move_handles: vec![Object::Session(Rc::new(RefCell::new(service)))], ..Response::default() }
+    Response { objects: vec![Rc::new(RefCell::new(service))], ..Response::default() }
 }
 
 /// The first `size` bytes of `buffer`, as (address, length) inside guest memory.

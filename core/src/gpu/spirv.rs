@@ -158,7 +158,7 @@ pub enum BuiltIn {
 
 #[derive(Debug, Clone)]
 pub struct Emitter {
-    sections: [Vec<u32>; 11],
+    sections: [Vec<u32>; 12],
     next_id: u32,
 }
 
@@ -530,6 +530,16 @@ impl Emitter {
 
     pub fn emit_function_end(&mut self) {
         self.inst(56, &[]);
+    }
+
+    // A function emitted while another is open goes after it, in section 11.
+    pub fn begin_function_after_current(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.sections[10])
+    }
+
+    pub fn end_function_after_current(&mut self, current: Vec<u32>) {
+        let function = std::mem::replace(&mut self.sections[10], current);
+        self.sections[11].extend(function);
     }
 
     pub fn emit_function_call(&mut self, result_type: u32, function: u32, args: &[u32]) -> u32 {

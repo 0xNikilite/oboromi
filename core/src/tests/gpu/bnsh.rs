@@ -28,6 +28,26 @@ mod tests {
     }
 
     #[test]
+    fn bnsh_compute_program_uses_its_stage_pointers() {
+        let code = [exit(), bra(-16)].into_iter().flat_map(u128::to_le_bytes).collect::<Vec<_>>();
+        let mut file = vec![0; 0x400];
+        file[..4].copy_from_slice(b"BNSH");
+        file[0x16] = 0x20;
+        file[0x20..0x24].copy_from_slice(b"grsc");
+        for (at, value, bytes) in [(0x3c, 1u64, 4), (0x40, 0x100, 8), (0x48, 0x80, 8), (0x84, 0x100, 4), (0x88, 0x300, 8), (0x110, 0x140, 8), (0x170, 0x200, 8), (0x1c0, 0x240, 8), (0x200, 1, 2), (0x210, 0x220, 8), (0x220, 0x300, 8), (0x268, 0x280, 8)] {
+            file[at..at + bytes].copy_from_slice(&value.to_le_bytes()[..bytes]);
+        }
+        for (axis, size) in [8u32, 4, 2].into_iter().enumerate() {
+            file[0x2bc + 4 * axis..0x2c0 + 4 * axis].copy_from_slice(&size.to_le_bytes());
+        }
+        file[0x300..0x300 + code.len()].copy_from_slice(&code);
+        let found = programs(&file);
+        assert_eq!((found.len(), found[0].stage, &found[0].code), (1, Stage::Compute { local_size: [8, 4, 2] }, &code));
+        file[0x170..0x178].fill(0);
+        assert!(programs(&file).is_empty());
+    }
+
+    #[test]
     fn precompiled_program_metadata_survives_the_disk_cache() {
         let instructions = [mov_imm(4, 0), mov_imm(5, 1), stg(4, 0, 5), exit(), bra(-16)];
         let program = Program {

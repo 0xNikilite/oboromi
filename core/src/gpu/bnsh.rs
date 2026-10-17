@@ -36,7 +36,10 @@ fn program(file: &[u8], at: usize, end: usize) -> Option<Program> {
     let header = file.get(at..at + SPH_BYTES)?;
     let sph = std::array::from_fn(|i| u32::from_le_bytes(header[4 * i..4 * i + 4].try_into().unwrap()));
     let stage = stage(&sph)?;
-    let start = at + SPH_BYTES;
+    program_code(file, at + SPH_BYTES, end, stage, sph)
+}
+
+fn program_code(file: &[u8], start: usize, end: usize, stage: Stage, sph: [u32; 32]) -> Option<Program> {
     let mut len = 0;
     for (pc, word) in (0..).zip(file.get(start..end)?.chunks_exact(16)) {
         len += 16;
@@ -51,15 +54,34 @@ fn program(file: &[u8], at: usize, end: usize) -> Option<Program> {
 /// Every program in the shader binary pool of a BNSH file. Its offsets are file-relative, so the relocation table is not needed.
 pub fn programs(file: &[u8]) -> Vec<Program> {
     let int = |at: usize, len: usize| file.get(at..at + len).map(|b| b.iter().rev().fold(0, |v, &b| v << 8 | b as usize));
+    let Some(grsc) = file.starts_with(b"BNSH").then(|| int(0x16, 2)).flatten() else { return Vec::new() };
     let pool = || {
-        let grsc = int(0x16, 2)?;
         let pool = (file.get(grsc..grsc + 4)? == b"grsc").then(|| int(grsc + 0x28, 8))??;
         let memory = int(pool + 8, 8)?;
         Some(memory..memory.checked_add(int(pool + 4, 4)?)?.min(file.len()))
     };
-    let Some(pool) = file.starts_with(b"BNSH").then(pool).flatten() else { return Vec::new() };
+    let Some(pool) = pool() else { return Vec::new() };
     let entries = pool.clone().step_by(16).filter(|&at| file[at..].starts_with(&POOL_ENTRY_MAGIC));
-    entries.filter_map(|at| program(file, at + POOL_ENTRY_SPH, pool.end)).collect()
+    let mut programs: Vec<_> = entries.filter_map(|at| program(file, at + POOL_ENTRY_SPH, pool.end)).collect();
+    let pointer = |at| int(at, 8).filter(|&offset| offset != 0 && offset < file.len());
+    let count = int(grsc + 0x1c, 4).unwrap_or(0);
+    let variations = pointer(grsc + 0x20).unwrap_or(file.len());
+    for variation in 0..count.min(file.len().saturating_sub(variations) / 0x40) {
+        let Some(binary) = pointer(variations + 0x40 * variation + 0x10) else { continue };
+        let Some(array) = pointer(binary + 0x30) else { continue };
+        let Some(pointers) = pointer(array + 0x10) else { continue };
+        let Some(reflection) = pointer(binary + 0x80).and_then(|at| pointer(at + 0x28)) else { continue };
+        let local_size = std::array::from_fn(|axis| int(reflection + 0x3c + 4 * axis, 4).unwrap_or(0) as u32);
+        if local_size.contains(&0) { continue }
+        for index in 0..int(array, 2).unwrap_or(0) {
+            let Some(start) = pointer(pointers + 8 * index) else { continue };
+            if !pool.contains(&start) { continue }
+            if let Some(program) = program_code(file, start, pool.end, Stage::Compute { local_size }, [0; 32]) {
+                programs.push(program);
+            }
+        }
+    }
+    programs
 }
 
 /// Program headers anywhere in `file` whose program translates: candidates for files no container parser knows.

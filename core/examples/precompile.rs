@@ -14,9 +14,14 @@ fn files(path: &Path, out: &mut Vec<PathBuf>) {
 
 // The key `Gpu::module` gives a program whose vertex attributes are all fetched as floats.
 fn key(program: &Program) -> u64 {
-    let sph: [u8; 0x80] = std::array::from_fn(|i| (program.sph[i / 4] >> (8 * (i % 4))) as u8);
     let mut hasher = DefaultHasher::new();
-    (sph, &program.words(), 0u32, 0u32).hash(&mut hasher);
+    match program.stage {
+        oboromi_core::gpu::sm86::Stage::Compute { local_size } => (&program.words(), local_size).hash(&mut hasher),
+        _ => {
+            let sph: [u8; 0x80] = std::array::from_fn(|i| (program.sph[i / 4] >> (8 * (i % 4))) as u8);
+            (sph, &program.words(), 0u32, 0u32).hash(&mut hasher);
+        }
+    }
     hasher.finish()
 }
 

@@ -11,6 +11,7 @@ mod fp64;
 mod int_alu;
 mod logic;
 mod memory;
+mod program;
 mod shared;
 mod special;
 mod texture;

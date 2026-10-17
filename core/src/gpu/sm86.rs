@@ -8,7 +8,7 @@ use crate::gpu::spirv::{self, storage_class};
 
 const MAX_REG_COUNT: usize = 254;
 const MAX_UNIFORM_REG_COUNT: usize = 63;
-pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1;
+pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1 + 1;
 pub const SUPPORT_BINDING: u32 = 0;
 pub const CBUF_BINDING: u32 = 1;
 pub const GLOBAL_BINDING: u32 = 9;
@@ -313,6 +313,7 @@ pub struct Decoder<'a> {
     type_abstract_state: u32,
     type_ptr_abstract_state_regs: u32,
     var_abstract_state: u32,
+    var_live: u32,
     var_pc: u32,
     var_rpc: [u32; 2],
     pc: u32,
@@ -407,6 +408,7 @@ impl<'a> Decoder<'a> {
             type_abstract_state: 0,
             type_ptr_abstract_state_regs: 0,
             var_abstract_state: 0,
+            var_live: 0,
             var_pc: 0,
             var_rpc: [0; 2],
             pc: 0,
@@ -438,7 +440,7 @@ impl<'a> Decoder<'a> {
     pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, local_size: [u32; 3]) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1]].into_iter().chain(resources).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live].into_iter().chain(resources).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
@@ -496,6 +498,7 @@ impl<'a> Decoder<'a> {
         self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, storage_class::PRIVATE);
         self.var_pc = self.ir.emit_variable(self.type_ptr_u32[1], storage_class::PRIVATE);
         self.var_rpc = [(); 2].map(|_| self.ir.emit_variable(self.type_ptr_u32[1], storage_class::PRIVATE));
+        self.var_live = self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_1);
 
 
     }
@@ -660,7 +663,11 @@ impl<'a> Decoder<'a> {
         assert_eq!(leaders.last(), Some(&len), "branch target outside the program");
         let [header, body, dispatched, cont, merge] = [(); 5].map(|_| self.ir.alloc_id());
         let blocks: Vec<(u32, u32)> = leaders[..leaders.len() - 1].iter().map(|&pc| (pc, self.ir.alloc_id())).collect();
-        self.ir.emit_store(self.var_pc, self.const_u32_0);
+        let live = self.ir.emit_load(self.type_u32[1], self.var_live);
+        let dead = self.ir.emit_iequal(self.type_bool[1], live, self.const_u32_0);
+        let end = self.cached_const_u32(len);
+        let start = self.ir.emit_select(self.type_u32[1], dead, end, self.const_u32_0);
+        self.ir.emit_store(self.var_pc, start);
         self.ir.emit_branch(header);
         self.ir.emit_label_id(header);
         self.ir.emit_loop_merge(merge, cont, 0);
@@ -683,8 +690,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_branch(cont);
         self.ir.emit_label_id(cont);
         let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
-        let len = self.cached_const_u32(len);
-        let done = self.ir.emit_ugreater_than_equal(self.type_bool[1], pc, len);
+        let done = self.ir.emit_ugreater_than_equal(self.type_bool[1], pc, end);
         self.ir.emit_branch_conditional(done, merge, header);
         self.ir.emit_label_id(merge);
     }
@@ -752,7 +758,8 @@ impl<'a> Decoder<'a> {
             s if s < regs => self.state_ptr(&[0, s]),
             s if s == regs => self.state_ptr(&[1]),
             s if s <= regs + uregs => self.state_ptr(&[2, s - regs - 1]),
-            _ => self.state_ptr(&[3]),
+            s if s == regs + uregs + 1 => self.state_ptr(&[3]),
+            _ => self.var_live,
         }
     }
 

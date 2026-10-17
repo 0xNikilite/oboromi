@@ -42,6 +42,9 @@ struct Engine {
     hooked: usize,
 }
 
+// All Unicorn handles and their internal Rc state remain behind the engine mutex.
+unsafe impl Send for Engine {}
+
 impl Deref for Engine {
     type Target = Emu;
     fn deref(&self) -> &Emu { &self.emu }
@@ -471,6 +474,3 @@ impl UnicornCPU {
         }
     }
 }
-
-unsafe impl Send for UnicornCPU {}
-unsafe impl Sync for UnicornCPU {}

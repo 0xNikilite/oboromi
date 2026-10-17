@@ -401,7 +401,18 @@ impl Kernel {
                     Some(id) => session.domain.as_ref().and_then(|objects| objects.get(id)).cloned(),
                     None => Some(session.service.clone()),
                 };
-                service.map_or_else(|| hipc::Response::error(hipc::SfError::InvalidInHeader.code()), |service| service.borrow_mut().dispatch(command, &mut request))
+                service.map_or_else(|| hipc::Response::error(hipc::SfError::InvalidInHeader.code()), |service| {
+                    let mut service = service.borrow_mut();
+                    let reply = service.dispatch(command, &mut request);
+                    for object in reply.copy_handles.iter().chain(&reply.move_handles) {
+                        if let Object::Event(event) = object
+                            && let Some(period) = service.event_period(event)
+                            && !self.scheduler.timers.iter().any(|timer| Rc::ptr_eq(&timer.event, event)) {
+                            self.scheduler.timers.push(Timer { event: event.clone(), deadline: cpu.ticks().saturating_add(period), period });
+                        }
+                    }
+                    reply
+                })
             }
             Ok(ParsedRequest::Close(id)) => {
                 session.domain.as_mut().and_then(|objects| objects.remove(id));

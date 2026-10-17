@@ -455,13 +455,17 @@ impl<'a> Decoder<'a> {
         self.ir
             .emit_execution_mode(func, spirv::execution_mode::LOCAL_SIZE, &local_size);
         use spirv::{capability as cap, execution_mode as mode};
-        if device.is_some_and(|d| d.signed_zero_inf_nan_preserve) {
-            self.ir.emit_capability(cap::SIGNED_ZERO_INF_NAN_PRESERVE);
-            self.ir.emit_execution_mode(func, mode::SIGNED_ZERO_INF_NAN_PRESERVE, &[32]);
-        }
-        if device.is_some_and(|d| d.denorm_preserve) {
-            self.ir.emit_capability(cap::DENORM_PRESERVE);
-            self.ir.emit_execution_mode(func, mode::DENORM_PRESERVE, &[32]);
+        let Some(device) = device else { return };
+        for (capability, execution_mode, widths) in [
+            (cap::SIGNED_ZERO_INF_NAN_PRESERVE, mode::SIGNED_ZERO_INF_NAN_PRESERVE, device.signed_zero_inf_nan_preserve),
+            (cap::DENORM_PRESERVE, mode::DENORM_PRESERVE, device.denorm_preserve),
+        ] {
+            if widths.contains(&true) {
+                self.ir.emit_capability(capability);
+            }
+            for (width, _) in [16, 32, 64].into_iter().zip(widths).filter(|&(_, supported)| supported) {
+                self.ir.emit_execution_mode(func, execution_mode, &[width]);
+            }
         }
     }
 
@@ -1343,19 +1347,22 @@ impl<'a> Decoder<'a> {
         let ty = self.type_f16x2();
         let half2 = self.ir.emit_composite_construct(ty, &halves);
         let mut packed = self.bitcast_u32(half2);
-        if rtz {
-            let width = self.cached_const_u32(16);
-            for i in 0..2 {
+        let [width, canonical_nan] = [16, 0x7fff].map(|c| self.cached_const_u32(c));
+        for i in 0..2 {
+            let offset = self.cached_const_u32(16 * i as u32);
+            if rtz {
                 let back = self.ir.emit_f_convert(self.type_f32[1], halves[i]);
                 let source = self.fp_src(self.type_f32[1], lanes[i], true, false);
                 let back = self.fp_src(self.type_f32[1], back, true, false);
                 let above = self.ir.emit_ford_greater_than(self.type_bool[1], back, source);
-                let offset = self.cached_const_u32(16 * i as u32);
                 let bits = self.ir.emit_bit_field_u_extract(self.type_u32[1], packed, offset, width);
                 let down = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
                 let bits = self.ir.emit_select(self.type_u32[1], above, down, bits);
                 packed = self.ir.emit_bit_field_insert(self.type_u32[1], packed, bits, offset, width);
             }
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], lanes[i]);
+            let canonical = self.ir.emit_bit_field_insert(self.type_u32[1], packed, canonical_nan, offset, width);
+            packed = self.ir.emit_select(self.type_u32[1], nan, canonical, packed);
         }
         packed
     }
@@ -1388,7 +1395,7 @@ impl<'a> Decoder<'a> {
         } else {
             lanes
         };
-        let bits = if f32_out { self.bitcast_u32(lanes[0]) } else { self.pack_half2(lanes) };
+        let bits = if f32_out { self.canonical_nan_bits(lanes[0]) } else { self.pack_half2(lanes) };
         let bits = match (ftz, f32_out) {
             (false, _) => bits,
             (true, true) => self.flush_subnormal(bits),
@@ -1628,7 +1635,7 @@ impl<'a> Decoder<'a> {
             let hi = self.cached_const_u32(hi);
             let result = self.ir.emit_select(self.type_u32[1], below, lo, converted);
             let result = self.ir.emit_select(self.type_u32[1], above, hi, result);
-            let result = self.ir.emit_select(self.type_u32[1], nan, self.const_u32_0, result);
+            let result = self.ir.emit_select(self.type_u32[1], nan, lo, result);
             self.store_register(rd, result);
         } else {
             let u64_ty = self.type_u64();
@@ -1641,10 +1648,9 @@ impl<'a> Decoder<'a> {
             };
             let lo = self.ir.emit_constant_typed(u64_ty, if signed { i64::MIN as u64 } else { 0 });
             let hi = self.ir.emit_constant_typed(u64_ty, if signed { i64::MAX as u64 } else { u64::MAX });
-            let zero = self.ir.emit_constant_typed(u64_ty, 0u64);
             let result = self.ir.emit_select(u64_ty, below, lo, converted);
             let result = self.ir.emit_select(u64_ty, above, hi, result);
-            let result = self.ir.emit_select(u64_ty, nan, zero, result);
+            let result = self.ir.emit_select(u64_ty, nan, lo, result);
             self.store_pair(rd, result);
         }
     }
@@ -1694,8 +1700,35 @@ impl<'a> Decoder<'a> {
         } else {
             val
         };
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
         if ftz { self.flush_subnormal(bits) } else { bits }
+    }
+
+    fn canonical_nan_bits(&mut self, val: u32) -> u32 {
+        let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+        let canonical = self.cached_const_u32(0x7fff_ffff);
+        let bits = self.bitcast_u32(val);
+        self.ir.emit_select(self.type_u32[1], nan, canonical, bits)
+    }
+
+    // NVIDIA returns the first quiet NaN operand, else the first signaling one quieted, in both cases without its sign.
+    fn propagated_nan_bits(&mut self, val: u32, operands: &[u32]) -> u32 {
+        let (ty, bool_ty) = (self.type_u64(), self.type_bool[1]);
+        let [magnitude, infinity, quiet, default] = [0x7fff_ffff_ffff_ffffu64, 0x7ff0_0000_0000_0000, 0x7ff8_0000_0000_0000, 0xfff8_0000_0000_0000]
+            .map(|c| self.ir.emit_constant_typed(ty, c));
+        let mut nan_bits = default;
+        for quiet_only in [false, true] {
+            for &operand in operands.iter().rev() {
+                let bits = self.bitcast_u64(operand);
+                let bits = self.ir.emit_bitwise_and(ty, bits, magnitude);
+                let nan = if quiet_only { self.ir.emit_ugreater_than_equal(bool_ty, bits, quiet) } else { self.ir.emit_ugreater_than(bool_ty, bits, infinity) };
+                let quieted = self.ir.emit_bitwise_or(ty, bits, quiet);
+                nan_bits = self.ir.emit_select(ty, nan, quieted, nan_bits);
+            }
+        }
+        let nan = self.ir.emit_f_is_nan(bool_ty, val);
+        let bits = self.bitcast_u64(val);
+        self.ir.emit_select(ty, nan, nan_bits, bits)
     }
 
     fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
@@ -2459,7 +2492,7 @@ impl<'a> Decoder<'a> {
         let (abs, neg) = if form == 1 { (inst >> 74 & 1 != 0, inst >> 75 & 1 != 0) } else { (inst >> 62 & 1 != 0, inst >> 63 & 1 != 0) };
         let b = self.fp64_src(b, !imm && abs, !imm && neg);
         let result = self.ir.emit_fadd(ty, a, b);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn depbar(&mut self, inst: u128) {
@@ -2488,7 +2521,7 @@ impl<'a> Decoder<'a> {
         let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
         let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [c, src] } else { [src, c] };
         let result = self.glsl(spirv::glsl::FMA, ty, &[a, b, c]);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b, c]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dmma(&mut self, inst: u128) {
@@ -2522,7 +2555,7 @@ impl<'a> Decoder<'a> {
         let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
         let b = self.fp64_alu_src(inst);
         let result = self.ir.emit_fmul(ty, a, b);
-        let result = self.bitcast_u64(result);
+        let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dsetp(&mut self, inst: u128) {
@@ -2699,12 +2732,15 @@ impl<'a> Decoder<'a> {
         let round = if inst >> 78 & 3 == 3 { spirv::glsl::TRUNC } else { spirv::glsl::ROUND_EVEN };
         let (b, c) = self.srcs_bc(inst);
         let a = self.load_register((inst >> 24 & 0xff) as u32);
+        let nan_byte = self.cached_const_u32(0x80);
         let [a, b] = [a, b].map(|x| {
             let x = self.bitcast_f32(x);
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], x);
             let x = self.glsl(round, self.type_f32[1], &[x]);
             let x = self.glsl(81, self.type_f32[1], &[x, lo, hi]);
             let x = self.ir.emit_convert_f_to_s(self.type_s32[1], x);
-            self.bitcast_u32(x)
+            let x = self.bitcast_u32(x);
+            self.ir.emit_select(self.type_u32[1], nan, nan_byte, x)
         });
         let c = self.high_half_if(c, inst >> 72 & 1 != 0);
         let word = self.pack_narrow(a, b, c, 8);
@@ -2734,9 +2770,10 @@ impl<'a> Decoder<'a> {
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn flo(&mut self, inst: u128) {
-        assert!(inst >> 81 & 7 == 7, "FLO predicate output not implemented");
         let ty = self.type_u32[1];
         let b = self.src_b_maybe_inverted(inst);
+        let nonzero = self.emit_cmp_against_zero(5, b);
+        self.store_pred_bit(is_uniform(inst), (inst >> 81 & 7) as u32, nonzero);
         let msb = self.glsl(if inst >> 73 & 1 != 0 { spirv::glsl::FIND_S_MSB } else { spirv::glsl::FIND_U_MSB }, ty, &[b]);
         let res = if inst >> 74 & 1 != 0 {
             let none = self.cached_const_u32(u32::MAX);
@@ -2759,7 +2796,7 @@ impl<'a> Decoder<'a> {
         // NMin and NMax return the other operand when one is NaN, like the hardware.
         let [min, max] = [spirv::glsl::N_MIN, spirv::glsl::N_MAX].map(|op| self.glsl(op, self.type_f32[1], &[a, b]));
         let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fmul(&mut self, inst: u128) {
@@ -2821,16 +2858,15 @@ impl<'a> Decoder<'a> {
             10 => {
                 let val = self.fp_alu_src(inst, ftz);
                 let val = self.glsl(ROUNDING[rnd], self.type_f32[1], &[val]);
-                let val = self.bitcast_u32(val);
+                let val = self.canonical_nan_bits(val);
                 self.store_register(rd, val);
             }
             15 => {
                 let val = self.fp64_alu_src(inst);
                 let ty = self.type_f64();
-                let val = self.glsl(ROUNDING[rnd], ty, &[val]);
-                let u64_ty = self.type_u64();
-                let val = self.ir.emit_bitcast(u64_ty, val);
-                self.store_pair(rd, val);
+                let rounded = self.glsl(ROUNDING[rnd], ty, &[val]);
+                let bits = self.propagated_nan_bits(rounded, &[val]);
+                self.store_pair(rd, bits);
             }
             _ => todo!("FRND format {fmt} requires f16 support"),
         }
@@ -2996,7 +3032,7 @@ impl<'a> Decoder<'a> {
             if inst >> 79 & 1 == 0 {
                 return val;
             }
-            let negative = self.ir.emit_ford_less_than(self.type_bool[1], val, zero);
+            let negative = self.ir.emit_ford_less_than_equal(self.type_bool[1], val, zero);
             self.ir.emit_select(self.type_f32[1], negative, zero, val)
         });
         self.store_half2(inst, val, ofmt == 1, inst >> 77 & 1 != 0, ftz);
@@ -4014,7 +4050,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn mufu(&mut self, inst: u128) {
-        use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
+        use spirv::glsl::{COS, EXP2, F_ABS, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
         let ty = self.type_f32[1];
         let x = self.fp_alu_src(inst, false);
         let val = match inst >> 74 & 0xf {
@@ -4032,10 +4068,19 @@ impl<'a> Decoder<'a> {
             }
             5 => self.glsl(INVERSE_SQRT, ty, &[x]),
             8 => self.glsl(SQRT, ty, &[x]),
-            9 => self.glsl(TANH, ty, &[x]),
+            // tanh(x) rounds to x below 2^-12, where drivers lose denormals that silicon keeps.
+            9 => {
+                let tanh = self.glsl(TANH, ty, &[x]);
+                let magnitude = self.glsl(F_ABS, ty, &[x]);
+                let tiny = self.ir.emit_constant_typed(ty, 2f32.powi(-12));
+                let linear = self.ir.emit_ford_less_than(self.type_bool[1], magnitude, tiny);
+                self.ir.emit_select(ty, linear, x, tanh)
+            }
             op => panic!("MUFU op {op} (RCP64H, RSQ64H) is not implemented"),
         };
-        let bits = self.bitcast_u32(val);
+        let bits = self.canonical_nan_bits(val);
+        // RCP flushes a subnormal result to zero.
+        let bits = if inst >> 74 & 0xf == 4 { self.flush_subnormal(bits) } else { bits };
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn nanosleep(&mut self, inst: u128) {

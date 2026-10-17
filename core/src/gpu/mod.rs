@@ -28,8 +28,8 @@ pub struct VkState {
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub submit: std::sync::Mutex<compute::Submit>,
-    pub signed_zero_inf_nan_preserve: bool,
-    pub denorm_preserve: bool,
+    pub signed_zero_inf_nan_preserve: [bool; 3],
+    pub denorm_preserve: [bool; 3],
     pub shader_float16: bool,
     pub shader_buffer_int64_atomics: bool,
     pub shader_shared_int64_atomics: bool,
@@ -74,13 +74,25 @@ impl VkState {
                     device,
                     command_pool,
                     submit: Default::default(),
-                    signed_zero_inf_nan_preserve: float_controls
-                        .shader_signed_zero_inf_nan_preserve_float32
-                        == vk::TRUE,
-                    // The entry point only sets the 32-bit mode, which NONE forbids.
-                    denorm_preserve: float_controls.shader_denorm_preserve_float32 == vk::TRUE
-                        && float_controls.denorm_behavior_independence
-                            != vk::ShaderFloatControlsIndependence::NONE,
+                    signed_zero_inf_nan_preserve: [
+                        float_controls.shader_signed_zero_inf_nan_preserve_float16,
+                        float_controls.shader_signed_zero_inf_nan_preserve_float32,
+                        float_controls.shader_signed_zero_inf_nan_preserve_float64,
+                    ]
+                    .map(|b| b == vk::TRUE),
+                    denorm_preserve: {
+                        let [f16, f32, f64] = [
+                            float_controls.shader_denorm_preserve_float16,
+                            float_controls.shader_denorm_preserve_float32,
+                            float_controls.shader_denorm_preserve_float64,
+                        ]
+                        .map(|b| b == vk::TRUE);
+                        match float_controls.denorm_behavior_independence {
+                            vk::ShaderFloatControlsIndependence::ALL => [f16, f32, f64],
+                            vk::ShaderFloatControlsIndependence::TYPE_32_ONLY => [f16 && f64, f32, f16 && f64],
+                            _ => [f16 && f32 && f64; 3],
+                        }
+                    },
                     shader_float16,
                     shader_buffer_int64_atomics,
                     shader_shared_int64_atomics,

@@ -101,7 +101,7 @@ mod tests {
         let Some((regs, _)) = run_regs(&program, &bits(&[f32::INFINITY]), &[], &[]) else {
             return;
         };
-        if !crate::gpu::device().unwrap().signed_zero_inf_nan_preserve {
+        if !crate::gpu::device().unwrap().signed_zero_inf_nan_preserve[1] {
             return eprintln!("skipping: device lacks SignedZeroInfNanPreserve");
         }
         assert_f32(&regs[1..2], &[f32::NAN]);

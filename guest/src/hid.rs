@@ -30,10 +30,16 @@ fn with_aruid(value: u32) -> [u32; 4] {
     [value, 0, ARUID[0], ARUID[1]]
 }
 
-pub fn read_full_key() -> Result<FullKey> {
+/// A session to the service sm: has under `name`.
+pub fn service(name: [u8; 8]) -> Result<u32> {
     let sm = svc::connect_to_named_port(c"sm:")?;
     call(sm, Request { command: 0, send_pid: true, data: &[0, 0], ..Default::default() })?;
-    let hid = call(sm, Request { command: 1, data: &[u32::from_le_bytes(*b"hid\0"), 0], ..Default::default() })?;
+    let name = [0, 4].map(|i| u32::from_le_bytes(name[i..i + 4].try_into().unwrap()));
+    call(sm, Request { command: 1, data: &name, ..Default::default() })
+}
+
+pub fn read_full_key() -> Result<FullKey> {
+    let hid = service(*b"hid\0\0\0\0\0")?;
     let resource = call(hid, Request { command: 0, send_pid: true, data: &ARUID, ..Default::default() })?;
     let shared = call(resource, Request { command: 0, ..Default::default() })?;
     svc::map_shared_memory(shared, SHARED_MEMORY, 0x40000, 1)?;

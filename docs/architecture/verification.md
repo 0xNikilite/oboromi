@@ -17,10 +17,10 @@ A handler, the code that translates one instruction family, is not done until it
 
 | Check | How | Where |
 |---|---|---|
-| spirv-val, the Khronos SPIR-V checker | The harness pipes each module through it, skipped when it is not installed | Core/src/tests/gpu/harness.rs |
-| nvdisasm, NVIDIA's disassembler | `fixtures_match_nvdisasm` disassembles the test words and compares the text | Core/src/tests/gpu_test.rs |
-| Silicon | Scoreboard tests replay recorded inputs and compare registers, shared memory, global memory and image bytes | Core/src/tests/gpu/fixtures.rs, core/tests/fixtures |
-| Programs | Kernels built with nvcc, NVIDIA's CUDA compiler, run through the translator and must match the card's output or its hash | Core/src/tests/gpu/program.rs, cubin tests |
+| spirv-val, the Khronos SPIR-V checker | The harness pipes each module through it, skipped when it is not installed | core/src/tests/gpu/harness.rs |
+| nvdisasm, NVIDIA's disassembler | `fixtures_match_nvdisasm` disassembles the test words and compares the text | core/src/tests/gpu_test.rs |
+| Silicon | Scoreboard tests replay recorded inputs and compare registers, shared memory, global memory and image bytes | core/src/tests/gpu/fixtures.rs, core/tests/fixtures |
+| Programs | Kernels built with nvcc, NVIDIA's CUDA compiler, run through the translator and must match the card's output or its hash | core/src/tests/gpu/program.rs, cubin tests |
 
 ## How are silicon captures made?
 

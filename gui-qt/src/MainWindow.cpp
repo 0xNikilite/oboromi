@@ -4,6 +4,7 @@
 #include <QFontDatabase>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenuBar>
@@ -16,6 +17,7 @@
 
 #include "DisplayWidget.h"
 #include "RustBridge.h"
+#include "oboromi_core.h"
 
 namespace {
 
@@ -40,6 +42,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             this, &MainWindow::onGpuTestsFinished);
 
     m_logList->addItem("click 'Run CPU Tests' to begin");
+    // the vulkan display is a separate native window, so keys are taken before any widget sees them
+    qApp->installEventFilter(this);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)
+        oboromi_input_key(static_cast<QKeyEvent *>(event)->key(), event->type() == QEvent::KeyPress);
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::buildMenuBar() {
@@ -81,7 +91,8 @@ void MainWindow::buildUi() {
     auto *frameButton = new QPushButton("Render Test Frame", central);
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
-    for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}}) {
+    for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}, {"Post", RustBridge::renderPostFrame},
+                                {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Helmet", RustBridge::renderHelmetDemo}}) {
         auto *demoButton = new QPushButton(name, central);
         demoButton->setCheckable(true);
         connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
@@ -95,8 +106,13 @@ void MainWindow::buildUi() {
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
         if (m_demoFrame.isFinished())
             m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);
+        OboromiInput input;
+        oboromi_input_state(&input);
+        m_gamepadLabel->setText(input.gamepad[0] ? QString("gamepad: ") + input.gamepad : QString());
     });
     buttons->addStretch();
+    m_gamepadLabel = new QLabel(central);
+    buttons->addWidget(m_gamepadLabel);
     layout->addLayout(buttons);
 
     layout->addWidget(createDisplay(central), /*stretch=*/3);

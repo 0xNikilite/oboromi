@@ -19,15 +19,13 @@ pub struct HostBuffer<'a> {
 
 impl<'a> HostBuffer<'a> {
     pub fn new(state: &'a VkState, size: u64) -> Result<Self, VkError> {
+        use vk::BufferUsageFlags as Usage;
+        Self::with_usage(state, size, Usage::STORAGE_BUFFER | Usage::UNIFORM_BUFFER | Usage::VERTEX_BUFFER | Usage::INDEX_BUFFER | Usage::TRANSFER_SRC | Usage::TRANSFER_DST)
+    }
+
+    pub fn with_usage(state: &'a VkState, size: u64, usage: vk::BufferUsageFlags) -> Result<Self, VkError> {
         let d = &state.device;
-        let info = vk::BufferCreateInfo::default().size(size).usage(
-            vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::UNIFORM_BUFFER
-                | vk::BufferUsageFlags::VERTEX_BUFFER
-                | vk::BufferUsageFlags::INDEX_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::TRANSFER_DST,
-        );
+        let info = vk::BufferCreateInfo::default().size(size).usage(usage);
         let mut buf = Self {
             device: d,
             buffer: unsafe { d.create_buffer(&info, None)? },
@@ -54,9 +52,13 @@ impl<'a> HostBuffer<'a> {
         })
         .ok_or(VkError::Vk(vk::Result::ERROR_FEATURE_NOT_PRESENT))?
         .0;
-        let alloc = vk::MemoryAllocateInfo::default()
+        let mut addressable = vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+        let mut alloc = vk::MemoryAllocateInfo::default()
             .allocation_size(req.size)
             .memory_type_index(memory_type);
+        if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+            alloc = alloc.push_next(&mut addressable);
+        }
         unsafe {
             buf.memory = d.allocate_memory(&alloc, None)?;
             d.bind_buffer_memory(buf.buffer, buf.memory, 0)?;
@@ -65,6 +67,10 @@ impl<'a> HostBuffer<'a> {
                 .cast();
         }
         Ok(buf)
+    }
+
+    fn address(&self) -> u64 {
+        unsafe { self.device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(self.buffer)) }
     }
 
     fn mapped(&self) -> [vk::MappedMemoryRange<'_>; 1] {
@@ -100,6 +106,96 @@ impl Drop for HostBuffer<'_> {
         unsafe {
             self.device.destroy_buffer(self.buffer, None);
             self.device.free_memory(self.memory, None);
+        }
+    }
+}
+
+/// One instance of a top-level acceleration structure: indexed triangles and the row-major 3x4 object-to-world transform.
+pub struct Triangles<'d> {
+    pub positions: &'d [[f32; 3]],
+    pub indices: &'d [u32],
+    pub transform: [[f32; 4]; 3],
+    pub opaque: bool,
+}
+
+/// A top-level acceleration structure over one bottom-level structure per instance, built on the device.
+pub struct AccelerationStructure<'a> {
+    loader: &'a ash::khr::acceleration_structure::Device,
+    structures: Vec<vk::AccelerationStructureKHR>,
+    buffers: Vec<HostBuffer<'a>>,
+    pub handle: vk::AccelerationStructureKHR,
+}
+
+impl<'a> AccelerationStructure<'a> {
+    pub fn new(state: &'a VkState, instances: &[Triangles]) -> Result<Self, VkError> {
+        use vk::BufferUsageFlags as Usage;
+        let loader = state.acceleration_structure.as_ref().expect("ray queries need VK_KHR_acceleration_structure and VK_KHR_ray_query");
+        let mut s = Self { loader, structures: Vec::new(), buffers: Vec::new(), handle: vk::AccelerationStructureKHR::null() };
+        let input = |bytes: &[u8]| {
+            let mut buffer = HostBuffer::with_usage(state, bytes.len().max(4) as u64, Usage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR | Usage::SHADER_DEVICE_ADDRESS)?;
+            buffer.write(bytes)?;
+            Ok::<_, VkError>(buffer)
+        };
+        let mut records = Vec::new();
+        for instance in instances {
+            let positions = input(&instance.positions.as_flattened().iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>())?;
+            let indices = input(&instance.indices.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>())?;
+            let triangles = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                .vertex_format(vk::Format::R32G32B32_SFLOAT)
+                .vertex_data(vk::DeviceOrHostAddressConstKHR { device_address: positions.address() })
+                .vertex_stride(12)
+                .max_vertex(instance.positions.len().saturating_sub(1) as u32)
+                .index_type(vk::IndexType::UINT32)
+                .index_data(vk::DeviceOrHostAddressConstKHR { device_address: indices.address() });
+            let flags = if instance.opaque { vk::GeometryFlagsKHR::OPAQUE } else { vk::GeometryFlagsKHR::empty() };
+            let geometry = vk::AccelerationStructureGeometryKHR::default().geometry_type(vk::GeometryTypeKHR::TRIANGLES).geometry(vk::AccelerationStructureGeometryDataKHR { triangles }).flags(flags);
+            let blas = s.build(state, vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, geometry, instance.indices.len() as u32 / 3)?;
+            s.buffers.extend([positions, indices]);
+            let address = unsafe { loader.get_acceleration_structure_device_address(&vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(blas)) };
+            records.push(vk::AccelerationStructureInstanceKHR {
+                transform: vk::TransformMatrixKHR { matrix: instance.transform.as_flattened().try_into().unwrap() },
+                instance_custom_index_and_mask: vk::Packed24_8::new(0, 0xff),
+                instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(0, vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8),
+                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR { device_handle: address },
+            });
+        }
+        let records = input(unsafe { std::slice::from_raw_parts(records.as_ptr().cast(), std::mem::size_of_val(records.as_slice())) })?;
+        let instances_data = vk::AccelerationStructureGeometryInstancesDataKHR::default().data(vk::DeviceOrHostAddressConstKHR { device_address: records.address() });
+        let geometry = vk::AccelerationStructureGeometryKHR::default().geometry_type(vk::GeometryTypeKHR::INSTANCES).geometry(vk::AccelerationStructureGeometryDataKHR { instances: instances_data });
+        s.handle = s.build(state, vk::AccelerationStructureTypeKHR::TOP_LEVEL, geometry, instances.len() as u32)?;
+        s.buffers.push(records);
+        Ok(s)
+    }
+
+    fn build(&mut self, state: &'a VkState, ty: vk::AccelerationStructureTypeKHR, geometry: vk::AccelerationStructureGeometryKHR, primitives: u32) -> Result<vk::AccelerationStructureKHR, VkError> {
+        use vk::BufferUsageFlags as Usage;
+        // minAccelerationStructureScratchOffsetAlignment is at most 256.
+        const SCRATCH_ALIGNMENT: u64 = 256;
+        let geometries = [geometry];
+        let info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(ty)
+            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(&geometries);
+        let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        unsafe { self.loader.get_acceleration_structure_build_sizes(vk::AccelerationStructureBuildTypeKHR::DEVICE, &info, &[primitives], &mut sizes) };
+        let storage = HostBuffer::with_usage(state, sizes.acceleration_structure_size, Usage::ACCELERATION_STRUCTURE_STORAGE_KHR | Usage::SHADER_DEVICE_ADDRESS)?;
+        let create = vk::AccelerationStructureCreateInfoKHR::default().buffer(storage.buffer).size(sizes.acceleration_structure_size).ty(ty);
+        let structure = unsafe { self.loader.create_acceleration_structure(&create, None)? };
+        self.structures.push(structure);
+        self.buffers.push(storage);
+        let scratch = HostBuffer::with_usage(state, sizes.build_scratch_size + SCRATCH_ALIGNMENT, Usage::STORAGE_BUFFER | Usage::SHADER_DEVICE_ADDRESS)?;
+        let info = info.dst_acceleration_structure(structure).scratch_data(vk::DeviceOrHostAddressKHR { device_address: scratch.address().next_multiple_of(SCRATCH_ALIGNMENT) });
+        let range = [vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(primitives)];
+        state.submit_and_wait(|cmd| unsafe { self.loader.cmd_build_acceleration_structures(cmd, &[info], &[&range]) })?;
+        Ok(structure)
+    }
+}
+
+impl Drop for AccelerationStructure<'_> {
+    fn drop(&mut self) {
+        for &structure in &self.structures {
+            unsafe { self.loader.destroy_acceleration_structure(structure, None) };
         }
     }
 }
@@ -285,6 +381,18 @@ impl<'a> Descriptors<'a> {
                 .buffer_info(&info);
             unsafe { self.device.update_descriptor_sets(&[write], &[]) };
         }
+    }
+
+    pub fn bind_acceleration_structure(&mut self, binding: u32, structure: &AccelerationStructure) {
+        let structures = [structure.handle];
+        let mut info = vk::WriteDescriptorSetAccelerationStructureKHR::default().acceleration_structures(&structures);
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.set)
+            .dst_binding(binding)
+            .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+            .descriptor_count(1)
+            .push_next(&mut info);
+        unsafe { self.device.update_descriptor_sets(&[write], &[]) };
     }
 
     pub fn bind_images(&mut self, images: &[(u32, &HostImage)]) {

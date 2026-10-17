@@ -163,6 +163,8 @@ pub enum Prop {
     Stalactite(V3, f32, f32),
     Stalagmite(V3, f32, f32),
     Bracket(V3, V3),
+    Barrel(V3),
+    Coin(V3),
 }
 
 pub struct World {
@@ -383,7 +385,7 @@ impl World {
                 for t in [0.5, 0.3, 0.7] {
                     if placed < 3 && door_clear(self, z, wall, t, 1.6) {
                         let (p, normal) = wall_point(&s, wall, t, 0.28, 2.3);
-                        self.lights.push(Light { pos: p, colour: scale(torch, 3.2), flicker: 1.0, flame: 0.42 });
+                        self.lights.push(Light { pos: add(p,[0.,0.12,0.]), colour: scale(torch, 3.2), flicker: 1.0, flame: 0.42 });
                         self.props.push(Prop::Bracket(add(p, [0.0, -0.05, 0.0]), normal));
                         self.sources.push((Sfx::Torch, p, 0.55));
                         placed += 1;
@@ -436,6 +438,12 @@ impl World {
                         self.props.push(Prop::Bone(add(p, [r.range(-0.4, 0.4), 0.0, r.range(-0.4, 0.4)]), r.range(0.0, TAU)));
                     }
                 }
+            }
+            let mut decor=Rng(900+z as u32);
+            self.props.push(Prop::Barrel([s.hi[0]-1.,0.,s.lo[2]+1.4]));
+            self.props.push(Prop::Chain([s.hi[0]-0.65,s.hi[1],s.lo[2]+2.2],1.8));
+            for _ in 0..12 {
+                self.props.push(Prop::Coin([s.hi[0]-decor.range(0.7,2.1),0.035,s.lo[2]+decor.range(1.,2.8)]));
             }
             // Candles in a free corner.
             let corner = [s.lo[0] + 0.7, 0.0, s.hi[2] - 0.7];
@@ -844,6 +852,24 @@ impl World {
                     b.tube(add(sub(p, scale(n, 0.27)), [0.0, -0.32, 0.0]), add(p, [0.0, -0.2, 0.0]), &|_| 0.018, 5, IRON);
                     b.tube(add(p, [0.0, -0.42, 0.0]), add(p, [0.0, -0.02, 0.0]), &|t| 0.03 + 0.012 * t, 7, WOOD);
                     b.blob(p, [0.06, 0.035, 0.06], 0.0, &|_, _| 1.0, [8, 4], IRON);
+                }
+                Prop::Barrel(p) => {
+                    for i in 0..12 {
+                        let a=i as f32/12.*TAU;
+                        let h=if i<3 {0.3+i as f32*0.08}else{0.78+0.06*(a*7.).sin()};
+                        let point=|u:f32,v:f32| {let angle=a+(u-0.5)*0.45;let radius=0.32+0.055*(v*PI).sin();add(p,[radius*angle.cos(),v*h,radius*angle.sin()])};
+                        b.prop(&point,[2,4],p,0.5,WOOD);
+                        for y in [0.12,0.58] {
+                            let point=|u:f32,v:f32| {let angle=a+u*TAU/12.;add(p,[0.37*angle.cos(),y+v*0.055,0.37*angle.sin()])};
+                            b.prop(&point,[2,1],p,0.5,IRON);
+                        }
+                    }
+                    b.tube(add(p,[-0.5,0.04,0.2]),add(p,[0.2,0.07,0.6]),&|_|0.035,4,WOOD);
+                }
+                Prop::Coin(p) => {
+                    let first=b.vertices.len();
+                    b.blob(p,[0.035,0.007,0.035],p[0],&|_,_|1.,[8,4],[1.1,0.65,0.16]);
+                    for v in &mut b.vertices[first..]{v.material=5.;}
                 }
                 Prop::Web(..) => {}
             }

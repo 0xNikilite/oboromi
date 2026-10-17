@@ -66,6 +66,7 @@ pub(super) struct Renderer {
     shadow_maps: HostBuffer<'static>,
     _rooms: HostBuffer<'static>,
     _geometry: HostBuffer<'static>,
+    _web: HostImage<'static>,
     _textures: Vec<HostImage<'static>>,
     _structure: Option<AccelerationStructure<'static>>,
     output: HostBuffer<'static>,
@@ -321,6 +322,25 @@ impl Renderer {
         if let Some(s) = &structure {
             cones.descriptors[1].bind_acceleration_structure(14, s);
         }
+        // Broken, sagging threads rasterised once into a filtered alpha texture.
+        let mut web_bytes=vec![0u8;256*256*4];
+        for y in 0..256 {for x in 0..256 {
+            let p=[x as f32/255.*2.-0.82,y as f32/255.*2.-0.77];
+            let angle=p[1].atan2(p[0]);let r=(p[0]*p[0]+p[1]*p[1]).sqrt();
+            let spoke=(angle*9.+0.15*(angle*5.).sin()).sin().abs()*r/9.;
+            let sag=r*(1.+0.035*(angle*18.).cos())+0.008*(angle*7.).sin();
+            let ring=((sag*8.+0.1*(angle*3.).sin()).fract()-0.5).abs()/8.;
+            let broken=(angle*17.+r*37.).sin()>-0.65;
+            let strand=spoke.min(if broken && r<0.85 {ring}else{1.});
+            let alpha=((0.009-strand)/0.007).clamp(0.,1.)*(1.-((r-0.7)/0.5).clamp(0.,1.));
+            let at=(y*256+x)*4;web_bytes[at..at+4].copy_from_slice(&[(alpha*255.) as u8;4]);
+        }}
+        let tic=[8u32|0o2222<<7|0o5432<<19,0,2<<21,32,255|1<<23,255|1<<31,0,0];
+        let tic:Vec<u8>=tic.iter().flat_map(|v|v.to_le_bytes()).collect();
+        let header=TexturePool{tic:&tic,tsc:&[]}.texture(0)?;
+        let sampler=vk::SamplerCreateInfo::default().mag_filter(vk::Filter::LINEAR).min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE).address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        let web=HostImage::new(state,&header,&web_bytes,&sampler).map_err(named)?;
         let mut sprites = GraphicsPipeline::with_format(
             state,
             &code(include_bytes!("../../../demos/shaders/dungeon_sprite.vert.spv")),
@@ -328,7 +348,7 @@ impl Renderer {
             &code(include_bytes!("../../../demos/shaders/dungeon_sprite.frag.spv")),
             [
                 &[(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER)],
-                &[(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER), (12, D::STORAGE_BUFFER)],
+                &[(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER), (2, D::COMBINED_IMAGE_SAMPLER), (12, D::STORAGE_BUFFER)],
             ],
             &VertexLayout { bindings: &[], attributes: &[], topology: vk::PrimitiveTopology::TRIANGLE_LIST },
             &TargetState { blend, depth: Some(DEPTH) },
@@ -337,6 +357,7 @@ impl Renderer {
         .map_err(named)?;
         sprites.descriptors[0].bind(&[(0, &uniforms), (1, &particles)]);
         sprites.descriptors[1].bind(&[(0, &uniforms), (1, &lights), (12, &target.staging)]);
+        sprites.descriptors[1].bind_images(&[(2,&web)]);
         let mut particles_step = ComputePipeline::new(
             state,
             &code(include_bytes!("../../../demos/shaders/dungeon_particles.comp.spv")),
@@ -389,6 +410,7 @@ impl Renderer {
             shadow_maps,
             _rooms: rooms,
             _geometry: geo,
+            _web: web,
             _textures: textures,
             _structure: structure,
             output,
@@ -694,7 +716,7 @@ impl Renderer {
         }
         for prop in &world.props {
             match *prop {
-                Prop::Web(p, _) => particle(add(p, [0., -0.65, 0.]), 8., [0.7, 0.65], 0., [0.25, 0.29, 0.26, 0.35]),
+                Prop::Web(p, signs) => particle(add(p, [signs[0]*0.56, -0.65, signs[1]*0.56]), 8., [0.8, 0.7], signs[0].atan2(-signs[1]), [0.3, 0.33, 0.32, 0.4]),
                 Prop::Lantern(p, yaw) => {
                     particle(add(p, turn(yaw, [0.235, 0.2, 0.])), 9., [0.16, 0.11], yaw, [3., 0.65, 0.015, 1.])
                 }

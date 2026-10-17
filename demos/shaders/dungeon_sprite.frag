@@ -11,6 +11,7 @@ layout(set=1,binding=0,std140) uniform Frame {
 struct Light { vec4 position; vec4 colour; };
 layout(set=1,binding=1,std430) readonly buffer Lights { Light lights[]; };
 layout(set=1,binding=12,std430) readonly buffer Depth { uvec2 background[]; };
+layout(set=1,binding=2) uniform sampler2D web_alpha;
 float noise(vec2 p) {
     vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
     vec4 n=fract(sin(vec4(dot(i,vec2(127.1,311.7)),dot(i+vec2(1,0),vec2(127.1,311.7)),dot(i+vec2(0,1),vec2(127.1,311.7)),dot(i+1.,vec2(127.1,311.7))))*43758.5453);
@@ -35,7 +36,7 @@ void main(){
     else if(kind<5.5) { a=exp(-pow((length(uv)-.8)*30.,2.))*colour.a; }
     else if(kind<6.5) { a=exp(-pow((length(uv)-.75)*18.,2.))*colour.a;c=vec3(.2,.35,.4); }
     else if(kind<7.5) { a=(1.-smoothstep(.65,.85,abs(uv.x)+abs(uv.y)*.5))*colour.a;c*=.5+.5*cos(uv.y*10.); }
-    else if(kind<8.5) { float r=length(uv),angle=atan(uv.y,uv.x);float strand=min(abs(sin(angle*8.))*r,abs(fract(r*8.)-.5)*.12);a=(1.-smoothstep(.002,.012,strand))*(1.-smoothstep(.6,1.,r))*colour.a; }
+    else if(kind<8.5) {a=texture(web_alpha,uv*.5+.5).r*colour.a;c*=1.5;}
     else if(kind<9.5) { vec2 q=vec2(abs(uv.x)-.43,uv.y-.25);float eye=1.-smoothstep(.1,.2,abs(q.x)+abs(q.y)*.6);float mouth=(1.-smoothstep(.09,.15,abs(uv.y+.35+.15*cos(uv.x*5.))))*(1.-smoothstep(.6,.8,abs(uv.x)));a=max(eye,mouth); }
     else { a=float(abs(uv.x)<.9 && uv.y>-.35+abs(uv.x)*.4 && uv.y<.32-abs(uv.x)*.25+.12*abs(sin(uv.x*16.))); }
     if(kind>=2. && kind<9.) {

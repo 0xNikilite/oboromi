@@ -184,6 +184,7 @@ void main() {
         base*=1.-wet*.38; rough=mix(rough,.055,wet);
         vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;n=normalize(basis*nt);
     } else { base=colour*mix(vec3(.24),albedo(uv,1),.2); rough=clamp(surface(uv,1).g,.4,.85); }
+    if(m==5){base=colour;rough=.2;metal=1.;}
     vec3 c=illuminate(world,n,v,base,max(.065,rough),metal,true)*ao;
     if(m==0 && wet>.05 && settings.z<.5) {
         vec4 r=reflected_vp*vec4(world,1);vec2 refl=r.xy/r.w*.5+.5;

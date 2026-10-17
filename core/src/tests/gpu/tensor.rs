@@ -149,4 +149,84 @@ mod tests {
             assert_eq!(regs[8..12], columns, "lane {lane}");
         }
     }
+
+    // Lane 4g + t holds A[g][t] in RA:RA+1, B[t][g] in RB:RB+1 and C/D[g][2t + i] in the pair at RC/RD + 2i.
+    #[test]
+    fn dmma_884_matches_an_f64_reference() {
+        let a = |row: usize, k: usize| ((row * 3 + k * 5) % 7) as f64 - 3.0;
+        let b = |k: usize, col: usize| ((k * 2 + col * 5) % 7) as f64 - 3.0;
+        let c = |row: usize, col: usize| (row * 8 + col) as f64 * 0.5 - 7.0;
+        let words = |x: f64| [x.to_bits() as u32, (x.to_bits() >> 32) as u32];
+        let seeds: Vec<Vec<u32>> = (0..32).map(|lane| {
+            let (g, t) = quad(lane);
+            let mut regs = vec![0; RC + 4];
+            regs[RA..RA + 2].copy_from_slice(&words(a(g, t)));
+            regs[RB..RB + 2].copy_from_slice(&words(b(t, g)));
+            for i in 0..2 {
+                regs[RC + 2 * i..RC + 2 * i + 2].copy_from_slice(&words(c(g, 2 * t + i)));
+            }
+            regs
+        }).collect();
+        let Some((lanes, _)) = run_lanes(&[alu3(DMMA, RD as u32, RA as u32, RB as u32, RC as u32)], &seeds, &[], &[]) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            let (g, t) = quad(lane);
+            let want = [0, 1].map(|i| words(c(g, 2 * t + i) + (0..4).map(|k| a(g, k) * b(k, 2 * t + i)).sum::<f64>()));
+            assert_eq!(regs[RD..RD + 4], want.concat(), "lane {lane}");
+        }
+    }
+
+    // A word of k_group j at lane 4g + t holds bits 128j + 32t.. of A row g (+ 8 in the odd registers of a 16-row tile)
+    // and of B column g; C/D are laid out as for IMMA.
+    #[test]
+    fn bmma_sums_popcounts_of_xor_and_and() {
+        let a = |row: usize, chunk: usize| (row as u32).wrapping_mul(0x9e37_79b9) ^ (chunk as u32).wrapping_mul(0x85eb_ca6b);
+        let b = |chunk: usize, col: usize| (col as u32).wrapping_mul(0xc2b2_ae35) ^ (chunk as u32).wrapping_mul(0x27d4_eb2f);
+        let c = |row: usize, col: usize| (row * 8 + col) as u32 * 3;
+        for (word, rows, k_groups, product) in [
+            (BMMA, 1, 1, (|x, y| x ^ y) as fn(u32, u32) -> u32),
+            (BMMA | BMMA_168128 | BMMA_AND, 2, 1, |x, y| x & y),
+            (BMMA | BMMA_168256, 2, 2, |x, y| x ^ y),
+        ] {
+            let chunk = |lane: usize, k_group: usize| quad(lane).1 + 4 * k_group;
+            let seeds: Vec<Vec<u32>> = (0..32).map(|lane| {
+                let mut regs = vec![0; RC + 4];
+                for k_group in 0..k_groups {
+                    for half in 0..rows {
+                        regs[RA + rows * k_group + half] = a(quad(lane).0 + 8 * half, chunk(lane, k_group));
+                    }
+                    regs[RB + k_group] = b(chunk(lane, k_group), quad(lane).0);
+                }
+                for reg in 0..2 * rows {
+                    let (row, col) = d_element(lane, reg);
+                    regs[RC + reg] = c(row, col);
+                }
+                regs
+            }).collect();
+            let Some((lanes, _)) = run_lanes(&[alu3(word, RD as u32, RA as u32, RB as u32, RC as u32)], &seeds, &[], &[]) else { return };
+            for (lane, regs) in (0..32).zip(lanes) {
+                let want: Vec<u32> = (0..2 * rows).map(|reg| {
+                    let (row, col) = d_element(lane, reg);
+                    c(row, col) + (0..4 * k_groups).map(|chunk| product(a(row, chunk), b(chunk, col)).count_ones()).sum::<u32>()
+                }).collect();
+                assert_eq!(regs[RD..RD + 2 * rows], want, "lane {lane} {word:#x}");
+            }
+        }
+    }
+
+    // Lane 4g + t holds halves (g, 2t) and (g, 2t + 1) of an 8x8 tile, as LDSM.16.M88 leaves it; half (row, col) holds 8 * row + col.
+    #[test]
+    fn movm_mt88_transposes_an_8x8_tile() {
+        let half = |row: usize, col: usize| (8 * row + col) as u32;
+        let seeds: Vec<Vec<u32>> = (0..32).map(|lane| {
+            let (g, t) = quad(lane);
+            let mut regs = vec![0; RA + 1];
+            regs[RA] = half(g, 2 * t + 1) << 16 | half(g, 2 * t);
+            regs
+        }).collect();
+        let Some((lanes, _)) = run_lanes(&[alu(MOVM, RD as u32, RA as u32, 0)], &seeds, &[], &[]) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            let (g, t) = quad(lane);
+            assert_eq!(regs[RD], half(2 * t + 1, g) << 16 | half(2 * t, g), "lane {lane}");
+        }
+    }
 }

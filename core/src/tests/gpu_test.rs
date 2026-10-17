@@ -65,6 +65,12 @@ pub mod inst {
     pub const LDSM: u128 = 0x83b;
     pub const LDSM_X4: u128 = 2 << 72;
     pub const LDSM_MT88: u128 = 1 << 78;
+    pub const DMMA: u128 = 0x23f;
+    pub const BMMA: u128 = 0x23d | 1 << 74 | 1 << 80;
+    pub const BMMA_168128: u128 = 1 << 75;
+    pub const BMMA_168256: u128 = 2 << 75;
+    pub const BMMA_AND: u128 = 2 << 77;
+    pub const MOVM: u128 = 0x23a;
     pub const HSET2: u128 = 0x233 | PP_PT;
     pub const HSETP2: u128 = 0x234 | PP_PT;
     pub const HMNMX2: u128 = 0x240;
@@ -962,6 +968,11 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S8.S8 R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4, 4, 2, 0), "LDSM.16.M88.4 R4, [R2] ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4 | inst::LDSM_MT88, 12, 2, 0), "LDSM.16.MT88.4 R12, [R2] ;"),
+        (inst::alu3(inst::DMMA, 4, 8, 12, 16), "DMMA.884 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::BMMA, 4, 8, 12, 16), "BMMA.88128.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::BMMA | inst::BMMA_168128 | inst::BMMA_AND, 4, 8, 12, 16), "BMMA.168128.AND.POPC R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::BMMA | inst::BMMA_168256, 4, 8, 12, 16), "BMMA.168256.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu(inst::MOVM, 4, 8, 0), "MOVM.16.MT88 R4, R8 ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

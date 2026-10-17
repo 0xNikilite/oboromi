@@ -70,6 +70,10 @@ pub mod capability {
     pub const INT16: u32 = 22;
     pub const INT8: u32 = 39;
     pub const IMAGE_QUERY: u32 = 50;
+    pub const GROUP_NON_UNIFORM: u32 = 61;
+    pub const GROUP_NON_UNIFORM_ARITHMETIC: u32 = 63;
+    pub const GROUP_NON_UNIFORM_BALLOT: u32 = 64;
+    pub const GROUP_NON_UNIFORM_SHUFFLE: u32 = 65;
     pub const STORAGE_BUFFER_16BIT: u32 = 4433;
     pub const STORAGE_BUFFER_8BIT: u32 = 4448;
     pub const PHYSICAL_STORAGE_BUFFER_ADDRESSES: u32 = 5348;
@@ -98,6 +102,7 @@ pub mod storage_class {
 pub mod scope {
     pub const DEVICE: u32 = 1;
     pub const WORKGROUP: u32 = 2;
+    pub const SUBGROUP: u32 = 3;
 }
 
 pub mod memory_semantics {
@@ -969,6 +974,10 @@ impl Emitter {
         let r = self.alloc_id();
         self.inst(339, &[ty, r, scope, predicate]);
         r
+    }
+
+    pub fn emit_group_non_uniform_ballot_bit_extract(&mut self, ty: u32, scope: u32, ballot: u32, index: u32) -> u32 {
+        self.typed_tri(341, ty, scope, ballot, index)
     }
 
     pub fn emit_group_non_uniform_shuffle(&mut self, ty: u32, scope: u32, value: u32, id: u32) -> u32 {

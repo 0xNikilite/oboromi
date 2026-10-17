@@ -79,6 +79,15 @@ impl<'a> Decoder<'a> {
             states.push((ptr, state, arrived, pred, op, count));
         }
         let candidate = self.ir.emit_select(ty, runnable, pc, none);
+        if matches!(self.stage, Stage::Fragment { .. }) {
+            assert!(bars.is_empty(), "workgroup barrier in a fragment shader");
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_ARITHMETIC);
+            let scope = self.cached_const_u32(spirv::scope::SUBGROUP);
+            let scheduled = self.ir.emit_group_non_uniform_umin(ty, scope, 0, candidate);
+            self.here = Some(self.ir.emit_iequal(bool_ty, candidate, scheduled));
+            return [scheduled; 2];
+        }
         let step = self.ir.emit_load(ty, self.var_step);
         let [three, stride] = [3, SCHEDULE_STRIDE].map(|c| self.cached_const_u32(c));
         let [now, next] = [self.const_u32_0, self.const_u32_1].map(|offset| {
@@ -245,6 +254,12 @@ impl<'a> Decoder<'a> {
         let mut target = self.cached_const_u32(branch_target(self.pc, inst).unwrap());
         if opcode(inst) == BRA_UPRED {
             let bit = self.pred_bit(true, upq, upq_not != 0);
+            let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
+            let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
+            target = self.ir.emit_select(self.type_u32[1], taken, target, next);
+        }
+        if inst >> 87 & 0xf != u128::from(PT) {
+            let bit = self.pp_bit(inst);
             let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
             let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
             target = self.ir.emit_select(self.type_u32[1], taken, target, next);

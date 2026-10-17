@@ -1,4 +1,4 @@
-// Draws: pbr.frag's metallic-roughness shading with ray-queried shadows, one shadow ray per pixel towards the light and one reflection ray for metallic pixels.
+// PBR with ray-query shadows, metallic reflections and four ambient-occlusion rays per fragment.
 // Inputs: pbr.vert's outputs; samplers at bindings 2-6 as pbr.frag; top-level acceleration structure at binding 7, built in world space (BoomBox instance with the frame's model matrix, ground plane).
 // Uniforms (std140, binding 1): pbr.frag's block plus +112 vec4 sky (rgb reflected on a miss, w = shadow ray bias in world units).
 #version 460
@@ -75,6 +75,16 @@ void main() {
     vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(v, h), 0.0), 5.0);
 
     vec3 origin = in_world + geometric * sky.w;
+    vec3 ao_t = normalize(cross(abs(geometric.x) < 0.9 ? vec3(1, 0, 0) : vec3(0, 1, 0), geometric));
+    vec3 ao_b = cross(geometric, ao_t);
+    float open = 0.0;
+    for (int i = 0; i < 4; i++) {
+        float phi = (float(i) + 0.5) * 2.39996323;
+        float u = (float(i) + 0.5) / 4.0;
+        vec3 dir = mat3(ao_t, ao_b, geometric) * vec3(cos(phi) * sqrt(u), sin(phi) * sqrt(u), sqrt(1.0 - u));
+        open += occluded(origin, dir, 0.5, gl_RayFlagsTerminateOnFirstHitEXT) ? 0.0 : 1.0;
+    }
+    occlusion *= open / 4.0;
     float lit = n_l > 0.0 && !occluded(origin, l, 1e4, gl_RayFlagsTerminateOnFirstHitEXT) ? 1.0 : 0.0;
     vec3 direct = ((1.0 - fresnel) * (1.0 - metallic) * albedo / PI + fresnel * a2 / (PI * d * d) * visibility) * light_colour.rgb * n_l * lit;
     vec3 indirect = ambient.rgb * albedo * occlusion;

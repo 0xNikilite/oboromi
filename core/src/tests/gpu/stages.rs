@@ -53,9 +53,9 @@ mod tests {
         ($($name:literal),*) => { [$(($name, include_bytes!(concat!("../../../tests/fixtures/driver-shaders/", $name, ".bin")).as_slice())),*] };
     }
 
-    const DRIVER_SHADERS: [(&str, &[u8]); 15] = driver_shaders!(
+    const DRIVER_SHADERS: [(&str, &[u8]); 17] = driver_shaders!(
         "triangle.vert", "triangle.frag", "particles.vert", "particles.frag", "particles_update.comp", "pbr.vert", "pbr.frag",
-        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag"
+        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag", "rt.vert", "rt.frag"
     );
 
     // The code of a graphics stage follows its 0x80-byte program header, whose byte 11 is a TCS's THREADS_PER_INPUT_PRIMITIVE

@@ -11,6 +11,7 @@ fn render(demo: &str, seconds: f32) -> Result<(), String> {
         "sprites" => demo_sprites::render_sprites_frame(seconds),
         "post" => demo_post::render_post_frame(seconds),
         "boombox" => demo::render_boombox_frame(seconds),
+        "raytraced" => demo::render_raytraced_frame(seconds),
         "helmet" => demo::render_helmet_frame(seconds),
         _ => Err(format!("unknown demo {demo}")),
     }

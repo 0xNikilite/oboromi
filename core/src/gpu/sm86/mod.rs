@@ -503,6 +503,28 @@ impl<'a> Decoder<'a> {
     fn warp_exchange(&mut self, val: u32, lanes: &[u32]) -> Vec<[u32; 2]> {
         const MAX_INVOCATIONS: u32 = 1024;
         let ty = self.type_u32[1];
+        if matches!(self.stage, Stage::Fragment { .. }) {
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_SHUFFLE);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_BALLOT);
+            let scope = self.cached_const_u32(spirv::scope::SUBGROUP);
+            let own = self.builtin(spirv::BuiltIn::SubgroupLocalInvocationId);
+            let yes = self.ir.emit_constant_true(self.type_bool[1]);
+            let present = self.ir.emit_group_non_uniform_ballot(self.type_u32[4], scope, yes);
+            let mask = self.cached_const_u32(!31);
+            let base = self.ir.emit_bitwise_and(ty, own, mask);
+            let value = self.ir.emit_select(ty, self.active, val, self.const_u32_0);
+            let active = self.bool_bit(self.active);
+            return lanes.iter().map(|&lane| {
+                let source = self.ir.emit_iadd(ty, base, lane);
+                let exists = self.ir.emit_group_non_uniform_ballot_bit_extract(self.type_bool[1], scope, present, source);
+                let source = self.ir.emit_select(ty, exists, source, own);
+                [value, active].map(|word| {
+                    let word = self.ir.emit_group_non_uniform_shuffle(ty, scope, word, source);
+                    self.ir.emit_select(ty, exists, word, self.const_u32_0)
+                })
+            }).collect();
+        }
         let invocation = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
         let flags = self.cached_const_u32(MAX_INVOCATIONS);
         let val = self.ir.emit_select(ty, self.active, val, self.const_u32_0);
@@ -603,7 +625,7 @@ impl<'a> Decoder<'a> {
         let end = self.cached_const_u32(len);
         let start = self.ir.emit_select(self.type_u32[1], dead, end, self.const_u32_0);
         self.ir.emit_store(self.var_pc, start);
-        if uniform {
+        if uniform && matches!(self.stage, Stage::Compute { .. }) {
             self.clear_schedule_slot(self.const_u32_0, &guest_barriers(words));
             self.workgroup_barrier();
         }

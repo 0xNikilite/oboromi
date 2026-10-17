@@ -23,7 +23,8 @@ pub const REV_WAVE_BUFFER_V2: u32 = 8;
 pub const REV_EFFECT_INFO_V2: u32 = 9;
 pub const REV_SPLITTER_BIQUADS: u32 = 12;
 pub const REV_SPLITTER_PREVIOUS_VOLUME_RESET: u32 = 13;
-pub const LATEST: u32 = 13;
+pub const REV_FLOAT_BIQUADS: u32 = 15;
+pub const LATEST: u32 = 15;
 
 /// nn::audio::detail::AudioRendererParameterInternal, the 0x34 bytes OpenAudioRenderer takes (libnx audren.c).
 #[derive(Clone, Copy, Debug, Default)]
@@ -304,7 +305,15 @@ impl Renderer {
             resource.mix = f32s(b, 4);
         }
         for (b, voice) in r
-            .records(size(0xC), voice_count, VOICE_IN)?
+            .records(
+                size(0xC),
+                voice_count,
+                if rev >= REV_FLOAT_BIQUADS {
+                    VOICE_IN_V2
+                } else {
+                    VOICE_IN
+                },
+            )?
             .zip(&mut self.voices)
         {
             voice.update(

@@ -1,23 +1,13 @@
 #![cfg(test)]
 
-use super::engine::{
-    bytes, entry, header, inc, non_inc, DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, SET_COLOR_TARGET_A, SET_CT_WRITE, SET_OBJECT,
-    SET_PIPELINE_SHADER, SET_SCISSOR_ENABLE, SET_VERTEX_ATTRIBUTE_A, SET_VERTEX_STREAM_A_FORMAT, SET_VERTEX_STREAM_SIZE_A,
-    SET_VIEWPORT_CLIP_HORIZONTAL, SET_VIEWPORT_SCALE_X,
-};
+use super::engine::bytes;
+use scene::host::SET_OBJECT;
+use scene::threed::*;
+use scene::{entry, immediate, inc, non_inc, one_inc};
 use crate::gpu::{
     fifo::{Event, Pusher},
     threed::{MemoryLayout, PrimitiveTopology},
 };
-
-fn immediate(method: u32, value: u32, words: &mut Vec<u32>) {
-    words.push(header(4, method, value));
-}
-
-fn one_inc(method: u32, values: &[u32], words: &mut Vec<u32>) {
-    words.push(header(5, method, values.len() as u32));
-    words.extend(values);
-}
 
 fn submit(words: &[u32], split: Option<usize>) -> Vec<Event> {
     let memory = bytes(words);
@@ -234,7 +224,6 @@ fn one_increment_advances_only_first_word() {
 
 #[test]
 fn subsequent_instances_of_one_draw_merge_into_an_instanced_draw() {
-    const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
     let mut words = triangle_pushbuffer();
     non_inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT, &[(4 << 28) | (3 << 16) | 2; 2], &mut words);
     let events = submit(&words, None);

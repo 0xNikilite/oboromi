@@ -287,8 +287,8 @@ impl<'a> Decoder<'a> {
     }
     pub fn depbar(&mut self, _inst: u128) {}
     pub fn exit(&mut self, _inst: u128) {
-        if self.stage == Stage::Fragment {
-            // One render target until the PS header's OMAP is read: its colour is R0-R3 at EXIT.
+        if let Stage::Fragment { depth, .. } = self.stage {
+            // One render target, so the PS header's OMAP has its colour in R0-R3 at EXIT.
             let target = self.interface_vec4(ResourceKind::FragmentOutput { location: 0 }, spirv::storage_class::OUTPUT);
             let colour: Vec<u32> = (0..4).map(|reg| {
                 let bits = self.load_register(reg);
@@ -296,6 +296,13 @@ impl<'a> Decoder<'a> {
             }).collect();
             let colour = self.ir.emit_composite_construct(self.type_f32[4], &colour);
             self.ir.emit_store(target, colour);
+            if depth {
+                // Depth is two registers past the last colour output (Ryujinx TranslatorContext.GetDepthRegister).
+                let var = self.frag_depth();
+                let bits = self.load_register(5);
+                let value = self.bitcast_f32(bits);
+                self.ir.emit_store(var, value);
+            }
         }
         let exit = self.cached_const_u32(u32::MAX);
         self.ir.emit_store(self.var_pc, exit);
@@ -333,7 +340,7 @@ impl<'a> Decoder<'a> {
         self.jump_to_register(inst, false);
     }
     pub fn kill(&mut self, inst: u128) {
-        assert!(self.stage != Stage::Fragment, "KILL as a fragment discard is not implemented");
+        assert!(!matches!(self.stage, Stage::Fragment { .. }), "KILL as a fragment discard is not implemented");
         // KILL is pixel-only on hardware, so a compute invocation that reaches one just ends like at EXIT.
         self.exit(inst);
     }

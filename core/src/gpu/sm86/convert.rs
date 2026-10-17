@@ -77,15 +77,18 @@ impl<'a> Decoder<'a> {
         let rd = (((inst >> 16) & 0xff) << 0);
         let rnd = ((inst >> 78) & 3) as u32;
         let ftz = ((inst >> 80) & 1) != 0;
-        let fmt = (((inst >> 84) & 0x7) << 3) | (((inst >> 75) & 0x7) << 0);
-        let f64_ty = self.type_f64();
-        let val = match fmt {
-            19 => {
+        let dstfmt = ((inst >> 75) & 3) as u32;
+        let srcfmt = ((inst >> 84) & 3) as u32;
+        let sat = inst >> 77 & 1 != 0;
+        let val = match (dstfmt, srcfmt) {
+            (3, 2) => {
                 let val = self.fp_alu_src(inst, ftz);
+                let f64_ty = self.type_f64();
                 self.ir.emit_f_convert(f64_ty, val)
             }
-            26 => {
+            (2, 3) => {
                 let val = self.fp64_alu_src(inst);
+                let f64_ty = self.type_f64();
                 let nearest = self.ir.emit_f_convert(self.type_f32[1], val);
                 self.ir.emit_decorate(nearest, spirv::decoration::NO_CONTRACTION, &[]);
                 let mut bits = self.bitcast_u32(nearest);
@@ -122,7 +125,46 @@ impl<'a> Decoder<'a> {
                 self.store_register(rd as u32, bits);
                 return;
             }
-            _ => todo!("F2F format {fmt} requires f16 support"),
+            (2, 1) => {
+                let val = self.f16_alu_src(inst, ftz);
+                let bits = self.canonical_nan_bits(val);
+                self.store_register(rd as u32, bits);
+                return;
+            }
+            (3, 1) => {
+                let val = self.f16_alu_src(inst, ftz);
+                let f64_ty = self.type_f64();
+                let converted = self.ir.emit_f_convert(f64_ty, val);
+                let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+                let u64_ty = self.type_u64();
+                let canonical = self.ir.emit_constant_typed(u64_ty, 0x7fff_ffff_ffff_ffffu64);
+                let bits = self.ir.emit_bitcast(u64_ty, converted);
+                let bits = self.ir.emit_select(u64_ty, nan, canonical, bits);
+                self.store_pair(rd as u32, bits);
+                return;
+            }
+            (1, src) => {
+                let (mut val, src_f64) = match src {
+                    1 => {
+                        let val = self.f16_alu_src(inst, ftz);
+                        let val = self.glsl(ROUNDING[rnd as usize], self.type_f32[1], &[val]);
+                        (val, false)
+                    }
+                    2 => (self.fp_alu_src(inst, ftz), false),
+                    3 => (self.fp64_alu_src(inst), true),
+                    _ => panic!("invalid F2F source format {src}"),
+                };
+                if sat {
+                    let ty = if src_f64 { self.type_f64() } else { self.type_f32[1] };
+                    let zero = if src_f64 { self.ir.emit_constant_typed(ty, 0.0f64) } else { self.ir.emit_constant_typed(ty, 0.0f32) };
+                    let one = if src_f64 { self.ir.emit_constant_typed(ty, 1.0f64) } else { self.ir.emit_constant_typed(ty, 1.0f32) };
+                    val = self.glsl(spirv::glsl::N_CLAMP, ty, &[val, zero, one]);
+                }
+                let bits = self.pack_f16_round(val, src_f64, if src == 1 { 0 } else { rnd }, ftz);
+                self.store_register(rd as u32, bits);
+                return;
+            }
+            _ => panic!("invalid F2F format {dstfmt}.{srcfmt}"),
         };
         let u64_ty = self.type_u64();
         let bits = self.ir.emit_bitcast(u64_ty, val);
@@ -162,14 +204,15 @@ impl<'a> Decoder<'a> {
             _ => (-2f64.powi(width - 1), 2f64.powi(width - 1)),
         };
         let (val, [min, max]) = match srcfmt {
+            1 => (self.f16_alu_src(inst, ftz), [min, max].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c as f32))),
             2 => (self.fp_alu_src(inst, ftz), [min, max].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c as f32))),
             3 => {
                 let ty = self.type_f64();
                 (self.fp64_alu_src(inst), [min, max].map(|c| self.ir.emit_constant_typed(ty, c)))
             }
-            _ => todo!("F2I source format {srcfmt} is not implemented"),
+            _ => panic!("invalid F2I source format {srcfmt}"),
         };
-        let ty = if srcfmt == 2 { self.type_f32[1] } else { self.type_f64() };
+        let ty = if srcfmt == 3 { self.type_f64() } else { self.type_f32[1] };
         let rounded = self.glsl(ROUNDING[rnd], ty, &[val]);
         self.store_f2i(rd, dstfmt, val, rounded, min, max);
     }
@@ -200,7 +243,8 @@ impl<'a> Decoder<'a> {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let extract = ((inst >> 60) & 3) as u32;
         let size = ((inst >> 75) & 3) as u32;
-        assert_round_to_nearest(inst);
+        let rnd = ((inst >> 78) & 3) as u32;
+        if size != 1 { assert_round_to_nearest(inst); }
         let srcfmt = ((((inst >> 84) & 0x3) << 1) | (((inst >> 74) & 0x1) << 0)) as u32;
         let signed = srcfmt & 1 != 0;
         let mut val = if srcfmt >= 6 {
@@ -224,6 +268,12 @@ impl<'a> Decoder<'a> {
             val = self.ir.emit_bitcast(ty, val);
         }
         let result = match size {
+            1 => {
+                let val = if signed { self.ir.emit_convert_s_to_f(self.type_f32[1], val) } else { self.ir.emit_convert_u_to_f(self.type_f32[1], val) };
+                let result = self.pack_f16_round(val, false, rnd, false);
+                self.store_register(rd, result);
+                return;
+            }
             2 => if signed {
                 self.ir.emit_convert_s_to_f(self.type_f32[1], val)
             } else {
@@ -233,7 +283,7 @@ impl<'a> Decoder<'a> {
                 let ty = self.type_f64();
                 if signed { self.ir.emit_convert_s_to_f(ty, val) } else { self.ir.emit_convert_u_to_f(ty, val) }
             }
-            _ => todo!("I2F destination format {size} requires f16 support"),
+            _ => panic!("invalid I2F destination format {size}"),
         };
         if size == 3 {
             let u64_ty = self.type_u64();

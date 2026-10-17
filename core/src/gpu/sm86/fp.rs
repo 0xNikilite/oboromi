@@ -121,6 +121,12 @@ impl<'a> Decoder<'a> {
         let ftz = ((inst >> 80) & 1) != 0;
         let fmt = (((inst >> 84) & 0x3) << 2) | (((inst >> 75) & 0x3) << 0);
         match fmt {
+            5 => {
+                let val = self.f16_alu_src(inst, ftz);
+                let val = self.glsl(ROUNDING[rnd], self.type_f32[1], &[val]);
+                let bits = self.pack_f16_round(val, false, 0, ftz);
+                self.store_register(rd, bits);
+            }
             10 => {
                 let val = self.fp_alu_src(inst, ftz);
                 let val = self.glsl(ROUNDING[rnd], self.type_f32[1], &[val]);
@@ -134,7 +140,7 @@ impl<'a> Decoder<'a> {
                 let bits = self.propagated_nan_bits(rounded, &[val]);
                 self.store_pair(rd, bits);
             }
-            _ => todo!("FRND format {fmt} requires f16 support"),
+            _ => panic!("invalid FRND format {fmt}"),
         }
     }
     pub fn fswzadd(&mut self, inst: u128) {

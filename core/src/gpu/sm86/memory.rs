@@ -84,16 +84,17 @@ impl<'a> Decoder<'a> {
         let attr = (((inst >> 64) & 0xff) << 2) as u32;
         let constant = (((inst >> 78) & 0x3) << 0) == 1;
         assert!(opcode(inst) == 0x326 && inst >> 76 & 3 == 0 && inst >> 78 & 3 < 2 && inst >> 81 & 7 == PT as u128, "only IPA.PASS and IPA.CONSTANT at the pixel centre are implemented");
-        assert!(self.stage == Stage::Fragment, "IPA in a {:?} module is not implemented", self.stage);
+        let Stage::Fragment { flat, .. } = self.stage else { panic!("IPA in a {:?} module is not implemented", self.stage) };
         let val = match attr {
             0x70..0x80 => {
                 let coord = self.builtin(BuiltIn::FragCoord);
                 let val = self.ir.emit_composite_extract(self.type_f32[1], coord, &[attr / 4 % 4]);
                 self.bitcast_u32(val)
             }
-            // The PS header's IMAP, not IPA, picks perspective or screen linear, so perspective until the header is read.
             0x80..0x280 => {
-                let ptr = self.interface_component(ResourceKind::Varying { location: (attr - 0x80) / 16, flat: constant }, INPUT, attr);
+                let location = (attr - 0x80) / 16;
+                let kind = ResourceKind::Varying { location, flat: constant || flat >> location & 1 != 0 };
+                let ptr = self.interface_component(kind, INPUT, attr);
                 let val = self.ir.emit_load(self.type_f32[1], ptr);
                 self.bitcast_u32(val)
             }

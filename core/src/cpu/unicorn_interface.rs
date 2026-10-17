@@ -1,5 +1,7 @@
-use std::sync::{Arc, Mutex};
-use unicorn_engine::{Arch, Mode, Prot, RegisterARM64, Unicorn, uc_error};
+use super::GuestRam;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use unicorn_engine::{Arch, HookType, Mode, Prot, RegisterARM64, Unicorn, uc_error};
 
 const EXCP_SWI: u32 = 2;
 
@@ -9,6 +11,8 @@ type Emu = Unicorn<'static, Option<u32>>;
 /// Safe wrapper for Unicorn CPU emulator
 pub struct UnicornCPU {
     emu: Arc<Mutex<Emu>>,
+    ram: Arc<GuestRam>,
+    hooked: AtomicUsize,
     pub core_id: u32,
 }
 
@@ -33,37 +37,11 @@ fn new_emu() -> Result<Emu, uc_error> {
 impl UnicornCPU {
     /// Create a new Unicorn instance with 8MB of memory (Legacy/Test mode)
     pub fn new() -> Option<Self> {
-        let mut emu = new_emu()
-            .map_err(|e| {
-                eprintln!("Failed to create Unicorn instance: {e:?}");
-                e
-            })
-            .ok()?;
-
-        // Map 8MB of memory with full permissions (Legacy size)
-        // This uses Unicorn's internal allocation
-        emu.mem_map(0x0, 8 * 1024 * 1024, Prot::ALL)
-            .map_err(|e| {
-                eprintln!("Failed to map memory: {e:?}");
-                e
-            })
-            .ok()?;
-
-        // Initialize stack pointer
-        let _ = emu.reg_write(RegisterARM64::SP, (8 * 1024 * 1024) - 0x1000);
-
-        Some(Self {
-            emu: Arc::new(Mutex::new(emu)),
-            core_id: 0,
-        })
+        Self::new_with_shared_mem(0, GuestRam::new(8 * 1024 * 1024))
     }
 
-    /// Create a new Unicorn instance with shared memory
-    /// 
-    /// # Safety
-    /// The caller must ensure `memory_ptr` is valid for the lifetime of this CPU
-    /// and has at least `memory_size` bytes.
-    pub unsafe fn new_with_shared_mem(core_id: u32, memory_ptr: *mut u8, memory_size: u64) -> Option<Self> {
+    /// Create a new Unicorn instance mapping `ram` at guest address 0
+    pub fn new_with_shared_mem(core_id: u32, ram: Arc<GuestRam>) -> Option<Self> {
         let mut emu = new_emu()
             .map_err(|e| {
                 eprintln!("Failed to create Unicorn instance for core {}: {:?}", core_id, e);
@@ -71,10 +49,9 @@ impl UnicornCPU {
             })
             .ok()?;
 
-        // Map shared memory
-        // unsafe because we are providing a raw pointer
+        // Safety: the core holds `ram`, so the mapping outlives the Unicorn instance.
         unsafe {
-            emu.mem_map_ptr(0x0, memory_size, Prot::ALL, memory_ptr as *mut std::ffi::c_void)
+            emu.mem_map_ptr(0x0, ram.size() as u64, Prot::ALL, ram.base().cast())
                 .map_err(|e| {
                     eprintln!("Failed to map shared memory for core {}: {:?}", core_id, e);
                     e
@@ -84,18 +61,37 @@ impl UnicornCPU {
 
         // Initialize stack pointer to end of memory, offset by core ID to avoid collision
         // Give each core 1MB of stack space at the top of memory
-        let stack_top = memory_size - (core_id as u64 * 0x100000);
+        let stack_top = ram.size() as u64 - (core_id as u64 * 0x100000);
         let _ = emu.reg_write(RegisterARM64::SP, stack_top);
 
         Some(Self {
             emu: Arc::new(Mutex::new(emu)),
+            ram,
+            hooked: AtomicUsize::new(0),
             core_id,
         })
     }
 
+    /// Locks the core and takes the RAM turn, first hooking writes to the ranges the GPU mapped since the last lock.
+    fn lock(&self) -> (MutexGuard<'_, Emu>, MutexGuard<'_, ()>) {
+        let mut emu = self.emu.lock().unwrap();
+        let watched = self.ram.watched();
+        // One hook per GPU mapping: Unicorn tests every guest store against each hook's range, and a hit only sets page bits.
+        for range in &watched[self.hooked.swap(watched.len(), Ordering::Relaxed)..] {
+            let ram = Arc::clone(&self.ram);
+            let mark = move |_: &mut Unicorn<Option<u32>>, _, pa, len: usize, _| {
+                ram.mark_cpu_written(pa, len as u64);
+                true
+            };
+            emu.add_mem_hook(HookType::MEM_WRITE, range.start, range.end - 1, mark).expect("write hook");
+        }
+        drop(watched);
+        (emu, self.ram.turn())
+    }
+
     /// Run the core until halt or breakpoint
     pub fn run(&self) -> u64 {
-        let mut emu = self.emu.lock().unwrap();
+        let (mut emu, _turn) = self.lock();
         let pc = emu.reg_read(RegisterARM64::PC).unwrap_or(0);
 
         // Run until we hit a BRK instruction or error
@@ -115,7 +111,7 @@ impl UnicornCPU {
 
     /// Execute a single step
     pub fn step(&self) -> u64 {
-        let mut emu = self.emu.lock().unwrap();
+        let (mut emu, _turn) = self.lock();
         let pc = emu.reg_read(RegisterARM64::PC).unwrap_or(0);
 
         match emu.emu_start(pc, pc + 4, 0, 1) {
@@ -255,23 +251,27 @@ impl UnicornCPU {
     }
 
     pub fn read_mem(&self, vaddr: u64, buf: &mut [u8]) -> Result<(), uc_error> {
-        self.emu.lock().unwrap().mem_read(vaddr, buf)
+        self.lock().0.mem_read(vaddr, buf)
     }
 
     pub fn write_mem(&self, vaddr: u64, bytes: &[u8]) -> Result<(), uc_error> {
-        self.emu.lock().unwrap().mem_write(vaddr, bytes)
+        let (mut emu, _turn) = self.lock();
+        emu.mem_write(vaddr, bytes)?;
+        self.ram.mark_cpu_written(vaddr, bytes.len() as u64);
+        Ok(())
     }
 
     /// Write a 32-bit value to emulated memory
     pub fn write_u32(&self, vaddr: u64, value: u32) {
-        let mut emu = self.emu.lock().unwrap();
+        let (mut emu, _turn) = self.lock();
         let bytes = value.to_le_bytes();
         let _ = emu.mem_write(vaddr, &bytes);
+        self.ram.mark_cpu_written(vaddr, 4);
     }
 
     /// Read a 32-bit value from emulated memory
     pub fn read_u32(&self, vaddr: u64) -> u32 {
-        let emu = self.emu.lock().unwrap();
+        let (emu, _turn) = self.lock();
         let mut bytes = [0u8; 4];
         if emu.mem_read(vaddr, &mut bytes).is_ok() {
             u32::from_le_bytes(bytes)
@@ -282,14 +282,15 @@ impl UnicornCPU {
 
     /// Write a 64-bit value to emulated memory
     pub fn write_u64(&self, vaddr: u64, value: u64) {
-        let mut emu = self.emu.lock().unwrap();
+        let (mut emu, _turn) = self.lock();
         let bytes = value.to_le_bytes();
         let _ = emu.mem_write(vaddr, &bytes);
+        self.ram.mark_cpu_written(vaddr, 8);
     }
 
     /// Read a 64-bit value from emulated memory
     pub fn read_u64(&self, vaddr: u64) -> u64 {
-        let emu = self.emu.lock().unwrap();
+        let (emu, _turn) = self.lock();
         let mut bytes = [0u8; 8];
         if emu.mem_read(vaddr, &mut bytes).is_ok() {
             u64::from_le_bytes(bytes)

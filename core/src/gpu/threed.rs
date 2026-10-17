@@ -280,8 +280,8 @@ pub struct DrawSnapshot {
     pub blend: Option<Blend>,
     pub blend_constant: [f32; 4],
     pub index_buffer: IndexBuffer,
-    /// Per binding group, the buffer bound to each constant buffer slot.
-    pub constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
+    /// Per binding group, the buffer bound to each slot BIND_GROUP_CONSTANT_BUFFER's 5-bit SHADER_SLOT names (clc797.h).
+    pub constant_buffers: [[Option<ConstantBuffer>; 32]; 5],
     pub texture_pool: DescriptorPool,
     pub sampler_pool: DescriptorPool,
     /// A texture's sampler is the TSC entry at its TIC index rather than the one its handle names.
@@ -309,7 +309,7 @@ pub struct ThreeD {
     dirty: DirtyFlags,
     topology: PrimitiveTopology,
     instance: u32,
-    constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
+    constant_buffers: [[Option<ConstantBuffer>; 32]; 5],
 }
 
 impl Default for ThreeD {

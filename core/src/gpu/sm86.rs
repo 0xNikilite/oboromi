@@ -50,6 +50,9 @@ const P0_TO_P6: u32 = 0x7f;
 const S2UR: u32 = 0x1c3;
 const R2UR: u32 = 0x3c2;
 const SHARED_WORDS: u32 = 256;
+const DIM_2D: u32 = 1;
+const LOD_OPERAND: u32 = 2;
+const GRAD_OPERAND: u32 = 4;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
@@ -4148,7 +4151,6 @@ impl<'a> Decoder<'a> {
     // The bound 2D surface variable holding `format` texels, its image type, and the texel coordinate in Ra, Ra+1,
     // where a byte-addressed x counts the four bytes of each texel.
     fn surface(&mut self, inst: u128, format: vk::Format, byte_addressed: bool) -> (u32, u32, u32) {
-        const DIM_2D: u32 = 1;
         const STORAGE: u32 = 2;
         const RGBA8: u32 = 4;
         const R32UI: u32 = 33;
@@ -4251,7 +4253,6 @@ impl<'a> Decoder<'a> {
         let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 == 1 { rb } else { ra + 1 };
         let coord = self.float_vec2([ra, y]);
         let sampled = self.texture_2d(inst);
-        const LOD_OPERAND: u32 = 2;
         let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod]);
         let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
         self.store_texel(inst, bits);
@@ -4273,7 +4274,6 @@ impl<'a> Decoder<'a> {
         let coord = self.ir.emit_composite_construct(self.type_u32[2], &coords);
         let sampled = self.texture_2d(inst);
         let image = self.ir.emit_image(self.type_texture_2d, sampled);
-        const LOD_OPERAND: u32 = 2;
         let texel = self.ir.emit_image_fetch(self.type_f32[4], image, coord, &[LOD_OPERAND, lod]);
         let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
         self.store_texel(inst, bits);
@@ -4304,7 +4304,6 @@ impl<'a> Decoder<'a> {
 
     fn texture_2d(&mut self, inst: u128) -> u32 {
         if self.type_sampled_texture_2d == 0 {
-            const DIM_2D: u32 = 1;
             self.ir.emit_capability(spirv::capability::IMAGE_QUERY);
             self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 0, 0, 0, 1, 0);
             self.type_sampled_texture_2d = self.ir.emit_type_sampled_image(self.type_texture_2d);
@@ -4452,7 +4451,6 @@ impl<'a> Decoder<'a> {
         // Rb holds du/dx, du/dy, dv/dx, dv/dy.
         let [dx, dy] = [[0, 2], [1, 3]].map(|pair| self.float_vec2(pair.map(|i| nth_reg(rb, RZ, i))));
         let sampled = self.texture_2d(inst);
-        const GRAD_OPERAND: u32 = 4;
         let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, GRAD_OPERAND, &[dx, dy]);
         let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
         self.store_texel(inst, bits);

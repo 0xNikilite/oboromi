@@ -40,4 +40,12 @@ bool renderTriangleDemo(float seconds) {
     return oboromi_render_triangle_demo(seconds);
 }
 
+bool renderBoomBoxDemo(float seconds) {
+    return oboromi_render_boombox_demo(seconds);
+}
+
+bool renderHelmetDemo(float seconds) {
+    return oboromi_render_helmet_demo(seconds);
+}
+
 }

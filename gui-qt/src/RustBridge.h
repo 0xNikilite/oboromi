@@ -20,4 +20,8 @@ bool renderDemoFrame(float seconds);
 // Draws the pushbuffer triangle demo at the given time into the display
 bool renderTriangleDemo(float seconds);
 
+// Draws the pbr BoomBox and FlightHelmet demos at the given time into the display
+bool renderBoomBoxDemo(float seconds);
+bool renderHelmetDemo(float seconds);
+
 }

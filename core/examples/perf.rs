@@ -68,7 +68,7 @@ fn main() {
     let mut pipeline = ComputePipeline::new(state, &words, &bindings).unwrap();
     let mut input = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output)]);
+    pipeline.descriptors.bind(&[(10, &input), (11, &output)]);
     let mut out = [0u8; STATE_WORDS * 4];
     bench("dispatch+fence+readback", 50, 1000, || {
         input.write(&[0; STATE_WORDS * 4]).unwrap();

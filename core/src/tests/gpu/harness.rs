@@ -180,8 +180,8 @@ pub fn run_textured(
     let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).collect();
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
-    pipeline.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
+    pipeline.descriptors.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
+    pipeline.descriptors.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {
         let mut out = vec![0u8; len * 4];
@@ -217,7 +217,7 @@ pub fn run_grid(instructions: &[u128], block: [u32; 3], grid: [u32; 3], cbuf0: &
     support.write(&base.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &[(GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)]).unwrap();
-    pipeline.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
+    pipeline.descriptors.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
     state.dispatch(&pipeline, grid).unwrap();
     global.read(&mut memory).unwrap();
     Some(regions.iter().map(|region| memory[span(region)].to_vec()).collect())

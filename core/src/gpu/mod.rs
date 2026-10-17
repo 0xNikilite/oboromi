@@ -2,6 +2,8 @@ use ash::vk;
 
 pub mod compute;
 pub mod cubin;
+#[cfg(feature = "cuda")]
+pub mod cuda;
 pub mod frame;
 pub mod sm86;
 pub mod spirv;

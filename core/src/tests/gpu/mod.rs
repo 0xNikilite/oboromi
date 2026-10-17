@@ -5,6 +5,8 @@ mod compare;
 mod control;
 mod convert;
 mod cubin;
+#[cfg(feature = "cuda")]
+mod cuda;
 mod fixtures;
 pub mod fp;
 mod int_alu;

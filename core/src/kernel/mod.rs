@@ -112,6 +112,10 @@ impl<T> HandleTable<T> {
         self.objects.get(&handle)
     }
 
+    pub fn get_mut(&mut self, handle: u32) -> Option<&mut T> {
+        self.objects.get_mut(&handle)
+    }
+
     pub fn remove(&mut self, handle: u32) -> Option<T> {
         self.objects.remove(&handle)
     }

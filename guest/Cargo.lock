@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "guest"
 version = "0.1.0"
+dependencies = [
+ "scene",
+]
+
+[[package]]
+name = "scene"
+version = "0.1.0"

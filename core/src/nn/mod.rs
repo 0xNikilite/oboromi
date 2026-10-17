@@ -1,10 +1,13 @@
 use crate::nn;
 use crate::sys;
 
+pub mod binder;
 pub mod fs;
 pub mod hid;
 pub mod hipc;
+pub mod nvdrv;
 pub mod sm;
+pub mod vi;
 
 macro_rules! define_service {
     ($($name:ident),* $(,)?) => {
@@ -44,12 +47,12 @@ define_service!(
     idle, ifcfg, imf, ins, irs, jit, lbl, ldn, ldr, led, lm,
     lp2p, lr, manu, mig, mii, miiimg, mm, mnpp, ncm, nd, ndd,
     ndrm, news, nfc, nfp, ngc, ngct, nifm, nim, notif, npns,
-    ns, nsd, ntc, nvdbg, nvdrv, nvdrvdbg, nvgem, nvmemp,
+    ns, nsd, ntc, nvdbg, nvdrvdbg, nvgem, nvmemp,
     olsc, omm, ommdisp, ovln, pcie, pcm, pctl, pcv, pdm,
     pgl, pinmux, pl, pm, prepo, psc, psm, pwm, rgltr, ro,
     rtc, sasbus, set, sf_uds, sfdnsres, spbg, spi, spl,
     sprof, spsm, srepo, ssl, syncpt, tc, tcap, time,
-    tma_log, tmagent, ts, tspm, uart, usb, vi, vi2, vic,
+    tma_log, tmagent, ts, tspm, uart, usb, vi2, vic,
     wlan, xcd,
 );
 
@@ -60,7 +63,7 @@ pub trait ServiceTrait {
 }
 
 pub fn start_host_services(state: &mut sys::State) {
-    let entries: [(&str, fn(&mut sys::State)); 159] = [
+    let entries: [(&str, fn(&mut sys::State)); 157] = [
         ("acc", nn::acc::State::run),
         ("adraw", nn::adraw::State::run),
         ("ahid", nn::ahid::State::run),
@@ -170,7 +173,6 @@ pub fn start_host_services(state: &mut sys::State) {
         ("nsd", nn::nsd::State::run),
         ("ntc", nn::ntc::State::run),
         ("nvdbg", nn::nvdbg::State::run),
-        ("nvdrv", nn::nvdrv::State::run),
         ("nvdrvdbg", nn::nvdrvdbg::State::run),
         ("nvgem", nn::nvgem::State::run),
         ("nvmemp", nn::nvmemp::State::run),
@@ -215,7 +217,6 @@ pub fn start_host_services(state: &mut sys::State) {
         ("tspm", nn::tspm::State::run),
         ("uart", nn::uart::State::run),
         ("usb", nn::usb::State::run),
-        ("vi", nn::vi::State::run),
         ("vi2", nn::vi2::State::run),
         ("vic", nn::vic::State::run),
         ("wlan", nn::wlan::State::run),

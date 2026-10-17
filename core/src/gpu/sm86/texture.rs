@@ -383,16 +383,25 @@ impl<'a> Decoder<'a> {
         assert!(inst >> 81 & 7 == PT as u128, "TEX sparse residency predicate");
         let [ra, rb] = [24, 32].map(|bit| (inst >> bit & 0xff) as u32);
         let lod = match inst >> 87 & 7 {
-            1 => self.const_u32_0,
-            3 => self.load_register(rb),
+            0 => None,
+            1 => Some(self.const_u32_0),
+            3 => Some(self.load_register(rb)),
             mode => todo!("TEX.{}", ["implicit lod", "LZ", "LB", "LL", "LC", "LB.LC", "LC.FDV", "INVALID7"][mode as usize]),
         };
-        let lod = self.bitcast_f32(lod);
         // .SCR splits the operands between Ra and Rb, so without a lod operand y is in Rb (RTX 3090 fixtures).
-        let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 == 1 { rb } else { ra + 1 };
+        let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 < 2 { rb } else { ra + 1 };
         let coord = self.float_vec2([ra, y]);
         let sampled = self.texture_2d(inst);
-        let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod]);
+        let texel = match lod {
+            Some(lod) => {
+                let lod = self.bitcast_f32(lod);
+                self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod])
+            }
+            None => {
+                self.derivatives = true;
+                self.ir.emit_image_sample_implicit_lod(self.type_f32[4], sampled, coord, &[])
+            }
+        };
         let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
         self.store_texel(inst, bits);
     }

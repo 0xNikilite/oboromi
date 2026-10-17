@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn tex_depth_compare_forms_pass_spirv_validation() {
         let word = inst::with_rb(texture(inst::TEX_LZ_2D | inst::TEX_DC, 8, 12, 4, 3, 0x10, 0xf), 6);
-        spirv_val(&translate_module(&[word], true, None));
+        spirv_val(&translate_module(&[word], true, None, false));
     }
 
     #[test]

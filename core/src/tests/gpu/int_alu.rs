@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn mov_cx_validates_dynamic_constant_bank() {
-        let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None);
+        let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None, false);
         spirv_val(&module);
     }
 

@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_lanes, run_regs};
-    use crate::tests::gpu_test::inst::{cs2r, s2r, s2ur, stg};
+    use crate::gpu::device;
+    use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_hints, run_lanes, run_regs};
+    use crate::tests::gpu_test::inst::{W2I_NANOSLEEP, W2I_PMTRIG, cs2r, s2r, s2ur, stg};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn special_registers_write_their_destination_width() {
@@ -29,5 +31,35 @@ mod tests {
         let ids: Vec<u32> = (0..32).collect();
         assert_eq!(lanes.iter().map(|regs| regs[0]).collect::<Vec<_>>(), ids);
         assert_eq!(global, ids);
+    }
+
+    #[test]
+    fn nanosleep_timing_hint_waits_only_when_enabled() {
+        let Ok(state) = device() else { return };
+        if !state.shader_device_clock {
+            return;
+        }
+        let sleep = W2I_NANOSLEEP | (1_000_000u128 << 32);
+        let program = [sleep; 64];
+        run_regs(&program, &[], &[], &[]).unwrap();
+        run_hints(&[W2I_NANOSLEEP], &[], &[], &[]).unwrap();
+        let start = Instant::now();
+        run_regs(&program, &[], &[], &[]).unwrap();
+        let off = start.elapsed();
+        let start = Instant::now();
+        run_hints(&program, &[], &[], &[]).unwrap();
+        let on = start.elapsed();
+        assert!(on >= off + Duration::from_millis(5), "off {off:?}, on {on:?}");
+    }
+
+    #[test]
+    fn pmtrig_counts_triggers_by_immediate() {
+        let trigger = W2I_PMTRIG | (17u128 << 32);
+        let sleep = W2I_NANOSLEEP | (8u128 << 32);
+        let Some((_, _, counts)) = run_hints(&[sleep, trigger, trigger], &[], &[], &[]) else {
+            return;
+        };
+        assert_eq!(counts[17], 2);
+        assert_eq!(counts.iter().sum::<u32>(), 2);
     }
 }

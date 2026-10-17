@@ -695,7 +695,7 @@ fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
     let start = Instant::now();
     println!("Running test: {} ({} instructions)", name, instructions.len());
     let result = catch_unwind(AssertUnwindSafe(|| {
-        translate_module(instructions, false, None).validate()
+        translate_module(instructions, false, None, false).validate()
     }));
 
     let duration = start.elapsed();
@@ -841,7 +841,9 @@ fn fixtures_match_nvdisasm() {
         (inst::W2I_DEPBAR, "DEPBAR;"),
         (inst::W2I_YIELD, "YIELD;"),
         (inst::W2I_NANOSLEEP, "NANOSLEEP 0x0;"),
+        (inst::W2I_NANOSLEEP | (1_000_000u128 << 32), "NANOSLEEP 0xf4240;"),
         (inst::W2I_PMTRIG, "PMTRIG 0x0;"),
+        (inst::W2I_PMTRIG | (17u128 << 32), "PMTRIG 0x11;"),
         (inst::W2I_ERRBAR, "ERRBAR;"),
         (inst::W2I_CSMTEST, "CSMTEST.INVALID0.F.AND P0, P0, 0x0, PT;"),
         (inst::W2I_CCTLT, "CCTLT.IVALL;"),
@@ -1096,6 +1098,6 @@ fn fixtures_match_nvdisasm() {
 #[test]
 fn mov_immediate_passes_spirv_val() {
     use crate::tests::gpu::harness::spirv_val;
-    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None);
+    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None, false);
     spirv_val(&module);
 }

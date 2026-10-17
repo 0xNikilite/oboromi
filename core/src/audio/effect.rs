@@ -6,8 +6,8 @@ use super::dsp::biquad::{Biquad, BiquadParams};
 use super::dsp::delay::{Delay, DelayParams};
 use super::dsp::reverb::{Reverb, ReverbParams};
 use super::parcel::{f32_at, i32_at, u16_at, u32_at, u64_at};
-use super::renderer::{Pools, REV_BIQUAD_STATE_CLEAR_FIX};
-use super::voice::biquad_q14;
+use super::renderer::{Pools, REV_BIQUAD_STATE_CLEAR_FIX, REV_FLOAT_BIQUADS};
+use super::voice::biquad_coefficients;
 use super::{GuestMemory, mix_into};
 
 const BUFFER_MIX: u8 = 1;
@@ -73,14 +73,16 @@ impl Effect {
         let p = &self.params;
         match self.kind {
             BIQUAD => {
-                let i16_at = |at| u16_at(p, at) as i16;
-                let status = p[0x17];
+                let float = rev >= REV_FLOAT_BIQUADS;
+                let coefficients = biquad_coefficients(p, if float { 0x10 } else { 0xC }, float);
+                if float {
+                    // render reads channels and status where the q14 layout keeps them
+                    self.params.copy_within(0x24..0x26, 0x16);
+                }
+                let status = self.params[0x17];
                 let params = BiquadParams {
                     new_state: status == 0 || (status == 1 && rev < REV_BIQUAD_STATE_CLEAR_FIX),
-                    ..biquad_q14(
-                        [i16_at(0xC), i16_at(0xE), i16_at(0x10)],
-                        [i16_at(0x12), i16_at(0x14)],
-                    )
+                    ..coefficients
                 };
                 match &mut self.kernel {
                     Kernel::Biquads(filters) => {

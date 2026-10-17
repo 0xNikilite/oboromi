@@ -68,7 +68,7 @@ impl Scene {
                 (0x1A, &[u8::from(!new)]),
             ],
         );
-        let voice = record(
+        let mut voice = record(
             0x170,
             &[
                 (8, &[u8::from(new), 1, 0, self.format]),
@@ -82,6 +82,9 @@ impl Scene {
                 (0x60, &wave),
             ],
         );
+        if self.revision >= 15 {
+            voice.splice(0x3C..0x3C, [0; 0x18]);
+        }
         let final_mix = record(
             0x930,
             &[

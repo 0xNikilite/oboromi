@@ -3,12 +3,13 @@
 
 Requires: pip install numpy Pillow
 
-Usage: gltf_to_raw.py MODEL.glb OUTDIR [--max-size 512] [--readme README.md]
+Usage: gltf_to_raw.py MODEL.glb OUTDIR [--max-size 512] [--block-linear [GOB_HEIGHT_LOG2]] [--readme README.md]
        [--source-url URL] [--author TEXT] [--license TEXT]
 
 Writes vertices.bin (f32 position3 normal3 tangent4 uv2 per vertex), indices.bin (u32),
-one <slot>.rgba8 per distinct image (pitch-linear RGBA8, full mip chain level after level)
-and manifest.json. Node transforms are not applied.
+one <slot>.rgba8 per distinct image (RGBA8, mip chain level after level, pitch-linear or with
+--block-linear in the GPU's GOB layout down to the last level a GOB wide) and manifest.json.
+Node transforms are not applied.
 """
 import argparse, json, re, struct, sys
 from pathlib import Path
@@ -118,7 +119,19 @@ def box(arr, w, h):
     return np.stack(ch, -1)
 
 
-def mip_chain(img, srgb, max_size):
+def block_linear(rows, g):
+    """Swizzles pitch-linear rows into blocks of 2**g GOBs, the offsets of block_linear_offset in core/src/gpu/texture.rs."""
+    rows = rows.reshape(len(rows), -1)
+    h, n = rows.shape
+    y, x = np.mgrid[:h, :n]
+    off = ((y >> 3 >> g) * -(-n // 64) + x // 64 << 9 + g) + (y >> 3 & (1 << g) - 1) * 512
+    off += (x & 63) // 32 * 256 + (y & 7) // 2 * 64 + (x & 31) // 16 * 32 + (y & 1) * 16 + (x & 15)
+    out = np.zeros(-(-h // (8 << g)) * -(-n // 64) << 9 + g, np.uint8)
+    out[off] = rows
+    return out
+
+
+def mip_chain(img, srgb, max_size, gob_height_log2):
     a = np.asarray(img.convert("RGBA"), np.float32) / 255.0
     if srgb:
         a[..., :3] = s2l(a[..., :3])
@@ -137,7 +150,13 @@ def mip_chain(img, srgb, max_size):
         l = l.copy()
         if srgb:
             l[..., :3] = l2s(l[..., :3])
-        out += np.clip(np.rint(l * 255), 0, 255).astype(np.uint8).tobytes()
+        l = np.clip(np.rint(l * 255), 0, 255).astype(np.uint8)
+        if gob_height_log2 is not None:
+            g = gob_height_log2
+            while g and len(l) <= 4 << g:
+                g -= 1
+            l = block_linear(l, g)
+        out += l.tobytes()
     return out, levels[0].shape[1], levels[0].shape[0], len(levels)
 
 
@@ -162,6 +181,7 @@ def main():
     ap.add_argument("model")
     ap.add_argument("outdir")
     ap.add_argument("--max-size", type=int, default=512)
+    ap.add_argument("--block-linear", type=int, nargs="?", const=1, metavar="GOB_HEIGHT_LOG2")
     ap.add_argument("--readme")
     ap.add_argument("--source-url")
     ap.add_argument("--author")
@@ -222,10 +242,11 @@ def main():
             img = Image.open(io.BytesIO(data))
         else:
             img = Image.open(base / im["uri"])
-        blob, w, h, n = mip_chain(img, srgb, args.max_size)
+        blob, w, h, n = mip_chain(img, srgb, args.max_size, args.block_linear)
         (out / f"{name}.rgba8").write_bytes(blob)
         textures.append({"file": f"{name}.rgba8", "image": src, "slots": slots, "width": w, "height": h, "mips": n,
-                         "color_space": "srgb" if srgb else "linear", "bytes": len(blob)})
+                         "color_space": "srgb" if srgb else "linear", "bytes": len(blob),
+                         "layout": "pitch" if args.block_linear is None else "block_linear", "gob_height_log2": args.block_linear})
     man = {"vertex_count": len(V), "index_count": len(I), "vertex_stride": 48,
            "vertex_layout": "position f32x3, normal f32x3, tangent f32x4, uv f32x2",
            "primitives": prims, "materials": mats, "textures": textures, **readme_meta(args.readme, args)}

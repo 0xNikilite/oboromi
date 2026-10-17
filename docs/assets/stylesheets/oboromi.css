@@ -1,0 +1,186 @@
+/* oboromi docs theme. Colours come from the logo: slate and plum half discs with a Joy-Con 2 blue and red stripe.
+   Brand values live in the token block; the rest maps them onto Material's variables. Fonts are system fonts. */
+
+:root {
+  --obo-ink: #14181d;       /* dark page */
+  --obo-slate: #1d232b;     /* header, dark surfaces */
+  --obo-slate-2: #2e343d;   /* the logo's slate: dark code blocks, sidebars */
+  --obo-steel: #6b7684;     /* borders and muted UI only */
+  --obo-mist: #f3f4f6;      /* light page */
+  --obo-mist-2: #e6e9ed;    /* light code blocks */
+  --obo-plum: #37143a;      /* the logo's plum, header edge */
+  --obo-blue: #61b7df;      /* Joy-Con 2 blue: links and active nav on dark */
+  --obo-blue-deep: #1a6c93; /* the same blue, dark enough for text on light */
+  --obo-red: #e2654a;       /* Joy-Con 2 red: section labels and marks, sparingly */
+  --obo-red-deep: #b4432c;  /* the same red on light */
+
+  --md-text-font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --md-code-font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  --md-mermaid-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --obo-radius: 0.4rem;
+}
+
+/* Material sets primary and accent on these selectors, which outrank :root. The header is slate in both schemes. */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: var(--obo-slate);
+  --md-primary-fg-color--light: var(--obo-slate-2);
+  --md-primary-fg-color--dark: var(--obo-ink);
+  --md-primary-bg-color: var(--obo-mist);
+  --md-primary-bg-color--light: color-mix(in srgb, var(--obo-mist) 70%, transparent);
+}
+
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: var(--obo-blue-deep);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--obo-blue-deep) 10%, transparent);
+  --md-accent-bg-color: #ffffff;
+  --md-accent-bg-color--light: color-mix(in srgb, #ffffff 70%, transparent);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 215;
+  --md-default-bg-color: var(--obo-ink);
+  --md-default-bg-color--light: color-mix(in srgb, var(--obo-ink) 70%, transparent);
+  --md-default-fg-color: var(--obo-mist);
+  --md-default-fg-color--light: color-mix(in srgb, var(--obo-mist) 70%, transparent);
+  --md-default-fg-color--lighter: var(--obo-steel);
+  --md-default-fg-color--lightest: color-mix(in srgb, var(--obo-steel) 22%, transparent);
+  --md-typeset-color: var(--obo-mist);
+  --md-typeset-a-color: var(--obo-blue);
+  --md-typeset-mark-color: color-mix(in srgb, var(--obo-red) 40%, transparent);
+  --md-typeset-table-color: color-mix(in srgb, var(--obo-steel) 60%, transparent);
+  --md-code-fg-color: var(--obo-mist);
+  --md-code-bg-color: var(--obo-slate-2);
+  --md-admonition-bg-color: var(--obo-slate);
+  --md-footer-bg-color: var(--obo-slate);
+  --md-footer-bg-color--dark: var(--obo-ink);
+  --md-accent-fg-color: var(--obo-blue);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--obo-blue) 12%, transparent);
+  --md-accent-bg-color: var(--obo-ink);
+  --obo-label-color: var(--obo-red);
+
+  --md-mermaid-node-bg-color: var(--obo-slate-2);
+  --md-mermaid-node-fg-color: var(--obo-mist);
+  --md-mermaid-edge-color: var(--obo-blue);
+  --md-mermaid-label-bg-color: var(--obo-ink);
+  --md-mermaid-label-fg-color: var(--obo-mist);
+  --md-mermaid-sequence-actor-bg-color: var(--obo-slate-2);
+  --md-mermaid-sequence-actor-fg-color: var(--obo-mist);
+  --md-mermaid-sequence-actor-border-color: var(--obo-blue);
+  --md-mermaid-sequence-actor-line-color: var(--obo-steel);
+  --md-mermaid-sequence-message-fg-color: var(--obo-mist);
+  --md-mermaid-sequence-message-line-color: var(--obo-blue);
+  --md-mermaid-sequence-label-bg-color: var(--obo-slate);
+  --md-mermaid-sequence-label-fg-color: var(--obo-mist);
+  --md-mermaid-sequence-note-bg-color: var(--obo-slate);
+  --md-mermaid-sequence-note-fg-color: var(--obo-mist);
+  --md-mermaid-sequence-note-border-color: var(--obo-red);
+}
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: var(--obo-mist);
+  --md-default-bg-color--light: color-mix(in srgb, var(--obo-mist) 70%, transparent);
+  --md-default-fg-color: var(--obo-ink);
+  --md-default-fg-color--light: color-mix(in srgb, var(--obo-ink) 66%, transparent);
+  --md-default-fg-color--lighter: var(--obo-steel);
+  --md-default-fg-color--lightest: color-mix(in srgb, var(--obo-steel) 18%, transparent);
+  --md-typeset-color: var(--obo-ink);
+  --md-typeset-a-color: var(--obo-blue-deep);
+  --md-typeset-mark-color: color-mix(in srgb, var(--obo-red) 28%, transparent);
+  --md-typeset-table-color: color-mix(in srgb, var(--obo-steel) 45%, transparent);
+  --md-code-fg-color: var(--obo-ink);
+  --md-code-bg-color: var(--obo-mist-2);
+  --md-admonition-bg-color: var(--obo-mist-2);
+  --md-footer-bg-color: var(--obo-slate);
+  --md-footer-bg-color--dark: var(--obo-ink);
+  --md-footer-fg-color: var(--obo-mist);
+  --obo-label-color: var(--obo-red-deep);
+
+  --md-mermaid-node-bg-color: #ffffff;
+  --md-mermaid-node-fg-color: var(--obo-ink);
+  --md-mermaid-edge-color: var(--obo-blue-deep);
+  --md-mermaid-label-bg-color: var(--obo-mist);
+  --md-mermaid-label-fg-color: var(--obo-ink);
+  --md-mermaid-sequence-actor-bg-color: #ffffff;
+  --md-mermaid-sequence-actor-fg-color: var(--obo-ink);
+  --md-mermaid-sequence-actor-border-color: var(--obo-blue-deep);
+  --md-mermaid-sequence-actor-line-color: var(--obo-steel);
+  --md-mermaid-sequence-message-fg-color: var(--obo-ink);
+  --md-mermaid-sequence-message-line-color: var(--obo-blue-deep);
+  --md-mermaid-sequence-label-bg-color: var(--obo-mist-2);
+  --md-mermaid-sequence-label-fg-color: var(--obo-ink);
+  --md-mermaid-sequence-note-bg-color: var(--obo-mist-2);
+  --md-mermaid-sequence-note-fg-color: var(--obo-ink);
+  --md-mermaid-sequence-note-border-color: var(--obo-red-deep);
+}
+
+/* The two Joy-Con 2 stripes as a thin edge under the header, the only place both accents meet. */
+.md-header {
+  border-bottom: 3px solid;
+  border-image: linear-gradient(90deg, var(--obo-blue) 0 50%, var(--obo-red) 50% 100%) 1;
+}
+
+[data-md-color-scheme="slate"] .md-sidebar--primary {
+  background-color: color-mix(in srgb, var(--obo-slate) 60%, transparent);
+}
+
+.md-typeset h1 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--md-typeset-color);
+}
+
+.md-typeset h2 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Section labels in the navigation carry the warm accent. */
+.md-nav__item--section > .md-nav__link,
+.md-nav__title {
+  font-family: var(--md-code-font-family);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--obo-label-color);
+}
+
+.md-nav--primary .md-nav__title[for="__drawer"] {
+  color: var(--md-primary-bg-color);
+}
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--md-typeset-table-color);
+  border-radius: var(--obo-radius);
+  font-size: 0.68rem;
+}
+
+.md-typeset .admonition,
+.md-typeset details,
+.md-typeset pre > code {
+  border-radius: var(--obo-radius);
+}
+
+.md-header__button.md-logo img {
+  height: 1.5rem;
+  width: auto;
+}
+
+.md-typeset .mermaid {
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* Wider pages so diagrams keep a readable text size. */
+.md-grid {
+  max-width: 72rem;
+}
+
+/* ADR status from the front matter: an accepted decision shows a check. */
+:root {
+  --md-status--accepted: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg>');
+}
+
+.md-status--accepted::after {
+  -webkit-mask-image: var(--md-status--accepted);
+  mask-image: var(--md-status--accepted);
+}

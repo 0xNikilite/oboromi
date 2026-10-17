@@ -39,27 +39,8 @@ impl<'a> Decoder<'a> {
         if neg { self.ir.emit_isub(self.type_u32[1], self.const_u32_0, val) } else { val }
     }
 
-    pub fn bitextract(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _num = (((inst >> 53) & 0x3) << 0);
-        let _srchalf = (((inst >> 56) & 0x1) << 0);
-        let _dstbyte = (((inst >> 57) & 0x3) << 0);
-        let _datasize = (((inst >> 61) & 0x3) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _size = (((inst >> 75) & 0x3) << 0);
-        let _mdidx = (((inst >> 78) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("BITEXTRACT");
+    pub fn bitextract(&mut self, _inst: u128) {
+        panic!("BITEXTRACT is masked on SM86 (class gather_bitextract_ MASK_INSTR_PREDICATE = (1)): nvdisasm does not decode it and ptxas feeds mma.sp metadata to HMMA.SP as a register");
     }
     pub fn bmsk(&mut self, inst: u128) {
         let ty = self.type_u32[1];

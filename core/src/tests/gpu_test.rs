@@ -64,6 +64,8 @@ pub mod inst {
     pub const MMA_BF16: u128 = 1 << 82;
     pub const MMA_1684: u128 = 1 << 78;
     pub const MMA_TF32: u128 = 2 << 82;
+    pub const MMA_SP: u128 = 1 << 73;
+    pub const MMA_SP_16832: u128 = MMA_SP | 9 << 75;
     pub const IMMA: u128 = 0x237 | 1 << 74;
     pub const IMMA_16816: u128 = 1 << 86;
     pub const IMMA_16832: u128 = IMMA_16816 | 1 << 75;
@@ -1074,6 +1076,9 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::BMMA | inst::BMMA_168128 | inst::BMMA_AND, 4, 8, 12, 16), "BMMA.168128.AND.POPC R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu3(inst::BMMA | inst::BMMA_168256, 4, 8, 12, 16), "BMMA.168256.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::MOVM, 4, 8, 0), "MOVM.16.MT88 R4, R8 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 3 << 48, "HMMA.SP.16816.F32 R4, R8, R12, R16, R20, 0x3 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 1 << 48, "HMMA.SP.16832.F32 R4, R8, R12, R16, R20, 0x1 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32 | inst::MMA_BF16, 4, 8, 12, 16) | 20 << 40, "HMMA.SP.16832.F32.BF16 R4, R8, R12, R16, R20, 0x0 ;"),
     ];
     use crate::tests::gpu::fp::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

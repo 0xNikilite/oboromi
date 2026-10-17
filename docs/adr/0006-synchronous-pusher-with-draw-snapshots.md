@@ -25,4 +25,4 @@ A pushbuffer interleaves state writes, draws, cbuf updates, clears and semaphore
 
 `core/src/tests/gpu/fifo.rs` for decode and ordering, and the engine acceptance test for the report and the semaphore payloads landing in guest memory.
 
-Sources: core/src/gpu/fifo.rs, core/src/gpu/threed.rs, core/src/gpu/engine.rs, design note "graphics research", project notes on the graphics plan.
+Sources: core/src/gpu/fifo.rs, core/src/gpu/threed.rs, core/src/gpu/engine.rs.

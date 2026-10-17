@@ -25,4 +25,4 @@ Guest RAM is the one source of truth. Every host resource is keyed by the guest-
 
 The engine acceptance test remaps a vertex VA between draws and checks the next draw follows it.
 
-Sources: core/src/gpu/memory.rs, core/src/gpu/engine.rs, project notes on the graphics plan.
+Sources: core/src/gpu/memory.rs, core/src/gpu/engine.rs.

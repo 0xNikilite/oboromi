@@ -24,4 +24,4 @@ Keep the SM86 table. CUDA 13.1's nvdisasm accepts `--binary SM88`, and its embed
 
 The extracted SM88 table is kept on `gpu/sm88-table` beside a diff summary; regenerate and diff when a new CUDA ships.
 
-Sources: scripts/sm_86_instructions.txt, scripts/decoder_generator.rs, the SM88 table diff note, open-gpu-doc classes/3d README notes.
+Sources: scripts/sm_86_instructions.txt, scripts/decoder_generator.rs, CUDA 13.1 nvdisasm, open-gpu-doc classes/3d.

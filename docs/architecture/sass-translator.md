@@ -65,4 +65,4 @@ By design todo: graphics-only transport (ISBERD, ISBEWR, LDTRAM, OUT, PIXLD), ra
 
 Verified by: spirv-val on every emitted module, the nvdisasm check of every hand-built word, and the silicon scoreboards (see [verification](verification.md)).
 
-Sources: scripts/decoder_generator.rs, core/src/gpu/sm86_decoder_generated.rs, core/src/gpu/sm86/{mod,access,memory,control,warp}.rs, design notes on divergence and the SM88 table diff, PR #80 body.
+Sources: scripts/decoder_generator.rs, core/src/gpu/sm86_decoder_generated.rs, core/src/gpu/sm86/{mod,access,memory,control,warp}.rs, PR #80 body.

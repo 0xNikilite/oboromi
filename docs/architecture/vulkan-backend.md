@@ -63,4 +63,4 @@ The Ubuntu CI job installs mesa's lavapipe and spirv-tools, pins `VK_DRIVER_FILE
 
 Verified by: the Vulkan validation layer clean on Intel and lavapipe for dispatch, draw and depth paths; the suite skipping without an ICD.
 
-Sources: core/src/gpu/{mod,compute,graphics,engine}.rs, core/examples/perf.rs, .github/workflows/ci.yml, PR #79 body, project notes on float controls and frame latency.
+Sources: core/src/gpu/{mod,compute,graphics,engine}.rs, core/examples/perf.rs, .github/workflows/ci.yml, PR #79 body.

@@ -46,4 +46,4 @@ flowchart LR
 
 Verified by: each "done" row links to its tests on the subsystem page; "in progress" rows are unmerged branches.
 
-Sources: core/src/gpu/sm86/*.rs (named todos), core/src/gpu/engine.rs (errors by name), core/src/gpu/memory.rs, demos/README, PR #79 and #80, project notes on the graphics plan, open questions and silicon session 6.
+Sources: core/src/gpu/sm86/*.rs (named todos), core/src/gpu/engine.rs (errors by name), core/src/gpu/memory.rs, demos/README, PR #79 and #80.

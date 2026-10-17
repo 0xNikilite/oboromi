@@ -25,4 +25,4 @@ Implement the silicon model exactly: groups of eight k (four for TF32), alignmen
 
 The tensor silicon scoreboard and the per-op compile timings in [textures and tensors](../architecture/textures-and-tensors.md).
 
-Sources: core/src/gpu/sm86/tensor.rs, project notes on HMMA numerics, the function form and the loop form.
+Sources: core/src/gpu/sm86/tensor.rs, core/src/tests/gpu/tensor.rs.

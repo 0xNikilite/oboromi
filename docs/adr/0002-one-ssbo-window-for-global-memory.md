@@ -25,4 +25,4 @@ All global memory a dispatch touches is one storage buffer at binding 9. The hos
 
 The compiled mul-add kernel and the gradient program match silicon through this window, and the memory tests cover remaps.
 
-Sources: core/src/gpu/memory.rs `window`, core/src/gpu/sm86/access.rs, core/src/tests/gpu/harness.rs `run_grid`, design note on the Vulkan resource ABI.
+Sources: core/src/gpu/memory.rs `window`, core/src/gpu/sm86/access.rs, core/src/tests/gpu/harness.rs `run_grid`.

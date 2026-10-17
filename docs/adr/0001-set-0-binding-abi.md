@@ -25,4 +25,4 @@ Everything lives in set 0. Binding 0 is a host support uniform buffer, never a g
 
 spirv-val on every module, the Vulkan validation layer on dispatch and draw, and the texture tests that bind several images at once.
 
-Sources: core/src/gpu/sm86/mod.rs, core/src/gpu/compute.rs, design notes on the Vulkan resource ABI and the texture ABI.
+Sources: core/src/gpu/sm86/mod.rs, core/src/gpu/compute.rs.

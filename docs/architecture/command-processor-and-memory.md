@@ -59,4 +59,4 @@ Why: identity by physical page survives remaps and aliasing, and nothing can sho
 
 Verified by: `core/src/tests/gpu/fifo.rs` and `memory_map.rs`, the engine acceptance test (draw, report, VA remap), and the QMD tests on its branch.
 
-Sources: core/src/gpu/{fifo,threed,memory,engine}.rs, core/src/gpu/compute_class.rs on gpu/qmd-dispatch, clc76f.h, clc797.h and clc7c0qmd.h field notes in the design note "graphics codebase", project notes on the graphics plan.
+Sources: core/src/gpu/{fifo,threed,memory,engine}.rs, core/src/gpu/compute_class.rs on gpu/qmd-dispatch, NVIDIA's clc76f.h, clc797.h and clc7c0qmd.h.

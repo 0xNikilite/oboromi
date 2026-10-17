@@ -16,7 +16,7 @@ flowchart TB
 | silicon | scoreboard tests replay captured inputs and compare registers, shared, global and image bytes | core/src/tests/gpu/fixtures.rs, core/tests/fixtures |
 | programs | nvcc-built kernels run through the translator and match silicon output or its hash | core/src/tests/gpu/program.rs, cubin tests |
 
-## The silicon rig
+## How silicon captures are made
 
 Each capture patches one 128-bit instruction word into an nvcc-compiled seed kernel, launches it through the CUDA driver API on a rented RTX 3090 or A6000, and reads the registers and memory back. Words are built from the instruction table and checked with nvdisasm before launch. A fixture records the word, inputs, outputs and whether it was really observed; observed results are never hand-written.
 
@@ -67,4 +67,4 @@ The lesson in the last group: whole compiled programs find bugs the per-instruct
 
 Verified by: this page is the index of checks; each tier's tests are listed above.
 
-Sources: core/src/tests/gpu/{harness,fixtures,program}.rs, core/src/tests/gpu_test.rs, core/tests/fixtures/README, core/examples/perf.rs, scripts/profile.sh, .github/workflows/ci.yml, the rig's run notes, project notes per silicon session and review pass.
+Sources: core/src/tests/gpu/{harness,fixtures,program}.rs, core/src/tests/gpu_test.rs, core/tests/fixtures/README, core/examples/perf.rs, scripts/profile.sh, .github/workflows/ci.yml.

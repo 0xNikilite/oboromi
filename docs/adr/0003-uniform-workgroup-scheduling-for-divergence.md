@@ -31,4 +31,4 @@ Keep the pc loop. A program with collectives or BAR steps every invocation toget
 
 The warp scoreboard passes on Intel and lavapipe, and tests cover unequal branch lengths, nested tokens and early exit.
 
-Sources: core/src/gpu/sm86/mod.rs `translate_program`, design note on divergence.
+Sources: core/src/gpu/sm86/mod.rs `translate_program`, core/src/gpu/sm86/warp.rs.

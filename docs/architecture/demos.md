@@ -41,7 +41,7 @@ flowchart LR
 | particles | particles integrated by a compute dispatch, drawn as additive instanced quads | particles_update.comp, particles.vert, particles.frag |
 | sprites2d | parallax layers and floating sprites, alpha-blended over a procedural atlas | sprite2d.vert, sprite2d.frag |
 
-Each scene document in `demos/scenes` lists its guest memory map, the register program it writes, and tags every unconfirmed convention with "(verify)". The shaders are GLSL that `glslangValidator -V` accepts; the plan is to compile them with the NVIDIA driver on the silicon rig into the SM86 programs the scenes load.
+Each scene document in `demos/scenes` lists its guest memory map, the register program it writes, and tags every unconfirmed convention with "(verify)". The shaders are GLSL that `glslangValidator -V` accepts; the plan is to compile them with the NVIDIA driver on a rented card into the SM86 programs the scenes load.
 
 Why GLSL compiled on a desktop card: it gives real SM86 code for the stages, but not the Switch 2's shader header or attribute conventions, so those stay tagged until a real title shows them.
 
@@ -60,4 +60,4 @@ BoomBox and Avocado are CC0 1.0 by Microsoft, from KhronosGroup's glTF-Sample-As
 
 Verified by: the GUI showing each button's output in an offscreen screenshot, the engine acceptance test for the triangle, the Julia centre test, and the block-linear swizzle matching the converter.
 
-Sources: core/src/gpu/frame.rs, core/src/ffi.rs, gui-qt/src/MainWindow.cpp, demos/README, demos/scenes/*.md, demos/assets/README, scripts/gltf_to_raw.py, core/examples/perf.rs, design note "shader source research", project notes on the demo stream.
+Sources: core/src/gpu/frame.rs, core/src/ffi.rs, gui-qt/src/MainWindow.cpp, demos/README, demos/scenes/*.md, demos/assets/README, scripts/gltf_to_raw.py, core/examples/perf.rs.

@@ -62,4 +62,4 @@ per HMMA.16816.F32, cold pipeline compile:
 
 Verified by: the tensor silicon scoreboard (session 5 captures) passing on Intel and lavapipe, texture and surface captures from CUDA texture objects, and the block-linear swizzle checked against the Python asset converter.
 
-Sources: core/src/gpu/texture.rs, core/src/gpu/sm86/{texture,tensor}.rs, core/src/tests/gpu/{texture,tensor}.rs, design note "texture ABI", project notes on HMMA numerics, loop form and block-linear textures.
+Sources: core/src/gpu/texture.rs, core/src/gpu/sm86/{texture,tensor}.rs, core/src/tests/gpu/{texture,tensor}.rs.

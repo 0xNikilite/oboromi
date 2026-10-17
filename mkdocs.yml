@@ -1,5 +1,6 @@
 site_name: oboromi
 site_description: How the oboromi Switch 2 emulator is built
+site_url: https://jopdorp.github.io/oboromi/
 docs_dir: docs
 site_dir: site
 

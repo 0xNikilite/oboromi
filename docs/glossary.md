@@ -46,4 +46,4 @@ flowchart LR
 | HLE | high-level emulation: implementing a firmware service's behaviour instead of running its code. |
 | Unicorn | the CPU emulator library oboromi's ARM cores run on. |
 
-Sources: core/src/gpu/{fifo,threed,texture,engine}.rs, core/src/gpu/compute_class.rs on gpu/qmd-dispatch, design note "graphics codebase", the SM88 table diff note.
+Sources: core/src/gpu/{fifo,threed,texture,engine}.rs, core/src/gpu/compute_class.rs on gpu/qmd-dispatch, NVIDIA's open-gpu-doc class headers.

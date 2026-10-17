@@ -12,7 +12,7 @@ There is no trustworthy public SM86 assembler and no complete semantic reference
 
 ## Decision Outcome
 
-Results are checked against registers read back from real Ampere cards. The silicon rig patches one instruction word into an nvcc-built seed kernel, runs it through the CUDA driver API, and records inputs and outputs; observed results are never hand-written. Encodings are checked with nvdisasm first. The scoreboard tests replay every capture on each device and fail on any mismatch not listed. Allowed mismatches are listed by fixture id with a reason, either for every device or for lavapipe only.
+Results are checked against registers read back from real Ampere cards. A capture patches one instruction word into an nvcc-built seed kernel, runs it through the CUDA driver API, and records inputs and outputs; observed results are never hand-written. Encodings are checked with nvdisasm first. The scoreboard tests replay every capture on each device and fail on any mismatch not listed. Allowed mismatches are listed by fixture id with a reason, either for every device or for lavapipe only.
 
 ### Consequences
 
@@ -25,4 +25,4 @@ Results are checked against registers read back from real Ampere cards. The sili
 
 `fixtures_match_silicon`, `fixtures_match_warp_silicon` and `fixtures_match_tensor_silicon` pass on Intel and lavapipe.
 
-Sources: core/tests/fixtures/README, core/src/tests/gpu/fixtures.rs, the rig's run notes, project notes on the rig decision.
+Sources: core/tests/fixtures/README, core/src/tests/gpu/fixtures.rs.

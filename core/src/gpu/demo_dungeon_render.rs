@@ -48,6 +48,7 @@ pub(super) struct Renderer {
     cones: GraphicsPipeline<'static>,
     _cone_instances: HostBuffer<'static>,
     cone_count: u32,
+    cone_visible: bool,
     opaque: GraphicsPipeline<'static>,
     sprites: GraphicsPipeline<'static>,
     particles_step: ComputePipeline<'static>,
@@ -71,6 +72,9 @@ pub(super) struct Renderer {
     _structure: Option<AccelerationStructure<'static>>,
     output: HostBuffer<'static>,
     count: u32,
+    visible_count: u32,
+    visible_zones: Vec<bool>,
+    batches: Vec<(Box3,Vec<u32>)>,
     water_indices: u32,
     water_vertex: usize,
     grid: [usize; 2],
@@ -95,7 +99,15 @@ impl Renderer {
         let water_vertex = vertices.len();
         let grid = water_grid();
         vertices.resize(water_vertex + grid[0] * grid[1], Vertex::default());
-        let mut indices = mesh.indices.clone();
+        let mut batches:Vec<_>=world.zones.iter().map(|_|(Box3{lo:[f32::INFINITY;3],hi:[f32::NEG_INFINITY;3]},Vec::new())).collect();
+        for tri in mesh.indices.chunks_exact(3) {
+            let centre=scale(add(add(mesh.vertices[tri[0] as usize].pos,mesh.vertices[tri[1] as usize].pos),mesh.vertices[tri[2] as usize].pos),1./3.);
+            let zone=world.zones.iter().position(|z|z.space.contains(centre)).unwrap_or_else(||world.zones.iter().enumerate()
+                .min_by(|(_,a),(_,b)|length(sub(a.space.centre(),centre)).total_cmp(&length(sub(b.space.centre(),centre)))).unwrap().0);
+            let (bounds,indices)=&mut batches[zone];indices.extend_from_slice(tri);
+            for &i in tri {for axis in 0..3 {let p=mesh.vertices[i as usize].pos[axis];bounds.lo[axis]=bounds.lo[axis].min(p);bounds.hi[axis]=bounds.hi[axis].max(p);}}
+        }
+        let mut indices:Vec<_>=batches.iter().flat_map(|(_,indices)|indices.iter().copied()).collect();
         let count = indices.len() as u32;
         for y in 0..grid[1] - 1 {
             for x in 0..grid[0] - 1 {
@@ -392,6 +404,7 @@ impl Renderer {
             cones,
             _cone_instances: cone_instances,
             cone_count,
+            cone_visible: true,
             opaque,
             sprites,
             particles_step,
@@ -415,6 +428,9 @@ impl Renderer {
             _structure: structure,
             output,
             count,
+            visible_count: count,
+            visible_zones: vec![true;batches.len()],
+            batches,
             water_indices,
             water_vertex,
             grid,
@@ -513,6 +529,7 @@ impl Renderer {
     }
     fn draw(&self, target: &RenderTarget, first: u32, count: u32, clear: bool, sprites: bool) -> Result<(), String> {
         let cones = first == u32::MAX;
+        if cones && !self.cone_visible {return Ok(());}
         let disabled=DISABLED.load(Ordering::Relaxed);
         if !sprites && !cones && first>0 && disabled&2!=0 { return Ok(()); }
         let blend = vk::PipelineColorBlendAttachmentState::default()
@@ -747,15 +764,32 @@ impl Renderer {
         let vp = multiply(projection, view);
         let reflected = multiply(vp, reflect);
         let reflected_eye = [eye[0], plane * 2. - eye[1], eye[2]];
+        let visible=|bounds:&Box3,matrix:Matrix| {
+            let corners:[[f32;4];8]=std::array::from_fn(|i|{
+                let p=[if i&1==0{bounds.lo[0]}else{bounds.hi[0]},if i&2==0{bounds.lo[1]}else{bounds.hi[1]},if i&4==0{bounds.lo[2]}else{bounds.hi[2]},1.];
+                std::array::from_fn(|r|(0..4).map(|c|matrix[c][r]*p[c]).sum())
+            });
+            !(0..6).any(|plane|corners.iter().all(|p|match plane{0=>p[0]< -p[3],1=>p[0]>p[3],2=>p[1]< -p[3],3=>p[1]>p[3],4=>p[2]<0.,_=>p[2]>p[3]}))
+        };
+        let cave=world.zones[world.cave].space;
+        let formations=Box3{lo:sub(cave.lo,[0.5;3]),hi:add(cave.hi,[0.5;3])};
+        self.cone_visible=visible(&formations,vp)||(!self.rays&&visible(&formations,reflected));
+        let zones:Vec<_>=self.batches.iter().map(|(bounds,_)|visible(bounds,vp)||(!self.rays&&visible(bounds,reflected))).collect();
+        if zones!=self.visible_zones {
+            let indices:Vec<_>=self.batches.iter().zip(&zones).filter(|(_,visible)|**visible).flat_map(|((_,indices),_)|indices.iter().copied()).collect();
+            self.visible_count=indices.len() as u32;
+            self.indices.write_at(0,&indices.iter().flat_map(|i|i.to_le_bytes()).collect::<Vec<_>>()).map_err(named)?;
+            self.visible_zones=zones;
+        }
         if !self.rays {
             self.uniforms(reflected, reflected, reflected_eye, seconds, right, up, world, true, plane)?;
-            self.draw(&self.reflection, 0, self.count, true, false)?;
+            self.draw(&self.reflection, 0, self.visible_count, true, false)?;
             self.draw(&self.reflection, u32::MAX, 24 * 12 * 6, false, false)?;
             self.draw(&self.reflection, 0, 6, false, true)?;
             self.reflection.readback().map_err(named)?;
         }
         self.uniforms(vp, reflected, eye, seconds, right, up, world, false, plane)?;
-        self.draw(&self.target, 0, self.count, true, false)?;
+        self.draw(&self.target, 0, self.visible_count, true, false)?;
         self.draw(&self.target, u32::MAX, 24 * 12 * 6, false, false)?;
         self.target.readback().map_err(named)?;
         self.draw(&self.target, self.count, self.water_indices, false, false)?;

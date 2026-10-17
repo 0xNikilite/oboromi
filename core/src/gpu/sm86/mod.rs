@@ -54,12 +54,13 @@ const EXIT: u32 = 0x94d;
 const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
 const BSYNC: u32 = 0x941;
-// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT
-// and the WARPSYNC mask it waits on.
+// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT,
+// the WARPSYNC mask it waits on and the byte address its EXIT jumps to, 0 for none.
 const BAR_ARRIVALS: u32 = 16;
 const BAR_RESULT: u32 = 32;
 const WARPSYNC_MASK: u32 = 33;
-const SYNC_WORDS: u32 = 34;
+const ATEXIT_PC: u32 = 34;
+const SYNC_WORDS: u32 = 35;
 // A schedule slot holds the pc vote, then per guest barrier the arrivals plus their BAR.RED predicates in the high half,
 // and the arrivals' thread count OR-ed with bit 12 for a running lane yet to arrive.
 const SCHEDULE_STRIDE: u32 = 1 + 2 * 16;
@@ -557,8 +558,9 @@ impl<'a> Decoder<'a> {
     // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
         let len = words.len() as u32;
-        // BRX, JMX and CALL Ra only know their target at run time, so such a program dispatches on every pc; RET lands after a CALL.
-        let indirect = words.iter().any(|inst| matches!(opcode(*inst), CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));
+        // BRX, JMX, CALL Ra and BMOV ATEXIT_PC only know their target at run time, so such a program dispatches on every pc; RET
+        // lands after a CALL.
+        let indirect = words.iter().any(|inst| matches!(opcode(*inst), 0x357 | 0x957 | CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));
         let mut leaders: Vec<u32> = if indirect { (0..=len).collect() } else { vec![0, len] };
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));

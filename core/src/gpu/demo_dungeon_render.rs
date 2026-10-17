@@ -205,7 +205,7 @@ impl Renderer {
         let per_emitter = if showcase { 96 } else { 32 };
         let extra_particles = world.drips.len() * 2
             + world.props.iter().filter(|p| matches!(p, Prop::Web(..) | Prop::Lantern(..))).count()
-            + 112;
+            + 184;
         let particles = HostBuffer::new(state, ((world.lights.len() * per_emitter + extra_particles) * 48) as u64)
             .map_err(named)?;
         let target = RenderTarget::with_format(state, WIDTH, HEIGHT, Some(DEPTH), None, HDR).map_err(named)?;
@@ -689,15 +689,15 @@ impl Renderer {
             );
         }
         let mut rng = Rng(117);
-        for i in 0..104 {
+        for i in 0..152 {
             let seed = i as f32;
-            if i < 48 {
+            if i < 96 {
                 let lamp = &world.lights[i % world.lights.len()];
                 let p = add(
                     lamp.pos,
                     [rng.range(-2., 2.), (rng.next() * 3. + seconds * 0.07).rem_euclid(3.) - 1., rng.range(-2., 2.)],
                 );
-                particle(p, 3., [0.004; 2], seed, [0.3, 0.23, 0.12, 0.6]);
+                particle(p, 3., [0.008; 2], seed, [0.65, 0.55, 0.37, 0.75]);
             } else {
                 let x = world.river.lo[0]
                     + (rng.next() * (world.river.hi[0] - world.river.lo[0]) + seconds * 0.16)
@@ -713,6 +713,11 @@ impl Renderer {
                     [0.28, 0.19, 0.055, 0.75],
                 );
             }
+        }
+        for i in 0..24 {
+            let h=(seconds*0.08+i as f32*0.17).rem_euclid(world.grate.hi[1]);
+            let p=add(world.grate.centre(),[rng.range(-0.65,0.65)+0.2*h,-h,rng.range(-0.65,0.65)-0.15*h]);
+            particle(p,3.,[0.009;2],i as f32,[0.7,1.,1.5,0.7]);
         }
         for prop in &world.props {
             match *prop {

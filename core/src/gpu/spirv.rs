@@ -66,6 +66,7 @@ pub mod capability {
     pub const INT64: u32 = 11;
     pub const INT16: u32 = 22;
     pub const INT8: u32 = 39;
+    pub const IMAGE_QUERY: u32 = 50;
     pub const STORAGE_BUFFER_16BIT: u32 = 4433;
     pub const STORAGE_BUFFER_8BIT: u32 = 4448;
     pub const PHYSICAL_STORAGE_BUFFER_ADDRESSES: u32 = 5348;
@@ -779,6 +780,10 @@ impl Emitter {
         self.typed_un(104, ty, image)
     }
 
+    pub fn emit_image_query_levels(&mut self, ty: u32, image: u32) -> u32 {
+        self.typed_un(106, ty, image)
+    }
+
     pub fn emit_atomic_load(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(227, &[ty, r, pointer, scope, semantics]);
@@ -1044,6 +1049,8 @@ pub mod glsl {
     pub const S_CLAMP: u32 = 45;
     pub const F_MIX: u32 = 46;
     pub const FMA: u32 = 50;
+    pub const PACK_UNORM_4X8: u32 = 55;
+    pub const UNPACK_UNORM_4X8: u32 = 64;
     pub const FIND_I_LSB: u32 = 73;
     pub const FIND_S_MSB: u32 = 74;
     pub const FIND_U_MSB: u32 = 75;

@@ -111,9 +111,17 @@ pub mod inst {
     const LDG_PU_PT: u128 = 7 << 81;
     const COP_EN: u128 = 1 << 84;
     const NO_WRITE_SCOREBOARD: u128 = 7 << 110;
-    const TLD: u128 = 0xb66;
     const TEX_2D: u128 = 1 << 61;
-    const TLD_LZ: u128 = 1 << 87;
+    const LZ: u128 = 1 << 87;
+    pub const TLD_LZ_2D: u128 = 0xb66 | TEX_2D | LZ;
+    pub const TEX_LZ_2D: u128 = 0xb60 | TEX_2D | LZ;
+    pub const TXQ_DIMENSION: u128 = 0xb6f;
+    const SU_2D_NEAR: u128 = 3 << 61 | 1 << 59;
+    const SU_RGBA: u128 = 0xf << 72;
+    pub const SULD_D_32: u128 = 0xb99 | SZ_32;
+    pub const SULD_P_RGBA: u128 = 0xb97 | SU_RGBA;
+    pub const SUST_D_32: u128 = 0xb9d | SZ_32;
+    pub const SUST_P_RGBA: u128 = 0xb9b | SU_RGBA;
     const LDS: u128 = 0x984;
     const STS: u128 = 0x388;
     const ATOMS_ADD: u128 = 0x38c;
@@ -247,12 +255,18 @@ pub mod inst {
         inst
     }
 
-    pub fn tld_lz(rd: u32, rd2: u32, ra: u32, bank: u32, byte_offset: u32, mask: u32) -> u128 {
-        alu(TLD | TEX_2D | TLD_LZ | LDG_PU_PT | COP_EN, rd, ra, 0xff)
+    pub fn texture(op: u128, rd: u32, rd2: u32, ra: u32, bank: u32, byte_offset: u32, mask: u32) -> u128 {
+        alu(op | LDG_PU_PT | COP_EN, rd, ra, 0xff)
             | (rd2 as u128) << 64
             | (byte_offset as u128 / 4) << 40
             | (bank as u128) << 54
             | (mask as u128) << 72
+    }
+
+    pub fn surface(op: u128, rd: u32, ra: u32, rb: u32, bank: u32, byte_offset: u32) -> u128 {
+        alu(op | SU_2D_NEAR | LDG_PU_PT | COP_EN | NO_WRITE_SCOREBOARD, rd, ra, rb)
+            | (byte_offset as u128 / 4) << 40
+            | (bank as u128) << 54
     }
 
     pub fn ldc(rd: u32, bank: u32, ra: u32, off: u32) -> u128 {
@@ -899,8 +913,14 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::MATCH | inst::MATCH_ANY | inst::MATCH_U64, 10, 12, 0), "MATCH.ANY.U64 R10, R12 ;"),
         (inst::alu3(inst::FSWZADD, 6, 5, 0x66, 4), "FSWZADD R6, R5, R4, PNNPPNNP;"),
         (inst::s2r(8, 57), "S2R R8, SR_LTMASK ;"),
-        (inst::tld_lz(4, 6, 2, 3, 0x10, 0xf), "TLD.LZ R6, R4, R2, 0x3, 0x4, 2D ;"),
-        (inst::tld_lz(8, 0xff, 2, 3, 0x10, 0xa), "TLD.LZ RZ, R8, R2, 0x3, 0x4, 2D, 0xa ;"),
+        (inst::texture(inst::TLD_LZ_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD.LZ R6, R4, R2, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TLD_LZ_2D, 8, 0xff, 2, 3, 0x10, 0xa), "TLD.LZ RZ, R8, R2, 0x3, 0x4, 2D, 0xa ;"),
+        (inst::texture(inst::TEX_LZ_2D, 8, 10, 2, 3, 0x10, 0xf), "TEX.LZ R10, R8, R2, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TXQ_DIMENSION, 4, 6, 0xff, 3, 0x10, 0xb), "TXQ R6, R4, RZ, TEX_HEADER_DIMENSION, 0x3, 0x4, 0xb ;"),
+        (inst::surface(inst::SUST_P_RGBA, 0xff, 2, 8, 3, 0x10), "SUST.P.2D [R2], R8, 0x3, 0x4 ;"),
+        (inst::surface(inst::SULD_D_32, 4, 2, 0xff, 3, 0x10), "SULD.D.2D R4, [R2], 0x3, 0x4 ;"),
+        (inst::surface(inst::SUST_D_32, 0xff, 2, 5, 3, 0x10), "SUST.D.2D [R2], R5, 0x3, 0x4 ;"),
+        (inst::surface(inst::SULD_P_RGBA, 12, 2, 0xff, 3, 0x10), "SULD.P.2D R12, [R2], 0x3, 0x4 ;"),
         (inst::s2r(11, 60), "S2R R11, SR_GEMASK ;"),
     ];
     use crate::tests::gpu::fp16::tests as fp16;

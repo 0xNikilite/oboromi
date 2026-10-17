@@ -115,7 +115,7 @@ fn main() {
     let fixtures = [
         inst::iadd_imm(1, 2, 42),
         inst::iadd_reg(1, 2, 3),
-        inst::iadd3_reg(1, 2, 3, 0xFF),
+        inst::iadd3_reg(1, 2, 3, 4),
         inst::mov_imm(1, 0xCAFEBABE),
         inst::mov_reg(1, 2),
     ];

@@ -79,13 +79,9 @@ pub fn key(code: i32, down: bool) {
     host.keys = if down { host.keys | bit } else { host.keys & !bit };
 }
 
-/// the merged keyboard and gamepad state. starts the gamepad thread on first use.
-pub fn state() -> InputState {
-    snapshot().0
-}
-
-/// [`state`] and the name of the gamepad feeding it, empty without one.
-pub fn snapshot() -> (InputState, String) {
+/// the merged keyboard and gamepad state and the name of the gamepad feeding it, empty without one.
+/// starts the gamepad thread on first use.
+pub fn state() -> (InputState, String) {
     static START: Once = Once::new();
     START.call_once(|| drop(std::thread::Builder::new().name("gamepad".into()).spawn(gamepad_thread)));
     let host = HOST.lock().unwrap();
@@ -93,7 +89,7 @@ pub fn snapshot() -> (InputState, String) {
 }
 
 fn merge(keys: u64, typed: bool, pad: InputState) -> InputState {
-    let axis = |neg, pos| (keys & pos != 0) as i8 as f32 - (keys & neg != 0) as i8 as f32;
+    let axis = |neg, pos| f32::from(keys & pos != 0) - f32::from(keys & neg != 0);
     let stick = |kb: [f32; 2], pad| if kb == [0.0; 2] { pad } else { kb };
     InputState {
         buttons: keys | pad.buttons,

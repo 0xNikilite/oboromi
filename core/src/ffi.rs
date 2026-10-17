@@ -184,7 +184,7 @@ pub struct OboromiInput {
 /// `out` must be valid for writes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oboromi_input_state(out: *mut OboromiInput) {
-    let (state, name) = crate::input::snapshot();
+    let (state, name) = crate::input::state();
     let mut gamepad = [0; 64];
     gamepad.iter_mut().zip(name.bytes().take(63)).for_each(|(d, s)| *d = s as c_char);
     unsafe { out.write(OboromiInput { state, gamepad }) };

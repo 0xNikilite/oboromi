@@ -50,9 +50,9 @@
    ],
    "width": 256,
    "height": 256,
-   "mips": 5,
+   "mips": 9,
    "color_space": "srgb",
-   "bytes": 349184,
+   "bytes": 351232,
    "layout": "block_linear",
    "gob_height_log2": 1
   },
@@ -64,9 +64,9 @@
    ],
    "width": 256,
    "height": 256,
-   "mips": 5,
+   "mips": 9,
    "color_space": "linear",
-   "bytes": 349184,
+   "bytes": 351232,
    "layout": "block_linear",
    "gob_height_log2": 1
   },
@@ -78,9 +78,9 @@
    ],
    "width": 256,
    "height": 256,
-   "mips": 5,
+   "mips": 9,
    "color_space": "linear",
-   "bytes": 349184,
+   "bytes": 351232,
    "layout": "block_linear",
    "gob_height_log2": 1
   }

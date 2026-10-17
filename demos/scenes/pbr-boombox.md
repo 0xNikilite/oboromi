@@ -35,7 +35,7 @@ Values tagged `(verify)` rest on a convention not yet confirmed on hardware or b
 | 0x1003_0000 | 0x1_0000 | TIC pool +0x0000 (4 entries of 32 B), TSC pool +0x8000 (1 entry) |
 | 0x1004_0000 | 0x3_0000 | boombox/vertices.bin, 171600 B, stride 48 |
 | 0x1007_0000 | 0x2_0000 | boombox/indices.bin, 72432 B, 18108 u32 |
-| 0x1010_0000 | 0x6_0000 | baseColor.rgba8 (256x256 block-linear, gob height 16 rows, 5 levels down to 16x16 back to back) |
+| 0x1010_0000 | 0x6_0000 | baseColor.rgba8 (256x256 block-linear, gob height 16 rows, 9 levels down to 1x1 back to back, small levels padded to a GOB) |
 | 0x1016_0000 | 0x6_0000 | metallicRoughness.rgba8 (also the occlusion map: glTF reads occlusion from R) |
 | 0x101C_0000 | 0x6_0000 | normal.rgba8 |
 | 0x1022_0000 | 0x6_0000 | emissive.rgba8 (Avocado has none: point TIC 3 at baseColor, emissive factor is 0) |
@@ -47,7 +47,7 @@ Values tagged `(verify)` rest on a convention not yet confirmed on hardware or b
 
 TIC entries (8 words, word 0 first). Word 0 = components A8B8G8R8 (8), UNORM per channel, swizzle RGBA (verify: TIC
 format code and data type values from clc797tex.h, never checked against a rig-written header). Word 2 = header
-version BLOCKLINEAR (3 << 21). Word 3 = gobs per block height 2 (1 << 3), MAX_MIP_LEVEL 4 (4 << 28). Word 4 = width-1,
+version BLOCKLINEAR (3 << 21). Word 3 = gobs per block height 2 (1 << 3), MAX_MIP_LEVEL 8 (8 << 28). Word 4 = width-1,
 TWO_D (1 << 23), sRGB conversion (1 << 22) for baseColor and emissive. Word 5 = height-1, normalized coords.
 
 | TIC | texture | w0 | w1 | w2 | w3 | w4 | w5 | w6 | w7 |

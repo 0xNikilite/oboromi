@@ -179,6 +179,6 @@ pub fn run_textured(
             .collect()
     };
     let lanes: Vec<Vec<u32>> = read(&output, words.len()).chunks(STATE_WORDS).take(seeds.len()).map(<[u32]>::to_vec).collect();
-    assert!(lanes.iter().all(|lane| lane[LIVE] < 2), "a lane was left waiting on a BSYNC");
+    assert!(lanes.iter().all(|lane| lane[LIVE] < 2), "a lane was left waiting on a barrier");
     Some((lanes, read(&memory, global.len())))
 }

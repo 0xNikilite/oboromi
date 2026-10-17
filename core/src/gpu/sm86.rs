@@ -35,6 +35,15 @@ const EXIT: u32 = 0x94d;
 const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
 const BSYNC: u32 = 0x941;
+// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT
+// and the WARPSYNC mask it waits on.
+const BAR_ARRIVALS: u32 = 16;
+const BAR_RESULT: u32 = 32;
+const WARPSYNC_MASK: u32 = 33;
+const SYNC_WORDS: u32 = 34;
+// A schedule slot holds the pc vote, then per guest barrier the arrivals plus their BAR.RED predicates in the high half,
+// and the arrivals' thread count OR-ed with bit 12 for a running lane yet to arrive.
+const SCHEDULE_STRIDE: u32 = 1 + 2 * 16;
 const VOTEU: u32 = 0x086;
 const S2UR: u32 = 0x1c3;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
@@ -395,6 +404,21 @@ fn exchanges(inst: u128) -> bool {
     matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d)
 }
 
+fn partial_warpsync(inst: u128) -> bool {
+    opcode(inst) & 0x1ff == 0x148 && !(opcode(inst) == 0x948 && (inst >> 32) as u32 == u32::MAX)
+}
+
+fn guest_barriers(words: &[u128]) -> Vec<u32> {
+    let bars = words.iter().filter(|&&inst| opcode(inst) & 0x1ff == 0x11d);
+    if bars.clone().any(|&inst| opcode(inst) == 0x51d) {
+        return (0..16).collect();
+    }
+    let mut ids: Vec<u32> = bars.map(|&inst| (inst >> 54 & 0xf) as u32).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
     let mut emitter = spirv::Emitter::new();
     emitter.emit_header();
@@ -532,9 +556,9 @@ impl<'a> Decoder<'a> {
         self.var_rpc = [(); 2].map(|_| self.ir.emit_variable(self.type_ptr_u32[1], storage_class::PRIVATE));
         self.var_live = self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_1);
         self.var_step = self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_0);
-        let barriers = self.cached_const_u32(16);
+        let barriers = self.cached_const_u32(SYNC_WORDS);
         let type_tokens = self.ir.emit_type_array(self.type_u32[1], barriers);
-        let no_tokens = self.ir.emit_constant_composite(type_tokens, &[self.const_u32_0; 16]);
+        let no_tokens = self.ir.emit_constant_composite(type_tokens, &[self.const_u32_0; SYNC_WORDS as usize]);
         let type_ptr_tokens = self.ir.emit_type_pointer(storage_class::PRIVATE, type_tokens);
         self.var_tokens = self.ir.emit_variable_init(type_ptr_tokens, storage_class::PRIVATE, no_tokens);
 
@@ -729,6 +753,9 @@ impl<'a> Decoder<'a> {
             if opcode(inst) == BSYNC {
                 leaders.push(pc);
             }
+            if opcode(inst) & 0x1ff == 0x11d || partial_warpsync(inst) {
+                leaders.push(pc + 1);
+            }
             if matches!(
                 opcode(inst),
                 CALL_ABS_R | CALL_REL_R | CALL_ABS | CALL_REL | 0x1943 | 0x1944 | 0xb43 | BRA | BRA_UPRED | BRA_UREG | BRX | BRXU | JMP_ABS | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | JMX | JMXU | EXIT | RET | 0x1950 | KILL
@@ -739,7 +766,7 @@ impl<'a> Decoder<'a> {
         leaders.sort_unstable();
         leaders.dedup();
         assert_eq!(leaders.last(), Some(&len), "branch target outside the program");
-        let uniform = words.iter().any(|&inst| exchanges(inst));
+        let uniform = words.iter().any(|&inst| exchanges(inst) || partial_warpsync(inst));
         let [header, body, dispatched, cont, merge] = [(); 5].map(|_| self.ir.alloc_id());
         let blocks: Vec<(u32, u32)> = leaders[..leaders.len() - 1].iter().map(|&pc| (pc, self.ir.alloc_id())).collect();
         let live = self.ir.emit_load(self.type_u32[1], self.var_live);
@@ -748,9 +775,7 @@ impl<'a> Decoder<'a> {
         let start = self.ir.emit_select(self.type_u32[1], dead, end, self.const_u32_0);
         self.ir.emit_store(self.var_pc, start);
         if uniform {
-            let first = self.workgroup_word(ResourceKind::Schedule, 3, self.const_u32_0);
-            let none = self.cached_const_u32(u32::MAX);
-            self.ir.emit_store(first, none);
+            self.clear_schedule_slot(self.const_u32_0, &guest_barriers(words));
             self.workgroup_barrier();
         }
         self.ir.emit_branch(header);
@@ -759,7 +784,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_branch(body);
         self.ir.emit_label_id(body);
         let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
-        let scheduled = if uniform { self.schedule(words, pc) } else { pc };
+        let [scheduled, progress] = if uniform { self.schedule(words, pc) } else { [pc; 2] };
         self.ir.emit_selection_merge(dispatched, 0);
         self.ir.emit_switch(scheduled, dispatched, &blocks);
         for (&(start, label), &end) in blocks.iter().zip(&leaders[1..]) {
@@ -782,7 +807,7 @@ impl<'a> Decoder<'a> {
             let step = self.ir.emit_load(self.type_u32[1], self.var_step);
             let step = self.ir.emit_iadd(self.type_u32[1], step, self.const_u32_1);
             self.ir.emit_store(self.var_step, step);
-            scheduled
+            progress
         } else {
             self.ir.emit_load(self.type_u32[1], self.var_pc)
         };
@@ -790,7 +815,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_branch_conditional(done, merge, header);
         self.ir.emit_label_id(merge);
         if self.here.take().is_some() {
-            // A lane still short of the end is stuck on a BSYNC nobody else can release, and reads back live = 2.
+            // A lane still short of the end is stuck on a BSYNC, BAR or WARPSYNC nobody can release, and reads back live = 2.
             let pc = self.ir.emit_load(self.type_u32[1], self.var_pc);
             let stuck = self.ir.emit_uless_than(self.type_bool[1], pc, end);
             let stuck = self.bool_bit(stuck);
@@ -801,8 +826,11 @@ impl<'a> Decoder<'a> {
 
     // The workgroup agrees on the lowest pc a lane can run through three rotating words, so one barrier per step keeps a
     // fast invocation's next vote out of the word a slow one is still reading. A lane waiting on BSYNC Bx cannot run while
-    // another lane of its warp holds the same Bx token and is not at a BSYNC Bx itself.
-    fn schedule(&mut self, words: &[u128], pc: u32) -> u32 {
+    // another lane of its warp holds the same Bx token and is not at a BSYNC Bx itself. A lane past WARPSYNC waits until
+    // every running lane of its mask waits on the same mask, and one past BAR.SYNC or BAR.RED until the step whose tally
+    // meets the barrier's thread count, or finds no running lane left to arrive when it has none. That release lands
+    // after the vote, so it keeps the loop going for one more step even when no lane could run in this one.
+    fn schedule(&mut self, words: &[u128], pc: u32) -> [u32; 2] {
         let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
         let end = self.cached_const_u32(words.len() as u32);
         let running = self.ir.emit_uless_than(bool_ty, pc, end);
@@ -840,25 +868,129 @@ impl<'a> Decoder<'a> {
             runnable = self.ir.emit_logical_and(bool_ty, runnable, free);
         }
         let none = self.cached_const_u32(u32::MAX);
+        if words.iter().any(|&inst| partial_warpsync(inst)) {
+            let ptr = self.barrier_token(WARPSYNC_MASK);
+            let mask = self.ir.emit_load(ty, ptr);
+            let offer = self.ir.emit_select(ty, running, mask, none);
+            let mut waits = self.ir.emit_constant_false(bool_ty);
+            for (lane, [other, _]) in (0..).zip(self.warp_values(offer)) {
+                let lane = self.cached_const_u32(lane);
+                let member = self.ir.emit_bit_field_u_extract(ty, mask, lane, self.const_u32_1);
+                let member = self.ir.emit_inot_equal(bool_ty, member, self.const_u32_0);
+                let [same, gone] = [mask, none].map(|v| self.ir.emit_iequal(bool_ty, other, v));
+                let ready = self.ir.emit_logical_or(bool_ty, same, gone);
+                let late = self.ir.emit_logical_not(bool_ty, ready);
+                let late = self.ir.emit_logical_and(bool_ty, member, late);
+                waits = self.ir.emit_logical_or(bool_ty, waits, late);
+            }
+            let kept = self.ir.emit_select(ty, waits, mask, self.const_u32_0);
+            self.ir.emit_store(ptr, kept);
+            let free = self.ir.emit_logical_not(bool_ty, waits);
+            runnable = self.ir.emit_logical_and(bool_ty, runnable, free);
+        }
+        let bars = guest_barriers(words);
+        let mut states = Vec::new();
+        for &bar in &bars {
+            let ptr = self.barrier_token(BAR_ARRIVALS + bar);
+            let state = self.ir.emit_load(ty, ptr);
+            let [arrived, parked, pred, op, count] = [(0, 1), (1, 1), (2, 1), (3, 2), (5, 12)].map(|(offset, bits)| {
+                let [offset, bits] = [offset, bits].map(|c| self.cached_const_u32(c));
+                self.ir.emit_bit_field_u_extract(ty, state, offset, bits)
+            });
+            let parked = self.ir.emit_iequal(bool_ty, parked, self.const_u32_0);
+            runnable = self.ir.emit_logical_and(bool_ty, runnable, parked);
+            states.push((ptr, state, arrived, pred, op, count));
+        }
         let candidate = self.ir.emit_select(ty, runnable, pc, none);
         let step = self.ir.emit_load(ty, self.var_step);
-        let three = self.cached_const_u32(3);
+        let [three, stride] = [3, SCHEDULE_STRIDE].map(|c| self.cached_const_u32(c));
         let [now, next] = [self.const_u32_0, self.const_u32_1].map(|offset| {
             let step = self.ir.emit_iadd(ty, step, offset);
-            let word = self.ir.emit_umod(ty, step, three);
-            self.workgroup_word(ResourceKind::Schedule, 3, word)
+            let slot = self.ir.emit_umod(ty, step, three);
+            self.ir.emit_imul(ty, slot, stride)
         });
         let [scope, relaxed] = [spirv::scope::WORKGROUP, spirv::memory_semantics::RELAXED].map(|c| self.cached_const_u32(c));
-        self.ir.emit_atomic_umin(ty, now, scope, relaxed, candidate);
-        self.ir.emit_atomic_store(next, scope, relaxed, none);
+        let vote = self.schedule_word(now, 0);
+        self.ir.emit_atomic_umin(ty, vote, scope, relaxed, candidate);
+        self.clear_schedule_slot(next, &bars);
+        let [sixteen, twelve] = [16, 12].map(|c| self.cached_const_u32(c));
+        let mut tallies = Vec::new();
+        for (&bar, &(_, _, arrived, pred, _, count)) in bars.iter().zip(&states) {
+            let [tally, terms] = [1, 2].map(|word| self.schedule_word(now, 2 * bar + word));
+            let pred = self.ir.emit_shift_left_logical(ty, pred, sixteen);
+            let arrival = self.ir.emit_bitwise_or(ty, arrived, pred);
+            self.ir.emit_atomic_iadd(ty, tally, scope, relaxed, arrival);
+            let away = self.ir.emit_iequal(bool_ty, arrived, self.const_u32_0);
+            let owing = self.ir.emit_logical_and(bool_ty, running, away);
+            let owing = self.bool_bit(owing);
+            let owing = self.ir.emit_shift_left_logical(ty, owing, twelve);
+            let term = self.ir.emit_bitwise_or(ty, count, owing);
+            self.ir.emit_atomic_or(ty, terms, scope, relaxed, term);
+            tallies.push([tally, terms]);
+        }
         self.workgroup_barrier();
-        let scheduled = self.ir.emit_load(ty, now);
+        let scheduled = self.ir.emit_load(ty, vote);
         self.here = Some(self.ir.emit_iequal(bool_ty, candidate, scheduled));
-        scheduled
+        let mut released = self.ir.emit_constant_false(bool_ty);
+        let result_ptr = self.barrier_token(BAR_RESULT);
+        let mut result = self.ir.emit_load(ty, result_ptr);
+        for ((ptr, state, arrived, _, op, _), [tally, terms]) in states.into_iter().zip(tallies) {
+            let [tally, terms] = [tally, terms].map(|word| self.ir.emit_load(ty, word));
+            let [arrivals, preds, count, owing] = [(tally, 0, 16), (tally, 16, 16), (terms, 0, 12), (terms, 12, 1)].map(|(word, offset, bits)| {
+                let [offset, bits] = [offset, bits].map(|c| self.cached_const_u32(c));
+                self.ir.emit_bit_field_u_extract(ty, word, offset, bits)
+            });
+            let counted = self.ir.emit_inot_equal(bool_ty, count, self.const_u32_0);
+            let enough = self.ir.emit_ugreater_than_equal(bool_ty, arrivals, count);
+            let all = self.ir.emit_iequal(bool_ty, owing, self.const_u32_0);
+            let met = self.ir.emit_select(bool_ty, counted, enough, all);
+            let some = self.ir.emit_inot_equal(bool_ty, arrivals, self.const_u32_0);
+            let release = self.ir.emit_logical_and(bool_ty, some, met);
+            released = self.ir.emit_logical_or(bool_ty, released, release);
+            let mine = self.ir.emit_inot_equal(bool_ty, arrived, self.const_u32_0);
+            let mine = self.ir.emit_logical_and(bool_ty, mine, release);
+            let kept = self.ir.emit_select(ty, mine, self.const_u32_0, state);
+            self.ir.emit_store(ptr, kept);
+            let every = self.ir.emit_iequal(bool_ty, preds, arrivals);
+            let any = self.ir.emit_inot_equal(bool_ty, preds, self.const_u32_0);
+            let [every, any] = [every, any].map(|c| self.bool_bit(c));
+            let [popc, and] = [0, 1].map(|c| {
+                let c = self.cached_const_u32(c);
+                self.ir.emit_iequal(bool_ty, op, c)
+            });
+            let reduced = self.ir.emit_select(ty, and, every, any);
+            let reduced = self.ir.emit_select(ty, popc, preds, reduced);
+            result = self.ir.emit_select(ty, mine, reduced, result);
+        }
+        self.ir.emit_store(result_ptr, result);
+        let progress = self.ir.emit_select(ty, released, self.const_u32_0, scheduled);
+        [scheduled, progress]
+    }
+
+    fn schedule_word(&mut self, slot: u32, word: u32) -> u32 {
+        let word = self.cached_const_u32(word);
+        let index = self.ir.emit_iadd(self.type_u32[1], slot, word);
+        self.workgroup_word(ResourceKind::Schedule, 3 * SCHEDULE_STRIDE, index)
+    }
+
+    fn clear_schedule_slot(&mut self, slot: u32, bars: &[u32]) {
+        let [scope, relaxed, none] = [spirv::scope::WORKGROUP, spirv::memory_semantics::RELAXED, u32::MAX].map(|c| self.cached_const_u32(c));
+        let vote = self.schedule_word(slot, 0);
+        self.ir.emit_atomic_store(vote, scope, relaxed, none);
+        for &bar in bars {
+            for word in [1, 2] {
+                let word = self.schedule_word(slot, 2 * bar + word);
+                self.ir.emit_atomic_store(word, scope, relaxed, self.const_u32_0);
+            }
+        }
     }
 
     fn barrier_token(&mut self, barrier: u32) -> u32 {
         let index = self.cached_const_u32(barrier);
+        self.sync_word(index)
+    }
+
+    fn sync_word(&mut self, index: u32) -> u32 {
         self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_tokens, &[index])
     }
 
@@ -2220,64 +2352,52 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        self.store_register(rd, self.const_u32_0);
+        if inst >> 78 & 3 != 1 {
+            return self.store_register(rd, self.const_u32_0);
+        }
+        let ptr = self.barrier_token(BAR_RESULT);
+        let result = self.ir.emit_load(self.type_u32[1], ptr);
+        self.store_register(rd, result);
+        let nonzero = self.ir.emit_inot_equal(self.type_bool[1], result, self.const_u32_0);
+        let bit = self.bool_bit(nonzero);
+        self.store_pred_bit(false, (inst >> 81 & 7) as u32, bit);
     }
+    // A lane records its arrival and the schedule releases it: bit 0 arrived, 1 parked until release, 2 the BAR.RED
+    // predicate, 3..4 the BAR.RED operation, 5.. the thread count, 0 for every running lane of the CTA.
     pub fn bar(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _sc = (((inst >> 42) & 0xfff) << 0);
-        let _barname = (((inst >> 54) & 0xf) << 0);
-        let pq = (((inst >> 77) & 0x7) << 0) as u32;
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        if pq == 1 {
-            return;
-        }
-        if matches!(pq, 2 | 3) {
-            let pp = (inst >> 87 & 7) as u32;
-            let value = self.pred_bit(false, pp, inst >> 90 & 1 != 0);
-            let values = self.warp_values(value);
-            let bop = if pq == 3 { 0 } else { inst >> 74 & 3 };
-            assert!(bop != 3, "BAR.RED operation 3 is invalid");
-            let mut reductions = Vec::with_capacity(32);
-            let mut result = if bop == 1 { self.const_u32_1 } else { self.const_u32_0 };
-            for [value, _] in values {
-                result = match bop {
-                    0 => self.ir.emit_iadd(self.type_u32[1], result, value),
-                    1 => self.ir.emit_bitwise_and(self.type_u32[1], result, value),
-                    _ => self.ir.emit_bitwise_or(self.type_u32[1], result, value),
-                };
-                reductions.push(result);
+        let ty = self.type_u32[1];
+        let (op, parks) = match inst >> 77 & 7 {
+            0 | 4 => (0, true),
+            1 => (0, false),
+            2 => (inst >> 74 & 3, true),
+            3 => todo!("BAR.SCAN"),
+            mode => panic!("BAR mode {mode} is invalid"),
+        };
+        assert!(op != 3, "BAR.RED operation 3 is invalid");
+        let [sb, sc] = [inst >> 54 & 0xf, inst >> 42 & 0xfff].map(|v| self.cached_const_u32(v as u32));
+        let rb = (inst >> 32 & 0xff) as u32;
+        let (bar, count) = match opcode(inst) {
+            0xb1d => (sb, sc),
+            0x91d => (sb, self.load_register(rb)),
+            0x51d => {
+                let bars = self.cached_const_u32(0xf);
+                let id = self.load_register(rb);
+                (self.ir.emit_bitwise_and(ty, id, bars), sc)
             }
-            if pq == 3 {
-                let lane = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
-                let mask = self.cached_const_u32(31);
-                let lane = self.ir.emit_bitwise_and(self.type_u32[1], lane, mask);
-                result = reductions[0];
-                for (i, &candidate) in reductions.iter().enumerate().skip(1) {
-                    let i = self.cached_const_u32(i as u32);
-                    let selected = self.ir.emit_iequal(self.type_bool[1], lane, i);
-                    result = self.ir.emit_select(self.type_u32[1], selected, candidate, result);
-                }
-            }
-            if matches!(opcode(inst), 0x31d | 0x51d) {
-                self.store_register((inst >> 32 & 0xff) as u32, result);
-            } else {
-                let nonzero = self.ir.emit_inot_equal(self.type_bool[1], result, self.const_u32_0);
-                let bit = self.bool_bit(nonzero);
-                self.store_pred_bit(false, pp, bit);
-            }
-            return;
-        }
-        assert!(matches!(pq, 0 | 4), "BAR mode {pq} is invalid");
-        use spirv::memory_semantics::{ACQUIRE_RELEASE, WORKGROUP_MEMORY};
-        let workgroup = self.cached_const_u32(spirv::scope::WORKGROUP);
-        let semantics = self.cached_const_u32(ACQUIRE_RELEASE | WORKGROUP_MEMORY);
-        self.ir.emit_control_barrier(workgroup, workgroup, semantics);
+            _ => panic!("BAR with barrier and thread count in one register"),
+        };
+        let pred = if inst >> 77 & 7 == 2 { self.pred_bit(false, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0) } else { self.const_u32_0 };
+        let [two, five, flags] = [2, 5, 1 | (parks as u32) << 1 | (op as u32) << 3].map(|c| self.cached_const_u32(c));
+        let pred = self.ir.emit_shift_left_logical(ty, pred, two);
+        let count = self.ir.emit_shift_left_logical(ty, count, five);
+        let state = self.ir.emit_bitwise_or(ty, flags, pred);
+        let state = self.ir.emit_bitwise_or(ty, state, count);
+        let first = self.cached_const_u32(BAR_ARRIVALS);
+        let index = self.ir.emit_iadd(ty, first, bar);
+        let ptr = self.sync_word(index);
+        let old = self.ir.emit_load(ty, ptr);
+        let state = self.ir.emit_select(ty, self.active, state, old);
+        self.ir.emit_store(ptr, state);
     }
     pub fn bitextract(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -5389,18 +5509,13 @@ impl<'a> Decoder<'a> {
         (ballot, self.bool_bit(result))
     }
     pub fn warpsync(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _depth = (((inst >> 86) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
+        assert!(inst >> 86 & 1 == 0 && inst >> 87 & 0xf == PT as u128, "WARPSYNC.EXCLUSIVE or with a condition predicate");
+        let mask = self.alu_src(inst);
+        let full = self.cached_const_u32(u32::MAX);
+        let partial = self.ir.emit_inot_equal(self.type_bool[1], mask, full);
+        let waits = self.ir.emit_select(self.type_u32[1], partial, mask, self.const_u32_0);
+        let ptr = self.barrier_token(WARPSYNC_MASK);
+        self.ir.emit_store(ptr, waits);
     }
     pub fn yield_(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

@@ -61,4 +61,18 @@ mod tests {
         let digest = String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap();
         assert_eq!(&digest[..64], string(json, "sha256"));
     }
+
+    // c = 0.7885 * e^(2 pi i turns): at half a turn c sits in the period-two bulb, so z = 0 never escapes.
+    #[test]
+    fn julia_demo_centre_is_inside_the_set_only_when_c_is_in_the_bulb() {
+        let centre = |turns: f32| {
+            let frame = run_grid(&crate::gpu::frame::julia_program(), [16, 16, 1], [120, 68, 1], &turns.to_le_bytes(), &[(0x2_0000_1000, &vec![0; 1920 * 1080 * 4])]);
+            frame.map(|regions| regions[0][(540 * 1920 + 960) * 4..][..4].to_vec())
+        };
+        let (Some(bulb), Some(dust)) = (centre(0.5), centre(0.0)) else {
+            return;
+        };
+        assert_eq!(bulb, [0, 0, 0, 255]);
+        assert_ne!(dust, [0, 0, 0, 255]);
+    }
 }

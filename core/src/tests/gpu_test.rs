@@ -41,6 +41,7 @@ pub mod inst {
     const FFMA_RIR: u128 = 0x823;
     const FMNMX_RR: u128 = 0x209;
     const MUFU_R: u128 = 0x308;
+    pub const FSETP_GT: u128 = 0x20b | 4 << 76 | 7 << 84 | PP_PT;
     pub const FP_ABS_B: u128 = 1 << 62;
     pub const FP_NEG_B: u128 = 1 << 63;
     pub const FP_NEG_A: u128 = 1 << 72;
@@ -57,11 +58,17 @@ pub mod inst {
     pub const MMA_16816: u128 = 1 << 75;
     pub const MMA_F32: u128 = 1 << 76;
     pub const MMA_BF16: u128 = 1 << 82;
+    pub const MMA_1684: u128 = 1 << 78;
+    pub const MMA_TF32: u128 = 2 << 82;
     pub const IMMA: u128 = 0x237 | 1 << 74;
     pub const IMMA_16816: u128 = 1 << 86;
     pub const IMMA_16832: u128 = IMMA_16816 | 1 << 75;
     pub const IMMA_S8_A: u128 = 1 << 76;
     pub const IMMA_S8_B: u128 = 1 << 78;
+    pub const IMMA_8832: u128 = 1 << 85;
+    pub const IMMA_16864: u128 = IMMA_16816 | IMMA_8832;
+    pub const IMMA_4_BIT: u128 = 1 << 83 | 1 << 84;
+    pub const IMMA_SAT: u128 = 1 << 82;
     pub const LDSM: u128 = 0x83b;
     pub const LDSM_X4: u128 = 2 << 72;
     pub const LDSM_MT88: u128 = 1 << 78;
@@ -831,6 +838,10 @@ fn fixtures_match_nvdisasm() {
         (inst::fmnmx(1, 2, 3, 0, true) | inst::FP_NEG_A | inst::FP_ABS_B, "FMNMX R1, -R2, |R3|, !P0;"),
         (inst::mufu(1, inst::MUFU_RCP, 3), "MUFU.RCP R1, R3 ;"),
         (inst::mufu(1, inst::MUFU_TANH, 3), "MUFU.TANH R1, R3 ;"),
+        (inst::mufu(8, inst::MUFU_COS, 11), "MUFU.COS R8, R11 ;"),
+        (inst::mufu(9, inst::MUFU_SIN, 11), "MUFU.SIN R9, R11 ;"),
+        (inst::mufu(13, inst::MUFU_LG2, 13), "MUFU.LG2 R13, R13 ;"),
+        (inst::alu(inst::FSETP_GT ^ inst::IMM_B, 0, 13, 256.0f32.to_bits()), "FSETP.GT.AND P0, PT, R13, 256, PT;"),
         (0x004fc800078e02090000000700077224, "IMAD R7, R0, R7, R9 ;"),
         (0x004fc800078e18ff0000000302017211, "LEA R1, R2, R3, 0x3 ;"),
         (0x004fc80003906270000000030200720c, "ISETP.GE.AND P0, P1, R2, R3, PT ;"),
@@ -1010,6 +1021,12 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::HMMA | inst::MMA_16816, 4, 8, 12, 16), "HMMA.16816.F16 R4, R8, R12, R16 ;"),
         (inst::alu3(inst::IMMA | inst::IMMA_16816, 4, 8, 12, 16), "IMMA.16816.U8.U8 R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S8.S8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_1684 | inst::MMA_F32 | inst::MMA_TF32, 4, 8, 12, 16), "HMMA.1684.F32.TF32 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::IMMA, 4, 8, 12, 16), "IMMA.8816.U8.U8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_8832 | inst::IMMA_4_BIT, 4, 8, 12, 16), "IMMA.8832.U4.U4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_4_BIT | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S4.S4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16864 | inst::IMMA_4_BIT | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16864.S4.S4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B | inst::IMMA_SAT, 4, 8, 12, 16), "IMMA.16832.S8.S8.SAT R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4, 4, 2, 0), "LDSM.16.M88.4 R4, [R2] ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4 | inst::LDSM_MT88, 12, 2, 0), "LDSM.16.MT88.4 R12, [R2] ;"),
         (inst::alu3(inst::DMMA, 4, 8, 12, 16), "DMMA.884 R4, R8, R12, R16 ;"),

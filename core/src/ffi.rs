@@ -74,6 +74,16 @@ pub extern "C" fn oboromi_render_test_frame() -> bool {
     )
 }
 
+/// renders the julia set demo at `seconds` and presents it, false if vulkan
+/// is missing or the dispatch fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_demo_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::frame::render_demo_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
 /// generation of the last presented frame, 0 until the guest presents one.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_generation() -> u64 {

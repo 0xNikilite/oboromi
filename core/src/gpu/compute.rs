@@ -89,6 +89,9 @@ impl<'a> HostBuffer<'a> {
     }
 }
 
+// The pointer is a host mapping of device memory, valid on any thread until Drop unmaps it.
+unsafe impl Send for HostBuffer<'_> {}
+
 impl Drop for HostBuffer<'_> {
     fn drop(&mut self) {
         unsafe {

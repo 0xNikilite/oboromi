@@ -56,6 +56,34 @@ mod tests {
         assert!(regs.iter().all(|r| r[6] == LANES));
     }
 
+    // 32 lanes drop 32 of 40 expected arrivals and then arrive once each: 16 finish phase 0, 8 phase 1 and 8 phase 2.
+    #[test]
+    fn atoms_arrive_counts_mbarrier_phases_after_popc_inc_drops() {
+        const ATOMS_ARRIVE_64: u128 = 0x003e22000c80043f00000000ff027f8c;
+        const ATOMS_POPC_INC_32: u128 = 0x000fe2000d00003f00000000ffff7f8c;
+        let seeds = lanes(|_| vec![0, 0, 0, 0, 0x4000_0000 - 40, 0x8000_0000 - 16, 4]);
+        let program = [
+            inst::sts(255, 4),
+            inst::sts(6, 5),
+            inst::bar_sync(),
+            ATOMS_POPC_INC_32,
+            inst::bar_sync(),
+            ATOMS_ARRIVE_64,
+            inst::bar_sync(),
+            inst::lds(8, 255),
+            inst::lds(9, 6),
+        ];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else {
+            return;
+        };
+        assert!(regs.iter().all(|r| r[2] == 0x4000_0000 - 8 && r[8..10] == [0x4000_0000 - 8, 0xffff_fff8]));
+        let mut old: Vec<u32> = regs.iter().map(|r| r[3]).collect();
+        let mut want: Vec<u32> = (0x7fff_fff0..=0x7fff_ffff).chain(0xffff_fff8..=0xffff_ffff).chain(0x7fff_fff8..=0x7fff_ffff).collect();
+        old.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(old, want);
+    }
+
     #[test]
     fn atoms_cas_lets_exactly_one_lane_win() {
         let seeds = lanes(|i| vec![0, 0, 0, 0, 0, 0, 0, 0, 0, i + 1]);

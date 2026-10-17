@@ -9,6 +9,8 @@ use std::sync::Arc;
 pub struct Submit {
     pub command_buffer: vk::CommandBuffer,
     pub fence: vk::Fence,
+    pub queries: vk::QueryPool,
+    gpu_time_ns: u64,
 }
 
 pub struct HostBuffer<'a> {
@@ -563,10 +565,15 @@ impl VkState {
         })
     }
 
+    pub fn last_gpu_time_ns(&self) -> u64 {
+        self.submit.lock().unwrap_or_else(|e| e.into_inner()).gpu_time_ns
+    }
+
     // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
     pub(super) fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
-        let submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
-        let (d, cmd, fence) = (&self.device, submit.command_buffer, submit.fence);
+        let mut submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
+        let (d, cmd, fence, queries) = (&self.device, submit.command_buffer, submit.fence, submit.queries);
+        let mut ticks = [0u64; 2];
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         let cmds = [cmd];
@@ -574,11 +581,16 @@ impl VkState {
         unsafe {
             d.reset_fences(&[fence])?;
             d.begin_command_buffer(cmd, &begin)?;
+            d.cmd_reset_query_pool(cmd, queries, 0, 2);
+            d.cmd_write_timestamp(cmd, vk::PipelineStageFlags::TOP_OF_PIPE, queries, 0);
             record(cmd);
+            d.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, queries, 1);
             d.end_command_buffer(cmd)?;
             d.queue_submit(self.queue, &submit_info, fence)?;
             d.wait_for_fences(&[fence], true, u64::MAX)?;
+            d.get_query_pool_results(queries, 0, &mut ticks, vk::QueryResultFlags::TYPE_64)?;
         }
+        submit.gpu_time_ns = (ticks[1].wrapping_sub(ticks[0]) as f64 * f64::from(self.timestamp_period)) as u64;
         Ok(())
     }
 }

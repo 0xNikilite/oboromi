@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::run_regs;
+    use crate::tests::gpu::harness::{run_regs, translate_module};
     use crate::tests::gpu_test::inst::cvt::*;
-    use crate::tests::gpu_test::inst::{CVT_H1, CVT_SAT, f2f, f2i, frnd, frnd_f16, i2f, i2i};
+    use crate::tests::gpu_test::inst::{CVT_H1, f2f, f2i, frnd, frnd_f16, i2f, i2i};
 
     fn pair(bits: u64) -> [u32; 2] {
         [bits as u32, (bits >> 32) as u32]
@@ -131,16 +131,38 @@ mod tests {
             f2f(22, 4, F16, F64, RZ, false),
             f2f(24, 0, F64, F16, RN, false) | CVT_H1,
             f2f(26, 6, F16, F16, RN, false),
-            f2f(27, 6, F16, F16, RM, false),
             f2f(28, 6, F16, F16, RP, false),
             f2f(29, 6, F16, F16, RZ, false),
-            f2f(30, 6, F16, F16, RN, false) | CVT_SAT,
-            f2f(31, 7, F16, F16, RN, false) | CVT_SAT,
         ];
         let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
         assert_eq!(regs[16..23], [1.5f32.to_bits(), 0x7fff_ffff, 0x3c00, 0x3c00, 0x3c01, 0x3c00, 0x3e00]);
         assert_eq!(regs[24..26], pair(1.5f64.to_bits()));
-        assert_eq!(regs[26..32], [0x4000, 0x3c00, 0x4000, 0x3c00, 0x3c00, 0]);
+        assert_eq!([regs[26], regs[28], regs[29]], [0x4000, 0x4000, 0x3c00]);
+    }
+
+    #[test]
+    fn f2f_f16_floor_and_sat_are_illegal_on_silicon() {
+        for word in [
+            0x004f5e00001048000000000400070304,
+            0x004f5e00001028000000000400070304,
+        ] {
+            assert!(std::panic::catch_unwind(|| translate_module(&[word], true, None, false)).is_err());
+        }
+    }
+
+    #[test]
+    fn i2f_f32_rounds_toward_the_mode() {
+        let seed = [u32::MAX, 0x100_0001, -0x100_0001i32 as u32];
+        let program = [
+            i2f(16, 0, F32, U32) | (RM as u128) << 78,
+            i2f(17, 0, F32, U32) | (RP as u128) << 78,
+            i2f(18, 1, F32, U32) | (RP as u128) << 78,
+            i2f(19, 1, F32, U32) | (RZ as u128) << 78,
+            i2f(20, 2, F32, S32) | (RM as u128) << 78,
+            i2f(21, 2, F32, S32) | (RP as u128) << 78,
+        ];
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
+        assert_eq!(regs[16..22], [0x4f7f_ffff, 0x4f80_0000, 0x4b80_0001, 0x4b80_0000, 0xcb80_0001, 0xcb80_0000]);
     }
 
     #[test]

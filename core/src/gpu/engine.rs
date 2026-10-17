@@ -462,7 +462,8 @@ impl<'a> Gpu<'a> {
         self.store(va, bytes, Writer::Cpu)
     }
 
-    pub fn read(&self, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+    pub fn read(&mut self, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+        self.settle(va, out.len() as u64)?;
         gather(&self.space, &self.ram, va, out)
     }
 
@@ -483,8 +484,7 @@ impl<'a> Gpu<'a> {
         Ok(())
     }
 
-    /// Runs GPFIFO entries to completion: every draw has landed in guest memory when this returns. Inside a submit a
-    /// target reaches guest memory only when something touches its pages, so many draws read it back once.
+    /// Runs GPFIFO entries to completion. A target reaches guest memory only when something touches its pages.
     pub fn submit(&mut self, entries: &[[u8; 8]]) -> Result<(), String> {
         let (space, ram) = (&self.space, &self.ram);
         let events = self.pusher.submit(entries.iter().copied(), |va, len| {
@@ -528,7 +528,7 @@ impl<'a> Gpu<'a> {
         if let Some((target, colour)) = self.pending_clear.take() {
             self.fill(target, colour)?;
         }
-        self.settle_all().map_err(named)
+        Ok(())
     }
 
     /// Writes a clear no draw consumed into the target's guest memory, where the target's next draw loads it from.
@@ -603,12 +603,12 @@ impl<'a> Gpu<'a> {
         }
         self.translated += 1;
         let (mut resources, mut stores_global) = (Vec::new(), false);
-        let words = emit_module(Some(self.state), stage, |decoder| {
+        let module = emit_module(Some(self.state), stage, |decoder| {
             decoder.translate_program(code);
             resources = decoder.resources.iter().map(|r| r.kind).collect();
             stores_global = decoder.stores_global;
-        })
-        .words();
+        });
+        let words = module.words();
         if let Some(disk) = disk {
             let _ = disk.store_spirv(key, &words, &resources, stores_global);
         }
@@ -662,12 +662,12 @@ impl<'a> Gpu<'a> {
                 let binding = match kind {
                     ResourceKind::Support => (SUPPORT_BINDING, ubo),
                     ResourceKind::Cbuf(slot) => (CBUF_BINDING + slot, ubo),
-                    ResourceKind::Global | ResourceKind::Global64 => (GLOBAL_BINDING, ssbo),
+                    ResourceKind::Global | ResourceKind::Global64 | ResourceKind::GlobalVector(_) => (GLOBAL_BINDING, ssbo),
                     ResourceKind::AccelerationStructure { cbuf_bank, byte_offset } => {
                         traversable = Some((acceleration_structure_binding(&resources), cbuf_bank, byte_offset));
                         continue;
                     }
-                    ResourceKind::BuiltIn(_) | ResourceKind::Local | ResourceKind::Shared | ResourceKind::Shared64 | ResourceKind::Warp | ResourceKind::Schedule | ResourceKind::Ttu | ResourceKind::RayQuery => continue,
+                    ResourceKind::BuiltIn(_) | ResourceKind::Local | ResourceKind::Shared | ResourceKind::Shared64 | ResourceKind::Warp | ResourceKind::Mma | ResourceKind::Schedule | ResourceKind::Ttu | ResourceKind::RayQuery => continue,
                     kind => return Err(format!("{kind:?} in a compute dispatch is not implemented")),
                 };
                 if !bindings.contains(&binding) {
@@ -848,8 +848,8 @@ impl<'a> Gpu<'a> {
                         gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut address).map_err(named)?;
                         traversables[stage] = Some((acceleration_structure_binding(&module.resources), u64::from_le_bytes(address)));
                     }
-                    ResourceKind::Global | ResourceKind::Support => windows[stage] = true,
-                    ResourceKind::Ttu | ResourceKind::RayQuery => {}
+                    ResourceKind::Global | ResourceKind::GlobalVector(_) | ResourceKind::Support => windows[stage] = true,
+                    ResourceKind::Mma | ResourceKind::Ttu | ResourceKind::RayQuery => {}
                     ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
                     kind => return Err(format!("{kind:?} in shader pipeline {pipeline} is not implemented")),
                 }

@@ -112,7 +112,13 @@ mod tests {
                 } else {
                     0xff00_00ff | ((t / 8.0 * 255.0).round() as u32) << 16
                 };
-                let want = if expected(x, y, 1, 1.0) == MISS { MISS } else { [colour, t.to_bits(), primitive, 0] };
+                let mut want = if expected(x, y, 1, 1.0) == MISS { MISS } else { [colour, t.to_bits(), primitive, 0] };
+                if name == "flags" && want != MISS {
+                    // TerminateOnFirstHit may return either eligible triangle, depending on traversal order.
+                    assert!(matches!(record[2], 1 | 2));
+                    want[1] = (record[2] as f32 + 1.0).to_bits();
+                    want[2] = record[2];
+                }
                 assert_eq!(record, want, "{name}, ray ({x}, {y})");
             }
         }
@@ -167,5 +173,4 @@ mod tests {
         gpu.read(engine::TARGET + (8 * 16 + 8) * 4, &mut pixel).unwrap();
         assert_eq!(pixel, [64, 0, 0, 255]);
     }
-
 }

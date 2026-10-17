@@ -57,7 +57,7 @@ nav:
   - Home: index.md
   - Architecture:
       - architecture/README.md
-      - oboromi overview: architecture/oboromi-overview.md
+      - Emulator overview: architecture/oboromi-overview.md
       - GPU pipeline: architecture/gpu-pipeline.md
       - SASS translator: architecture/sass-translator.md
       - Vulkan backend: architecture/vulkan-backend.md
@@ -69,14 +69,14 @@ nav:
       - Roadmap: architecture/roadmap.md
   - Decisions:
       - adr/README.md
-      - Set-0 binding ABI: adr/0001-set-0-binding-abi.md
-      - One SSBO window for global memory: adr/0002-one-ssbo-window-for-global-memory.md
-      - Uniform scheduling for divergence: adr/0003-uniform-workgroup-scheduling-for-divergence.md
-      - Backing memory is the authority: adr/0004-backing-memory-authority-for-coherence.md
-      - HMMA as DontUnroll loops: adr/0005-hmma-exact-accumulation-as-dontunroll-loops.md
-      - Synchronous pusher and draw snapshots: adr/0006-synchronous-pusher-with-draw-snapshots.md
-      - T239 decodes with the SM86 table: adr/0007-t239-decodes-with-the-sm86-table.md
-      - Silicon-first verification: adr/0008-silicon-first-verification.md
+      - One table of data slots: adr/0001-set-0-binding-abi.md
+      - One memory window: adr/0002-one-ssbo-window-for-global-memory.md
+      - Diverged threads take turns: adr/0003-uniform-workgroup-scheduling-for-divergence.md
+      - RAM is the one true copy: adr/0004-backing-memory-authority-for-coherence.md
+      - Exact matrix sums as loops: adr/0005-hmma-exact-accumulation-as-dontunroll-loops.md
+      - Commands run in order: adr/0006-synchronous-pusher-with-draw-snapshots.md
+      - Switch 2 uses the desktop table: adr/0007-t239-decodes-with-the-sm86-table.md
+      - Real chips are the reference: adr/0008-silicon-first-verification.md
   - Glossary: glossary.md
   - SM86 instruction table (PDF): sm86.pdf
 

@@ -4,25 +4,36 @@ date: 2026-10-17
 decision-makers: jopdorp
 component: [oboromi-gpu]
 ---
-# Guest memory is the authority for coherence
+# Emulated RAM is the one true copy of all data
+
+## In plain words
+
+Vulkan cannot read the emulated console's RAM directly, so the emulator keeps PC-side copies of game data. Copies can go stale: the game might move a buffer, change it from the CPU, or draw into memory it later reads as a texture. So emulated RAM is the only truth. Every copy remembers where it came from and when, and every draw writes its pixels back to RAM before it returns. Think of a shared master file: anyone holding a printout checks the date before using it.
 
 ## Context and Problem Statement
 
-The engine keeps host copies of guest data: buffer mirrors, render targets, compiled modules. The guest can remap a VA, write a buffer from the CPU, or render into memory it later samples. Host copies must never show what guest memory does not hold.
+The engine keeps host copies of game data: buffer copies, the images draws paint into, and translated shaders. The game can repoint a GPU address, write a buffer from the CPU, or draw into memory it later reads. A host copy must never show what the game's memory does not hold.
 
 ## Decision Outcome
 
-Guest RAM is the one source of truth. Every host resource is keyed by the guest-physical ranges behind it, not by VA. A `MemoryTracker` stamps each physical page write with a global generation and its writer. A mirror refreshes when its ranges' generation moved. Every draw writes its target back to guest RAM before `submit` returns, and stores the generation it left. A target whose pages changed outside its own draws is an error until loading it is implemented.
+Guest RAM is the one source of truth. Every host copy is keyed by guest-physical ranges, where the bytes really sit in emulated RAM. It is not keyed by GPU virtual address, which the game can point elsewhere.
 
-### Consequences
+A `MemoryTracker` stamps each page write with a global counter, the generation, and who wrote it, CPU or GPU. A copy refreshes when the counter on its pages moved.
 
-* Good, because remaps and aliasing are correct by construction, and render to texture is a read of guest memory.
-* Good, because a CPU read after `submit` always sees GPU results.
-* Bad, because every draw pays a readback; fine for the demos, not for a title at full speed.
-* Bad, because page granularity refreshes whole pages for small writes.
+Every draw writes its render target, the image it painted, back to guest RAM before `submit` returns. It also records the counter it left. A target whose pages changed outside its own draws is an error until loading it is implemented.
+
+### What this makes easy
+
+* Moved and shared memory are right by construction, and drawing into a texture then reading it is just a read of RAM.
+* A CPU read after `submit` always sees what the GPU wrote.
+
+### What this makes hard
+
+* Every draw pays for copying its pixels back, which is fine for demos but too slow for a game at full speed.
+* A small write refreshes a whole page.
 
 ### Confirmation
 
-The engine acceptance test remaps a vertex VA between draws and checks the next draw follows it.
+The engine acceptance test repoints a vertex buffer address between draws and checks the next draw follows it.
 
 Sources: core/src/gpu/memory.rs, core/src/gpu/engine.rs.

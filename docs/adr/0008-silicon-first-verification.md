@@ -4,22 +4,31 @@ date: 2026-10-16
 decision-makers: jopdorp
 component: [oboromi-gpu]
 ---
-# Silicon is the reference; known failures are per device
+# Real chips are the reference, and known differences are listed per device
+
+## In plain words
+
+No public document says exactly what every Ampere instruction does. So we ask the chip. We run one instruction on a rented desktop Ampere card, record its inputs and outputs, and require the translator to give the same bytes. Where a Vulkan driver is known to differ, the exception is written down by name, for that driver only.
 
 ## Context and Problem Statement
 
-There is no trustworthy public SM86 assembler and no complete semantic reference. Hand-built encodings have been wrong before, and documentation and other emulators cover Maxwell, not Ampere. Vulkan drivers also differ in float rounding, denormals and NaNs.
+There is no trustworthy public SM86 assembler and no complete description of what instructions do. Hand-built encodings have been wrong before. Public docs and other emulators cover Maxwell, an older NVIDIA generation, not Ampere. Vulkan drivers also differ in float rounding, denormals (tiny near-zero floats) and NaNs (not-a-number results).
 
 ## Decision Outcome
 
-Results are checked against registers read back from real Ampere cards. A capture patches one instruction word into an nvcc-built seed kernel, runs it through the CUDA driver API, and records inputs and outputs; observed results are never hand-written. Encodings are checked with nvdisasm first. The scoreboard tests replay every capture on each device and fail on any mismatch not listed. Allowed mismatches are listed by fixture id with a reason, either for every device or for lavapipe only.
+Results are checked against registers read back from real Ampere cards. A capture patches one instruction word into a seed kernel, a small CUDA program built with nvcc that carries the instruction. It runs through the CUDA driver and records inputs and outputs. Observed results are never typed in by hand, and every word is checked with nvdisasm first.
 
-### Consequences
+Scoreboard tests replay every capture on each device and fail on any mismatch not listed. Allowed mismatches are listed by fixture id with a reason, either for every device or for lavapipe only.
 
-* Good, because bugs no reading of documentation would find were found: NaN rules, tensor rounding, shuffle clamping.
-* Good, because a device quirk cannot hide a translator bug: it is excused for that device only.
-* Bad, because each session costs a rented card and some seeds fault, so coverage arrives in batches.
-* Bad, because the captures come from GA102, not from a Switch 2.
+### What this makes easy
+
+* It finds bugs no reading of documentation would, such as NaN rules, tensor rounding and shuffle clamping.
+* A device quirk cannot hide a translator bug, because the quirk is excused for that device only.
+
+### What this makes hard
+
+* Each session needs a rented card and some seeds crash, so coverage arrives in batches.
+* The recordings come from desktop GA102 cards, not from a Switch 2.
 
 ### Confirmation
 

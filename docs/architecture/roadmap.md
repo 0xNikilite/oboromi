@@ -1,48 +1,57 @@
 # Roadmap
 
-Where the GPU work stands, by area. "By design" means left out on purpose, with a named panic, until something needs it.
+The compute side of the translator is done, and the graphics engine draws its first triangle. No real game runs yet, because the OS layer that would load one is missing. For example, no game can ask the GPU driver service for memory, so tests set the GPU up by hand.
+
+"By design" below means left out on purpose, with a named panic, until something needs it.
 
 ```mermaid
 flowchart LR
-    A["compute instructions<br/>done"] --> B["graphics engine<br/>triangle done, hooks in progress"]
-    B --> C["four demo scenes<br/>todo"]
-    D["OS layer: loader, nvdrv<br/>todo"] --> E["a real title's pushbuffers"]
+    A["Compute instructions<br/>Done"] --> B["Drawing engine<br/>Triangle done, more features in progress"]
+    B --> C["Four demo scenes<br/>To do"]
+    D["OS layer: game loader, GPU driver service<br/>To do"] --> E["A real game's GPU commands"]
     B --> E
 ```
 
-## Open items
+*What has to land before a real game's commands can reach the GPU work.*
 
-| area | item | status |
+## What is done and what is open?
+
+| Area | Item | Status |
 |---|---|---|
-| translator | every compute instruction family, incl. textures, tensors and divergence | done |
-| translator | vertex and fragment stages: ALD, AST, IPA, fragment outputs and depth | done |
-| translator | geometry and tessellation transport: ISBERD, ISBEWR, LDTRAM, OUT, PIXLD | by design |
-| translator | ray tracing TTU ops, sparse tensor ops, FOOTPRINT, SUQUERY, UCLEA | by design |
-| translator | float atomics (need VK_EXT_shader_atomic_float), implicit-LOD TEX in compute | todo |
-| command processor | GPFIFO, SET_OBJECT, channel semaphores, 3D class and draw snapshots | done |
-| command processor | 0xC7C0 QMD decode | in progress, own branch |
-| command processor | MME64 macros, 2D, DMA and inline-to-memory classes, semaphore acquire | todo |
-| engine | pushbuffer triangle with cbufs, clear, report and VA remap | done |
-| engine | QMD dispatch execution, indexed draws, depth, blending, textures in draws, render to texture | in progress |
-| textures | pitch and block-linear, mip chains, sRGB, R8, RG8, RGBA16F, R32UI, BC1, BC3, BC7 | done |
-| textures | other formats, swizzles, 3D, cube and array textures, dynamic descriptor arrays | todo |
-| tensors | HMMA, IMMA, DMMA, BMMA, LDSM, MOVM with the silicon accumulation model | done |
-| verification | session 6 captures (TF32, IMMA saturation per k16 half, conversions, indexed MOV) | todo: not replayed yet |
-| CUDA | cubin runner, native path on libcuda, the three division fixes | done |
-| CUDA | more cuda-samples kernels | todo |
-| demos | pbr-boombox, post-effect, particles, sprites2d | todo |
-| OS layer | loader, SVCs, nvdrv, nvmap and address-space ioctls, syncpoints, vi | todo |
-| upstream | PR #79 and PR #80 | open |
-| upstream | a PR for gpu-graphics | not opened |
+| Translator | Every compute instruction family, including textures, tensors and divergence | Done |
+| Translator | Vertex and pixel shaders: ALD, AST, IPA, pixel outputs and depth | Done |
+| Translator | Geometry and tessellation data transport: ISBERD, ISBEWR, LDTRAM, OUT, PIXLD | By design |
+| Translator | Ray tracing TTU ops, sparse tensor ops, FOOTPRINT, SUQUERY, UCLEA | By design |
+| Translator | Float atomics (need VK_EXT_shader_atomic_float), texture reads with implicit detail level in compute | To do |
+| Command processor | GPFIFO, SET_OBJECT, channel semaphores, 3D class and draw snapshots | Done |
+| Command processor | Reading compute launch blocks (QMD) for class 0xC7C0 | In progress, own branch |
+| Command processor | MME64 macros, 2D, DMA and inline-to-memory classes, semaphore acquire | To do |
+| Engine | Command-list triangle with constant buffers, clear, report and address remap | Done |
+| Engine | Running compute launches, indexed draws, depth, blending, textures in draws, drawing into textures | In progress |
+| Textures | Plain and tiled layouts, mip chains, sRGB, R8, RG8, RGBA16F, R32UI, BC1, BC3, BC7 | Done |
+| Textures | Other formats and channel orders, 3D, cube and array textures, texture arrays picked at run time | To do |
+| Tensors | HMMA, IMMA, DMMA, BMMA, LDSM, MOVM with the chip's exact sums | Done |
+| Verification | Session 6 recordings (TF32, IMMA saturation per k16 half, conversions, indexed MOV) | To do: not replayed yet |
+| CUDA | cubin runner, native path on libcuda, the three division fixes | Done |
+| CUDA | More cuda-samples kernels | To do |
+| Demos | pbr-boombox, post-effect, particles, sprites2d | To do |
+| OS layer | Loader, system calls, nvdrv, nvmap and address-space calls, syncpoints, vi | To do |
+| Upstream | PR #79 and PR #80 | Open |
+| Upstream | A PR for gpu-graphics | Not opened |
 
-## Honest limits
+## What are the honest limits?
 
-- No game boots. There is no loader, and the GPU is driven by host-written pushbuffers.
-- Nothing has run on a Switch 2. Instruction semantics are verified on GA102 (RTX 3090, A6000), which is the same Ampere SM; the T239's encoding table is identical, its runtime behaviour is assumed equal by design.
-- Shader program header size: the engine reads code after a 0x50-byte header and finds its end at the branch-to-self; NAK says the version 4 header is 32 words, which puts code at 0x80. Unresolved until a real title's shader is read.
-- The GPU page size is Ryujinx's big page size; the T239 value is unverified.
-- The base-vertex behaviour of VertexIndex and the front-facing value are unverified.
-- Graphics-stage code has only been written by hand and by desktop compilers, never taken from a Switch 2 title.
+- No game boots. There is no loader, and tests write the GPU's command lists by hand.
+- Nothing has run on a Switch 2. Instructions are checked on desktop GA102 cards, the same Ampere core. The Switch 2's instruction table is identical, and its behaviour is assumed equal.
+- The shader header size is unresolved, see the table below, until a real game's shader is read.
+- The GPU page size is Ryujinx's big page size; the Switch 2's value is unverified.
+- How the vertex id treats a base vertex, and the front-facing value, are unverified.
+- Graphics shaders so far were written by hand or by desktop compilers, never taken from a Switch 2 game.
+
+| Shader header question | Value |
+|---|---|
+| Where the engine reads code today | After a 0x50-byte header, ending at the branch-to-self |
+| What NAK, Mesa's NVIDIA compiler, says | The version 4 header is 32 words, so code starts at 0x80 |
 
 Verified by: each "done" row links to its tests on the subsystem page; "in progress" rows are unmerged branches.
 

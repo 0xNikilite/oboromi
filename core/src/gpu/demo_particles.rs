@@ -229,10 +229,18 @@ impl<'a> Particles<'a> {
 
     /// Writes the background into the target and adds one glow quad per particle, seen from the camera at `seconds`.
     pub fn draw(&mut self, seconds: f32) -> Result<(), String> {
+        self.reset_target()?;
+        self.draw_particles(seconds)
+    }
+
+    fn reset_target(&mut self) -> Result<(), String> {
+        self.gpu.write(TARGET, &self.background).map_err(named)
+    }
+
+    fn draw_particles(&mut self, seconds: f32) -> Result<(), String> {
         const ONE_WORD_RELEASE: u32 = 0x1000_f010;
         // COUNT is 13 bits wide in a method header.
         const PACKET: u32 = 8191;
-        self.gpu.write(TARGET, &self.background).map_err(named)?;
         let (view_proj, right, up) = camera(seconds);
         let vs_uniforms = [&view_proj[..], &right, &[HALF_SIZE], &up, &[0.0]].concat();
         let mut words = Vec::new();
@@ -266,7 +274,8 @@ pub fn render_particles_frame(seconds: f32) -> Result<(), String> {
             scene
         }
     };
+    scene.reset_target()?;
     scene.update(seconds)?;
-    scene.draw(seconds)?;
+    scene.draw_particles(seconds)?;
     scene.gpu.present(TARGET, WIDTH, HEIGHT).map_err(named)
 }

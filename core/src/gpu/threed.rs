@@ -440,6 +440,18 @@ impl ThreeD {
         }
     }
 
+    pub(crate) fn repeat_subsequent(&mut self, method: u16, value: u32, count: u32, draw: &mut DrawSnapshot) -> bool {
+        let byte = method as usize * 4;
+        if byte != DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT || self.repeatable_draw != Some(value) {
+            return false;
+        }
+        self.words[method as usize] = value;
+        self.mark_dirty(byte);
+        self.instance += count;
+        draw.instance_count += count;
+        true
+    }
+
     pub(crate) fn encoded_draw(&mut self, value: u32, indexed: bool) -> Result<DrawSnapshot, String> {
         self.topology = ((value >> 28) as u8).try_into()?;
         self.snapshot(

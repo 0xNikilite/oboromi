@@ -17,8 +17,8 @@ impl ServiceTrait for State {
     }
 }
 
-fn session(service: impl Service + 'static) -> Object {
-    Object::Session(Rc::new(RefCell::new(service)))
+fn session(service: impl Service + 'static) -> Rc<RefCell<dyn Service>> {
+    Rc::new(RefCell::new(service))
 }
 
 fn unix_time() -> i64 {
@@ -42,7 +42,7 @@ impl Service for State {
             }
             _ => return Response::not_implemented("time", cmd),
         };
-        Response { move_handles: vec![service], ..Response::default() }
+        Response { objects: vec![service], ..Response::default() }
     }
 }
 

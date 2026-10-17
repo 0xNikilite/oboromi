@@ -79,15 +79,15 @@ fn u32_arg(request: &Request) -> u32 {
     request.args.get(..4).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
 }
 
-fn session(service: impl Service + 'static) -> Object {
-    Object::Session(Rc::new(RefCell::new(service)))
+fn session(service: impl Service + 'static) -> Rc<RefCell<dyn Service>> {
+    Rc::new(RefCell::new(service))
 }
 
 impl Service for State {
     fn dispatch(&mut self, cmd: u32, request: &mut Request) -> Response {
         let ok = Response::default();
         match cmd {
-            0 => Response { move_handles: vec![session(AppletResource(self.shared.clone()))], ..ok },
+            0 => Response { objects: vec![session(AppletResource(self.shared.clone()))], ..ok },
             100 => {
                 self.style_set = u32_arg(request);
                 ok
@@ -108,7 +108,7 @@ impl Service for State {
             106 => Response { copy_handles: vec![Object::Event(Rc::new(Cell::new(true)))], ..ok },
             // LinearResonantActuator, no position.
             200 => Response { data: vec![1, 0, 0, 0, 0, 0, 0, 0], ..ok },
-            203 => Response { move_handles: vec![session(ActiveVibrationDeviceList)], ..ok },
+            203 => Response { objects: vec![session(ActiveVibrationDeviceList)], ..ok },
             205 => Response { data: vec![1], ..ok },
             _ => Response::unknown_command(cmd),
         }

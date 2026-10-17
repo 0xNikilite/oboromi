@@ -18,14 +18,14 @@ impl ServiceTrait for State {
     }
 }
 
-fn session(service: impl Service + 'static) -> Object {
-    Object::Session(Rc::new(RefCell::new(service)))
+fn session(service: impl Service + 'static) -> Rc<RefCell<dyn Service>> {
+    Rc::new(RefCell::new(service))
 }
 
 impl Service for State {
     fn dispatch(&mut self, cmd: u32, _: &mut Request) -> Response {
         match cmd {
-            0 | 100 | 200 | 201 | 300 | 350 => Response { move_handles: vec![session(ApplicationProxy)], ..Response::default() },
+            0 | 100 | 200 | 201 | 300 | 350 => Response { objects: vec![session(ApplicationProxy)], ..Response::default() },
             _ => Response::not_implemented("appletOE", cmd),
         }
     }
@@ -46,7 +46,7 @@ impl Service for ApplicationProxy {
             1000 => session(Empty("IDebugFunctions")),
             _ => return Response::not_implemented("IApplicationProxy", cmd),
         };
-        Response { move_handles: vec![service], ..Response::default() }
+        Response { objects: vec![service], ..Response::default() }
     }
 }
 

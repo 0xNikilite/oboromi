@@ -2,10 +2,12 @@
 //! from a host-written pushbuffer by the NVIDIA driver's SM86 build of demos/shaders/pbr.vert and pbr.frag, one draw per
 //! primitive with its material's pointer table.
 use super::engine::Gpu;
+use super::frame::cache_root;
 use super::memory::PAGE;
 use super::{VkState, device};
 use crate::tests::gpu::engine::{bytes, entry, inc, non_inc};
 use crate::tests::gpu_test::inst::bra;
+use std::path::Path;
 use std::sync::Mutex;
 
 const BASE: u64 = 0x1000_0000;
@@ -25,6 +27,7 @@ const VERTICES: u64 = BASE + 0x4_0000;
 // The depth target lives on the host only, so its VA needs no pages.
 const DEPTH: u64 = 0x2000_0000;
 const ALIGN: u64 = 0x1_0000;
+const EYE: [f32; 3] = [0.0, 0.35, 3.5];
 
 // The driver's bank 0x1d: TEX handle k at +4k in GLSL declaration order, the binding 1 block's address at +0x18
 // (pbr.vert and pbr.frag SASS: `TEX ... 0x1d, 0x4`, `ULDC.64 UR4, c[0x1d][0x18]`).
@@ -168,7 +171,7 @@ pub struct Scene<'a> {
 
 impl<'a> Scene<'a> {
     /// Lays the asset in demos/assets/`asset` out in guest memory and runs the init segment.
-    pub fn new(state: &'a VkState, asset: &str, width: u32, height: u32) -> Result<Self, String> {
+    pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, asset: &str, width: u32, height: u32) -> Result<Self, String> {
         let dir = asset_dir(asset);
         let read = |file: &str| std::fs::read(dir.join(file)).map_err(|e| format!("{}: {e}", dir.join(file).display()));
         let text = String::from_utf8(read("manifest.json")?).map_err(|e| e.to_string())?;
@@ -182,7 +185,7 @@ impl<'a> Scene<'a> {
         }
         let target = texture_va.pop().unwrap();
         let end = (target + u64::from(width * height * 4)).next_multiple_of(PAGE);
-        let mut gpu = Gpu::new(state, (end - BASE) as usize);
+        let mut gpu = Gpu::new(state, (end - BASE) as usize, cache, *super::SPEED_HACKS.lock().unwrap()).map_err(|e| format!("{e:?}"))?;
         gpu.space.map(BASE, 0, end - BASE);
         let named = |e| format!("{e:?}");
         for (va, data) in [(VERTICES, &vertices), (indices_va, &indices)] {
@@ -202,9 +205,10 @@ impl<'a> Scene<'a> {
             tic.extend([A8B8G8R8_UNORM, lo, hi | BLOCK_LINEAR, gob_height_log2 << 3 | (mips - 1) << 28, (width - 1) | TWO_D, (height - 1) | NORMALIZED, 0, 0]);
         }
         gpu.write(TIC, &bytes(&tic)).map_err(named)?;
-        // Repeat, trilinear, LOD clamped to 0..15.
+        // Repeat, trilinear, 16x anisotropic, LOD clamped to 0..15.
+        const MAX_ANISOTROPY_16: u32 = 7 << 20;
         const TRILINEAR: u32 = 2 | 2 << 4 | 3 << 6;
-        gpu.write(TSC, &bytes(&[0, TRILINEAR, 0xf00 << 12, 0, 0, 0, 0, 0])).map_err(named)?;
+        gpu.write(TSC, &bytes(&[MAX_ANISOTROPY_16, TRILINEAR, 0xf00 << 12, 0, 0, 0, 0, 0])).map_err(named)?;
 
         let light = [0.4f32, 0.8, 0.45];
         let light = light.map(|c| c / light.iter().map(|c| c * c).sum::<f32>().sqrt());
@@ -225,7 +229,7 @@ impl<'a> Scene<'a> {
             emissive.resize(4, 0.0);
             let scalar = |key| material.get(key).map(Json::number);
             let factors = [scalar("metallicFactor")?, scalar("roughnessFactor")?, scalar("normalScale")?, scalar("occlusionStrength")?];
-            let uniforms = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.08, 0.09, 0.11, 0.0, 0.0, 0.3, 3.0, 1.0], &base_factor, &emissive, &factors].concat();
+            let uniforms = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.6, 0.62, 0.66, 0.0], &EYE, &[1.0], &base_factor, &emissive, &factors].concat();
             gpu.write(va, &bytes(&table)).map_err(named)?;
             gpu.write(va + MATERIAL_UNIFORMS, &floats(&uniforms)).map_err(named)?;
         }
@@ -265,7 +269,7 @@ impl<'a> Scene<'a> {
         inc(SET_VIEWPORT_CLIP_HORIZONTAL, &[width << 16, height << 16, 0, 1.0f32.to_bits()], &mut words);
         inc(SET_SCISSOR_ENABLE, &[1, width << 16, height << 16], &mut words);
         // SET_COLOR_CLEAR_VALUE is followed by SET_Z_CLEAR_VALUE.
-        inc(SET_COLOR_CLEAR_VALUE, &[0.02f32, 0.02, 0.03, 1.0, 1.0].map(f32::to_bits), &mut words);
+        inc(SET_COLOR_CLEAR_VALUE, &[0.16f32, 0.17, 0.2, 1.0, 1.0].map(f32::to_bits), &mut words);
         inc(SET_DEPTH_TEST, &[1], &mut words);
         inc(SET_DEPTH_WRITE, &[1], &mut words);
         inc(SET_DEPTH_FUNC, &[OGL_LESS], &mut words);
@@ -294,10 +298,10 @@ impl<'a> Scene<'a> {
         let (sin, cos) = (seconds * 0.8).sin_cos();
         let mut model = [[cos * scale, 0.0, -sin * scale, 0.0], [0.0, scale, 0.0, 0.0], [sin * scale, 0.0, cos * scale, 0.0], [0.0; 4]];
         model[3] = [-(cos * cx + sin * cz) * scale, -cy * scale, (sin * cx - cos * cz) * scale, 1.0];
-        // Vulkan clip space, y down and z in 0..1: 45 degrees vertical, near 0.1, far 20, looking from (0, 0.3, 3) at the origin.
+        // Vulkan clip space, y down and z in 0..1: 45 degrees vertical, near 0.1, far 20, looking from EYE at the origin.
         let (near, far, focal) = (0.1, 20.0, 1.0 / (22.5f32.to_radians()).tan());
         let projection = [[focal * self.height as f32 / self.width as f32, 0.0, 0.0, 0.0], [0.0, -focal, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]];
-        let eye = [0.0, 0.3, 3.0f32];
+        let eye = EYE;
         let length = (eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
         let [up, back] = [[0.0, eye[2] / length, -eye[1] / length], [0.0, eye[1] / length, eye[2] / length]];
         let mut view = [[1.0, up[0], back[0], 0.0], [0.0, up[1], back[1], 0.0], [0.0, up[2], back[2], 0.0], [0.0, 0.0, 0.0, 1.0]];
@@ -338,12 +342,13 @@ impl<'a> Scene<'a> {
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
+pub(super) static SCENE: Mutex<Option<(&str, Scene<'static>)>> = Mutex::new(None);
+
 fn render(asset: &'static str, seconds: f32) -> Result<(), String> {
-    static SCENE: Mutex<Option<(&str, Scene<'static>)>> = Mutex::new(None);
     let mut slot = SCENE.lock().unwrap();
     if slot.as_ref().is_none_or(|(name, _)| *name != asset) {
         *slot = None;
-        *slot = Some((asset, Scene::new(device().map_err(|e| format!("{e:?}"))?, asset, WIDTH, HEIGHT)?));
+        *slot = Some((asset, Scene::new(device().map_err(|e| format!("{e:?}"))?, Some((&cache_root(), "demos")), asset, WIDTH, HEIGHT)?));
     }
     let (_, scene) = slot.as_mut().unwrap();
     scene.frame(seconds)?;

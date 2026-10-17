@@ -40,6 +40,10 @@ bool renderTriangleDemo(float seconds) {
     return oboromi_render_triangle_demo(seconds);
 }
 
+bool flushDemoCaches() {
+    return oboromi_flush_demo_caches();
+}
+
 bool renderBoomBoxDemo(float seconds) {
     return oboromi_render_boombox_demo(seconds);
 }
@@ -50,6 +54,22 @@ bool renderHelmetDemo(float seconds) {
 
 bool renderPostFrame(float seconds) {
     return oboromi_render_post_frame(seconds);
+}
+
+bool renderSpritesFrame(float seconds) {
+    return oboromi_render_sprites_frame(seconds);
+}
+
+bool renderMusicDemo(float seconds) {
+    return oboromi_render_music_demo(seconds);
+}
+
+bool renderBounceDemo(float seconds) {
+    return oboromi_render_bounce_demo(seconds);
+}
+
+bool renderParticlesFrame(float seconds) {
+    return oboromi_render_particles_frame(seconds);
 }
 
 }

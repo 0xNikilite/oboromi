@@ -95,6 +95,12 @@ pub extern "C" fn oboromi_render_triangle_demo(seconds: f32) -> bool {
     )
 }
 
+/// saves the pipeline cache of the demos that ran, call it when a demo stops.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_flush_demo_caches() -> bool {
+    matches!(catch_unwind(crate::gpu::frame::flush_demo_caches), Ok(Ok(())))
+}
+
 /// draws the pbr BoomBox demo at `seconds` and presents it, false if vulkan is
 /// missing or the draw fails. blocks, so call it from a worker thread.
 #[unsafe(no_mangle)]
@@ -115,6 +121,39 @@ pub extern "C" fn oboromi_render_helmet_demo(seconds: f32) -> bool {
 pub extern "C" fn oboromi_render_post_frame(seconds: f32) -> bool {
     matches!(
         catch_unwind(|| crate::gpu::demo_post::render_post_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
+/// draws the sprites demo at `seconds` and presents it, false if vulkan is
+/// missing or the draw fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_sprites_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::demo_sprites::render_sprites_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
+/// plays the music demo up to `seconds` through the audio renderer, false if it panicked.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_music_demo(seconds: f32) -> bool {
+    catch_unwind(|| crate::audio::demo_music::play_music(seconds)).is_ok()
+}
+
+/// steps the bounce demo to `seconds`, plays its knocks and presents the frame, false if vulkan
+/// is missing or a draw fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_bounce_demo(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo_bounce::render_bounce_frame(seconds)), Ok(Ok(())))
+}
+
+/// draws a frame of the particles demo at `seconds` and presents it, false if
+/// vulkan is missing or the frame fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_particles_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::demo_particles::render_particles_frame(seconds)),
         Ok(Ok(()))
     )
 }
@@ -179,6 +218,12 @@ pub extern "C" fn oboromi_display_surface(surface: vk::SurfaceKHR, width: u32, h
     )
 }
 
+/// skips draws while their pipelines compile in engines created from now on.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_skip_draw_while_compiling(skip: bool) {
+    crate::gpu::SPEED_HACKS.lock().unwrap().skip_draw_while_compiling = skip;
+}
+
 /// a qt key code pressed or released in the gui.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_input_key(code: i32, down: bool) {
@@ -202,4 +247,54 @@ pub unsafe extern "C" fn oboromi_input_state(out: *mut OboromiInput) {
     let mut gamepad = [0; 64];
     gamepad.iter_mut().zip(name.bytes().take(63)).for_each(|(d, s)| *d = s as c_char);
     unsafe { out.write(OboromiInput { state, gamepad }) };
+}
+
+/// copies up to `frames` queued stereo frames into `dst` and zero-fills the
+/// rest, returns the frames copied.
+///
+/// # Safety
+/// `dst` must be null or valid for `frames * 2` writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_pull(dst: *mut i16, frames: usize) -> usize {
+    if dst.is_null() {
+        return 0;
+    }
+    crate::audio::pull(unsafe { std::slice::from_raw_parts_mut(dst, frames * 2) })
+}
+
+/// writes the output format, interleaved i16 samples produced `period` frames at a time.
+///
+/// # Safety
+/// `rate`, `channels` and `period` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_format(rate: *mut u32, channels: *mut u32, period: *mut u32) {
+    unsafe {
+        *rate = crate::audio::RATE;
+        *channels = crate::audio::CHANNELS;
+        *period = crate::audio::PERIOD;
+    }
+}
+
+/// writes the frames waiting in the ring and the pulls that ran dry.
+///
+/// # Safety
+/// `queued` and `underruns` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_stats(queued: *mut usize, underruns: *mut u64) {
+    unsafe {
+        *queued = crate::audio::queued();
+        *underruns = crate::audio::underruns();
+    }
+}
+
+/// frames ever queued, changes whenever something is produced.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_audio_generation() -> u64 {
+    crate::audio::generation()
+}
+
+/// queues `seconds` more of a 440 hz test tone, returns the frames that fit.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_audio_test_tone(seconds: f32) -> usize {
+    crate::audio::test_tone(seconds)
 }

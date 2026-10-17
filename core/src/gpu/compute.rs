@@ -1,7 +1,9 @@
 //! Host-visible buffers and compute pipelines dispatched synchronously on the `VkState` queue.
+use super::memory::ImportedRam;
 use super::texture::TextureHeader;
 use super::{VkError, VkState};
 use ash::vk;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct Submit {
@@ -15,25 +17,33 @@ pub struct HostBuffer<'a> {
     pub memory: vk::DeviceMemory,
     pub size: u64,
     ptr: *mut u8,
+    non_coherent_atom: u64,
+    /// The guest RAM this buffer reads and writes in place instead of owning memory.
+    pub imported: Option<Arc<ImportedRam<'a>>>,
+}
+
+pub(super) fn buffer_info(size: u64) -> vk::BufferCreateInfo<'static> {
+    vk::BufferCreateInfo::default().size(size).usage(
+        vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::UNIFORM_BUFFER
+            | vk::BufferUsageFlags::VERTEX_BUFFER
+            | vk::BufferUsageFlags::INDEX_BUFFER
+            | vk::BufferUsageFlags::TRANSFER_SRC
+            | vk::BufferUsageFlags::TRANSFER_DST,
+    )
 }
 
 impl<'a> HostBuffer<'a> {
     pub fn new(state: &'a VkState, size: u64) -> Result<Self, VkError> {
         let d = &state.device;
-        let info = vk::BufferCreateInfo::default().size(size).usage(
-            vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::UNIFORM_BUFFER
-                | vk::BufferUsageFlags::VERTEX_BUFFER
-                | vk::BufferUsageFlags::INDEX_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::TRANSFER_DST,
-        );
         let mut buf = Self {
             device: d,
-            buffer: unsafe { d.create_buffer(&info, None)? },
+            buffer: unsafe { d.create_buffer(&buffer_info(size), None)? },
             memory: vk::DeviceMemory::null(),
             size,
             ptr: std::ptr::null_mut(),
+            non_coherent_atom: unsafe { state.instance.get_physical_device_properties(state.physical_device) }.limits.non_coherent_atom_size,
+            imported: None,
         };
         let req = unsafe { d.get_buffer_memory_requirements(buf.buffer) };
         let instance = &state.instance;
@@ -67,32 +77,71 @@ impl<'a> HostBuffer<'a> {
         Ok(buf)
     }
 
-    fn mapped(&self) -> [vk::MappedMemoryRange<'_>; 1] {
+    /// A buffer over `size` bytes of `ram` from `offset`, or None where the buffer's alignment or memory types rule
+    /// that offset out.
+    pub fn imported(state: &'a VkState, ram: &Arc<ImportedRam<'a>>, offset: u64, size: u64) -> Result<Option<Self>, VkError> {
+        let d = &state.device;
+        let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        let buffer = match unsafe { d.create_buffer(&buffer_info(size).push_next(&mut external), None) } {
+            Ok(buffer) => buffer,
+            Err(vk::Result::ERROR_DEVICE_LOST) => return Err(vk::Result::ERROR_DEVICE_LOST.into()),
+            Err(_) => return Ok(None),
+        };
+        let buf = Self {
+            device: d,
+            buffer,
+            memory: ram.memory,
+            size,
+            ptr: std::ptr::null_mut(),
+            non_coherent_atom: 1,
+            imported: Some(Arc::clone(ram)),
+        };
+        let req = unsafe { d.get_buffer_memory_requirements(buf.buffer) };
+        if !offset.is_multiple_of(req.alignment) || req.memory_type_bits >> ram.memory_type & 1 == 0
+            || offset.checked_add(req.size).is_none_or(|end| end > ram.size) {
+            return Ok(None);
+        }
+        if let Err(e) = unsafe { d.bind_buffer_memory(buf.buffer, buf.memory, offset) } {
+            return if e == vk::Result::ERROR_DEVICE_LOST { Err(e.into()) } else { Ok(None) };
+        }
+        Ok(Some(buf))
+    }
+
+    /// Flushing or invalidating non-coherent memory costs per byte, so only the atoms holding `bytes`.
+    fn mapped(&self, bytes: std::ops::Range<u64>) -> [vk::MappedMemoryRange<'_>; 1] {
+        let (start, end) = (bytes.start / self.non_coherent_atom * self.non_coherent_atom, bytes.end.next_multiple_of(self.non_coherent_atom));
         [vk::MappedMemoryRange::default()
             .memory(self.memory)
-            .size(vk::WHOLE_SIZE)]
+            .offset(start)
+            .size(if end >= self.size { vk::WHOLE_SIZE } else { end - start })]
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<(), VkError> {
-        self.write_at(0, data);
-        self.flush()
+        self.write_at(0, data)
     }
 
-    /// A write without the flush, for several before one.
-    pub fn write_at(&mut self, offset: u64, data: &[u8]) {
+    pub fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<(), VkError> {
         assert!(offset + data.len() as u64 <= self.size);
-        unsafe { self.ptr.add(offset as usize).copy_from_nonoverlapping(data.as_ptr(), data.len()) }
+        unsafe {
+            self.ptr.add(offset as usize).copy_from_nonoverlapping(data.as_ptr(), data.len());
+            Ok(self.device.flush_mapped_memory_ranges(&self.mapped(offset..offset + data.len() as u64))?)
+        }
     }
 
-    pub fn flush(&self) -> Result<(), VkError> {
-        unsafe { Ok(self.device.flush_mapped_memory_ranges(&self.mapped())?) }
+    /// `bytes` of the buffer as the device last wrote them.
+    pub fn view(&self, bytes: std::ops::Range<u64>) -> Result<&[u8], VkError> {
+        assert!(bytes.end <= self.size);
+        unsafe {
+            self.device.invalidate_mapped_memory_ranges(&self.mapped(bytes.clone()))?;
+            Ok(std::slice::from_raw_parts(self.ptr.add(bytes.start as usize), (bytes.end - bytes.start) as usize))
+        }
     }
 
     pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
         assert!(out.len() as u64 <= self.size);
         unsafe {
             self.device
-                .invalidate_mapped_memory_ranges(&self.mapped())?;
+                .invalidate_mapped_memory_ranges(&self.mapped(0..out.len() as u64))?;
             self.ptr.copy_to_nonoverlapping(out.as_mut_ptr(), out.len());
         }
         Ok(())
@@ -106,7 +155,9 @@ impl Drop for HostBuffer<'_> {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_buffer(self.buffer, None);
-            self.device.free_memory(self.memory, None);
+            if self.imported.is_none() {
+                self.device.free_memory(self.memory, None);
+            }
         }
     }
 }
@@ -353,7 +404,7 @@ impl<'a> ComputePipeline<'a> {
         let info = [vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(p.layout)];
-        p.pipeline = unsafe { d.create_compute_pipelines(state.pipeline_cache, &info, None) }
+        p.pipeline = unsafe { d.create_compute_pipelines(*state.pipeline_cache.read().unwrap(), &info, None) }
             .map_err(|(_, e)| e)?[0];
         Ok(p)
     }

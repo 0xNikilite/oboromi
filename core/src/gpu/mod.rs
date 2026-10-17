@@ -1,10 +1,14 @@
 use ash::vk;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
+pub mod bnsh;
 pub mod compute;
 pub mod compute_class;
 pub mod demo;
+pub mod demo_bounce;
+pub mod demo_particles;
 pub mod demo_post;
+pub mod demo_sprites;
 pub mod engine;
 pub mod fifo;
 pub mod frame;
@@ -30,6 +34,16 @@ impl From<vk::Result> for VkError {
     }
 }
 
+/// Settings that trade accuracy for speed, all off by default.
+#[derive(Clone, Copy, Default)]
+pub struct SpeedHacks {
+    pub fast_tensor: bool,
+    /// Skips draws whose pipeline is still compiling instead of waiting, so new shaders pop in.
+    pub skip_draw_while_compiling: bool,
+}
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false, skip_draw_while_compiling: false });
+
 pub struct VkState {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
@@ -40,7 +54,8 @@ pub struct VkState {
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub submit: std::sync::Mutex<compute::Submit>,
-    pub pipeline_cache: vk::PipelineCache,
+    /// vkMergePipelineCaches needs its dstCache externally synchronized, so merges take the write lock and pipeline creation the read one.
+    pub pipeline_cache: std::sync::RwLock<vk::PipelineCache>,
     /// Graphics pipelines link from libraries shared between them, compiled once per stage or interface.
     pub graphics_pipeline_library: bool,
     pub(crate) libraries: std::sync::Mutex<std::collections::HashMap<(vk::GraphicsPipelineLibraryFlagsEXT, u64), vk::Pipeline>>,
@@ -54,6 +69,8 @@ pub struct VkState {
     pub index_type_uint8: bool,
     pub surface: Option<ash::khr::surface::Instance>,
     pub swapchain: Option<ash::khr::swapchain::Device>,
+    /// Present when host memory imports as buffer memory, with the alignment imported pointers and sizes need.
+    pub external_memory_host: Option<(ash::ext::external_memory_host::Device, u64)>,
 }
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
@@ -63,6 +80,10 @@ pub fn surface_device() -> Result<&'static VkState, VkError> {
     SURFACES.store(true, Relaxed);
     device()
 }
+
+// The Vulkan loader unlinks a destroyed device under a different lock than vkGetDeviceProcAddr walks the device list
+// with, so creating a device while another thread destroys one reads freed memory.
+static DEVICE_LIFETIMES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn device() -> Result<&'static VkState, VkError> {
     static DEVICE: std::sync::OnceLock<VkState> = std::sync::OnceLock::new();
@@ -80,6 +101,7 @@ impl VkState {
     }
 
     pub fn new() -> Result<Self, VkError> {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
         let extensions = if SURFACES.load(Relaxed) {
@@ -102,7 +124,7 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3]) =
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3], host_pointer_alignment) =
             Self::open_device(&instance, surfaces)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
@@ -114,6 +136,7 @@ impl VkState {
             surface: surfaces.then(|| ash::khr::surface::Instance::new(&entry, &instance)),
             swapchain: surfaces.then(|| ash::khr::swapchain::Device::new(&instance, &device)),
             extended_dynamic_state3: extended_dynamic_state3.then(|| ash::ext::extended_dynamic_state3::Device::new(&instance, &device)),
+            external_memory_host: host_pointer_alignment.map(|alignment| (ash::ext::external_memory_host::Device::new(&instance, &device), alignment)),
             entry,
             instance,
             physical_device,
@@ -121,7 +144,7 @@ impl VkState {
             device,
             command_pool,
             submit: Default::default(),
-            pipeline_cache: vk::PipelineCache::null(),
+            pipeline_cache: Default::default(),
             graphics_pipeline_library,
             libraries: Default::default(),
             signed_zero_inf_nan_preserve: [
@@ -156,14 +179,14 @@ impl VkState {
         submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
         // Created without EXTERNALLY_SYNCHRONIZED_BIT, so the implementation synchronises it and any thread may create
         // pipelines through it (VUID-vkCreateGraphicsPipelines-pipelineCache-02876, fundamentals-threadingbehavior).
-        state.pipeline_cache = unsafe { state.device.create_pipeline_cache(&Default::default(), None)? };
+        *state.pipeline_cache.get_mut().unwrap() = unsafe { state.device.create_pipeline_cache(&Default::default(), None)? };
         Ok(state)
     }
 
     fn open_device(
         instance: &ash::Instance,
         surfaces: bool,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, [bool; 2]), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, [bool; 2], Option<u64>), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -201,6 +224,7 @@ impl VkState {
         let geometry_shader = features.features.geometry_shader == vk::TRUE;
         let vertex_stores = features.features.vertex_pipeline_stores_and_atomics == vk::TRUE;
         let fragment_stores = features.features.fragment_stores_and_atomics == vk::TRUE;
+        let sampler_anisotropy = features.features.sampler_anisotropy == vk::TRUE;
         let _ = features;
         let shader_float16 = float16_int8.shader_float16 == vk::TRUE;
         let shader_buffer_int64_atomics = atomic_int64.shader_buffer_int64_atomics == vk::TRUE;
@@ -219,6 +243,19 @@ impl VkState {
             dynamic3.extended_dynamic_state3_color_write_mask,
         ] == [vk::TRUE; 3]
             && has(vk::EXT_EXTENDED_DYNAMIC_STATE3_NAME);
+        let mut host_allocation = vk::ExternalBufferProperties::default();
+        let buffer_info = vk::PhysicalDeviceExternalBufferInfo::default()
+            .usage(compute::buffer_info(0).usage)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        unsafe { instance.get_physical_device_external_buffer_properties(physical_device, &buffer_info, &mut host_allocation) };
+        let device_type = unsafe { instance.get_physical_device_properties(physical_device) }.device_type;
+        let external_memory_host = matches!(device_type, vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU)
+            && has(vk::EXT_EXTERNAL_MEMORY_HOST_NAME)
+            && host_allocation.external_memory_properties.external_memory_features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE);
+        let mut host_pointer = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
+        if external_memory_host {
+            unsafe { instance.get_physical_device_properties2(physical_device, &mut vk::PhysicalDeviceProperties2::default().push_next(&mut host_pointer)) };
+        }
         let enabled_extensions: Vec<_> = [
             (linear_derivatives, derivatives_extension),
             (index_type_uint8, vk::KHR_INDEX_TYPE_UINT8_NAME),
@@ -226,6 +263,7 @@ impl VkState {
             (graphics_pipeline_library, vk::EXT_GRAPHICS_PIPELINE_LIBRARY_NAME),
             (extended_dynamic_state3, vk::EXT_EXTENDED_DYNAMIC_STATE3_NAME),
             (surfaces, ash::khr::swapchain::NAME),
+            (external_memory_host, vk::EXT_EXTERNAL_MEMORY_HOST_NAME),
         ]
         .into_iter()
         .filter_map(|(enabled, name)| enabled.then_some(name.as_ptr()))
@@ -236,7 +274,8 @@ impl VkState {
             .texture_compression_bc(texture_compression_bc)
             .geometry_shader(geometry_shader)
             .vertex_pipeline_stores_and_atomics(vertex_stores)
-            .fragment_stores_and_atomics(fragment_stores);
+            .fragment_stores_and_atomics(fragment_stores)
+            .sampler_anisotropy(sampler_anisotropy);
         let mut enabled_float16 = vk::PhysicalDeviceShaderFloat16Int8Features::default()
             .shader_float16(shader_float16);
         let mut enabled_atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()
@@ -273,7 +312,7 @@ impl VkState {
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3])),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3], external_memory_host.then_some(host_pointer.min_imported_host_pointer_alignment))),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())
@@ -284,11 +323,12 @@ impl VkState {
 
 impl Drop for VkState {
     fn drop(&mut self) {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let _ = self.device.device_wait_idle();
             let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());
             self.device.destroy_fence(submit.fence, None);
-            self.device.destroy_pipeline_cache(self.pipeline_cache, None);
+            self.device.destroy_pipeline_cache(*self.pipeline_cache.get_mut().unwrap_or_else(|e| e.into_inner()), None);
             let libraries = self.libraries.get_mut().unwrap_or_else(|e| e.into_inner());
             libraries.values().for_each(|&library| self.device.destroy_pipeline(library, None));
             self.device.destroy_command_pool(self.command_pool, None);

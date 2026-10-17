@@ -15,6 +15,7 @@
 #include <QWidget>
 #include <QtConcurrent/QtConcurrent>
 
+#include "AudioOutput.h"
 #include "DisplayWidget.h"
 #include "RustBridge.h"
 #include "oboromi_core.h"
@@ -35,6 +36,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     buildMenuBar();
     buildUi();
+    m_audio = new AudioOutput(this);
 
     connect(&m_cpuWatcher, &QFutureWatcher<std::vector<std::string>>::finished,
             this, &MainWindow::onCpuTestsFinished);
@@ -92,11 +94,16 @@ void MainWindow::buildUi() {
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
     for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}, {"Post", RustBridge::renderPostFrame},
-                                {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Helmet", RustBridge::renderHelmetDemo}}) {
+                                {"Sprites", RustBridge::renderSpritesFrame}, {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Helmet", RustBridge::renderHelmetDemo},
+                                {"Particles", RustBridge::renderParticlesFrame}, {"Music", RustBridge::renderMusicDemo}, {"Bounce", RustBridge::renderBounceDemo}}) {
         auto *demoButton = new QPushButton(name, central);
         demoButton->setCheckable(true);
         connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
-            if (!on) return m_demoTimer.stop();
+            if (!on) {
+                m_demoTimer.stop();
+                RustBridge::flushDemoCaches();
+                return;
+            }
             m_demoRender = render;
             m_demoClock.start();
             m_demoTimer.start(16);
@@ -110,6 +117,15 @@ void MainWindow::buildUi() {
         oboromi_input_state(&input);
         m_gamepadLabel->setText(input.gamepad[0] ? QString("gamepad: ") + input.gamepad : QString());
     });
+    auto *toneButton = new QPushButton("Tone", central);
+    toneButton->setCheckable(true);
+    connect(toneButton, &QPushButton::toggled, this, [this](bool on) {
+        if (on) return m_toneTimer.start(5);
+        m_toneTimer.stop();
+        m_logList->addItem(m_audio->status());
+    });
+    connect(&m_toneTimer, &QTimer::timeout, this, [] { oboromi_audio_test_tone(0.1f); });
+    buttons->addWidget(toneButton);
     buttons->addStretch();
     m_gamepadLabel = new QLabel(central);
     buttons->addWidget(m_gamepadLabel);

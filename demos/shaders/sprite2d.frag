@@ -1,5 +1,5 @@
 // Draws: one sprite texel per fragment from the layer atlas, alpha-blended (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) back to front.
-// Inputs: location 0 uv vec2 (atlas, repeat wrap so tiles scroll), 1 alpha float; sampler at binding 2 (the atlas, nearest filter for crisp pixels).
+// Inputs: location 0 uv vec2 (atlas, repeat wrap so tiles scroll), 1 alpha float; sampler at binding 2 (the atlas, linear filter).
 // Uniforms (std140, binding 1): +0 vec4 tint (rgb multiplier, a = global alpha).
 #version 450
 

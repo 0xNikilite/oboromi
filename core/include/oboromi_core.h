@@ -181,6 +181,20 @@ using LineCallback = void(*)(const char*);
 
 using FrameCallback = void(*)(void*);
 
+struct InputState {
+  uint64_t buttons;
+  float left[2];
+  float right[2];
+  /// a gamepad is present or a key has been pressed.
+  bool connected;
+};
+
+struct OboromiInput {
+  InputState state;
+  /// nul terminated, empty without a gamepad.
+  char gamepad[64];
+};
+
 extern "C" {
 
 /// runs the arm64 cpu test suite. blocks the calling thread, so call it from
@@ -238,5 +252,14 @@ void *oboromi_vk_instance();
 /// pixels. call it again on resize and expose, and with a null surface before destroying it.
 /// false if the device cannot present to it.
 bool oboromi_display_surface(uint64_t surface, uint32_t width, uint32_t height);
+
+/// a qt key code pressed or released in the gui.
+void oboromi_input_key(int32_t code, bool down);
+
+/// the merged host input the guest sees.
+///
+/// # Safety
+/// `out` must be valid for writes.
+void oboromi_input_state(OboromiInput *out);
 
 }  // extern "C"

@@ -1,6 +1,27 @@
 use super::*;
 
 impl<'a> Decoder<'a> {
+    fn shared_f32_at(&mut self, address: u32) -> u32 {
+        use spirv::storage_class::WORKGROUP;
+        let kind = ResourceKind::Ssbo(3);
+        let var = match self.resource(kind) {
+            Some(var) => var,
+            None => {
+                let len = self.cached_const_u32(SHARED_WORDS);
+                let array = self.ir.emit_type_array(self.type_f32[1], len);
+                let ptr = self.ir.emit_type_pointer(WORKGROUP, array);
+                let var = self.ir.emit_variable(ptr, WORKGROUP);
+                self.resources.push(Resource { kind, var });
+                var
+            }
+        };
+        let [two, last] = [2, SHARED_WORDS - 1].map(|c| self.cached_const_u32(c));
+        let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, two);
+        let index = self.ir.emit_bitwise_and(self.type_u32[1], index, last);
+        let ptr = self.ir.emit_type_pointer(WORKGROUP, self.type_f32[1]);
+        self.ir.emit_access_chain(ptr, var, &[index])
+    }
+
     fn shared_address(&mut self, inst: u128, uniform: u32) -> u32 {
         assert!(inst >> 78 & 3 == 0, "shared address stride {}", inst >> 78 & 3);
         self.global_address(inst, uniform, 40)
@@ -35,8 +56,7 @@ impl<'a> Decoder<'a> {
         let op = (((inst >> 87) & 0xf) << 0) as u32;
         let cas = opcode(inst) == 0x38d;
         match opcode(inst) {
-            0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC expose encodings but not state-transition semantics"),
-            0x38d if op & 1 == 1 => todo!("ATOMS.CAST exposes operands but not cast semantics"),
+            0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC have no published shared-word state transition in the SM86 table, Eden, Ryujinx, or NAK"),
             _ => {}
         }
         let address = self.shared_address(inst, 64);
@@ -74,15 +94,28 @@ impl<'a> Decoder<'a> {
             self.store_pair(rd, old);
             return;
         }
-        if sz >= 2 {
-            todo!("floating-point shared atomics require VK_EXT_shader_atomic_float");
-        }
         let ptr = self.shared_word_at(address);
         let b = self.load_register(rb);
         let (ty, signed) = (self.type_u32[1], sz == 1);
         let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
         let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
-        let old = if cas {
+        let old = if sz == 3 {
+            assert!(!cas && op == 0, "ATOMS.INVALID3 is the NAK-documented ADD.F32 form");
+            assert!(crate::gpu::device().is_ok_and(|d| d.shader_shared_float32_atomic_add), "ATOMS.ADD.F32 requires shaderSharedFloat32AtomicAdd");
+            let fptr = self.shared_f32_at(address);
+            let initial = self.ir.emit_load(self.type_u32[1], ptr);
+            let initial = self.bitcast_f32(initial);
+            self.ir.emit_store(fptr, initial);
+            let sem = self.cached_const_u32(spirv::memory_semantics::ACQUIRE_RELEASE | spirv::memory_semantics::WORKGROUP_MEMORY);
+            self.ir.emit_control_barrier(scope, scope, sem);
+            let old = self.atomic_fadd(fptr, scope, relaxed, b);
+            self.ir.emit_control_barrier(scope, scope, sem);
+            let final_value = self.ir.emit_load(self.type_f32[1], fptr);
+            let final_value = self.bitcast_u32(final_value);
+            self.ir.emit_store(ptr, final_value);
+            self.ir.emit_control_barrier(scope, scope, sem);
+            old
+        } else if cas {
             let c = self.load_register((inst >> 64) as u32 & 0xff);
             self.ir.emit_atomic_compare_exchange(ty, ptr, scope, relaxed, relaxed, c, b)
         } else {

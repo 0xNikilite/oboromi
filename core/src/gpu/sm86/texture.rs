@@ -3,6 +3,8 @@ use super::*;
 const DIM_2D: u32 = 1;
 const LOD_OPERAND: u32 = 2;
 const GRAD_OPERAND: u32 = 4;
+const BIAS_OPERAND: u32 = 1;
+const MIN_LOD_OPERAND: u32 = 0x80;
 
 #[repr(u32)]
 pub enum TextureType {
@@ -375,24 +377,55 @@ impl<'a> Decoder<'a> {
     }
     pub fn tex(&mut self, inst: u128) {
         assert!(opcode(inst) == 0xb60 && inst >> 59 & 1 == 0, "TEX only in the bound cbuf form: {inst:#034x}");
-        for (bit, modifier) in [(76, "AOFFI"), (77, "NDV"), (78, "DC"), (79, "F16.RN"), (80, "F16.RZ")] {
+        for (bit, modifier) in [(76, "AOFFI"), (77, "NDV"), (79, "F16.RN"), (80, "F16.RZ")] {
             assert!(inst >> bit & 1 == 0, "TEX.{modifier}");
         }
         let dimension = (inst >> 61 & 7) as usize;
         assert!(dimension == 1, "TEX.{}", ["1D", "2D", "3D", "CUBE", "ARRAY_1D", "ARRAY_2D", "INVALID6", "ARRAY_CUBE"][dimension]);
         assert!(inst >> 81 & 7 == PT as u128, "TEX sparse residency predicate");
         let [ra, rb] = [24, 32].map(|bit| (inst >> bit & 0xff) as u32);
-        let lod = match inst >> 87 & 7 {
-            1 => self.const_u32_0,
-            3 => self.load_register(rb),
-            mode => todo!("TEX.{}", ["implicit lod", "LZ", "LB", "LL", "LC", "LB.LC", "LC.FDV", "INVALID7"][mode as usize]),
+        let rb_value = self.load_register(rb);
+        let rb_f32 = self.bitcast_f32(rb_value);
+        let clamp_value = self.load_register(ra + 2);
+        let clamp = self.bitcast_f32(clamp_value);
+        let mode = inst >> 87 & 7;
+        let (image_ops, operands) = match mode {
+            0 => todo!("TEX implicit LOD waits for the fragment-stage translator"),
+            1 => (LOD_OPERAND, vec![self.bitcast_f32(self.const_u32_0)]),
+            2 => (BIAS_OPERAND, vec![rb_f32]),
+            3 => (LOD_OPERAND, vec![rb_f32]),
+            4 => (MIN_LOD_OPERAND, vec![clamp]),
+            5 => (BIAS_OPERAND | MIN_LOD_OPERAND, vec![rb_f32, clamp]),
+            6 => todo!("TEX.LC.FDV requires per-instruction divergent derivatives, which SPIR-V derivative groups cannot select"),
+            _ => panic!("TEX lod mode {mode}"),
         };
-        let lod = self.bitcast_f32(lod);
         // .SCR splits the operands between Ra and Rb, so without a lod operand y is in Rb (RTX 3090 fixtures).
-        let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 == 1 { rb } else { ra + 1 };
+        let y = if inst >> 60 & 1 != 0 && mode == 1 { rb } else { ra + 1 };
         let coord = self.float_vec2([ra, y]);
         let sampled = self.texture_2d(inst);
-        let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod]);
+        if matches!(mode, 2 | 4 | 5) {
+            self.derivatives = true;
+        }
+        if matches!(mode, 4 | 5) {
+            self.ir.emit_capability(spirv::capability::MIN_LOD);
+        }
+        let implicit_operands: Vec<_> = std::iter::once(image_ops).chain(operands.iter().copied()).collect();
+        let texel = if inst >> 78 & 1 != 0 {
+            let dref_reg = rb + matches!(mode, 2 | 3 | 5) as u32;
+            let dref = self.load_register(dref_reg);
+            let dref = self.bitcast_f32(dref);
+            let sample = if matches!(mode, 1 | 3) {
+                self.ir.emit_image_sample_dref_explicit_lod(self.type_f32[1], sampled, coord, dref, image_ops, &operands)
+            } else {
+                self.ir.emit_image_sample_dref_implicit_lod(self.type_f32[1], sampled, coord, dref, &implicit_operands)
+            };
+            let one = self.ir.emit_constant_typed(self.type_f32[1], 1.0f32);
+            self.ir.emit_composite_construct(self.type_f32[4], &[sample, sample, sample, one])
+        } else if matches!(mode, 1 | 3) {
+            self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, image_ops, &operands)
+        } else {
+            self.ir.emit_image_sample_implicit_lod(self.type_f32[4], sampled, coord, &implicit_operands)
+        };
         let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
         self.store_texel(inst, bits);
     }
@@ -407,7 +440,7 @@ impl<'a> Decoder<'a> {
         let lod = match inst >> 87 & 7 {
             1 => self.const_u32_0,
             3 => self.load_register(rb),
-            mode => todo!("TLD lod mode {mode}"),
+            mode => panic!("TLD only defines LZ and LL, not lod mode {mode}"),
         };
         let coords = [ra, ra + 1].map(|r| self.load_register(r));
         let coord = self.ir.emit_composite_construct(self.type_u32[2], &coords);
@@ -444,7 +477,7 @@ impl<'a> Decoder<'a> {
     fn texture_2d(&mut self, inst: u128) -> u32 {
         if self.type_sampled_texture_2d == 0 {
             self.ir.emit_capability(spirv::capability::IMAGE_QUERY);
-            self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 0, 0, 0, 1, 0);
+            self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 2, 0, 0, 1, 0);
             self.type_sampled_texture_2d = self.ir.emit_type_sampled_image(self.type_texture_2d);
         }
         let (cbuf_bank, byte_offset) = bound_handle(inst);

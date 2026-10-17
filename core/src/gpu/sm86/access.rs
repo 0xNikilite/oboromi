@@ -122,6 +122,29 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    pub(super) fn atomic_fadd(&mut self, ptr: u32, scope: u32, sem: u32, value: u32) -> u32 {
+        self.ir.emit_capability(spirv::capability::ATOMIC_FLOAT32_ADD);
+        self.ir.emit_extension("SPV_EXT_shader_atomic_float_add");
+        let ty = self.type_f32[1];
+        let value = self.bitcast_f32(value);
+        let old = self.ir.emit_atomic_fadd(ty, ptr, scope, sem, value);
+        self.bitcast_u32(old)
+    }
+
+    pub(super) fn atomic_f16x2(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, value: u32) -> u32 {
+        self.atomic_update(ptr, scope, sem, |d, old| {
+            let ty = d.type_f16x2();
+            let [old, value] = [old, value].map(|word| d.unpack_half2(word));
+            let new = match op {
+                0 => d.ir.emit_fadd(ty, old, value),
+                1 => d.glsl(spirv::glsl::N_MIN, ty, &[old, value]),
+                2 => d.glsl(spirv::glsl::N_MAX, ty, &[old, value]),
+                _ => panic!("ATOM.F16x2 operation {op}"),
+            };
+            d.bitcast_u32(new)
+        })
+    }
+
     // Local memory is a lazy 4 KiB Private array per invocation.
     fn local_word_at(&mut self, address: u32) -> u32 {
         let var = match self.resource(ResourceKind::Local) {

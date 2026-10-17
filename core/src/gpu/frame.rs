@@ -117,7 +117,6 @@ struct Frame {
     pixels_buffer: HostBuffer<'static>,
     cbuf0: HostBuffer<'static>,
     _support: HostBuffer<'static>,
-    pixels: Vec<u8>,
 }
 
 impl Frame {
@@ -133,15 +132,13 @@ impl Frame {
         let bindings = [(SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo), (GLOBAL_BINDING, DescriptorType::STORAGE_BUFFER)];
         let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings)?;
         pipeline.descriptors.bind(&[(SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf0), (GLOBAL_BINDING, &pixels_buffer)]);
-        Ok(Self { pipeline, pixels_buffer, cbuf0, _support: support, pixels: vec![0; size as usize] })
+        Ok(Self { pipeline, pixels_buffer, cbuf0, _support: support })
     }
 
     fn render(&mut self) -> Result<(), VkError> {
         // Round up so 1080 rows get a partial last group; the program's guard drops the overhang.
         device()?.dispatch(&self.pipeline, [WIDTH.div_ceil(GROUP), HEIGHT.div_ceil(GROUP), 1])?;
-        self.pixels_buffer.read(&mut self.pixels)?;
-        crate::display::present(WIDTH, HEIGHT, &self.pixels);
-        Ok(())
+        crate::display::present_buffer(&self.pixels_buffer, WIDTH, HEIGHT)
     }
 }
 

@@ -473,7 +473,7 @@ impl<'a> Decoder<'a> {
         let binding = TEXTURE_BINDING + images.count() as u32;
         let ptr = self.ir.emit_type_pointer(UNIFORM_CONSTANT, ty);
         let var = self.ir.emit_variable(ptr, UNIFORM_CONSTANT);
-        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         self.resources.push(Resource { kind, var });
         var

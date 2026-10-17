@@ -27,14 +27,16 @@ impl<'a> Decoder<'a> {
         let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
         let words = (((inst >> 74) & 0x3) << 0) as u32 + 1;
         assert!(opcode(inst) == 0x321 && inst >> 24 & 0xff == RZ as u128 && inst >> 76 & 0xf == 0, "only ALD of an input at an immediate attribute address is implemented");
-        assert!(self.stage == Stage::Vertex, "ALD in a {:?} module is not implemented", self.stage);
+        assert!(matches!(self.stage, Stage::Vertex { .. }), "ALD in a {:?} module is not implemented", self.stage);
         for i in 0..words {
             let attr = ra_offset + 4 * i;
             let val = match attr {
                 0x80..0x280 => {
-                    let ptr = self.interface_component(ResourceKind::VertexInput { location: (attr - 0x80) / 16 }, INPUT, attr);
-                    let val = self.ir.emit_load(self.type_f32[1], ptr);
-                    self.bitcast_u32(val)
+                    let kind = ResourceKind::VertexInput { location: (attr - 0x80) / 16 };
+                    let ptr = self.interface_component(kind, INPUT, attr);
+                    let ty = self.interface_type(kind, 1);
+                    let val = self.ir.emit_load(ty, ptr);
+                    if ty == self.type_u32[1] { val } else { self.bitcast_u32(val) }
                 }
                 0x2f8 => self.builtin(BuiltIn::InstanceIndex),
                 0x2fc => self.builtin(BuiltIn::VertexIndex),
@@ -49,7 +51,7 @@ impl<'a> Decoder<'a> {
         let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
         let words = (((inst >> 74) & 0x3) << 0) as u32 + 1;
         assert!(opcode(inst) == 0x322 && inst >> 24 & 0xff == RZ as u128 && inst >> 76 & 3 == 0, "only AST at an immediate attribute address is implemented");
-        assert!(self.stage == Stage::Vertex, "AST in a {:?} module is not implemented", self.stage);
+        assert!(matches!(self.stage, Stage::Vertex { .. }), "AST in a {:?} module is not implemented", self.stage);
         for i in 0..words {
             let attr = ra_offset + 4 * i;
             let kind = match attr {

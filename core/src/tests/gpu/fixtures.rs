@@ -39,6 +39,16 @@ mod tests {
             .collect()
     }
 
+    fn strings(object: &str, key: &str) -> Vec<String> {
+        let value = object.split_once(&format!("\"{key}\":")).unwrap().1;
+        let value = value.split_once('[').unwrap().1.split_once(']').unwrap().0;
+        value
+            .split(',')
+            .filter_map(|value| value.trim().strip_prefix('"')?.strip_suffix('"'))
+            .map(str::to_owned)
+            .collect()
+    }
+
     fn nested_numbers(object: &str, key: &str) -> Vec<u32> {
         let value = object.split_once(&format!("\"{key}\":")).unwrap().1;
         let start = value.find('[').unwrap();
@@ -129,6 +139,10 @@ mod tests {
             (
                 "s4dsetp",
                 include_str!("../../../tests/fixtures/sm86-s4-predicate-dsetp-silicon.json"),
+            ),
+            (
+                "s5hsetp2",
+                include_str!("../../../tests/fixtures/sm86-s5-hsetp2-silicon.json"),
             ),
         ]
         .into_iter()
@@ -344,6 +358,68 @@ mod tests {
         .collect()
     }
 
+    struct Session5WarpFixture {
+        source: &'static str,
+        index: usize,
+        family: String,
+        case: String,
+        words: Vec<u128>,
+        inputs: Vec<u32>,
+        outputs: Vec<u32>,
+        input_regs: Vec<usize>,
+        output_regs: Vec<usize>,
+        registers_after: Vec<u32>,
+        global_after: Vec<u32>,
+    }
+
+    fn session5_warp_fixtures() -> Vec<Session5WarpFixture> {
+        [
+            (
+                "s5observer",
+                include_str!("../../../tests/fixtures/sm86-s5-observer-silicon.json"),
+            ),
+            (
+                "s5local",
+                include_str!("../../../tests/fixtures/sm86-s5-local-silicon.json"),
+            ),
+        ]
+        .into_iter()
+        .flat_map(|(source, json)| {
+            objects(json)
+                .enumerate()
+                .map(move |(index, object)| (source, index, object))
+        })
+        .map(|(source, index, object)| {
+            let reg = |name: String| string(object, &name)[1..].parse().unwrap();
+            let mut words = vec![u128::from_str_radix(&string(object, "word_hex"), 16).unwrap()];
+            if object.contains("\"observer_word_hex\"") {
+                words.push(u128::from_str_radix(&string(object, "observer_word_hex"), 16).unwrap());
+            }
+            Session5WarpFixture {
+                source,
+                index,
+                family: string(object, "family"),
+                case: string(object, "case"),
+                words,
+                inputs: nested_numbers(object, "inputs"),
+                outputs: nested_numbers(object, "outputs"),
+                input_regs: (0..4).map(|i| reg(format!("input{i}"))).collect(),
+                output_regs: (0..2).map(|i| reg(format!("output{i}"))).collect(),
+                registers_after: if object.contains("\"registers_after\"") {
+                    nested_numbers(object, "registers_after")
+                } else {
+                    Vec::new()
+                },
+                global_after: if object.contains("\"global_after\"") {
+                    nested_numbers(object, "global_after")
+                } else {
+                    Vec::new()
+                },
+            }
+        })
+        .collect()
+    }
+
     const NOT_REPLAYABLE: &[&str] = &[
         "s3#067/fp16/hadd2-r15-r4-f32-r0",
         "s3#097/memory/stl-r0-0x8-r1",
@@ -375,7 +451,16 @@ mod tests {
         "s4predicate#003/dsetp/lt-distinct-pairs",
     ];
     // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
-    const KNOWN_FAILURES: &[&str] = &["s3#026/fp32/mufu-tanh-r1-r3"];
+    const KNOWN_FAILURES: &[&str] = &[
+        "s3#026/fp32/mufu-tanh-r1-r3",
+        "s5tensor#000/tensor/m16n8k16-f32/mixed-exponents/dst-f16",
+        "s5tensor#001/tensor/m16n8k16-f32/mixed-exponents/src-bf16",
+        "s5tensor#007/tensor/m16n8k16-f16/mixed-exponents/",
+        "s5tensor#009/tensor/m16n8k16-f32/mixed-exponents/",
+        "s5tensor#011/tensor/m16n8k8-f32/mixed-exponents/",
+        "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
+        "s5suatom#000/suatom/d-2d-add",
+    ];
     const LLVMPIPE_FAILURES: &[&str] = &[
         // llvmpipe truncates an f64 RoundEven.
         "s3#030/convert/f2i-s64-f64-r10-r12",
@@ -390,6 +475,11 @@ mod tests {
         "s4tex#007/tex/mask-r",
         "s4tex#009/tex/mask-rg",
         "s4tex#010/tex/mask-a",
+        "s5tex#003/tex/lod-lz",
+        "s5tex#005/tex/lod-ll",
+        "s5tex#007/tex/mask-r",
+        "s5tex#009/tex/mask-rg",
+        "s5tex#010/tex/mask-a",
     ];
 
     fn destination_width(fixture: &WarpFixture) -> usize {
@@ -437,6 +527,18 @@ mod tests {
                 "s4tex",
                 include_str!("../../../tests/fixtures/sm86-s4-texture-silicon.json"),
             ),
+            (
+                "s5tmml",
+                include_str!("../../../tests/fixtures/sm86-s5-tmml-silicon.json"),
+            ),
+            (
+                "s5suatom",
+                include_str!("../../../tests/fixtures/sm86-s5-suatom-silicon.json"),
+            ),
+            (
+                "s5tex",
+                include_str!("../../../tests/fixtures/sm86-s5-texture-silicon.json"),
+            ),
         ]
         .into_iter()
         .flat_map(|(source, json)| {
@@ -482,17 +584,19 @@ mod tests {
             .iter()
             .flat_map(|word| word.to_le_bytes())
             .collect::<Vec<_>>();
-        let source = if fixture.family == "surf" {
-            &surface
-        } else {
-            &texels
-        };
+        let surface_access = matches!(fixture.family.as_str(), "surf" | "suatom");
+        let source = if surface_access { &surface } else { &texels };
         let rows: Vec<u8> = source
             .chunks(16)
             .flat_map(|row| [row, &[0; PITCH - 16]].concat())
             .collect();
+        let format = if fixture.family == "suatom" {
+            0x0f | 0b100_100_100_100 << 7
+        } else {
+            8 | 0b010_010_010_010 << 7
+        };
         let header = [
-            8 | 0b010_010_010_010 << 7 | 0o5432 << 19,
+            format | 0o5432 << 19,
             ADDRESS as u32,
             (ADDRESS >> 32) as u32 | 2 << 21,
             PITCH as u32 >> 5,
@@ -529,6 +633,14 @@ mod tests {
                 let mut seed = vec![0; PRED + 1];
                 seed[0] = 0xffa5_5a00 | lane as u32;
                 seed[4..8].copy_from_slice(&fixture.inputs[lane * 4..][..4]);
+                if fixture.family == "tmml" {
+                    let rd2 = (fixture.word >> 64 & 0xff) as usize;
+                    seed[rd2] = if rd2 == 8 {
+                        fixture.outputs[lane * 2 + 1]
+                    } else {
+                        0xdead_beef
+                    };
+                }
                 seed
             })
             .collect();
@@ -536,7 +648,7 @@ mod tests {
         if fixture.family == "surf" {
             program.push(inst::surface(
                 inst::SULD_D_32 | inst::SU_BA,
-                8,
+                20,
                 6,
                 0xff,
                 0,
@@ -552,10 +664,39 @@ mod tests {
         )?;
         if fixture.family == "surf" {
             for (lane, regs) in lanes.iter().take(16).enumerate() {
-                if regs[8] != fixture.surface_after[lane] {
+                let expected = fixture.surface_after[lane];
+                if regs[20] != expected {
                     return Some(Err(format!(
                         "lane {lane} expected {:#010x}, got {:#010x}",
-                        fixture.surface_after[lane], regs[8]
+                        expected, regs[20]
+                    )));
+                }
+            }
+        } else if fixture.family == "suatom" {
+            for (lane, regs) in lanes.iter().enumerate() {
+                if regs[8] != fixture.outputs[lane * 2 + 1] {
+                    return Some(Err(format!(
+                        "lane {lane} expected {:#010x}, got {:#010x}",
+                        fixture.outputs[lane * 2 + 1],
+                        regs[8]
+                    )));
+                }
+            }
+        } else if fixture.family == "tmml" {
+            let rd = (fixture.word >> 16 & 0xff) as usize;
+            let rd2 = (fixture.word >> 64 & 0xff) as usize;
+            for (lane, regs) in lanes.iter().enumerate() {
+                let (reg, expected) = if rd == 8 {
+                    (rd, fixture.outputs[lane * 2 + 1])
+                } else if rd2 == 8 {
+                    (rd2, fixture.outputs[lane * 2 + 1])
+                } else {
+                    (rd2, 0xdead_beef)
+                };
+                if regs[reg] != expected {
+                    return Some(Err(format!(
+                        "lane {lane} expected {:#010x}, got {:#010x}",
+                        expected, regs[reg]
                     )));
                 }
             }
@@ -582,6 +723,153 @@ mod tests {
             }
         }
         Some(Ok(()))
+    }
+
+    struct TensorFixture {
+        index: usize,
+        case: String,
+        dataset: String,
+        modifier: String,
+        words: Vec<u128>,
+        observed: bool,
+        before: Vec<u32>,
+        after: Vec<u32>,
+    }
+
+    fn tensor_fixtures() -> Vec<TensorFixture> {
+        objects(include_str!(
+            "../../../tests/fixtures/sm86-s5-tensor-silicon.json"
+        ))
+        .enumerate()
+        .map(|(index, object)| TensorFixture {
+            index,
+            case: string(object, "case"),
+            dataset: object
+                .contains("\"dataset\"")
+                .then(|| string(object, "dataset"))
+                .unwrap_or_default(),
+            modifier: object
+                .contains("\"modifier\": \"")
+                .then(|| string(object, "modifier"))
+                .unwrap_or_default(),
+            words: strings(object, "words")
+                .into_iter()
+                .map(|word| u128::from_str_radix(&word, 16).unwrap())
+                .collect(),
+            observed: object.contains("\"observed\": true"),
+            before: if object.contains("\"fragments_before\"") {
+                nested_numbers(object, "fragments_before")
+            } else {
+                Vec::new()
+            },
+            after: if object.contains("\"fragments_after\"") {
+                nested_numbers(object, "fragments_after")
+            } else {
+                Vec::new()
+            },
+        })
+        .collect()
+    }
+
+    fn tensor_program(fixture: &TensorFixture) -> Vec<u128> {
+        if fixture.words.len() == 1 {
+            return fixture.words.clone();
+        }
+        let index = match fixture.case.as_str() {
+            "m16n8k8-f32" => 0,
+            "m16n8k16-f32" => 1,
+            "m16n8k8-tf32" => 2,
+            "ldmatrix-x4-trans" => 3,
+            "ldmatrix-x4" => 4,
+            "m16n8k16-f16" => 5,
+            _ => unreachable!(),
+        };
+        if fixture.case.starts_with("ldmatrix") {
+            vec![
+                inst::sts(20, 16),
+                inst::sts(21, 17),
+                inst::sts(22, 18),
+                inst::sts(23, 19),
+                fixture.words[index],
+            ]
+        } else {
+            vec![fixture.words[index]]
+        }
+    }
+
+    #[test]
+    fn fixtures_match_tensor_silicon() {
+        let mut score = Score::default();
+        let mut unexpected = Vec::new();
+        for fixture in tensor_fixtures() {
+            let id = format!(
+                "s5tensor#{:03}/tensor/{}/{}/{}",
+                fixture.index, fixture.case, fixture.dataset, fixture.modifier
+            );
+            if !fixture.observed {
+                score.skipped += 1;
+                continue;
+            }
+            let program = tensor_program(&fixture);
+            if catch_unwind(|| translate_module(&program, true, None)).is_err() {
+                score.unimplemented += 1;
+                continue;
+            }
+            let mut seeds = vec![vec![0; PRED + 1]; 32];
+            for (lane, seed) in seeds.iter_mut().enumerate() {
+                let before = &fixture.before[lane * 12..][..12];
+                match fixture.case.as_str() {
+                    "m16n8k8-f32" => {
+                        seed[6..8].copy_from_slice(&before[..2]);
+                        seed[0] = before[2];
+                        seed[8..12].copy_from_slice(&before[3..7]);
+                    }
+                    case if case.starts_with("ldmatrix") => {
+                        let slot = 16 * (5 * lane as u32 % 32);
+                        seed[0] = slot;
+                        seed[16..20].copy_from_slice(&before[..4]);
+                        for word in 0..4 {
+                            seed[20 + word] = slot + 4 * word as u32;
+                        }
+                        seed[PRED] = (case == "ldmatrix-x4-trans") as u32;
+                    }
+                    _ => {
+                        seed[12..16].copy_from_slice(&before[..4]);
+                        seed[6..8].copy_from_slice(&before[4..6]);
+                        seed[8..12].copy_from_slice(&before[6..10]);
+                    }
+                }
+            }
+            let Some((lanes, _)) = run_lanes(&program, &seeds, &[], &[]) else {
+                eprintln!("skipping tensor silicon fixtures: no Vulkan device");
+                return;
+            };
+            let width = if fixture.case == "m16n8k16-f16" || fixture.modifier == "dst-f16" {
+                2
+            } else {
+                4
+            };
+            let mismatch = lanes.iter().enumerate().find_map(|(lane, regs)| {
+                let expected = &fixture.after[lane * 4..][..width];
+                let actual = &regs[8..8 + width];
+                (actual != expected).then_some((lane, expected.to_vec(), actual.to_vec()))
+            });
+            if let Some((lane, expected, actual)) = mismatch {
+                score.fail += 1;
+                if !KNOWN_FAILURES.contains(&id.as_str()) {
+                    unexpected.push(id.clone());
+                }
+                eprintln!("{id}: lane {lane} expected {expected:?}, got {actual:?}");
+            } else {
+                score.pass += 1;
+            }
+        }
+        println!("family       pass fail unimplemented skipped");
+        println!(
+            "tensor       {:>4} {:>4} {:>13} {:>7}",
+            score.pass, score.fail, score.unimplemented, score.skipped
+        );
+        assert!(unexpected.is_empty(), "unexpected failures: {unexpected:?}");
     }
 
     #[test]
@@ -704,6 +992,97 @@ mod tests {
                 }
                 if !shared_matches {
                     eprintln!("{id}: shared memory mismatch");
+                }
+            }
+        }
+        for fixture in session5_warp_fixtures() {
+            let score = scores.entry(fixture.family.clone()).or_default();
+            let id = format!(
+                "{}#{:03}/{}/{}",
+                fixture.source, fixture.index, fixture.family, fixture.case
+            );
+            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+                score.unimplemented += 1;
+                continue;
+            }
+            let mut seeds = vec![vec![0; LIVE + 1]; 32];
+            for (lane, seed) in seeds.iter_mut().enumerate() {
+                let inputs = if fixture.inputs.len() == 4 {
+                    &fixture.inputs[..]
+                } else {
+                    &fixture.inputs[lane * 4..][..4]
+                };
+                for (&value, &reg) in inputs.iter().zip(&fixture.input_regs) {
+                    seed[reg] = value;
+                }
+                let global = GLOBAL_BASE + lane as u64 * 16;
+                seed[2] = global as u32;
+                seed[3] = (global >> 32) as u32;
+                seed[PRED] = 1 | ((lane as u32 & 1) << 1);
+                seed[LIVE] = 1;
+            }
+            let mut cbuf = vec![0; 0x170 / 4];
+            cbuf[0x168 / 4] = GLOBAL_BASE as u32;
+            cbuf[0x16c / 4] = (GLOBAL_BASE >> 32) as u32;
+            let global_before: Vec<_> = (0..256)
+                .map(|word| {
+                    if word & 1 == 0 {
+                        0x7fff_ffff
+                    } else {
+                        0x8000_0000
+                    }
+                })
+                .collect();
+            let Some((lanes, global)) = run_lanes(&fixture.words, &seeds, &cbuf, &global_before)
+            else {
+                eprintln!("skipping session 5 warp fixtures: no Vulkan device");
+                return;
+            };
+            let mismatch = if fixture.source == "s5local" {
+                lanes.iter().enumerate().find_map(|(lane, regs)| {
+                    let actual = regs[fixture.output_regs[0]];
+                    (actual != fixture.outputs[0]).then_some((lane, fixture.outputs[0], actual))
+                })
+            } else {
+                let checked = match fixture.family.as_str() {
+                    "vote" | "shfl" | "match" => &fixture.input_regs[..2],
+                    "redux" | "uldc" => &fixture.input_regs[1..2],
+                    "ldg" => &fixture.input_regs[..1],
+                    _ => &[],
+                };
+                lanes.iter().enumerate().find_map(|(lane, regs)| {
+                    checked.iter().find_map(|&reg| {
+                        let marker = fixture.input_regs.iter().position(|&r| r == reg).unwrap();
+                        let expected = if fixture.family == "uldc" {
+                            GLOBAL_BASE as u32
+                        } else {
+                            fixture.registers_after[lane * 8 + marker]
+                        };
+                        (regs[reg] != expected).then_some((lane, expected, regs[reg]))
+                    })
+                })
+            };
+            let global_mismatch =
+                (!fixture.global_after.is_empty() && global != fixture.global_after).then(|| {
+                    let word = global
+                        .iter()
+                        .zip(&fixture.global_after)
+                        .position(|(a, b)| a != b)
+                        .unwrap();
+                    (word, fixture.global_after[word], global[word])
+                });
+            if mismatch.is_none() && global_mismatch.is_none() {
+                score.pass += 1;
+            } else {
+                score.fail += 1;
+                if !known(&id) {
+                    unexpected.push(id.clone());
+                }
+                if let Some((lane, expected, actual)) = mismatch {
+                    eprintln!("{id}: lane {lane} expected {expected:#010x}, got {actual:#010x}");
+                }
+                if let Some((word, expected, actual)) = global_mismatch {
+                    eprintln!("{id}: global[{word}] expected {expected:#010x}, got {actual:#010x}");
                 }
             }
         }

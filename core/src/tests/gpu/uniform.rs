@@ -3,6 +3,8 @@ mod tests {
     use crate::tests::gpu::harness::{UPRED, UREG, run_regs};
     use crate::tests::gpu_test::inst::*;
 
+    const URZ: u32 = 63;
+
     fn run(program: &[u128], seed: &[(usize, u32)]) -> Option<Vec<u32>> {
         let mut words = vec![0; UPRED + 1];
         for &(slot, value) in seed {
@@ -81,5 +83,25 @@ mod tests {
         let seed = [(UREG + 5, 1), (UREG + 6, u32::MAX), (UREG + 8, 0xaaaa_aaaa), (UREG + 9, 0x000a_0000)];
         let Some(regs) = run(&program, &seed) else { return };
         assert_eq!([regs[UREG + 7], regs[UPRED]], [0xaaaa_95aa, 0x1a]);
+    }
+
+    #[test]
+    fn uniform_twins_read_and_write_uniform_registers() {
+        let program = [
+            alu3(ULOP3 | lop3_fields(0xc0, 7, 7, true), 10, 1, 3, URZ),
+            alu3(ULOP3 ^ IMM_B | lop3_fields(0xc0, 1, 7, true), URZ, 2, 1, URZ),
+            alu3(USHF ^ IMM_B | SHF_R | SHF_U32 | SHF_HI, 11, URZ, 31, 2),
+            alu3(UPRMT ^ IMM_B, 12, 1, 0x0123, URZ),
+            alu(UPOPC, 13, 0, 2),
+            alu(UFLO, 14, 0, 2),
+            alu(UBREV, 15, 0, 1),
+            alu(UBMSK ^ IMM_B, 16, 4, 8),
+            alu(USGXT ^ IMM_B | S32, 17, 3, 16),
+        ];
+        let seed = [(UREG + 1, 0x1234_5678), (UREG + 2, 0x8000_0001), (UREG + 3, 0xff00_ff00), (UREG + 4, 4)];
+        let Some(regs) = run(&program, &seed) else { return };
+        let expected = [0x1200_5600, 1, 0x7856_3412, 2, 31, 0x1e6a_2c48, 0xff0, 0xffff_ff00];
+        assert_eq!(regs[UREG + 10..UREG + 18], expected);
+        assert_eq!(regs[UPRED], 1 << 1);
     }
 }

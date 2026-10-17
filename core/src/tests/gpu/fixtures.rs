@@ -9,8 +9,7 @@ mod tests {
     use std::panic::catch_unwind;
 
     struct Fixture {
-        source: &'static str,
-        index: usize,
+        id: String,
         family: String,
         case: String,
         words: Vec<u128>,
@@ -18,6 +17,8 @@ mod tests {
         outputs: Vec<u32>,
         input_regs: Vec<usize>,
         output_regs: Vec<usize>,
+        registers_after: Vec<u32>,
+        global_after: Vec<u32>,
     }
 
     fn string(object: &str, key: &str) -> String {
@@ -31,7 +32,9 @@ mod tests {
     }
 
     fn numbers(object: &str, key: &str) -> Vec<u32> {
-        let value = object.split_once(&format!("\"{key}\":")).unwrap().1;
+        let Some((_, value)) = object.split_once(&format!("\"{key}\":")) else {
+            return Vec::new();
+        };
         let value = value.split_once('[').unwrap().1.split_once(']').unwrap().0;
         value
             .split(',')
@@ -39,135 +42,42 @@ mod tests {
             .collect()
     }
 
-    fn strings(object: &str, key: &str) -> Vec<String> {
-        let value = object.split_once(&format!("\"{key}\":")).unwrap().1;
-        let value = value.split_once('[').unwrap().1.split_once(']').unwrap().0;
-        value
-            .split(',')
-            .filter_map(|value| value.trim().strip_prefix('"')?.strip_suffix('"'))
-            .map(str::to_owned)
-            .collect()
+    fn reg(object: &str, name: &str) -> usize {
+        string(object, name)[1..].parse().unwrap()
     }
 
-    fn nested_numbers(object: &str, key: &str) -> Vec<u32> {
-        let value = object.split_once(&format!("\"{key}\":")).unwrap().1;
-        let start = value.find('[').unwrap();
-        let mut depth = 0;
-        let end = value[start..]
-            .char_indices()
-            .find_map(|(i, c)| {
-                depth += (c == '[') as usize;
-                depth -= (c == ']') as usize;
-                (depth == 0).then_some(start + i)
-            })
-            .unwrap();
-        value[start..=end]
-            .split(|c: char| !c.is_ascii_digit())
-            .filter_map(|n| n.parse().ok())
-            .collect()
+    fn word(object: &str, key: &str) -> u128 {
+        u128::from_str_radix(&string(object, key), 16).unwrap()
     }
 
-    fn number(object: &str, key: &str) -> u32 {
-        object
-            .split_once(&format!("\"{key}\":"))
-            .unwrap()
-            .1
-            .trim_start()
-            .split(|c: char| !c.is_ascii_digit())
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap()
+    fn id(object: &str) -> String {
+        let [id, family, case] = ["id", "family", "case"].map(|key| string(object, key));
+        format!("{id}/{family}/{case}")
     }
 
-    fn objects(json: &'static str) -> impl Iterator<Item = &'static str> {
-        json.split("\n  },\n  {")
+    fn observed(object: &str) -> bool {
+        object.contains("\"observed\":true")
     }
 
-    fn fixtures() -> Vec<Fixture> {
-        [
-            (
-                "silicon",
-                include_str!("../../../tests/fixtures/sm86-silicon.json"),
-            ),
-            (
-                "s4local",
-                include_str!("../../../tests/fixtures/sm86-s4-local-silicon.json"),
-            ),
-        ]
-        .into_iter()
-        .flat_map(|(source, json)| {
-            objects(json)
-                .enumerate()
-                .map(move |(index, object)| (source, index, object))
-        })
-        .map(|(source, index, object)| {
-            let reg = |name: String| string(object, &name)[1..].parse().unwrap();
-            let mut words = vec![u128::from_str_radix(&string(object, "word_hex"), 16).unwrap()];
-            if object.contains("\"observer_word_hex\"") {
-                words.push(u128::from_str_radix(&string(object, "observer_word_hex"), 16).unwrap());
-            }
-            Fixture {
-                source,
-                index,
-                family: string(object, "family"),
-                case: string(object, "case"),
-                words,
-                inputs: numbers(object, "inputs"),
-                outputs: numbers(object, "outputs"),
-                input_regs: (0..4).map(|i| reg(format!("input{i}"))).collect(),
-                output_regs: (0..2).map(|i| reg(format!("output{i}"))).collect(),
-            }
-        })
-        .collect()
-    }
-
-    fn predicate_fixtures() -> Vec<Fixture> {
-        [
-            (
-                "s3predicate",
-                include_str!("../../../tests/fixtures/sm86-s3-predicate-silicon.json"),
-            ),
-            (
-                "s3notpt",
-                include_str!("../../../tests/fixtures/sm86-s3-predicate-notpt-silicon.json"),
-            ),
-            (
-                "s4predicate",
-                include_str!("../../../tests/fixtures/sm86-s4-predicate-silicon.json"),
-            ),
-            (
-                "s4dsetp",
-                include_str!("../../../tests/fixtures/sm86-s4-predicate-dsetp-silicon.json"),
-            ),
-            (
-                "s5hsetp2",
-                include_str!("../../../tests/fixtures/sm86-s5-hsetp2-silicon.json"),
-            ),
-        ]
-        .into_iter()
-        .flat_map(|(source, json)| {
-            objects(json)
-                .enumerate()
-                .map(move |(index, object)| (source, index, object))
-        })
-        .map(|(source, index, object)| {
-            let reg = |name: String| string(object, &name)[1..].parse().unwrap();
-            Fixture {
-                source,
-                index,
+    fn fixtures(json: &str) -> Vec<Fixture> {
+        json.lines()
+            .map(|object| Fixture {
+                id: id(object),
                 family: string(object, "family"),
                 case: string(object, "case"),
                 words: ["word_hex", "observer_word_hex"]
-                    .map(|key| u128::from_str_radix(&string(object, key), 16).unwrap())
-                    .to_vec(),
+                    .into_iter()
+                    .filter(|key| object.contains(&format!("\"{key}\"")))
+                    .map(|key| word(object, key))
+                    .collect(),
                 inputs: numbers(object, "inputs"),
                 outputs: numbers(object, "outputs"),
-                input_regs: (0..4).map(|i| reg(format!("input{i}"))).collect(),
-                output_regs: (0..2).map(|i| reg(format!("output{i}"))).collect(),
-            }
-        })
-        .collect()
+                input_regs: (0..4).map(|i| reg(object, &format!("input{i}"))).collect(),
+                output_regs: (0..2).map(|i| reg(object, &format!("output{i}"))).collect(),
+                registers_after: numbers(object, "registers_after"),
+                global_after: numbers(object, "global_after"),
+            })
+            .collect()
     }
 
     #[derive(Default)]
@@ -181,12 +91,9 @@ mod tests {
     #[test]
     fn fixtures_match_silicon() {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
-        for fixture in fixtures() {
+        for fixture in fixtures(include_str!("../../../tests/fixtures/sm86-thread.jsonl")) {
             let score = scores.entry(fixture.family.clone()).or_default();
-            let id = format!(
-                "{}#{:03}/{}/{}",
-                fixture.source, fixture.index, fixture.family, fixture.case
-            );
+            let id = &fixture.id;
             if LOCAL_NOT_REPLAYABLE.contains(&id.as_str()) {
                 score.skipped += 1;
                 eprintln!("{id}: skipped, ptxas kept the local array in registers so the instruction has no observable result");
@@ -215,11 +122,8 @@ mod tests {
                 );
             }
         }
-        for fixture in predicate_fixtures() {
-            let id = format!(
-                "{}#{:03}/{}/{}",
-                fixture.source, fixture.index, fixture.family, fixture.case
-            );
+        for fixture in fixtures(include_str!("../../../tests/fixtures/sm86-predicate.jsonl")) {
+            let id = &fixture.id;
             let score = scores.entry(fixture.family.clone()).or_default();
             if PREDICATE_NOT_REPLAYABLE.contains(&id.as_str()) {
                 score.skipped += 1;
@@ -258,8 +162,7 @@ mod tests {
     }
 
     struct WarpFixture {
-        source: &'static str,
-        index: usize,
+        id: String,
         family: String,
         case: String,
         text: String,
@@ -281,155 +184,51 @@ mod tests {
     }
 
     fn warp_fixtures() -> Vec<WarpFixture> {
-        [
-            (
-                "warp3",
-                include_str!("../../../tests/fixtures/sm86-warp3-silicon.json"),
-            ),
-            (
-                "seg16",
-                include_str!("../../../tests/fixtures/sm86-warp3-seg16-silicon.json"),
-            ),
-            (
-                "s3",
-                include_str!("../../../tests/fixtures/sm86-s3-silicon.json"),
-            ),
-            (
-                "s4warp",
-                include_str!("../../../tests/fixtures/sm86-s4-warpseed-silicon.json"),
-            ),
-        ]
-        .into_iter()
-        .flat_map(|(source, json)| {
-            objects(json)
-                .enumerate()
-                .map(move |(index, object)| (source, index, object))
-        })
-        .map(|object| {
-            let (source, index, object) = object;
-            let reg = |name: &str| string(object, name)[1..].parse().unwrap();
-            let input_regs: Vec<_> = (0..4).map(|i| reg(&format!("input{i}"))).collect();
-            let shared_addr = reg("shared_addr");
-            let shared_bank_addr = reg("shared_bank_addr");
-            let global_lo = reg("global_lo");
-            let global_hi = reg("global_hi");
-            WarpFixture {
-                source,
-                index,
-                family: string(object, "family"),
-                case: string(object, "case"),
-                text: string(object, "nvdisasm_text"),
-                word: u128::from_str_radix(&string(object, "word_hex"), 16).unwrap(),
-                observed: object.contains("\"observed\": true"),
-                lanes_active: number(object, "lanes_active"),
-                inputs: nested_numbers(object, "inputs"),
-                outputs: if object.contains("\"outputs\"") {
-                    nested_numbers(object, "outputs")
-                } else {
-                    Vec::new()
-                },
-                input_regs: input_regs.clone(),
-                output_regs: (0..2).map(|i| reg(&format!("output{i}"))).collect(),
-                shared_addr,
-                shared_bank_addr,
-                global_lo,
-                global_hi,
-                shared_after: if object.contains("\"shared_after\"") {
-                    nested_numbers(object, "shared_after")
-                } else {
-                    Vec::new()
-                },
-                global_after: if object.contains("\"global_after\"") {
-                    nested_numbers(object, "global_after")
-                } else {
-                    Vec::new()
-                },
-                registers_after: if object.contains("\"registers_after\"") {
-                    nested_numbers(object, "registers_after")
-                } else {
-                    Vec::new()
-                },
-                marker_regs: input_regs
-                    .into_iter()
-                    .chain([shared_addr, shared_bank_addr, global_lo, global_hi])
-                    .collect(),
-            }
-        })
-        .collect()
+        include_str!("../../../tests/fixtures/sm86-warp.jsonl")
+            .lines()
+            .map(|object| {
+                let input_regs: Vec<_> =
+                    (0..4).map(|i| reg(object, &format!("input{i}"))).collect();
+                let [shared_addr, shared_bank_addr, global_lo, global_hi] =
+                    ["shared_addr", "shared_bank_addr", "global_lo", "global_hi"]
+                        .map(|name| reg(object, name));
+                WarpFixture {
+                    id: id(object),
+                    family: string(object, "family"),
+                    case: string(object, "case"),
+                    text: string(object, "nvdisasm_text"),
+                    word: word(object, "word_hex"),
+                    observed: observed(object),
+                    lanes_active: object
+                        .split_once("\"lanes_active\":")
+                        .unwrap()
+                        .1
+                        .split(|c: char| !c.is_ascii_digit())
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                    inputs: numbers(object, "inputs"),
+                    outputs: numbers(object, "outputs"),
+                    input_regs: input_regs.clone(),
+                    output_regs: (0..2).map(|i| reg(object, &format!("output{i}"))).collect(),
+                    shared_addr,
+                    shared_bank_addr,
+                    global_lo,
+                    global_hi,
+                    shared_after: numbers(object, "shared_after"),
+                    global_after: numbers(object, "global_after"),
+                    registers_after: numbers(object, "registers_after"),
+                    marker_regs: input_regs
+                        .into_iter()
+                        .chain([shared_addr, shared_bank_addr, global_lo, global_hi])
+                        .collect(),
+                }
+            })
+            .collect()
     }
 
-    struct Session5WarpFixture {
-        source: &'static str,
-        index: usize,
-        family: String,
-        case: String,
-        words: Vec<u128>,
-        inputs: Vec<u32>,
-        outputs: Vec<u32>,
-        input_regs: Vec<usize>,
-        output_regs: Vec<usize>,
-        registers_after: Vec<u32>,
-        global_after: Vec<u32>,
-    }
-
-    fn session5_warp_fixtures() -> Vec<Session5WarpFixture> {
-        [
-            (
-                "s5observer",
-                include_str!("../../../tests/fixtures/sm86-s5-observer-silicon.json"),
-            ),
-            (
-                "s5local",
-                include_str!("../../../tests/fixtures/sm86-s5-local-silicon.json"),
-            ),
-        ]
-        .into_iter()
-        .flat_map(|(source, json)| {
-            objects(json)
-                .enumerate()
-                .map(move |(index, object)| (source, index, object))
-        })
-        .map(|(source, index, object)| {
-            let reg = |name: String| string(object, &name)[1..].parse().unwrap();
-            let mut words = vec![u128::from_str_radix(&string(object, "word_hex"), 16).unwrap()];
-            if object.contains("\"observer_word_hex\"") {
-                words.push(u128::from_str_radix(&string(object, "observer_word_hex"), 16).unwrap());
-            }
-            Session5WarpFixture {
-                source,
-                index,
-                family: string(object, "family"),
-                case: string(object, "case"),
-                words,
-                inputs: nested_numbers(object, "inputs"),
-                outputs: nested_numbers(object, "outputs"),
-                input_regs: (0..4).map(|i| reg(format!("input{i}"))).collect(),
-                output_regs: (0..2).map(|i| reg(format!("output{i}"))).collect(),
-                registers_after: if object.contains("\"registers_after\"") {
-                    nested_numbers(object, "registers_after")
-                } else {
-                    Vec::new()
-                },
-                global_after: if object.contains("\"global_after\"") {
-                    nested_numbers(object, "global_after")
-                } else {
-                    Vec::new()
-                },
-            }
-        })
-        .collect()
-    }
-
-    const NOT_REPLAYABLE: &[&str] = &[
-        "s3#067/fp16/hadd2-r15-r4-f32-r0",
-        "s3#097/memory/stl-r0-0x8-r1",
-        "s3#098/memory/ldl-r4-r0-0x8",
-        "s3#099/memory/stl-u8-r0-r1",
-        "s3#100/memory/ldl-s8-r5-r0",
-        "s3#101/memory/stl-u16-r0-0x4-r1",
-        "s3#102/memory/ldl-s16-r6-r0-0x4",
-        "warp3#053/sts/bank-conflict",
-    ];
+    const NOT_REPLAYABLE: &[&str] = &["warp3#053/sts/bank-conflict"];
     const LOCAL_NOT_REPLAYABLE: &[&str] = &[
         "s4local#000/local/stl-32-0x0001c000001008000000080100007387-stl-r0",
         "s4local#001/local/stl-32-0x0001c000001008000000080100007387-stl-r0",
@@ -450,15 +249,16 @@ mod tests {
         "s4predicate#002/dsetp/lt-distinct-pairs",
         "s4predicate#003/dsetp/lt-distinct-pairs",
     ];
-    // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
     const KNOWN_FAILURES: &[&str] = &[
+        // fp32: MUFU.TANH is a hardware approximation that no exact tanh reproduces.
         "s3#026/fp32/mufu-tanh-r1-r3",
+        // suatom: the order in which lanes hitting the same texel apply their atomics is up to the device.
         "s5suatom#000/suatom/d-2d-add",
     ];
     const LLVMPIPE_FAILURES: &[&str] = &[
-        // llvmpipe truncates an f64 RoundEven.
+        // convert: llvmpipe truncates an f64 RoundEven.
         "s3#030/convert/f2i-s64-f64-r10-r12",
-        // lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
+        // tex: lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
         "tex#003/tex/lod-lz",
         "tex#005/tex/lod-ll",
         "tex#007/tex/mask-r",
@@ -474,7 +274,7 @@ mod tests {
         "s5tex#007/tex/mask-r",
         "s5tex#009/tex/mask-rg",
         "s5tex#010/tex/mask-a",
-        // lavapipe scales the lod of unnormalized coordinates by the texture size once more.
+        // tmml: lavapipe scales the lod of unnormalized coordinates by the texture size once more.
         "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
     ];
 
@@ -499,8 +299,7 @@ mod tests {
     }
 
     struct TextureFixture {
-        source: &'static str,
-        index: usize,
+        id: String,
         family: String,
         case: String,
         word: u128,
@@ -514,57 +313,22 @@ mod tests {
     }
 
     fn texture_fixtures() -> Vec<TextureFixture> {
-        [
-            (
-                "tex",
-                include_str!("../../../tests/fixtures/sm86-texture-silicon.json"),
-            ),
-            (
-                "s4tex",
-                include_str!("../../../tests/fixtures/sm86-s4-texture-silicon.json"),
-            ),
-            (
-                "s5tmml",
-                include_str!("../../../tests/fixtures/sm86-s5-tmml-silicon.json"),
-            ),
-            (
-                "s5suatom",
-                include_str!("../../../tests/fixtures/sm86-s5-suatom-silicon.json"),
-            ),
-            (
-                "s5tex",
-                include_str!("../../../tests/fixtures/sm86-s5-texture-silicon.json"),
-            ),
-        ]
-        .into_iter()
-        .flat_map(|(source, json)| {
-            objects(json)
-                .enumerate()
-                .map(move |(index, object)| (source, index, object))
-        })
-        .map(|(source, index, object)| TextureFixture {
-            source,
-            index,
-            family: string(object, "family"),
-            case: string(object, "case"),
-            word: u128::from_str_radix(&string(object, "word_hex"), 16).unwrap(),
-            observed: object.contains("\"observed\": true"),
-            handle: string(object, "handle_reg")[1..].parse().unwrap(),
-            inputs: nested_numbers(object, "inputs"),
-            outputs: if object.contains("\"outputs\"") {
-                nested_numbers(object, "outputs")
-            } else {
-                Vec::new()
-            },
-            texels: numbers(object, "texels"),
-            surface_before: numbers(object, "surface_before"),
-            surface_after: if object.contains("\"surface_after\"") {
-                numbers(object, "surface_after")
-            } else {
-                Vec::new()
-            },
-        })
-        .collect()
+        include_str!("../../../tests/fixtures/sm86-texture.jsonl")
+            .lines()
+            .map(|object| TextureFixture {
+                id: id(object),
+                family: string(object, "family"),
+                case: string(object, "case"),
+                word: word(object, "word_hex"),
+                observed: observed(object),
+                handle: reg(object, "handle_reg"),
+                inputs: numbers(object, "inputs"),
+                outputs: numbers(object, "outputs"),
+                texels: numbers(object, "texels"),
+                surface_before: numbers(object, "surface_before"),
+                surface_after: numbers(object, "surface_after"),
+            })
+            .collect()
     }
 
     fn run_texture_fixture(fixture: &TextureFixture) -> Option<Result<(), String>> {
@@ -722,9 +486,8 @@ mod tests {
     }
 
     struct TensorFixture {
-        index: usize,
+        id: String,
         case: String,
-        dataset: String,
         modifier: String,
         words: Vec<u128>,
         observed: bool,
@@ -733,38 +496,39 @@ mod tests {
     }
 
     fn tensor_fixtures() -> Vec<TensorFixture> {
-        objects(include_str!(
-            "../../../tests/fixtures/sm86-s5-tensor-silicon.json"
-        ))
-        .enumerate()
-        .map(|(index, object)| TensorFixture {
-            index,
-            case: string(object, "case"),
-            dataset: object
-                .contains("\"dataset\"")
-                .then(|| string(object, "dataset"))
-                .unwrap_or_default(),
-            modifier: object
-                .contains("\"modifier\": \"")
-                .then(|| string(object, "modifier"))
-                .unwrap_or_default(),
-            words: strings(object, "words")
-                .into_iter()
-                .map(|word| u128::from_str_radix(&word, 16).unwrap())
-                .collect(),
-            observed: object.contains("\"observed\": true"),
-            before: if object.contains("\"fragments_before\"") {
-                nested_numbers(object, "fragments_before")
-            } else {
-                Vec::new()
-            },
-            after: if object.contains("\"fragments_after\"") {
-                nested_numbers(object, "fragments_after")
-            } else {
-                Vec::new()
-            },
-        })
-        .collect()
+        include_str!("../../../tests/fixtures/sm86-tensor.jsonl")
+            .lines()
+            .map(|object| {
+                let case = string(object, "case");
+                let [dataset, modifier] = ["dataset", "modifier"].map(|key| {
+                    object
+                        .contains(&format!("\"{key}\":\""))
+                        .then(|| string(object, key))
+                        .unwrap_or_default()
+                });
+                TensorFixture {
+                    id: format!(
+                        "{}/tensor/{case}/{dataset}/{modifier}",
+                        string(object, "id")
+                    ),
+                    case,
+                    modifier,
+                    words: object
+                        .split_once("\"words\":[")
+                        .unwrap()
+                        .1
+                        .split_once(']')
+                        .unwrap()
+                        .0
+                        .split(',')
+                        .map(|word| u128::from_str_radix(word.trim_matches('"'), 16).unwrap())
+                        .collect(),
+                    observed: observed(object),
+                    before: numbers(object, "fragments_before"),
+                    after: numbers(object, "fragments_after"),
+                }
+            })
+            .collect()
     }
 
     fn tensor_program(fixture: &TensorFixture) -> Vec<u128> {
@@ -798,10 +562,7 @@ mod tests {
         let mut score = Score::default();
         let mut unexpected = Vec::new();
         for fixture in tensor_fixtures() {
-            let id = format!(
-                "s5tensor#{:03}/tensor/{}/{}/{}",
-                fixture.index, fixture.case, fixture.dataset, fixture.modifier
-            );
+            let id = &fixture.id;
             if !fixture.observed {
                 score.skipped += 1;
                 continue;
@@ -881,10 +642,7 @@ mod tests {
                 score.skipped += 1;
                 continue;
             }
-            let id = format!(
-                "{}#{:03}/{}/{}",
-                fixture.source, fixture.index, fixture.family, fixture.case
-            );
+            let id = &fixture.id;
             if NOT_REPLAYABLE.contains(&id.as_str()) {
                 score.skipped += 1;
                 eprintln!("{id}: skipped, rig seed kernel wrote shared memory so one instruction cannot replay it");
@@ -926,7 +684,7 @@ mod tests {
                 seed[PRED] = 1;
                 seed[LIVE] = fixture.lanes_active >> lane & 1;
             }
-            let global_before: Vec<_> = if fixture.source == "s4warp" {
+            let global_before: Vec<_> = if fixture.id.starts_with("s4warp") {
                 (0..256)
                     .map(|i| if i & 1 == 0 { 0x7fff_ffff } else { 0x8000_0000 })
                     .collect()
@@ -991,12 +749,9 @@ mod tests {
                 }
             }
         }
-        for fixture in session5_warp_fixtures() {
+        for fixture in fixtures(include_str!("../../../tests/fixtures/sm86-observer.jsonl")) {
             let score = scores.entry(fixture.family.clone()).or_default();
-            let id = format!(
-                "{}#{:03}/{}/{}",
-                fixture.source, fixture.index, fixture.family, fixture.case
-            );
+            let id = &fixture.id;
             if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
                 score.unimplemented += 1;
                 continue;
@@ -1034,7 +789,7 @@ mod tests {
                 eprintln!("skipping session 5 warp fixtures: no Vulkan device");
                 return;
             };
-            let mismatch = if fixture.source == "s5local" {
+            let mismatch = if fixture.id.starts_with("s5local") {
                 lanes.iter().enumerate().find_map(|(lane, regs)| {
                     let actual = regs[fixture.output_regs[0]];
                     (actual != fixture.outputs[0]).then_some((lane, fixture.outputs[0], actual))
@@ -1088,10 +843,7 @@ mod tests {
                 score.skipped += 1;
                 continue;
             }
-            let id = format!(
-                "{}#{:03}/{}/{}",
-                fixture.source, fixture.index, fixture.family, fixture.case
-            );
+            let id = &fixture.id;
             match catch_unwind(|| run_texture_fixture(&fixture)) {
                 Err(_) => score.unimplemented += 1,
                 Ok(None) => {

@@ -101,13 +101,6 @@ mod tests {
         );
     }
 
-    fn using_lavapipe() -> bool {
-        ["VK_DRIVER_FILES", "VK_ICD_FILENAMES"]
-            .iter()
-            .filter_map(|name| std::env::var(name).ok())
-            .any(|path| path.contains("lvp_icd"))
-    }
-
     #[test]
     fn arithmetic_handles_sources_modifiers_and_ieee_edges() {
         let nan = f64::from_bits(0x7ff8_0000_0000_1234);
@@ -155,7 +148,7 @@ mod tests {
 
     #[test]
     fn dfma_rounds_once() {
-        if using_lavapipe() {
+        if crate::gpu::device().is_ok_and(|d| d.is_llvmpipe()) {
             return;
         }
         let a = 1.0 + f64::EPSILON;

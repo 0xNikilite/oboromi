@@ -25,10 +25,6 @@ mod tests {
         (lane / 4, lane % 4)
     }
 
-    fn first_k(sources: &Sources, lane: usize, k_group: usize) -> usize {
-        sources.per_reg * (quad(lane).1 + 4 * k_group)
-    }
-
     fn pack(sources: &Sources, element: impl Fn(usize) -> f32) -> u32 {
         let bits = 32 / sources.per_reg;
         (0..sources.per_reg).fold(0, |word, i| word | (sources.pack)(element(i)) << bits * i)
@@ -54,7 +50,7 @@ mod tests {
         let seeds: Vec<Vec<u32>> = (0..32).map(|lane| {
             let mut regs = vec![0; RC + 4];
             for k_group in 0..k_groups {
-                let k = first_k(sources, lane, k_group);
+                let k = sources.per_reg * (quad(lane).1 + 4 * k_group);
                 for half in 0..2 {
                     regs[RA + 2 * k_group + half] = pack(sources, |i| a(quad(lane).0 + 8 * half, k + i));
                 }

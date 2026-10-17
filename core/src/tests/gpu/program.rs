@@ -12,7 +12,7 @@ mod tests {
     }
 
     fn string<'a>(json: &'a str, key: &str) -> &'a str {
-        json.split_once(&format!("\"{key}\": \"")).unwrap().1.split_once('"').unwrap().0
+        json.split_once(&format!("\"{key}\":\"")).unwrap().1.split_once('"').unwrap().0
     }
 
     fn u32s(items: &[&str]) -> Vec<u32> {

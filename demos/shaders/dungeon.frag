@@ -37,7 +37,7 @@ float noise(vec2 p) {
 }
 vec3 decode(uvec2 p) { return vec3(unpackHalf2x16(p.x),unpackHalf2x16(p.y).x); }
 vec3 screenSample(vec2 uv, bool reflect_scene) {
-    ivec2 size=ivec2(settings.xy); ivec2 p=clamp(ivec2(uv*size),ivec2(0),size-1);
+    ivec2 size=ivec2(settings.xy)/(reflect_scene?2:1); ivec2 p=clamp(ivec2(uv*size),ivec2(0),size-1);
     int at=p.y*size.x+p.x;
     return decode(reflect_scene?reflection[at]:refraction[at]);
 }
@@ -154,7 +154,7 @@ void main() {
     vec3 b=normalize(cross(n,t))*sign(du1.x*du2.y-du1.y*du2.x); mat3 basis=mat3(t,b,n);
     if(m!=3) {
         if(m==0) {
-            vec3 tv=transpose(basis)*v; float steps=mix(28.,12.,abs(tv.z));
+            vec3 tv=transpose(basis)*v; float steps=right_quality.w>.5?mix(28.,12.,abs(tv.z)):mix(12.,6.,abs(tv.z));
             vec2 delta=tv.xy/max(abs(tv.z),.15)*.035/steps; float z=0.;
             for(int i=0;i<28;i++) { if(z>=1.-surface(uv,m).a)break; uv-=delta;z+=1./steps; }
         }

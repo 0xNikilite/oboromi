@@ -204,7 +204,7 @@ impl Renderer {
         let particles = HostBuffer::new(state, ((world.lights.len() * per_emitter + extra_particles) * 48) as u64)
             .map_err(named)?;
         let target = RenderTarget::with_format(state, WIDTH, HEIGHT, Some(DEPTH), None, HDR).map_err(named)?;
-        let reflection = RenderTarget::with_format(state, WIDTH, HEIGHT, Some(DEPTH), None, HDR).map_err(named)?;
+        let reflection = RenderTarget::with_format(state, WIDTH / 2, HEIGHT / 2, Some(DEPTH), None, HDR).map_err(named)?;
         let output = HostBuffer::new(state, u64::from(WIDTH * HEIGHT * 4)).map_err(named)?;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../demos/assets/dungeon");
         let mut textures = Vec::new();
@@ -707,11 +707,13 @@ impl Renderer {
         let vp = multiply(projection, view);
         let reflected = multiply(vp, reflect);
         let reflected_eye = [eye[0], plane * 2. - eye[1], eye[2]];
-        self.uniforms(reflected, reflected, reflected_eye, seconds, right, up, world, true, plane)?;
-        self.draw(&self.reflection, 0, self.count, true, false)?;
-        self.draw(&self.reflection, u32::MAX, 24 * 12 * 6, false, false)?;
-        self.draw(&self.reflection, 0, 6, false, true)?;
-        self.reflection.readback().map_err(named)?;
+        if !self.rays {
+            self.uniforms(reflected, reflected, reflected_eye, seconds, right, up, world, true, plane)?;
+            self.draw(&self.reflection, 0, self.count, true, false)?;
+            self.draw(&self.reflection, u32::MAX, 24 * 12 * 6, false, false)?;
+            self.draw(&self.reflection, 0, 6, false, true)?;
+            self.reflection.readback().map_err(named)?;
+        }
         self.uniforms(vp, reflected, eye, seconds, right, up, world, false, plane)?;
         self.draw(&self.target, 0, self.count, true, false)?;
         self.draw(&self.target, u32::MAX, 24 * 12 * 6, false, false)?;

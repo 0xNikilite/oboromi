@@ -106,6 +106,9 @@ fn main() {
             render(&args[0], seconds).unwrap();
         }
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
+        if args.iter().any(|a| a == "--profile") {
+            eprintln!("dungeon_cpu,{i},{:.4}", timings.last().unwrap());
+        }
         if let Some(wav) = &mut wav { wav.drain(); }
         if audio_only {
             continue;
@@ -129,5 +132,10 @@ fn main() {
     }
     if let Some(wav) = wav {
         wav.finish((frames as f64 * f64::from(RATE) / f64::from(fps)).round() as usize);
+    }
+    if timings.len() > 1 {
+        timings.remove(0);
+        timings.sort_by(f64::total_cmp);
+        eprintln!("frame_ms,median,{:.3},p95,{:.3}", timings[timings.len() / 2], timings[(timings.len() * 95 / 100).min(timings.len() - 1)]);
     }
 }

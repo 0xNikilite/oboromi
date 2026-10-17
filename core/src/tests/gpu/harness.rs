@@ -48,6 +48,14 @@ pub fn spirv_val(module: &Emitter) {
     assert!(out.status.success(), "{out:?}");
 }
 
+pub fn sha256(bytes: &[u8]) -> String {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    sha256sum.stdin.take().unwrap().write_all(bytes).unwrap();
+    String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap()[..64].into()
+}
+
 pub fn vk_state() -> Option<VkState> {
     match VkState::new() {
         Ok(s) => Some(s),

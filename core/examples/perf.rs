@@ -6,7 +6,7 @@ use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::pipeline_cache::Disk;
 use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, Stage, emit_module};
-use oboromi_core::gpu::{VkState, demo_particles::render_particles_frame, surface_device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
+use oboromi_core::gpu::{VkState, demo_particles::render_particles_frame, demo_post::render_post_frame, surface_device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
 use oboromi_core::tests::gpu::engine::{TARGET, TEXTURES, VERTICES, texture_header, textured_quad_frame, triangle_guest, vertex_bytes};
 use oboromi_core::tests::gpu::{graphics, harness::translate_module};
 use oboromi_core::tests::gpu_test::inst;
@@ -117,6 +117,7 @@ fn main() {
         render_demo_frame(0.25).unwrap()
     });
     bench("pushbuffer triangle 1080p", 2, 100, || render_triangle_demo(0.25).unwrap());
+    bench("demo post 1080p", 2, 100, || render_post_frame(0.25).unwrap());
     bench("demo particles 1080p", 2, 100, || render_particles_frame(0.25).unwrap());
     let mut quad = triangle_guest(state, 1920, 1080, &[([0.0; 2], [0; 4]); 3]).unwrap();
     let corners = [([-1.0, -1.0], [0, 0, 0, 0]), ([1.0, -1.0], [255, 0, 0, 0]), ([-1.0, 1.0], [0, 255, 0, 0]), ([1.0, 1.0], [255, 255, 0, 0])];

@@ -75,3 +75,13 @@ pub(crate) fn mix_into(buffers: &mut [Vec<f32>], from: usize, to: usize, volume:
     }
 }
 
+/// sums one period from each source (the renderer, audout) onto the sink ring, which takes a single producer.
+pub fn play(periods: &[&[i16]]) -> usize {
+    let mut mixed = [0i16; 480];
+    for period in periods {
+        for (mixed, sample) in mixed.iter_mut().zip(period.iter()) {
+            *mixed = mixed.saturating_add(*sample);
+        }
+    }
+    push(&mixed)
+}

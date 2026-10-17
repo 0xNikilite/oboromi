@@ -5,6 +5,7 @@ mod compare;
 mod control;
 pub mod demos;
 mod convert;
+mod demos_post;
 mod fifo;
 mod fixtures;
 pub mod fp;

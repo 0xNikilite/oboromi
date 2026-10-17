@@ -48,4 +48,8 @@ bool renderHelmetDemo(float seconds) {
     return oboromi_render_helmet_demo(seconds);
 }
 
+bool renderPostFrame(float seconds) {
+    return oboromi_render_post_frame(seconds);
+}
+
 }

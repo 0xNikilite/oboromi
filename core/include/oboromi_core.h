@@ -211,6 +211,10 @@ bool oboromi_render_boombox_demo(float seconds);
 /// demos/assets/fetch.sh has not fetched the asset.
 bool oboromi_render_helmet_demo(float seconds);
 
+/// draws the post-effect demo at `seconds` and presents it, false if vulkan
+/// is missing or a draw fails. blocks, so call it from a worker thread.
+bool oboromi_render_post_frame(float seconds);
+
 /// generation of the last presented frame, 0 until the guest presents one.
 uint64_t oboromi_frame_generation();
 

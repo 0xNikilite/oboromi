@@ -12,7 +12,7 @@ impl<'a> Decoder<'a> {
         if is_uniform(inst) { self.load_ureg_pair(index & 0x3f) } else { self.load_pair(index & 0xff) }
     }
 
-    fn store_alu_pair(&mut self, inst: u128, val: u32) {
+    pub(super) fn store_alu_pair(&mut self, inst: u128, val: u32) {
         let rd = (inst >> 16) as u32;
         if !is_uniform(inst) {
             return self.store_pair(rd & 0xff, val);
@@ -39,27 +39,8 @@ impl<'a> Decoder<'a> {
         if neg { self.ir.emit_isub(self.type_u32[1], self.const_u32_0, val) } else { val }
     }
 
-    pub fn bitextract(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _num = (((inst >> 53) & 0x3) << 0);
-        let _srchalf = (((inst >> 56) & 0x1) << 0);
-        let _dstbyte = (((inst >> 57) & 0x3) << 0);
-        let _datasize = (((inst >> 61) & 0x3) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _size = (((inst >> 75) & 0x3) << 0);
-        let _mdidx = (((inst >> 78) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("BITEXTRACT");
+    pub fn bitextract(&mut self, _inst: u128) {
+        panic!("BITEXTRACT is masked on SM86 (class gather_bitextract_ MASK_INSTR_PREDICATE = (1)): nvdisasm does not decode it and ptxas feeds mma.sp metadata to HMMA.SP as a register");
     }
     pub fn bmsk(&mut self, inst: u128) {
         let ty = self.type_u32[1];
@@ -302,6 +283,7 @@ impl<'a> Decoder<'a> {
         const MOV_IRF_I: u32 = 0x1878;
         const MOV_IRF_C: u32 = 0x1a78;
         const MOV_R_IRF: u32 = 0x1c78;
+        // Session 6: silicon faults on an index of 256 or more; here any index past R253 reads 0 and drops the write as RZ does.
         let indexed_ptr = |this: &mut Self, ur| {
             let index = this.load_ureg(ur);
             let limit = this.cached_const_u32(MAX_REG_COUNT as u32);

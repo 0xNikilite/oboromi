@@ -167,7 +167,7 @@ pub fn replay_tensor(state: &VkState, fixture: &TensorFixture, cooperative: Opti
         decoder.force_cooperative_hmma = cooperative;
         decoder.translate_program(&program);
     };
-    run_on(state, body, &tensor_seeds(fixture), &[], &[], &Default::default()).map(|(lanes, _)| lanes)
+    run_on(state, body, &tensor_seeds(fixture), &[], &[], &Default::default(), false).map(|(lanes, ..)| lanes)
 }
 
 /// The f16 HMMA shapes for which the device reproduces every observed fixture bit for bit through cooperative matrices.

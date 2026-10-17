@@ -31,6 +31,7 @@ pub const SUPPORT_BINDING: u32 = 0;
 pub const CBUF_BINDING: u32 = 1;
 pub const GLOBAL_BINDING: u32 = 9;
 pub const TEXTURE_BINDING: u32 = 12;
+pub const PMTRIG_WORDS: usize = 1 << 16;
 const RZ: u32 = 255;
 const URZ: u32 = 63;
 const SRZ: u32 = 255;
@@ -85,6 +86,7 @@ pub enum ResourceKind {
     Mma,
     Schedule,
     Global64,
+    Hints,
     Texture2D { cbuf_bank: u32, byte_offset: u32 },
     Surface2D { cbuf_bank: u32, byte_offset: u32, format: vk::Format },
 }
@@ -145,6 +147,18 @@ pub struct Decoder<'a> {
     pub resources: Vec<Resource>,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
+    timing: Timing,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Hints {
+    pub timing: bool,
+}
+
+enum Timing {
+    Off,
+    Fallback,
+    Clock { period: f32, emitted: bool },
 }
 
 fn opcode(inst: u128) -> u32 {
@@ -204,13 +218,12 @@ fn guest_barriers(words: &[u128]) -> Vec<u32> {
     ids
 }
 
-pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
+pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], hints: Hints, body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
     let mut emitter = spirv::Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(spirv::capability::SHADER);
     emitter.emit_memory_model(0, 1);
-    let mut decoder = Decoder::new(&mut emitter);
-    decoder.device = device;
+    let mut decoder = Decoder::new(&mut emitter, hints, device);
     decoder.init();
     let void_ty = decoder.get_type_void();
     let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
@@ -226,7 +239,7 @@ pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl Fn
 }
 
 impl<'a> Decoder<'a> {
-    pub fn new(ir: &'a mut spirv::Emitter) -> Self {
+    pub fn new(ir: &'a mut spirv::Emitter, hints: Hints, device: Option<&'a VkState>) -> Self {
         Self {
             ir,
             type_void: 0,
@@ -262,7 +275,7 @@ impl<'a> Decoder<'a> {
             type_f16: 0,
             type_f16x2: 0,
             mma_vars: [0; 9],
-            device: None,
+            device,
             force_cooperative_hmma: None,
             cooperative_types: HashMap::new(),
             type_texture_2d: 0,
@@ -273,6 +286,11 @@ impl<'a> Decoder<'a> {
             glsl_ext: 0,
             resources: Vec::new(),
             const_cache: HashMap::new(),
+            timing: if !hints.timing { Timing::Off } else if let Some(device) = device.filter(|d| d.shader_device_clock) {
+                Timing::Clock { period: device.timestamp_period, emitted: false }
+            } else {
+                Timing::Fallback
+            },
         }
     }
 
@@ -281,6 +299,10 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, local_size: [u32; 3]) {
+        if let Some(var) = self.resource(ResourceKind::Hints) {
+            let textures = self.resources.iter().filter(|r| matches!(r.kind, ResourceKind::Texture2D { .. } | ResourceKind::Surface2D { .. })).count() as u32;
+            self.ir.emit_decorate(var, spirv::decoration::BINDING, &[TEXTURE_BINDING + textures]);
+        }
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
         let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).collect();
@@ -474,7 +496,9 @@ impl<'a> Decoder<'a> {
         }
         let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
         self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
-        self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        if kind != ResourceKind::Hints {
+            self.ir.emit_decorate(var, deco::BINDING, &[binding]);
+        }
         self.resources.push(Resource { kind, var });
         var
     }

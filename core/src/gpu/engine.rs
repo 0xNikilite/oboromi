@@ -145,9 +145,9 @@ fn settle_ranges(targets: &mut HashMap<TargetKey, Target>, ram: &mut [u8], range
     let overlaps = |piece: &PaRange| ranges.iter().any(|range| range.start < piece.end && piece.start < range.end);
     for (key, target) in targets {
         let Some(pending) = target.pending.take_if(|pending| within(&key.ranges, pending.clone()).any(|(_, piece)| overlaps(&piece))) else { continue };
-        let staged = target.render_target.staged()?;
-        for (offset, piece) in within(&key.ranges, pending) {
-            ram[piece.start as usize..piece.end as usize].copy_from_slice(&staged[offset as usize..][..(piece.end - piece.start) as usize]);
+        let staged = target.render_target.staged(pending.clone())?;
+        for (offset, piece) in within(&key.ranges, pending.clone()) {
+            ram[piece.start as usize..piece.end as usize].copy_from_slice(&staged[(offset - pending.start) as usize..][..(piece.end - piece.start) as usize]);
         }
     }
     Ok(())

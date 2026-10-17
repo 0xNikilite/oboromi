@@ -266,9 +266,9 @@ impl<'a> RenderTarget<'a> {
         self.staging.read(out)
     }
 
-    /// The target as its last draw left it, row by row.
-    pub fn staged(&self) -> Result<&[u8], VkError> {
-        self.staging.view()
+    /// `bytes` of the target as its last draw left it, row by row.
+    pub fn staged(&self, bytes: std::ops::Range<u64>) -> Result<&[u8], VkError> {
+        self.staging.view(bytes)
     }
 
     pub fn write(&mut self, pixels: &[u8]) -> Result<(), VkError> {

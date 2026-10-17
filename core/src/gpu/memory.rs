@@ -186,7 +186,8 @@ impl MemoryTracker {
 
     /// Stores the page pieces the device changed in `mapping`, which matched guest memory before it ran.
     pub fn download(&mut self, mapping: &mut Mapping, ram: &mut [u8]) -> Result<(), VkError> {
-        self.store(ram, &mapping.ranges, mapping.buffer.view()?, Writer::Gpu);
+        let len = mapping.ranges.iter().map(|range| range.end - range.start).sum();
+        self.store(ram, &mapping.ranges, mapping.buffer.view(0..len)?, Writer::Gpu);
         for (piece, seen) in &mut mapping.seen {
             *seen = self.generation(piece.start, piece.end - piece.start);
         }

@@ -113,7 +113,6 @@ pub struct Services {
     pub nsd: Option<nn::nsd::State>,
     pub ntc: Option<nn::ntc::State>,
     pub nvdbg: Option<nn::nvdbg::State>,
-    pub nvdrv: Option<nn::nvdrv::State>,
     pub nvdrvdbg: Option<nn::nvdrvdbg::State>,
     pub nvgem: Option<nn::nvgem::State>,
     pub nvmemp: Option<nn::nvmemp::State>,

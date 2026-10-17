@@ -304,12 +304,12 @@ impl Process {
 
 impl Kernel {
     /// Points the thread at an image of `image_size` bytes loaded at `entry`.
-    pub fn start(&mut self, cpu: &UnicornCPU, entry: u64, image_size: u64) {
+    pub fn start(&mut self, cpu: &UnicornCPU, entry: u64, image_size: u64) -> u32 {
         self.process.image_size = image_size.next_multiple_of(PAGE);
         cpu.set_pc(entry);
         cpu.set_sp(MAIN_STACK.base + MAIN_STACK.size);
         cpu.set_tls(TLS);
-        self.start_threads(cpu);
+        self.start_threads(cpu)
     }
 
     /// Runs ready threads and deadlines until process exit or an unhandled stop.

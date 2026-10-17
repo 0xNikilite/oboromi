@@ -341,7 +341,7 @@ impl Kernel {
         self
     }
 
-    pub(super) fn start_threads(&mut self, cpu: &UnicornCPU) {
+    pub(super) fn start_threads(&mut self, cpu: &UnicornCPU) -> u32 {
         cpu.set_virtual_time(self.scheduler.virtual_time);
         let id = 0;
         self.scheduler.add(id, cpu.context().expect("main context"), 44, 0);
@@ -349,9 +349,14 @@ impl Kernel {
         cpu.set_x(1, u64::from(handle));
         cpu.save(&mut self.scheduler.threads[id].context).expect("main context");
         self.scheduler.enqueue(id, false);
+        handle
     }
 
     pub(super) fn run_threads(&mut self, cpu: &UnicornCPU) -> bool {
+        // Loaders set the entry ABI registers after Kernel::start.
+        if self.scheduler.switches == 0 && cpu.save(&mut self.scheduler.threads[0].context).is_err() {
+            return false;
+        }
         loop {
             self.scheduler.poll(cpu);
             let Some((id, core)) = self.scheduler.select() else {

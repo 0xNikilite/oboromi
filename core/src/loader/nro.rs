@@ -11,8 +11,6 @@ use std::path::Path;
 use std::rc::Rc;
 
 const PAGE: usize = 0x1000;
-/// The kernel has no thread objects, so the main thread is the current-thread pseudo-handle.
-const CURRENT_THREAD: u64 = 0xFFFF_8000;
 const APPLET_APPLICATION: u64 = 0;
 /// 22.5.0, the SystemVersion of the one firmware dump we checked.
 const HOS_VERSION: u64 = 22 << 16 | 5 << 8;
@@ -32,7 +30,7 @@ fn word<const N: usize>(bytes: &[u8], at: usize) -> Result<usize> {
 
 /// ConfigEntry {key, flags, value[2]} records followed by the exit stub and the argv string.
 fn config(base: u64, argv: &str) -> Vec<u8> {
-    let entries = [[1, CURRENT_THREAD, 0], [5, 0, base + ARGV_AT as u64], [7, APPLET_APPLICATION, 0], [16, HOS_VERSION, 0], [0; 3]];
+    let entries = [[1, 0, 0], [5, 0, base + ARGV_AT as u64], [7, APPLET_APPLICATION, 0], [16, HOS_VERSION, 0], [0; 3]];
     let mut page: Vec<u8> = entries.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
     page.resize(EXIT_AT, 0);
     page.extend(EXIT_PROCESS.to_le_bytes());
@@ -72,7 +70,8 @@ pub fn load(ram: &GuestRam, cpu: &UnicornCPU, kernel: &mut Kernel, path: &Path) 
     let segments = [text, ro, data, (bss_at as u64, &bss), (config_at as u64, &config)];
     load_segments(ram, CODE.base, &segments).ok_or_else(invalid)?;
 
-    kernel.start(cpu, CODE.base, (config_at + config.len()) as u64);
+    let main_thread = kernel.start(cpu, CODE.base, (config_at + config.len()) as u64);
+    cpu.write_u64(CODE.base + config_at as u64 + 8, u64::from(main_thread));
     cpu.set_x(0, CODE.base + config_at as u64);
     cpu.set_x(1, u64::MAX);
     cpu.set_x(30, CODE.base + (config_at + EXIT_AT) as u64);

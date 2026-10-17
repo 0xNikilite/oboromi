@@ -695,9 +695,11 @@ impl<'a> Decoder<'a> {
         self.global_address(inst, uniform, 40)
     }
 
+    // Silicon faults on an address past shared memory, which here wraps instead of indexing out of bounds.
     fn shared_word_at(&mut self, address: u32) -> u32 {
-        let two = self.cached_const_u32(2);
+        let [two, last] = [2, SHARED_WORDS - 1].map(|c| self.cached_const_u32(c));
         let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, two);
+        let index = self.ir.emit_bitwise_and(self.type_u32[1], index, last);
         self.workgroup_word(ResourceKind::Shared, SHARED_WORDS, index)
     }
 
@@ -708,7 +710,7 @@ impl<'a> Decoder<'a> {
         let var = match self.resource(ResourceKind::Shared64) {
             Some(var) => var,
             None => {
-                let len = self.cached_const_u32(128);
+                let len = self.cached_const_u32(SHARED_WORDS / 2);
                 let array = self.ir.emit_type_array(ty, len);
                 let ptr = self.ir.emit_type_pointer(WORKGROUP, array);
                 self.type_ptr_shared_u64 = self.ir.emit_type_pointer(WORKGROUP, ty);
@@ -717,8 +719,9 @@ impl<'a> Decoder<'a> {
                 var
             }
         };
-        let three = self.cached_const_u32(3);
+        let [three, last] = [3, SHARED_WORDS / 2 - 1].map(|c| self.cached_const_u32(c));
         let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, three);
+        let index = self.ir.emit_bitwise_and(self.type_u32[1], index, last);
         self.ir.emit_access_chain(self.type_ptr_shared_u64, var, &[index])
     }
 

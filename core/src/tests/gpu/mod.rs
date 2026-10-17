@@ -12,6 +12,7 @@ mod memory_map;
 mod program;
 mod shared;
 mod special;
+mod stages;
 mod tensor;
 mod texture;
 mod uniform;

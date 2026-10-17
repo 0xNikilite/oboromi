@@ -300,65 +300,12 @@ mod tests {
         "s3#102/memory/ldl-s16-r6-r0-0x4",
         "warp3#053/sts/bank-conflict",
     ];
-    const KNOWN_FAILURES: &[&str] = &[
-        "s3#011/fp32/fadd-r1-r2-r3",
-        "s3#012/fp32/fadd-r1-r2-r3",
-        "s3#014/fp32/fadd-r1-r2-0-5",
-        "s3#015/fp32/fmul-r1-r2-r3",
-        "s3#016/fp32/fmul-fmz-r1-r2-r3",
-        "s3#018/fp32/fmul-r1-r2-3",
-        "s3#019/fp32/ffma-r1-r2-r3-r4",
-        "s3#020/fp32/ffma-fmz-r1-r2-r3-r4",
-        "s3#021/fp32/ffma-r1-r2-2-r4",
-        "s3#022/fp32/ffma-r1-r2-r3-0-5",
-        "s3#023/fp32/fmnmx-r1-r2-r3-pt",
-        "s3#024/fp32/fmnmx-r1-r2-r3-p0",
-        "s3#025/fp32/mufu-rcp-r1-r3",
-        "s3#026/fp32/mufu-tanh-r1-r3",
-        "s3#028/convert/f2f-f32-f64-rp-r13-r14",
-        "s3#029/convert/f2i-r1-r3",
+    // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
+    const KNOWN_FAILURES: &[&str] = &["s3#026/fp32/mufu-tanh-r1-r3"];
+    const LLVMPIPE_FAILURES: &[&str] = &[
+        // llvmpipe truncates an f64 RoundEven.
         "s3#030/convert/f2i-s64-f64-r10-r12",
-        "s3#031/convert/frnd-r4-r5",
-        "s3#035/fp64/dadd-r32-r0-r2",
-        "s3#037/fp64/dadd-r36-r0-c-0x0-0x0",
-        "s3#038/fp64/dadd-r38-r6-r6",
-        "s3#039/fp64/dadd-r40-r8-r10",
-        "s3#040/fp64/dadd-r42-r12-r0",
-        "s3#041/fp64/dadd-r58-r0-r2",
-        "s3#042/fp64/dmul-r44-r0-r2",
-        "s3#043/fp64/dmul-r46-r0-2",
-        "s3#044/fp64/dfma-r48-r0-r2-r4",
-        "s3#045/fp64/dfma-r50-r0-2-r4",
-        "s3#046/fp64/dfma-r52-r0-r2-2",
-        "s3#047/fp64/dfma-r54-r0-c-0x0-0x0-r4",
-        "s3#048/fp64/dfma-r56-r0-r2-c-0x0-0x0",
-        "s3#049/fp64/dfma-r60-r0-r2-r4",
-        "s3#062/fp16/hadd2-r10-r0-r1",
-        "s3#063/fp16/hadd2-r11-r0-h0-h0-r1-h1-h1",
-        "s3#064/fp16/hadd2-r12-r2-r3",
-        "s3#065/fp16/hadd2-r13-r2-h0-h0-r2-h0-h0",
-        "s3#066/fp16/hadd2-f32-r14-rz-r0-h1-h1",
-        "s3#068/fp16/hadd2-r16-r0-0-5-1",
-        "s3#069/fp16/hmul2-r17-r0-r5",
-        "s3#070/fp16/hmul2-r18-r2-r2",
-        "s3#071/fp16/hmul2-fmz-r19-r2-r2-h0-h0",
-        "s3#072/fp16/hmul2-ftz-r25-r7-r7",
-        "s3#073/fp16/hfma2-r20-r0-r1-r5",
-        "s3#075/fp16/hfma2-relu-r22-r0-r1-r5",
-        "s3#076/fp16/hfma2-r23-r0-2-0-5-r5",
-        "s3#077/fp16/hfma2-r26-r0-r1-1-4",
-        "s3#078/fp16/hfma2-mma-r24-r0-r1-r5",
-        "s3#079/fp16/hset2-bf-lt-and-r10-r0-r5-pt",
-        "s3#080/fp16/hset2-ge-and-r11-r0-r5-pt",
-        "s3#081/fp16/hset2-bf-neu-and-r12-r3-r3-pt",
-        "s3#082/fp16/hmnmx2-r13-r0-r5-pt",
-        "s3#083/fp16/hmnmx2-r14-r0-r5-pt",
-        "s3#084/fp16/hmnmx2-r15-r3-r0-pt",
-        "s3#085/fp16/hmnmx2-nan-r16-r3-r0-pt",
-        "s3#086/fp16/f2fp-pack-ab-r20-r6-r7",
-        "s3#087/fp16/f2fp-pack-ab-r21-r8-r9",
-        "s3#088/fp16/f2fp-merge-c-r22-r7-r0-h1",
-        "s3#091/fp16/f2ip-u8-f32-r25-r6-r15-r10",
+        // lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
         "tex#003/tex/lod-lz",
         "tex#005/tex/lod-ll",
         "tex#007/tex/mask-r",
@@ -545,6 +492,8 @@ mod tests {
     fn fixtures_match_warp_silicon() {
         let mut scores: BTreeMap<String, Score> = BTreeMap::new();
         let mut unexpected = Vec::new();
+        let llvmpipe = crate::gpu::device().is_ok_and(|d| d.is_llvmpipe());
+        let known = |id: &str| KNOWN_FAILURES.contains(&id) || llvmpipe && LLVMPIPE_FAILURES.contains(&id);
         for fixture in warp_fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
             if !fixture.observed {
@@ -641,7 +590,7 @@ mod tests {
                 score.unimplemented += 1;
             } else {
                 score.fail += 1;
-                if !KNOWN_FAILURES.contains(&id.as_str()) {
+                if !known(&id) {
                     unexpected.push(id.clone());
                 }
                 if let Some((lane, expected, actual)) = mismatch {
@@ -671,7 +620,7 @@ mod tests {
                 Ok(Some(Ok(()))) => score.pass += 1,
                 Ok(Some(Err(mismatch))) => {
                     score.fail += 1;
-                    if !KNOWN_FAILURES.contains(&id.as_str()) {
+                    if !known(&id) {
                         unexpected.push(id.clone());
                     }
                     eprintln!("{id}: {mismatch}");

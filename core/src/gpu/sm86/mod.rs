@@ -163,7 +163,7 @@ fn branch_offset(inst: u128) -> i64 {
     ((inst >> 34) as i64) << 16 >> 18
 }
 
-fn branch_target(pc: u32, inst: u128) -> Option<u32> {
+pub fn branch_target(pc: u32, inst: u128) -> Option<u32> {
     let offset = branch_offset(inst);
     match opcode(inst) {
         BRA | BRA_UREG | BRA_UPRED | CALL_REL => Some((pc as i64 + 1 + offset) as u32),

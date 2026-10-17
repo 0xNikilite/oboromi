@@ -11,16 +11,18 @@ void main(){
     int count=int(time_count.y), emitter=int(i)/count,k=int(i)%count;
     Light l=lights[emitter]; float seed=float(i)+1.,scale=max(l.position.w,.04);
     float age=fract(time_count.x*(.16+hash(seed)*.24)+hash(seed+3.));
-    float type=k<6?0.:k%5==0?2.:1.;
+    float type=k<9?0.:k%4==0?2.:1.;
     vec3 p=l.position.xyz;
     vec4 colour=vec4(1.,.28,.018,1.);
     vec2 size;
     if(type==0.) {
-        p+=vec3((hash(seed)-.5)*scale*.4,scale*.25,(hash(seed+2.)-.5)*scale*.4);
-        size=vec2(.34,.55+hash(seed)*.3)*scale; colour.a=.4;
+        float angle=float(k)*2.39996;
+        float radius=sqrt(float(k)/9.)*scale*.28;
+        p+=vec3(cos(angle)*radius,scale*(.04+hash(seed)*.17),sin(angle)*radius);
+        size=vec2(.3,.46+hash(seed)*.28)*scale; colour.a=k<3?.8:.38;
     }else if(type==2.) {
-        p+=vec3(sin(age*5.+seed)*age*.55,age*scale*3.2,cos(age*4.+seed)*age*.4);
-        size=vec2(.18+age*.5)*scale;colour=vec4(.08,.07,.06,(1.-age)*.16);
+        p+=vec3(sin(age*5.+seed)*age*.65,scale*(.8+age*3.2),cos(age*4.+seed)*age*.55);
+        size=vec2(.22+age*.65)*scale;colour=vec4(.14,.14,.14,sin(age*3.14159)*.22);
     }else {
         p+=vec3(sin(seed*5.+age*8.)*age*.45,age*scale*2.8,cos(seed+age*6.)*age*.4);
         if(k%3==0)p.y-=age*age*scale*2.;

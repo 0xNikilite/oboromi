@@ -48,6 +48,7 @@ pub(super) struct Renderer {
     cones: GraphicsPipeline<'static>,
     _cone_instances: HostBuffer<'static>,
     cone_count: u32,
+    cone_visible: bool,
     opaque: GraphicsPipeline<'static>,
     sprites: GraphicsPipeline<'static>,
     particles_step: ComputePipeline<'static>,
@@ -61,14 +62,19 @@ pub(super) struct Renderer {
     vertices: HostBuffer<'static>,
     indices: HostBuffer<'static>,
     particles: HostBuffer<'static>,
-    _lights: HostBuffer<'static>,
+    lights: HostBuffer<'static>,
     shadows_ready: bool,
     shadow_maps: HostBuffer<'static>,
+    _rooms: HostBuffer<'static>,
     _geometry: HostBuffer<'static>,
+    _web: HostImage<'static>,
     _textures: Vec<HostImage<'static>>,
     _structure: Option<AccelerationStructure<'static>>,
     output: HostBuffer<'static>,
     count: u32,
+    visible_count: u32,
+    visible_zones: Vec<bool>,
+    batches: Vec<(Box3,Vec<u32>)>,
     water_indices: u32,
     water_vertex: usize,
     grid: [usize; 2],
@@ -93,7 +99,15 @@ impl Renderer {
         let water_vertex = vertices.len();
         let grid = water_grid();
         vertices.resize(water_vertex + grid[0] * grid[1], Vertex::default());
-        let mut indices = mesh.indices.clone();
+        let mut batches:Vec<_>=world.zones.iter().map(|_|(Box3{lo:[f32::INFINITY;3],hi:[f32::NEG_INFINITY;3]},Vec::new())).collect();
+        for tri in mesh.indices.chunks_exact(3) {
+            let centre=scale(add(add(mesh.vertices[tri[0] as usize].pos,mesh.vertices[tri[1] as usize].pos),mesh.vertices[tri[2] as usize].pos),1./3.);
+            let zone=world.zones.iter().position(|z|z.space.contains(centre)).unwrap_or_else(||world.zones.iter().enumerate()
+                .min_by(|(_,a),(_,b)|length(sub(a.space.centre(),centre)).total_cmp(&length(sub(b.space.centre(),centre)))).unwrap().0);
+            let (bounds,indices)=&mut batches[zone];indices.extend_from_slice(tri);
+            for &i in tri {for axis in 0..3 {let p=mesh.vertices[i as usize].pos[axis];bounds.lo[axis]=bounds.lo[axis].min(p);bounds.hi[axis]=bounds.hi[axis].max(p);}}
+        }
+        let mut indices:Vec<_>=batches.iter().flat_map(|(_,indices)|indices.iter().copied()).collect();
         let count = indices.len() as u32;
         for y in 0..grid[1] - 1 {
             for x in 0..grid[0] - 1 {
@@ -195,12 +209,15 @@ impl Renderer {
             .collect();
         let mut lights = HostBuffer::new(state, (lights_data.len() * 4) as u64).map_err(named)?;
         lights.write(&floats(&lights_data)).map_err(named)?;
+        let bounds: Vec<_> = world.zones.iter().flat_map(|z| [z.space.lo[0],z.space.lo[2],z.space.hi[0],z.space.hi[2]]).collect();
+        let mut rooms=HostBuffer::new(state,(bounds.len()*4) as u64).map_err(named)?;
+        rooms.write(&floats(&bounds)).map_err(named)?;
         let uniforms = HostBuffer::new(state, 256).map_err(named)?;
         let particle_time = HostBuffer::new(state, 16).map_err(named)?;
         let per_emitter = if showcase { 96 } else { 32 };
         let extra_particles = world.drips.len() * 2
             + world.props.iter().filter(|p| matches!(p, Prop::Web(..) | Prop::Lantern(..))).count()
-            + 112;
+            + 184;
         let particles = HostBuffer::new(state, ((world.lights.len() * per_emitter + extra_particles) * 48) as u64)
             .map_err(named)?;
         let target = RenderTarget::with_format(state, WIDTH, HEIGHT, Some(DEPTH), None, HDR).map_err(named)?;
@@ -256,7 +273,7 @@ impl Renderer {
         let mut fragment = vec![(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER)];
         fragment.extend((2..11).map(|b| (b, D::COMBINED_IMAGE_SAMPLER)));
         fragment.extend((11..14).map(|b| (b, D::STORAGE_BUFFER)));
-        fragment.push((15, D::STORAGE_BUFFER));
+        fragment.extend([(15, D::STORAGE_BUFFER),(16, D::STORAGE_BUFFER)]);
         if rays {
             fragment.push((14, D::ACCELERATION_STRUCTURE_KHR));
         }
@@ -284,6 +301,7 @@ impl Renderer {
             (12, &target.staging),
             (13, &geo),
             (15, &shadow_maps),
+            (16, &rooms),
         ]);
         opaque.descriptors[1]
             .bind_images(&textures.iter().enumerate().map(|(i, t)| (i as u32 + 2, t)).collect::<Vec<_>>());
@@ -309,12 +327,32 @@ impl Renderer {
             (12, &target.staging),
             (13, &geo),
             (15, &shadow_maps),
+            (16, &rooms),
         ]);
         cones.descriptors[1]
             .bind_images(&textures.iter().enumerate().map(|(i, t)| (i as u32 + 2, t)).collect::<Vec<_>>());
         if let Some(s) = &structure {
             cones.descriptors[1].bind_acceleration_structure(14, s);
         }
+        // Broken, sagging threads rasterised once into a filtered alpha texture.
+        let mut web_bytes=vec![0u8;256*256*4];
+        for y in 0..256 {for x in 0..256 {
+            let p=[x as f32/255.*2.-0.82,y as f32/255.*2.-0.77];
+            let angle=p[1].atan2(p[0]);let r=(p[0]*p[0]+p[1]*p[1]).sqrt();
+            let spoke=(angle*9.+0.15*(angle*5.).sin()).sin().abs()*r/9.;
+            let sag=r*(1.+0.035*(angle*18.).cos())+0.008*(angle*7.).sin();
+            let ring=((sag*8.+0.1*(angle*3.).sin()).fract()-0.5).abs()/8.;
+            let broken=(angle*17.+r*37.).sin()>-0.65;
+            let strand=spoke.min(if broken && r<0.85 {ring}else{1.});
+            let alpha=((0.009-strand)/0.007).clamp(0.,1.)*(1.-((r-0.7)/0.5).clamp(0.,1.));
+            let at=(y*256+x)*4;web_bytes[at..at+4].copy_from_slice(&[(alpha*255.) as u8;4]);
+        }}
+        let tic=[8u32|0o2222<<7|0o5432<<19,0,2<<21,32,255|1<<23,255|1<<31,0,0];
+        let tic:Vec<u8>=tic.iter().flat_map(|v|v.to_le_bytes()).collect();
+        let header=TexturePool{tic:&tic,tsc:&[]}.texture(0)?;
+        let sampler=vk::SamplerCreateInfo::default().mag_filter(vk::Filter::LINEAR).min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE).address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        let web=HostImage::new(state,&header,&web_bytes,&sampler).map_err(named)?;
         let mut sprites = GraphicsPipeline::with_format(
             state,
             &code(include_bytes!("../../../demos/shaders/dungeon_sprite.vert.spv")),
@@ -322,7 +360,7 @@ impl Renderer {
             &code(include_bytes!("../../../demos/shaders/dungeon_sprite.frag.spv")),
             [
                 &[(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER)],
-                &[(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER), (12, D::STORAGE_BUFFER)],
+                &[(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER), (2, D::COMBINED_IMAGE_SAMPLER), (12, D::STORAGE_BUFFER)],
             ],
             &VertexLayout { bindings: &[], attributes: &[], topology: vk::PrimitiveTopology::TRIANGLE_LIST },
             &TargetState { blend, depth: Some(DEPTH) },
@@ -331,6 +369,7 @@ impl Renderer {
         .map_err(named)?;
         sprites.descriptors[0].bind(&[(0, &uniforms), (1, &particles)]);
         sprites.descriptors[1].bind(&[(0, &uniforms), (1, &lights), (12, &target.staging)]);
+        sprites.descriptors[1].bind_images(&[(2,&web)]);
         let mut particles_step = ComputePipeline::new(
             state,
             &code(include_bytes!("../../../demos/shaders/dungeon_particles.comp.spv")),
@@ -365,6 +404,7 @@ impl Renderer {
             cones,
             _cone_instances: cone_instances,
             cone_count,
+            cone_visible: true,
             opaque,
             sprites,
             particles_step,
@@ -378,14 +418,19 @@ impl Renderer {
             vertices: vb,
             indices: ib,
             particles,
-            _lights: lights,
+            lights,
             shadows_ready: false,
             shadow_maps,
+            _rooms: rooms,
             _geometry: geo,
+            _web: web,
             _textures: textures,
             _structure: structure,
             output,
             count,
+            visible_count: count,
+            visible_zones: vec![true;batches.len()],
+            batches,
             water_indices,
             water_vertex,
             grid,
@@ -484,6 +529,7 @@ impl Renderer {
     }
     fn draw(&self, target: &RenderTarget, first: u32, count: u32, clear: bool, sprites: bool) -> Result<(), String> {
         let cones = first == u32::MAX;
+        if cones && !self.cone_visible {return Ok(());}
         let disabled=DISABLED.load(Ordering::Relaxed);
         if !sprites && !cones && first>0 && disabled&2!=0 { return Ok(()); }
         let blend = vk::PipelineColorBlendAttachmentState::default()
@@ -605,9 +651,9 @@ impl Renderer {
                 let z = world.river.lo[2] + uv[1] * (world.river.hi[2] - world.river.lo[2]);
                 let a = x * 3.2 + z * 1.3 - seconds * 1.4;
                 let b = x * 1.7 - z * 4.2 + seconds * 1.1;
-                let h = h + 0.012 * a.sin() + 0.008 * b.sin();
-                let sx = sx + 0.0384 * a.cos() + 0.0136 * b.cos();
-                let sz = sz + 0.0156 * a.cos() - 0.0336 * b.cos();
+                let h = h + 0.025 * a.sin() + 0.014 * b.sin();
+                let sx = sx + 0.08 * a.cos() + 0.0238 * b.cos();
+                let sz = sz + 0.0325 * a.cos() - 0.0588 * b.cos();
                 Vertex {
                     pos: [
                         world.river.lo[0] + uv[0] * (world.river.hi[0] - world.river.lo[0]),
@@ -623,6 +669,12 @@ impl Renderer {
             })
             .collect();
         self.vertices.write_at((self.water_vertex * 48) as u64, &pack(&water)).map_err(named)?;
+        let light_data: Vec<_> = world.lights.iter().enumerate().flat_map(|(i,l)| {
+            let phase=i as f32*2.3;
+            let flicker=1.+l.flicker*(0.21*(seconds*11.7+phase).sin()+0.11*(seconds*23.1+phase*1.7).sin()+0.08*(seconds*4.3+phase).sin());
+            [l.pos[0],l.pos[1],l.pos[2],l.flame,l.colour[0]*flicker,l.colour[1]*flicker,l.colour[2]*flicker,0.]
+        }).collect();
+        self.lights.write(&floats(&light_data)).map_err(named)?;
         let per_emitter = if self.showcase { 96 } else { 32 };
         self.particle_time.write(&floats(&[seconds, per_emitter as f32, 0., 0.])).map_err(named)?;
         self.state.dispatch_profiled(&self.particles_step, [(self.emitter_count * per_emitter).div_ceil(64) as u32, 1, 1],self.query_pool()).map_err(named)?;
@@ -654,15 +706,15 @@ impl Renderer {
             );
         }
         let mut rng = Rng(117);
-        for i in 0..104 {
+        for i in 0..152 {
             let seed = i as f32;
-            if i < 48 {
+            if i < 96 {
                 let lamp = &world.lights[i % world.lights.len()];
                 let p = add(
                     lamp.pos,
                     [rng.range(-2., 2.), (rng.next() * 3. + seconds * 0.07).rem_euclid(3.) - 1., rng.range(-2., 2.)],
                 );
-                particle(p, 3., [0.004; 2], seed, [0.3, 0.23, 0.12, 0.6]);
+                particle(p, 3., [0.008; 2], seed, [0.65, 0.55, 0.37, 0.75]);
             } else {
                 let x = world.river.lo[0]
                     + (rng.next() * (world.river.hi[0] - world.river.lo[0]) + seconds * 0.16)
@@ -679,9 +731,14 @@ impl Renderer {
                 );
             }
         }
+        for i in 0..24 {
+            let h=(seconds*0.08+i as f32*0.17).rem_euclid(world.grate.hi[1]);
+            let p=add(world.grate.centre(),[rng.range(-0.65,0.65)+0.2*h,-h,rng.range(-0.65,0.65)-0.15*h]);
+            particle(p,3.,[0.009;2],i as f32,[0.7,1.,1.5,0.7]);
+        }
         for prop in &world.props {
             match *prop {
-                Prop::Web(p, _) => particle(add(p, [0., -0.65, 0.]), 8., [0.7, 0.65], 0., [0.25, 0.29, 0.26, 0.35]),
+                Prop::Web(p, signs) => particle(add(p, [signs[0]*0.56, -0.65, signs[1]*0.56]), 8., [0.8, 0.7], signs[0].atan2(-signs[1]), [0.3, 0.33, 0.32, 0.4]),
                 Prop::Lantern(p, yaw) => {
                     particle(add(p, turn(yaw, [0.235, 0.2, 0.])), 9., [0.16, 0.11], yaw, [3., 0.65, 0.015, 1.])
                 }
@@ -707,15 +764,32 @@ impl Renderer {
         let vp = multiply(projection, view);
         let reflected = multiply(vp, reflect);
         let reflected_eye = [eye[0], plane * 2. - eye[1], eye[2]];
+        let visible=|bounds:&Box3,matrix:Matrix| {
+            let corners:[[f32;4];8]=std::array::from_fn(|i|{
+                let p=[if i&1==0{bounds.lo[0]}else{bounds.hi[0]},if i&2==0{bounds.lo[1]}else{bounds.hi[1]},if i&4==0{bounds.lo[2]}else{bounds.hi[2]},1.];
+                std::array::from_fn(|r|(0..4).map(|c|matrix[c][r]*p[c]).sum())
+            });
+            !(0..6).any(|plane|corners.iter().all(|p|match plane{0=>p[0]< -p[3],1=>p[0]>p[3],2=>p[1]< -p[3],3=>p[1]>p[3],4=>p[2]<0.,_=>p[2]>p[3]}))
+        };
+        let cave=world.zones[world.cave].space;
+        let formations=Box3{lo:sub(cave.lo,[0.5;3]),hi:add(cave.hi,[0.5;3])};
+        self.cone_visible=visible(&formations,vp)||(!self.rays&&visible(&formations,reflected));
+        let zones:Vec<_>=self.batches.iter().map(|(bounds,_)|visible(bounds,vp)||(!self.rays&&visible(bounds,reflected))).collect();
+        if zones!=self.visible_zones {
+            let indices:Vec<_>=self.batches.iter().zip(&zones).filter(|(_,visible)|**visible).flat_map(|((_,indices),_)|indices.iter().copied()).collect();
+            self.visible_count=indices.len() as u32;
+            self.indices.write_at(0,&indices.iter().flat_map(|i|i.to_le_bytes()).collect::<Vec<_>>()).map_err(named)?;
+            self.visible_zones=zones;
+        }
         if !self.rays {
             self.uniforms(reflected, reflected, reflected_eye, seconds, right, up, world, true, plane)?;
-            self.draw(&self.reflection, 0, self.count, true, false)?;
+            self.draw(&self.reflection, 0, self.visible_count, true, false)?;
             self.draw(&self.reflection, u32::MAX, 24 * 12 * 6, false, false)?;
             self.draw(&self.reflection, 0, 6, false, true)?;
             self.reflection.readback().map_err(named)?;
         }
         self.uniforms(vp, reflected, eye, seconds, right, up, world, false, plane)?;
-        self.draw(&self.target, 0, self.count, true, false)?;
+        self.draw(&self.target, 0, self.visible_count, true, false)?;
         self.draw(&self.target, u32::MAX, 24 * 12 * 6, false, false)?;
         self.target.readback().map_err(named)?;
         self.draw(&self.target, self.count, self.water_indices, false, false)?;

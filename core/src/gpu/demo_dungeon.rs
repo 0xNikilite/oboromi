@@ -163,6 +163,8 @@ pub enum Prop {
     Stalactite(V3, f32, f32),
     Stalagmite(V3, f32, f32),
     Bracket(V3, V3),
+    Barrel(V3),
+    Coin(V3),
 }
 
 pub struct World {
@@ -383,7 +385,7 @@ impl World {
                 for t in [0.5, 0.3, 0.7] {
                     if placed < 3 && door_clear(self, z, wall, t, 1.6) {
                         let (p, normal) = wall_point(&s, wall, t, 0.28, 2.3);
-                        self.lights.push(Light { pos: p, colour: scale(torch, 3.2), flicker: 1.0, flame: 0.42 });
+                        self.lights.push(Light { pos: add(p,[0.,0.12,0.]), colour: scale(torch, 3.2), flicker: 1.0, flame: 0.42 });
                         self.props.push(Prop::Bracket(add(p, [0.0, -0.05, 0.0]), normal));
                         self.sources.push((Sfx::Torch, p, 0.55));
                         placed += 1;
@@ -397,7 +399,7 @@ impl World {
                     self.lights.push(Light { pos: p, colour: scale(torch, 2.4), flicker: 1.0, flame: 0.32 });
                     self.sources.push((Sfx::Torch, p, 0.45));
                 }
-                self.lights.push(Light { pos: [s.centre()[0], WATER + 0.4, self.river.centre()[2]], colour: [0.05, 0.13, 0.2], flicker: 0.0, flame: 0.0 });
+                self.lights.push(Light { pos: [s.centre()[0], s.hi[1]*0.45, self.river.centre()[2]], colour: [2., 3., 4.5], flicker: 0.0, flame: 0.0 });
                 for i in 0..4 {
                     let x = s.lo[0] + (s.hi[0] - s.lo[0]) * (0.12 + 0.25 * i as f32);
                     self.sources.push((Sfx::River, [x, WATER, self.river.centre()[2]], 1.3));
@@ -436,6 +438,12 @@ impl World {
                         self.props.push(Prop::Bone(add(p, [r.range(-0.4, 0.4), 0.0, r.range(-0.4, 0.4)]), r.range(0.0, TAU)));
                     }
                 }
+            }
+            let mut decor=Rng(900+z as u32);
+            self.props.push(Prop::Barrel([s.hi[0]-1.,0.,s.lo[2]+1.4]));
+            self.props.push(Prop::Chain([s.hi[0]-0.65,s.hi[1],s.lo[2]+2.2],1.8));
+            for _ in 0..12 {
+                self.props.push(Prop::Coin([s.hi[0]-decor.range(0.7,2.1),0.035,s.lo[2]+decor.range(1.,2.8)]));
             }
             // Candles in a free corner.
             let corner = [s.lo[0] + 0.7, 0.0, s.hi[2] - 0.7];
@@ -653,6 +661,30 @@ impl World {
                     let uv = |u: f32, v: f32| [(a + (c - a) * u) / 4.0 + start * e[k] / 4.0, (y0 + (y1 - y0) * v) / 4.0];
                     let cells = if cave { [((c - a) * 2.0) as usize, ((y1 - y0) * 2.0) as usize].map(|c| c.max(1)) } else { [1, 1] };
                     b.surface(&f, [c - a, y1 - y0], cells, &uv, if cave { LIMESTONE } else { STONE });
+                    if !cave && y0.abs()<0.01 {
+                        let blocks=((c-a)/0.55).ceil() as usize;
+                        for i in 0..blocks {
+                            let along=a+(i as f32+0.5)*(c-a)/blocks as f32;
+                            let h=0.13+0.06*(along*17.3).sin();
+                            let p=add(add(plane,scale(e,along)),add(scale(n,0.07),[0.,h*0.6,0.]));
+                            b.blob(p,[0.29,h,0.24],along,&|a,t|1.+0.12*(a*4.+t*5.).sin(),[8,5],STONE);
+                        }
+                    }
+                }
+            }
+            if !cave && zone.kind != Kind::Corridor {
+                let mut debris=Rng(290+z as u32);
+                for _ in 0..65 {
+                    let axis=if debris.next()<0.5 {0}else{2};let k=2-axis;
+                    let mut p=[0.;3];p[axis]=if debris.next()<0.5{s.lo[axis]+debris.range(0.15,0.8)}else{s.hi[axis]-debris.range(0.15,0.8)};
+                    p[k]=debris.range(s.lo[k]+0.3,s.hi[k]-0.3);p[1]=0.025;
+                    if debris.next()<0.3 {
+                        let size=debris.range(0.035,0.13);
+                        b.blob(p,[size,size*0.6,size*0.8],debris.next()*TAU,&|a,t|1.+0.16*(a*5.+t*3.).sin(),[6,4],LIMESTONE);
+                    }else{
+                        let d=turn(debris.next()*TAU,[debris.range(0.06,0.19),0.,0.]);
+                        b.tube(sub(p,d),add(p,d),&|_|0.005,3,[0.75,0.53,0.24]);
+                    }
                 }
             }
             let [w, d] = [s.hi[0] - s.lo[0], s.hi[2] - s.lo[2]];
@@ -821,6 +853,24 @@ impl World {
                     b.tube(add(p, [0.0, -0.42, 0.0]), add(p, [0.0, -0.02, 0.0]), &|t| 0.03 + 0.012 * t, 7, WOOD);
                     b.blob(p, [0.06, 0.035, 0.06], 0.0, &|_, _| 1.0, [8, 4], IRON);
                 }
+                Prop::Barrel(p) => {
+                    for i in 0..12 {
+                        let a=i as f32/12.*TAU;
+                        let h=if i<3 {0.3+i as f32*0.08}else{0.78+0.06*(a*7.).sin()};
+                        let point=|u:f32,v:f32| {let angle=a+(u-0.5)*0.45;let radius=0.32+0.055*(v*PI).sin();add(p,[radius*angle.cos(),v*h,radius*angle.sin()])};
+                        b.prop(&point,[2,4],p,0.5,WOOD);
+                        for y in [0.12,0.58] {
+                            let point=|u:f32,v:f32| {let angle=a+u*TAU/12.;add(p,[0.37*angle.cos(),y+v*0.055,0.37*angle.sin()])};
+                            b.prop(&point,[2,1],p,0.5,IRON);
+                        }
+                    }
+                    b.tube(add(p,[-0.5,0.04,0.2]),add(p,[0.2,0.07,0.6]),&|_|0.035,4,WOOD);
+                }
+                Prop::Coin(p) => {
+                    let first=b.vertices.len();
+                    b.blob(p,[0.035,0.007,0.035],p[0],&|_,_|1.,[8,4],[1.1,0.65,0.16]);
+                    for v in &mut b.vertices[first..]{v.material=5.;}
+                }
                 Prop::Web(..) => {}
             }
         }
@@ -912,7 +962,7 @@ impl Dungeon {
         }
         match VIEW.load(std::sync::atomic::Ordering::Relaxed) {
             1 => { let p = self.world.sources.iter().find(|s| s.0 == Sfx::Fire).unwrap().1; self.eye=add(p,[-3.2,1.1,2.8]); self.yaw=0.85; self.pitch=-0.18; }
-            2 => { self.eye=[self.world.bridge.centre()[0]-3.4,EYE,self.world.bridge.lo[2]-1.2]; self.yaw=2.35; self.pitch=-0.18; }
+            2 => { self.eye=[self.world.river.lo[0]+2.,EYE,self.world.river.lo[2]-0.9]; let look=sub([self.world.bridge.centre()[0],EYE,self.world.river.centre()[2]],self.eye); self.yaw=look[0].atan2(-look[2]); self.pitch=0.06; }
             3 => { let p=self.world.grate.centre();self.eye=add(p,[-2.8,EYE-p[1],-3.]);self.yaw=2.4;self.pitch=0.12; }
             _ => {}
         }

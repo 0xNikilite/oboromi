@@ -10,6 +10,7 @@ struct Light { vec4 position; vec4 colour; };
 layout(binding=3,std430) readonly buffer Lights { Light lights[]; };
 layout(binding=4,std430) readonly buffer Fog { vec4 fog_pixels[]; };
 vec3 sampleAt(ivec2 p){p=clamp(p,ivec2(0),ivec2(settings.xy)-1);uvec2 h=hdr[p.y*int(settings.x)+p.x];return vec3(unpackHalf2x16(h.x),unpackHalf2x16(h.y).x);}
+vec4 fogAt(ivec2 p){p=clamp(p,ivec2(0),ivec2(settings.xy)/4-1);return fog_pixels[p.y*int(settings.x/4.)+p.x];}
 void main(){
     ivec2 p=ivec2(gl_GlobalInvocationID.xy); if(any(greaterThanEqual(p,ivec2(settings.xy))))return;
     vec2 distortion=vec2(0);
@@ -27,7 +28,8 @@ void main(){
         float w=exp(-float(i*i+j*j)*.35);bloom+=max(sampleAt(p+ivec2(i,j)*6)-1.,0.)*w;weight+=w;
     }
     if((uint(moon.w)&4u)==0u)c+=bloom/weight*.22;
-    vec4 fog=fog_pixels[(p.y/4)*int(settings.x/4.)+p.x/4];
+    vec2 fp=(vec2(p)+.5)/4.-.5;ivec2 fi=ivec2(floor(fp));vec2 f=fract(fp);
+    vec4 fog=mix(mix(fogAt(fi),fogAt(fi+ivec2(1,0)),f.x),mix(fogAt(fi+ivec2(0,1)),fogAt(fi+1),f.x),f.y);
     c=(c*fog.a+fog.rgb)*1.15;
     c=clamp(c*(2.51*c+.03)/(c*(2.43*c+.59)+.14),0.,1.);
     vec2 uv=(vec2(p)+.5)/settings.xy; c*=1.-.18*pow(length(uv-.5),2.);

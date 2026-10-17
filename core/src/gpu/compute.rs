@@ -544,11 +544,11 @@ impl VkState {
     pub fn dispatch_profiled(&self, pipeline: &ComputePipeline, groups: [u32; 3], timestamp: Option<vk::QueryPool>) -> Result<(), VkError> {
         let compute = vk::PipelineBindPoint::COMPUTE;
         let src = vk::PipelineStageFlags::COMPUTE_SHADER;
-        let dst = vk::PipelineStageFlags::HOST;
-        // Shader writes are not visible to host reads after the fence wait without this barrier.
+        let dst = vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::ALL_GRAPHICS;
+        // Make writes visible to readback and to later compute or graphics passes.
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags::HOST_READ);
+            .dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::SHADER_READ);
         let d = &self.device;
         self.submit_and_wait(|cmd| unsafe {
             d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);

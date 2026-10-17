@@ -702,22 +702,6 @@ impl Renderer {
         }
         debug_assert_eq!(extras.len(), self.extra_particles * 12);
         self.particles.write_at((self.emitter_count * per_emitter * 48) as u64, &floats(&extras)).map_err(named)?;
-        // Particle writes feed a vertex storage buffer in the next submission.
-        self.state
-            .submit_and_wait(|cmd| unsafe {
-                self.state.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    vk::PipelineStageFlags::VERTEX_SHADER,
-                    Default::default(),
-                    &[vk::MemoryBarrier::default()
-                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                        .dst_access_mask(vk::AccessFlags::SHADER_READ)],
-                    &[],
-                    &[],
-                )
-            })
-            .map_err(named)?;
         let plane = if world.zones[world.cave].space.contains(eye) { WATER } else { 0. };
         let reflect = [[1., 0., 0., 0.], [0., -1., 0., 0.], [0., 0., 1., 0.], [0., plane * 2., 0., 1.]];
         let vp = multiply(projection, view);
@@ -743,21 +727,6 @@ impl Renderer {
             )
             .map_err(named)?;
         self.report("fog")?;
-        self.state
-            .submit_and_wait(|cmd| unsafe {
-                self.state.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    Default::default(),
-                    &[vk::MemoryBarrier::default()
-                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                        .dst_access_mask(vk::AccessFlags::SHADER_READ)],
-                    &[],
-                    &[],
-                )
-            })
-            .map_err(named)?;
         self.state
             .dispatch_profiled(
                 &self.post,

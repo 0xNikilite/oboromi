@@ -111,6 +111,7 @@ fn exclusive_store_fails_after_a_switch_even_when_memory_returns_to_its_old_valu
     assert!(kernel.run(cpu));
     assert_eq!(cpu.read_u32(DATA), 5);
     assert_eq!(cpu.read_u32(DATA + 4), 1);
+    assert_eq!(cpu.read_u32(DATA + 12), 1);
 }
 
 #[test]

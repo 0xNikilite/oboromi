@@ -63,6 +63,8 @@ fail:
     ldxr w20, [x19]
     mov x0, #0
     svc #0x0b
+    ldr w9, [x19, #8]
+    str w9, [x19, #12]
     stxr w21, w20, [x19]
     str w21, [x19, #4]
     svc #0x0a
@@ -72,6 +74,8 @@ fail:
     str w9, [x19]
     mov w9, #5
     str w9, [x19]
+    mov w9, #1
+    str w9, [x19, #8]
     svc #0x0a
 
 .org 0x600

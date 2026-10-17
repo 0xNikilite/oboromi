@@ -1,5 +1,8 @@
-//! Readers for the RTX 3090 fixture files.
-use crate::tests::gpu::harness::PRED;
+//! Readers for the RTX 3090 fixture files, and the tensor replay that decides whether a device's cooperative matrices
+//! reproduce the silicon.
+use crate::gpu::VkState;
+use crate::gpu::sm86::{cooperative_tile, f16_hmma_shape};
+use crate::tests::gpu::harness::{run_on, PRED};
 use crate::tests::gpu_test::inst;
 
 pub fn string(object: &str, key: &str) -> String {
@@ -157,3 +160,25 @@ pub fn tensor_mismatch(fixture: &TensorFixture, lanes: &[Vec<u32>]) -> Option<(u
     })
 }
 
+/// Runs `fixture` on `state`, through cooperative matrices when `cooperative` is true and the device has a fitting tile.
+pub fn replay_tensor(state: &VkState, fixture: &TensorFixture, cooperative: Option<bool>) -> Option<Vec<Vec<u32>>> {
+    let program = tensor_program(fixture);
+    let body = |decoder: &mut crate::gpu::sm86::Decoder| {
+        decoder.force_cooperative_hmma = cooperative;
+        decoder.translate_program(&program);
+    };
+    run_on(state, body, &tensor_seeds(fixture), &[], &[], &Default::default()).map(|(lanes, _)| lanes)
+}
+
+/// The f16 HMMA shapes for which the device reproduces every observed fixture bit for bit through cooperative matrices.
+pub fn exact_cooperative_hmma(state: &VkState) -> Vec<(u32, bool)> {
+    let fixtures: Vec<_> = tensor_fixtures().into_iter().filter(|fixture| fixture.observed)
+        .filter_map(|fixture| Some((f16_hmma_shape(*tensor_program(&fixture).last()?)?, fixture))).collect();
+    let mut shapes: Vec<_> = fixtures.iter().map(|&(shape, _)| shape).collect();
+    shapes.sort_unstable();
+    shapes.dedup();
+    shapes.retain(|&shape| cooperative_tile(state, shape).is_some() && fixtures.iter().filter(|&&(of, _)| of == shape).all(|(_, fixture)| {
+        replay_tensor(state, fixture, Some(true)).is_some_and(|lanes| tensor_mismatch(fixture, &lanes).is_none())
+    }));
+    shapes
+}

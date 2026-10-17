@@ -19,6 +19,7 @@ mod operands;
 mod shared;
 mod special;
 mod tensor;
+pub use tensor::{cooperative_tile, f16_hmma_shape};
 mod texture;
 mod uniform;
 mod warp;
@@ -81,6 +82,7 @@ pub enum ResourceKind {
     Shared,
     Shared64,
     Warp,
+    Mma,
     Schedule,
     Global64,
     Texture2D { cbuf_bank: u32, byte_offset: u32 },
@@ -131,6 +133,9 @@ pub struct Decoder<'a> {
     type_f16: u32,
     type_f16x2: u32,
     mma_vars: [u32; 9],
+    device: Option<&'a VkState>,
+    pub force_cooperative_hmma: Option<bool>,
+    cooperative_types: HashMap<[u32; 4], u32>,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
@@ -205,6 +210,7 @@ pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl Fn
     emitter.emit_capability(spirv::capability::SHADER);
     emitter.emit_memory_model(0, 1);
     let mut decoder = Decoder::new(&mut emitter);
+    decoder.device = device;
     decoder.init();
     let void_ty = decoder.get_type_void();
     let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
@@ -256,6 +262,9 @@ impl<'a> Decoder<'a> {
             type_f16: 0,
             type_f16x2: 0,
             mma_vars: [0; 9],
+            device: None,
+            force_cooperative_hmma: None,
+            cooperative_types: HashMap::new(),
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],

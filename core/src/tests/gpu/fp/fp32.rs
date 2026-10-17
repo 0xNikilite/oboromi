@@ -84,7 +84,9 @@ mod tests {
         let Some((regs, _)) = run_regs(&program, &bits(&x), &[], &[]) else {
             return;
         };
-        assert_eq!(regs[10..14], [0x3fc0_0001, 0xbfc0_0001, 0x7f7f_ffff, 2.25f32.to_bits()]);
+        // llvmpipe lowers Fma to a multiply and an add, so it keeps the nearest product.
+        let rounded_down = if crate::gpu::device().is_ok_and(|d| d.is_llvmpipe()) { 0 } else { 1 };
+        assert_eq!(regs[10..14], [0x3fc0_0002 - rounded_down, 0xbfc0_0002 - rounded_down, 0x7f80_0000 - rounded_down, 2.25f32.to_bits()]);
     }
 
     #[test]

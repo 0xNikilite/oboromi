@@ -42,29 +42,6 @@ mod tests {
             .collect()
     }
 
-    fn strings(object: &str, key: &str) -> Vec<String> {
-        let value = object.split_once(&format!("\"{key}\":")).unwrap().1;
-        let value = value.split_once('[').unwrap().1.split_once(']').unwrap().0;
-        value
-            .split(',')
-            .filter_map(|value| value.trim().strip_prefix('"')?.strip_suffix('"'))
-            .map(str::to_owned)
-            .collect()
-    }
-
-    fn number(object: &str, key: &str) -> u32 {
-        object
-            .split_once(&format!("\"{key}\":"))
-            .unwrap()
-            .1
-            .trim_start()
-            .split(|c: char| !c.is_ascii_digit())
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap()
-    }
-
     fn reg(object: &str, name: &str) -> usize {
         string(object, name)[1..].parse().unwrap()
     }
@@ -222,7 +199,15 @@ mod tests {
                     text: string(object, "nvdisasm_text"),
                     word: word(object, "word_hex"),
                     observed: observed(object),
-                    lanes_active: number(object, "lanes_active"),
+                    lanes_active: object
+                        .split_once("\"lanes_active\":")
+                        .unwrap()
+                        .1
+                        .split(|c: char| !c.is_ascii_digit())
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                     inputs: numbers(object, "inputs"),
                     outputs: numbers(object, "outputs"),
                     input_regs: input_regs.clone(),
@@ -243,16 +228,7 @@ mod tests {
             .collect()
     }
 
-    const NOT_REPLAYABLE: &[&str] = &[
-        "s3#067/fp16/hadd2-r15-r4-f32-r0",
-        "s3#097/memory/stl-r0-0x8-r1",
-        "s3#098/memory/ldl-r4-r0-0x8",
-        "s3#099/memory/stl-u8-r0-r1",
-        "s3#100/memory/ldl-s8-r5-r0",
-        "s3#101/memory/stl-u16-r0-0x4-r1",
-        "s3#102/memory/ldl-s16-r6-r0-0x4",
-        "warp3#053/sts/bank-conflict",
-    ];
+    const NOT_REPLAYABLE: &[&str] = &["warp3#053/sts/bank-conflict"];
     const LOCAL_NOT_REPLAYABLE: &[&str] = &[
         "s4local#000/local/stl-32-0x0001c000001008000000080100007387-stl-r0",
         "s4local#001/local/stl-32-0x0001c000001008000000080100007387-stl-r0",
@@ -273,15 +249,16 @@ mod tests {
         "s4predicate#002/dsetp/lt-distinct-pairs",
         "s4predicate#003/dsetp/lt-distinct-pairs",
     ];
-    // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
     const KNOWN_FAILURES: &[&str] = &[
+        // fp32: MUFU.TANH is a hardware approximation that no exact tanh reproduces.
         "s3#026/fp32/mufu-tanh-r1-r3",
+        // suatom: the order in which lanes hitting the same texel apply their atomics is up to the device.
         "s5suatom#000/suatom/d-2d-add",
     ];
     const LLVMPIPE_FAILURES: &[&str] = &[
-        // llvmpipe truncates an f64 RoundEven.
+        // convert: llvmpipe truncates an f64 RoundEven.
         "s3#030/convert/f2i-s64-f64-r10-r12",
-        // lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
+        // tex: lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
         "tex#003/tex/lod-lz",
         "tex#005/tex/lod-ll",
         "tex#007/tex/mask-r",
@@ -297,7 +274,7 @@ mod tests {
         "s5tex#007/tex/mask-r",
         "s5tex#009/tex/mask-rg",
         "s5tex#010/tex/mask-a",
-        // lavapipe scales the lod of unnormalized coordinates by the texture size once more.
+        // tmml: lavapipe scales the lod of unnormalized coordinates by the texture size once more.
         "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
     ];
 
@@ -536,9 +513,15 @@ mod tests {
                     ),
                     case,
                     modifier,
-                    words: strings(object, "words")
-                        .into_iter()
-                        .map(|word| u128::from_str_radix(&word, 16).unwrap())
+                    words: object
+                        .split_once("\"words\":[")
+                        .unwrap()
+                        .1
+                        .split_once(']')
+                        .unwrap()
+                        .0
+                        .split(',')
+                        .map(|word| u128::from_str_radix(word.trim_matches('"'), 16).unwrap())
                         .collect(),
                     observed: observed(object),
                     before: numbers(object, "fragments_before"),

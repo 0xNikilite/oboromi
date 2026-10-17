@@ -9,7 +9,6 @@ pub mod fp16;
 mod fp32;
 mod fp64;
 mod int_alu;
-mod logic;
 mod memory;
 mod program;
 mod shared;

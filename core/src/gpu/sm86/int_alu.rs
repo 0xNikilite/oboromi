@@ -36,7 +36,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn int_src(&mut self, val: u32, neg: bool) -> u32 {
-        if neg { self.neg(val) } else { val }
+        if neg { self.ir.emit_isub(self.type_u32[1], self.const_u32_0, val) } else { val }
     }
 
     pub fn bitextract(&mut self, inst: u128) {

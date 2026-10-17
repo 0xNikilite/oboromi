@@ -429,10 +429,6 @@ impl<'a> Decoder<'a> {
         let bits = self.bitcast_u32(val);
         self.ir.emit_select(self.type_u32[1], nan, canonical, bits)
     }
-
-    pub(super) fn neg(&mut self, x: u32) -> u32 {
-        self.ir.emit_isub(self.type_u32[1], self.const_u32_0, x)
-    }
 }
 
 #[cfg(test)]

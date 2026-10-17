@@ -137,6 +137,7 @@ pub mod inst {
     const LZ: u128 = 1 << 87;
     pub const TLD_LZ_2D: u128 = 0xb66 | TEX_2D | LZ;
     pub const TEX_LZ_2D: u128 = 0xb60 | TEX_2D | LZ;
+    pub const TEX_LL_2D: u128 = 0xb60 | TEX_2D | 3 << 87;
     pub const TXQ_DIMENSION: u128 = 0xb6f;
     const SU_2D_NEAR: u128 = 3 << 61 | 1 << 59;
     const SU_RGBA: u128 = 0xf << 72;
@@ -970,6 +971,7 @@ fn fixtures_match_nvdisasm() {
         (inst::texture(inst::TLD_LZ_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD.LZ R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TLD_LZ_2D, 8, 0xff, 2, 3, 0x10, 0xa), "TLD.LZ RZ, R8, R2, 0x3, 0x4, 2D, 0xa ;"),
         (inst::texture(inst::TEX_LZ_2D, 8, 10, 2, 3, 0x10, 0xf), "TEX.LZ R10, R8, R2, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LL_2D, 4, 6, 2, 3, 0x10, 0xf), 8), "TEX.LL R6, R4, R2, R8, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TXQ_DIMENSION, 4, 6, 0xff, 3, 0x10, 0xb), "TXQ R6, R4, RZ, TEX_HEADER_DIMENSION, 0x3, 0x4, 0xb ;"),
         (inst::surface(inst::SUST_P_RGBA, 0xff, 2, 8, 3, 0x10), "SUST.P.2D [R2], R8, 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_D_32, 4, 2, 0xff, 3, 0x10), "SULD.D.2D R4, [R2], 0x3, 0x4 ;"),

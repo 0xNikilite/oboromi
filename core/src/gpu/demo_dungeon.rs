@@ -1,6 +1,6 @@
 //! The dungeon demo: a generated layout of stone rooms, corridors and a river cave, walked through in first person and
 //! drawn through the pbr scene path in four draws: the stone and props with their textures, a lightmap pass that
-//! multiplies in the torchlight, flicker and distance darkness the host recomposes every frame, the river surface and
+//! multiplies in GPU-composed torchlight, flicker and distance darkness, the river surface and
 //! the additive flames, embers and glows. The sound runs through the emulated audio renderer (demo_dungeon_sound.rs).
 use super::demo::{Matrix, Scene, multiply};
 use super::texture::{level_gob_height_log2, pitch_to_block_linear};
@@ -1102,7 +1102,7 @@ pub struct Dungeon {
     river: River,
     embers: Embers,
     fire: V3,
-    light: Vec<(usize, V3, V3)>,
+    light: Lightmap,
 }
 
 impl Dungeon {
@@ -1145,6 +1145,7 @@ impl Dungeon {
             }
             light.push((texel.at, texel.pos, std::array::from_fn(|i| colour[i] * texel.tint[i])));
         }
+        let light = Lightmap::new(state, &light)?;
         let mut vertices = packed(&mesh.vertices, false);
         vertices.extend(packed(&mesh.vertices, true));
         let count = mesh.indices.len();
@@ -1288,15 +1289,8 @@ impl Dungeon {
         quad(add(moon, [0.0, -2.2, 0.0]), [right, UP], [0.9, 2.2], atlas::BEAM);
         billboards.resize(SPRITES * 4, Vertex::default());
         self.scene.gpu.write(VERTICES_VA + self.sprite_vertex as u64 * 48, &packed(&billboards, false)).map_err(|e| format!("{e:?}"))?;
-        let mut pixels = vec![[0, 0, 0, 255]; LIGHTMAP[0] * LIGHTMAP[1]];
         let flicker = 0.88 + 0.07 * (seconds * 11.7).sin() + 0.05 * (seconds * 23.1).sin();
-        for &(at, pos, colour) in &self.light {
-            let distance = length(sub(self.eye, pos));
-            let fog = (-distance * 0.045).exp();
-            let c = colour.map(|c| c * 0.12 * flicker * fog);
-            pixels[at] = [srgb(c[0]), srgb(c[1]), srgb(c[2]), 255];
-        }
-        self.scene.gpu.write(self.scene.textures[3], &mips(pixels, LIGHTMAP, 1, 1)).map_err(|e| format!("{e:?}"))?;
+        self.scene.gpu.write(self.scene.textures[3], self.light.step(self.eye, flicker)?).map_err(|e| format!("{e:?}"))?;
         let back = scale(forward, -1.0);
         let axes = [right, up, back];
         let view: Matrix = std::array::from_fn(|column| std::array::from_fn(|row| if row == 3 { if column == 3 { 1.0 } else { 0.0 } } else if column == 3 { -dot(axes[row], self.eye) } else { axes[row][column] }));
@@ -1437,5 +1431,61 @@ impl Embers {
         let mut particles = vec![0; 256 * 48];
         self.gpu.read(0x1001_0000, &mut particles).map_err(named)?;
         Ok(particles.chunks_exact(48).map(|p| std::array::from_fn(|i| f32::from_le_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()))).collect())
+    }
+}
+
+struct Lightmap {
+    state: &'static VkState,
+    pipeline: super::compute::ComputePipeline<'static>,
+    texels: super::compute::HostBuffer<'static>,
+    pixels: super::compute::HostBuffer<'static>,
+    uniforms: super::compute::HostBuffer<'static>,
+}
+
+impl Lightmap {
+    fn new(state: &'static VkState, light: &[(usize, V3, V3)]) -> Result<Self, String> {
+        use super::compute::{ComputePipeline, HostBuffer};
+        use ash::vk::DescriptorType as D;
+        let named = |e| format!("{e:?}");
+        let mut texels = HostBuffer::new(state, light.len() as u64 * 32).map_err(named)?;
+        let data: Vec<u8> = light.iter().flat_map(|&(at, pos, colour)| floats(&[pos[0], pos[1], pos[2], f32::from_bits(at as u32), colour[0], colour[1], colour[2], 0.0])).collect();
+        texels.write(&data).map_err(named)?;
+        let mut pixels = HostBuffer::new(state, (LIGHTMAP[0] * LIGHTMAP[1] * 4) as u64).map_err(named)?;
+        pixels.write(&[0, 0, 0, 255].repeat(LIGHTMAP[0] * LIGHTMAP[1])).map_err(named)?;
+        let uniforms = HostBuffer::new(state, 16).map_err(named)?;
+        let code: Vec<u32> = include_bytes!("../../../demos/shaders/dungeon_light.spv").chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect();
+        let mut pipeline = ComputePipeline::new(state, &code, &[(0, D::STORAGE_BUFFER), (1, D::STORAGE_BUFFER), (2, D::UNIFORM_BUFFER)]).map_err(named)?;
+        pipeline.descriptors.bind(&[(0, &texels), (1, &pixels), (2, &uniforms)]);
+        Ok(Self { state, pipeline, texels, pixels, uniforms })
+    }
+
+    fn step(&mut self, eye: V3, flicker: f32) -> Result<&[u8], String> {
+        let named = |e| format!("{e:?}");
+        self.uniforms.write(&floats(&[eye[0], eye[1], eye[2], flicker])).map_err(named)?;
+        self.state.dispatch(&self.pipeline, [(self.texels.size / 32).div_ceil(64) as u32, 1, 1]).map_err(named)?;
+        self.pixels.view(0..self.pixels.size).map_err(named)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lightmap_compute_preserves_fog_flicker_and_block_linear_texels() {
+        let Some(state) = crate::tests::gpu::harness::shared_device() else { return };
+        let light: Vec<_> = [0, 3, 4, 7, 8, 15, 16, 1023, 1024, 8191, 8192, 16383, 16384, LIGHTMAP[0] * LIGHTMAP[1] - 1]
+            .into_iter().enumerate().map(|(i, at)| (at, [i as f32, 2.0, -3.0], [0.004, i as f32 * 0.1, 20.0])).collect();
+        let mut map = Lightmap::new(state, &light).unwrap();
+        for (eye, flicker) in [([0.0; 3], 0.76), ([5.0, 1.0, -2.0], 1.0), ([100.0; 3], 0.9)] {
+            let mut expected = vec![[0, 0, 0, 255]; LIGHTMAP[0] * LIGHTMAP[1]];
+            for &(at, pos, colour) in &light {
+                let fog = (-length(sub(eye, pos)) * 0.045).exp();
+                let c = colour.map(|c| srgb(c * 0.12 * flicker * fog));
+                expected[at] = [c[0], c[1], c[2], 255];
+            }
+            let expected = pitch_to_block_linear(expected.as_flattened(), LIGHTMAP[0] as u32, LIGHTMAP[1] as u32, 4, 1);
+            assert!(map.step(eye, flicker).unwrap().iter().zip(expected).all(|(&actual, expected)| actual.abs_diff(expected) <= 1));
+        }
     }
 }

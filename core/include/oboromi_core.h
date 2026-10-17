@@ -203,6 +203,14 @@ bool oboromi_render_demo_frame(float seconds);
 /// vulkan is missing or the draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_triangle_demo(float seconds);
 
+/// draws the pbr BoomBox demo at `seconds` and presents it, false if vulkan is
+/// missing or the draw fails. blocks, so call it from a worker thread.
+bool oboromi_render_boombox_demo(float seconds);
+
+/// draws the pbr FlightHelmet demo like the BoomBox one, false too when
+/// demos/assets/fetch.sh has not fetched the asset.
+bool oboromi_render_helmet_demo(float seconds);
+
 /// draws the post-effect demo at `seconds` and presents it, false if vulkan
 /// is missing or a draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_post_frame(float seconds);

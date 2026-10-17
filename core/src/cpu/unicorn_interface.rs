@@ -426,10 +426,12 @@ impl UnicornCPU {
     }
 
     pub fn read_mem(&self, vaddr: u64, buf: &mut [u8]) -> Result<(), uc_error> {
+        if vaddr.checked_add(buf.len() as u64).is_none_or(|end| end > self.ram.size() as u64) { return Err(uc_error::READ_UNMAPPED); }
         self.lock().0.mem_read(vaddr, buf)
     }
 
     pub fn write_mem(&self, vaddr: u64, bytes: &[u8]) -> Result<(), uc_error> {
+        if vaddr.checked_add(bytes.len() as u64).is_none_or(|end| end > self.ram.size() as u64) { return Err(uc_error::WRITE_UNMAPPED); }
         let (mut emu, _turn) = self.lock();
         emu.mem_write(vaddr, bytes)?;
         self.ram.mark_cpu_written(vaddr, bytes.len() as u64);
@@ -438,17 +440,13 @@ impl UnicornCPU {
 
     /// Write a 32-bit value to emulated memory
     pub fn write_u32(&self, vaddr: u64, value: u32) {
-        let (mut emu, _turn) = self.lock();
-        let bytes = value.to_le_bytes();
-        let _ = emu.mem_write(vaddr, &bytes);
-        self.ram.mark_cpu_written(vaddr, 4);
+        let _ = self.write_mem(vaddr, &value.to_le_bytes());
     }
 
     /// Read a 32-bit value from emulated memory
     pub fn read_u32(&self, vaddr: u64) -> u32 {
-        let (emu, _turn) = self.lock();
         let mut bytes = [0u8; 4];
-        if emu.mem_read(vaddr, &mut bytes).is_ok() {
+        if self.read_mem(vaddr, &mut bytes).is_ok() {
             u32::from_le_bytes(bytes)
         } else {
             0
@@ -457,17 +455,13 @@ impl UnicornCPU {
 
     /// Write a 64-bit value to emulated memory
     pub fn write_u64(&self, vaddr: u64, value: u64) {
-        let (mut emu, _turn) = self.lock();
-        let bytes = value.to_le_bytes();
-        let _ = emu.mem_write(vaddr, &bytes);
-        self.ram.mark_cpu_written(vaddr, 8);
+        let _ = self.write_mem(vaddr, &value.to_le_bytes());
     }
 
     /// Read a 64-bit value from emulated memory
     pub fn read_u64(&self, vaddr: u64) -> u64 {
-        let (emu, _turn) = self.lock();
         let mut bytes = [0u8; 8];
-        if emu.mem_read(vaddr, &mut bytes).is_ok() {
+        if self.read_mem(vaddr, &mut bytes).is_ok() {
             u64::from_le_bytes(bytes)
         } else {
             0

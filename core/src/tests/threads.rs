@@ -106,6 +106,8 @@ fn mutex_condvar_ping_pong_is_exact_after_ten_thousand_rounds() {
 fn exclusive_store_fails_after_a_switch_even_when_memory_returns_to_its_old_value() {
     let (cpus, mut kernel) = setup(0x400);
     let cpu = cpus.get_core(0).unwrap();
+    let rejected = kernel.svc(cpu, 0x1b, [0xffff_0000_0000, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+    assert_eq!(rejected[0], u64::from(Error::InvalidCurrentMemory.code()));
     let other = thread(&mut kernel, cpu, 0x480, 0, 44);
     call(&mut kernel, cpu, 0x09, &[other]);
     assert!(kernel.run(cpu));

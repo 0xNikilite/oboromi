@@ -563,7 +563,9 @@ impl Kernel {
                 let mut objects = Vec::with_capacity(x[2] as usize);
                 for index in 0..x[2] {
                     let addr = x[1].checked_add(index * 4).ok_or(Error::InvalidPointer)?;
-                    objects.push(self.sync_object(word(cpu, addr)?)?);
+                    let mut bytes = [0; 4];
+                    cpu.read_mem(addr, &mut bytes).map_err(|_| Error::InvalidPointer)?;
+                    objects.push(self.sync_object(u32::from_le_bytes(bytes))?);
                 }
                 if let Some(index) = self.scheduler.signaled(&objects) {
                     x[1] = index as u64;

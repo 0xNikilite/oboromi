@@ -406,12 +406,20 @@ impl<'a> Gpu<'a> {
         self.store(target.address, &bytes, Writer::Gpu).map_err(named)
     }
 
-    /// Presents a pitch-linear RGBA8 surface from guest memory.
-    pub fn present(&mut self, va: u64, width: u32, height: u32) -> Result<(), MemoryError> {
-        self.pixels.resize(width as usize * height as usize * 4, 0);
-        gather(&self.space, &self.ram, va, &mut self.pixels)?;
-        crate::display::present(width, height, &self.pixels);
-        Ok(())
+    /// Presents a pitch-linear RGBA8 surface from guest memory, from the target that drew it unless the pages changed since.
+    pub fn present(&mut self, va: u64, width: u32, height: u32) -> Result<(), String> {
+        let len = u64::from(width * height * 4);
+        let ranges: Vec<_> = self.space.resolve(va, len).map_err(named)?.collect();
+        let current = generation(&self.memory, &ranges);
+        let drawn = self.targets.iter().find(|(key, target)| key.ranges == ranges && key.extent == (width, height) && target.generation == current);
+        match drawn {
+            Some((_, target)) => crate::display::present_image(target.render_target.color_image(), width, height),
+            None => {
+                let ranges = self.mirror(va, len)?;
+                crate::display::present_buffer(&self.mirrors[&ranges].1.buffer, width, height)
+            }
+        }
+        .map_err(named)
     }
 
     // Nothing records a program's length, but compiled programs end with a branch to itself after their last EXIT.

@@ -171,5 +171,5 @@ pub fn render_triangle_demo(seconds: f32) -> Result<(), String> {
     let (sin, cos) = (seconds / SECONDS_PER_TURN * std::f32::consts::TAU).sin_cos();
     let aspect = HEIGHT as f32 / WIDTH as f32;
     triangle_frame(gpu, WIDTH, HEIGHT, [cos * aspect, -sin * aspect, sin, cos], 0)?;
-    gpu.present(TARGET, WIDTH, HEIGHT).map_err(|e| format!("{e:?}"))
+    gpu.present(TARGET, WIDTH, HEIGHT)
 }

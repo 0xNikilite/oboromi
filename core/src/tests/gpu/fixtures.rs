@@ -275,8 +275,6 @@ mod tests {
         "s3#026/fp32/mufu-tanh-r1-r3",
         // suatom: the order in which lanes hitting the same texel apply their atomics is up to the device.
         "s5suatom#000/suatom/d-2d-add",
-        "s6convert#002/convert-f16/f2f-f16-f64-rz",
-        "s6convert#003/convert-f16/f2f-f64-f16",
         "s6atomic#000/atom/add-f16x2-rn",
         "s6atomic#001/atom/add-f32-ftz-rn",
         "s6atomic#002/atom/cast-32",

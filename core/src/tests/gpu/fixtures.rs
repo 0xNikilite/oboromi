@@ -3,8 +3,10 @@ mod tests {
     use crate::gpu::texture::TexturePool;
     use crate::tests::gpu::silicon::{numbers, observed, string, tensor_fixtures, tensor_mismatch, tensor_program, tensor_seeds};
     use crate::tests::gpu::harness::{
-        run_lanes, run_regs, run_textured, translate_module, Textures, GLOBAL_BASE, LIVE, PRED,
+        both_ways, run_kernel, run_lanes, run_regs, run_textured, translate_module, Textures, GLOBAL_BASE, LIVE, PRED,
     };
+    use crate::gpu::cubin::{Arg, Kernel};
+    use crate::gpu::sm86::plan;
     use crate::tests::gpu_test::inst;
     use std::collections::BTreeMap;
     use std::panic::catch_unwind;
@@ -790,5 +792,63 @@ mod tests {
             );
         }
         assert!(unexpected.is_empty(), "unexpected failures: {unexpected:?}");
+    }
+
+    // nvcc -arch=sm_86 bench kernels, each launched with small arguments.
+    fn bench_launches() -> Vec<(&'static str, [u32; 3], [u32; 3], Vec<Vec<u8>>, Vec<u8>)> {
+        let mandelbrot = [80u32, 60, 64].map(u32::to_le_bytes).into_iter().chain([-2.5f32, -1.5, 0.05].map(f32::to_le_bytes)).flatten().collect();
+        let fma = [4u32.to_le_bytes(), 0.999f32.to_le_bytes(), 0.001f32.to_le_bytes()].concat();
+        vec![
+            ("mandelbrot", [5, 4, 1], [16, 16, 1], vec![vec![0; 80 * 60 * 4]], mandelbrot),
+            ("fma_chain", [2, 1, 1], [256, 1, 1], vec![vec![0; 2 * 256 * 4]], fma),
+            ("stream_add", [1, 1, 1], [256, 1, 1], vec![(0..4096u32).flat_map(|i| (i as f32).to_le_bytes()).collect(), vec![0; 4096 * 4]], 1f32.to_le_bytes().to_vec()),
+            ("empty", [1, 1, 1], [256, 1, 1], vec![vec![0; 16]], Vec::new()),
+        ]
+    }
+
+    #[test]
+    fn structured_translation_matches_the_dispatcher() {
+        const BENCH: &[u8] = include_bytes!("../../../tests/fixtures/bench/bench.cubin");
+        let mut structured = 0;
+        let mut rejected: BTreeMap<String, usize> = BTreeMap::new();
+        let mut eligible = |words: &[u128]| match plan(words) {
+            Ok(_) => {
+                structured += 1;
+                true
+            }
+            Err(reason) => {
+                *rejected.entry(reason.split(" at pc").next().unwrap().to_string()).or_default() += 1;
+                false
+            }
+        };
+        let jsonl = [include_str!("../../../tests/fixtures/sm86-thread.jsonl"), include_str!("../../../tests/fixtures/sm86-predicate.jsonl"), include_str!("../../../tests/fixtures/sm86-observer.jsonl")];
+        for fixture in jsonl.into_iter().flat_map(fixtures) {
+            if !eligible(&fixture.words) || catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
+                continue;
+            }
+            let mut seed = vec![0; LIVE];
+            for (&reg, &value) in fixture.input_regs.iter().zip(&fixture.inputs) {
+                seed[reg] = value;
+            }
+            let [dispatched, planned] = both_ways(|| run_regs(&fixture.words, &seed, &[], &[]));
+            assert_eq!(dispatched, planned, "{}", fixture.id);
+        }
+        for fixture in texture_fixtures().iter().filter(|fixture| fixture.observed && eligible(&[fixture.word])) {
+            let [dispatched, planned] = both_ways(|| catch_unwind(|| run_texture_fixture(fixture)).ok());
+            assert_eq!(dispatched, planned, "{}", fixture.id);
+        }
+        for fixture in tensor_fixtures() {
+            eligible(&tensor_program(&fixture));
+        }
+        for (name, grid, block, buffers, values) in bench_launches() {
+            let kernel = Kernel::load(BENCH, name).unwrap();
+            if !eligible(&kernel.words) {
+                continue;
+            }
+            let args: Vec<Arg> = buffers.iter().map(|buffer| Arg::Buffer(buffer)).chain(values.chunks(4).map(Arg::Value)).collect();
+            let [dispatched, planned] = both_ways(|| run_kernel(BENCH, name, grid, block, &args));
+            assert_eq!(dispatched, planned, "{name}");
+        }
+        println!("structured {structured}, dispatcher only {rejected:?}");
     }
 }

@@ -1,11 +1,16 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer, HostImage};
 use crate::gpu::cubin::{Arg, Kernel};
-use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, Hints, PMTRIG_WORDS, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING};
+use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, Hints, PMTRIG_WORDS, ResourceKind, STATE_WORDS, SUPPORT_BINDING, TEXTURE_BINDING, Translation};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::texture::TexturePool;
 use crate::gpu::{VkError, VkState};
 use ash::vk::{self, DescriptorType};
+use std::cell::Cell;
 use std::ops::Range;
+
+thread_local! {
+    pub static TRANSLATION: Cell<Translation> = Cell::default();
+}
 
 pub fn translate_module(
     instructions: &[u128],
@@ -23,7 +28,7 @@ pub fn emit_module(
     timing_hints: bool,
     body: impl FnOnce(&mut Decoder),
 ) -> Emitter {
-    sm86::emit_module(device, [lanes, 1, 1], Hints { timing: timing_hints }, |decoder| {
+    sm86::emit_module(device, [lanes, 1, 1], Hints { timing: timing_hints, translation: TRANSLATION.get() }, |decoder| {
         if register_io {
             decoder.emit_register_io(10, 11);
         }
@@ -61,6 +66,16 @@ fn vk_state() -> Option<VkState> {
         }
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     }
+}
+
+/// Runs `run` once through the dispatcher and once through the structured plan.
+pub fn both_ways<T>(run: impl Fn() -> T) -> [T; 2] {
+    [Translation::ForceDispatcher, Translation::ForceStructured].map(|translation| {
+        TRANSLATION.set(translation);
+        let out = run();
+        TRANSLATION.set(Translation::default());
+        out
+    })
 }
 
 pub const GLOBAL_BASE: u64 = 0x2_0000_1000;
@@ -250,7 +265,7 @@ pub struct Grid<'a> {
 
 impl<'a> Grid<'a> {
     pub fn new(state: &'a VkState, instructions: &[u128], block: [u32; 3], banks: &[(u32, Vec<u8>)], regions: &[(u64, &[u8])]) -> Self {
-        let module = sm86::emit_module(Some(state), block, Hints::default(), |decoder| decoder.translate_program(instructions));
+        let module = sm86::emit_module(Some(state), block, Hints { translation: TRANSLATION.get(), ..Hints::default() }, |decoder| decoder.translate_program(instructions));
         spirv_val(&module);
         let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
         let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();

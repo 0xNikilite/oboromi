@@ -35,11 +35,11 @@ The message format is documented by switchbrew, the community's Switch wiki:
 | Raw data, aligned to 16 bytes | The `SFCI` magic, then the command id and its arguments |
 | Reply raw data | The `SFCO` magic, then the result code and the outputs |
 
-CMIF is the name for this command layer on top of HIPC. Upstream already defines the HIPC header types in `core/src/nn/hipc.rs`. The guest's encoder for the whole request lives in `guest/src/cmif.rs` on the `guest/scene-crate` branch.
+CMIF is the name for this command layer on top of HIPC. oboromi already defines the HIPC header types in `core/src/nn/hipc.rs`. The guest's encoder for the whole request lives in `guest/src/cmif.rs` on the `guest/scene-crate` branch.
 
 ## Which services exist?
 
-Upstream's registry names 160 services and gives each one a slot in the system state. Each entry is where that service's commands will go. The first ones being filled in are those a game needs to draw:
+The service registry names 160 services and gives each one a slot in the system state. Each entry is where that service's commands will go. The first ones being filled in are those a game needs to draw:
 
 | Service | Job | State |
 |---|---|---|

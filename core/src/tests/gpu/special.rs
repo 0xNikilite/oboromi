@@ -1,9 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::device;
-    use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_hints, run_lanes, run_regs};
+    use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_hints, run_lanes, run_regs, run_timed};
     use crate::tests::gpu_test::inst::{W2I_NANOSLEEP, W2I_PMTRIG, cs2r, s2r, s2ur, stg};
-    use std::time::{Duration, Instant};
 
     #[test]
     fn special_registers_write_their_destination_width() {
@@ -41,15 +40,9 @@ mod tests {
         }
         let sleep = W2I_NANOSLEEP | (1_000_000u128 << 32);
         let program = [sleep; 64];
-        run_regs(&program, &[], &[], &[]).unwrap();
-        run_hints(&[W2I_NANOSLEEP], &[], &[], &[]).unwrap();
-        let start = Instant::now();
-        run_regs(&program, &[], &[], &[]).unwrap();
-        let off = start.elapsed();
-        let start = Instant::now();
-        run_hints(&program, &[], &[], &[]).unwrap();
-        let on = start.elapsed();
-        assert!(on >= off + Duration::from_millis(5), "off {off:?}, on {on:?}");
+        let off = run_timed(&state, &program, false).unwrap();
+        let on = run_timed(&state, &program, true).unwrap();
+        assert!(on >= off.saturating_mul(3), "off {off}ns, on {on}ns");
     }
 
     #[test]

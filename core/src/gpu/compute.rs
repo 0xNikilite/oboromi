@@ -201,7 +201,7 @@ impl<'a> HostImage<'a> {
                 .format(header.format)
                 .subresource_range(range);
             img.view = d.create_image_view(&view, None)?;
-            img.sampler = d.create_sampler(sampler, None)?;
+            img.sampler = d.create_sampler(&sampler.unnormalized_coordinates(!header.normalized), None)?;
         }
         Ok(img)
     }

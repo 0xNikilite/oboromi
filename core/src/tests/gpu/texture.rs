@@ -8,11 +8,17 @@ mod tests {
     const PITCH: usize = 32;
     const NEAREST: u32 = 1;
     const LINEAR: u32 = 2;
+    const RGBA8_UNORM: u32 = 8 | 0b010_010_010_010 << 7;
+    const R32_UINT: u32 = 0x0f | 0b100_100_100_100 << 7;
 
-    // A pitch-linear 4x4 RGBA8 header at TIC index 1 and a clamp-to-edge sampler at TSC index 1.
     fn run(program: &[u128], seeds: &[Vec<u32>], texels: &[u8], filter: u32) -> Option<Vec<Vec<u32>>> {
+        run_format(program, seeds, texels, filter, RGBA8_UNORM)
+    }
+
+    // A pitch-linear 4x4 header of `format` at TIC index 1 and a clamp-to-edge sampler at TSC index 1.
+    fn run_format(program: &[u128], seeds: &[Vec<u32>], texels: &[u8], filter: u32, format: u32) -> Option<Vec<Vec<u32>>> {
         let header = [
-            8 | 0b010_010_010_010 << 7 | 0o5432 << 19,
+            format | 0o5432 << 19,
             TEXELS_ADDRESS as u32,
             (TEXELS_ADDRESS >> 32) as u32 | 2 << 21,
             PITCH as u32 >> 5,
@@ -100,5 +106,69 @@ mod tests {
             let bytes = regs[12..16].iter().map(|&r| (f32::from_bits(r) * 255.0).round() as u8);
             assert_eq!(bytes.collect::<Vec<_>>(), pattern(t as u32, 2), "lane {t} .P readback");
         }
+    }
+
+    #[test]
+    fn tld4_gathers_the_red_footprint_in_gather_order() {
+        let texels: Vec<u8> = (0..64).map(|i| 4 * i + 3).collect();
+        let red = |x: u32, y: u32| texels[16 * y as usize + 4 * x as usize];
+        let corner = |i: u32| ((i + 1) as f32 / 4.0).to_bits();
+        let seeds: Vec<Vec<u32>> = (0..9).map(|t| vec![0, 0, corner(t % 3), corner(t / 3)]).collect();
+        let program = [texture(inst::TLD4_R_2D, 4, 6, 2, 3, 0x10, 0xf)];
+        let Some(lanes) = run(&program, &seeds, &texels, NEAREST) else { return };
+        for (t, regs) in lanes.iter().enumerate() {
+            let [x, y] = [t as u32 % 3, t as u32 / 3];
+            let bytes: Vec<u8> = regs[4..8].iter().map(|&r| (f32::from_bits(r) * 255.0).round() as u8).collect();
+            assert_eq!(bytes, [red(x, y + 1), red(x + 1, y + 1), red(x + 1, y), red(x, y)], "lane {t}");
+        }
+    }
+
+    #[test]
+    fn txd_on_the_only_mip_matches_tex_lod_zero_for_any_gradient() {
+        let texels: Vec<u8> = (0..64).map(|i| 4 * i + 3).collect();
+        let center = |i: u32| ((i as f32 + 0.5) / 4.0).to_bits();
+        let seeds: Vec<Vec<u32>> = (0..16)
+            .map(|t| [vec![0, 0, center(t % 4), center(t / 4)], vec![0; 16], vec![8f32.to_bits(); 4]].concat())
+            .collect();
+        let program = [
+            texture(inst::TEX_LZ_2D, 8, 10, 2, 3, 0x10, 0xf),
+            inst::with_rb(texture(inst::TXD_2D, 12, 14, 2, 3, 0x10, 0xf), 4),
+            inst::with_rb(texture(inst::TXD_2D, 16, 18, 2, 3, 0x10, 0xf), 20),
+        ];
+        let Some(lanes) = run(&program, &seeds, &texels, NEAREST) else { return };
+        for (t, regs) in lanes.iter().enumerate() {
+            assert_eq!([&regs[12..16], &regs[16..20]], [&regs[8..12]; 2], "lane {t}");
+        }
+    }
+
+    #[test]
+    fn tmml_returns_fixed_point_lod_then_level_from_quad_derivatives() {
+        let step = |quad: u32| quad as f32 + 1.0;
+        let seeds: Vec<Vec<u32>> = (0..8)
+            .map(|t| {
+                let [quad, x, y] = [t / 4, t & 1, t >> 1 & 1];
+                let coord = |offset: u32| ((0.5 + (offset as f32) * step(quad)) / 4.0).to_bits();
+                vec![0, 0, coord(x), coord(y)]
+            })
+            .collect();
+        let program = [texture(inst::TMML_LOD_2D, 4, 0xff, 2, 3, 0x10, 0x3)];
+        let Some(lanes) = run(&program, &seeds, &[0; 64], NEAREST) else { return };
+        for (t, regs) in lanes.iter().enumerate() {
+            assert_eq!(regs[4..6], [0x100 * (t as u32 / 4), 0], "lane {t}");
+        }
+    }
+
+    #[test]
+    fn sured_adds_from_every_lane_and_suatom_returns_each_old_value() {
+        let seeds = vec![vec![0, 0, 1, 1, 1]; 32];
+        let program = [
+            inst::surface(inst::SURED_ADD, 0, 2, 4, 3, 0x10),
+            inst::bar_sync(),
+            inst::surface(inst::SUATOM_ADD, 5, 2, 4, 3, 0x10),
+        ];
+        let Some(lanes) = run_format(&program, &seeds, &[0; 64], NEAREST, R32_UINT) else { return };
+        let mut old: Vec<u32> = lanes.iter().map(|regs| regs[5]).collect();
+        old.sort();
+        assert_eq!(old, (32..64).collect::<Vec<_>>());
     }
 }

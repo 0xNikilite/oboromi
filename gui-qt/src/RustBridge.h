@@ -33,6 +33,10 @@ bool renderPostFrame(float seconds);
 // Draws the sprites demo at the given time into the display
 bool renderSpritesFrame(float seconds);
 
+// Plays the music demo and steps the bounce demo up to the given time
+bool renderMusicDemo(float seconds);
+bool renderBounceDemo(float seconds);
+
 // Draws the particles demo at the given time into the display
 bool renderParticlesFrame(float seconds);
 

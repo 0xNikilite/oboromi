@@ -6,6 +6,9 @@ pub mod gpu;
 pub mod guest;
 pub mod input;
 pub mod kernel;
+pub mod loader {
+    pub mod nro;
+}
 pub mod tests;
 pub mod nn;
 pub mod sys;

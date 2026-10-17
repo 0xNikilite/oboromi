@@ -24,7 +24,6 @@ fn render(demo: &str, seconds: f32) -> Result<(), String> {
         }
         _ => Err(format!("unknown demo {demo}")),
     }
-
 }
 
 struct Wav {
@@ -94,15 +93,22 @@ fn main() {
     let out = std::path::PathBuf::from(flag("--out").expect("--out <dir>"));
     std::fs::create_dir_all(&out).unwrap();
     let mut wav = flag("--audio").map(Wav::new);
+    let audio_only = args.iter().any(|arg| arg == "--audio-only");
     let mut pixels = Vec::new();
     let mut timings = Vec::new();
     let frames = (seconds * fps).round() as usize;
     for i in 0..frames {
         let start = std::time::Instant::now();
-        render(&args[0], (i + usize::from(args[0] == "dungeon")) as f32 / fps).unwrap();
+        let seconds = (i + usize::from(args[0] == "dungeon")) as f32 / fps;
+        if audio_only && args[0] == "dungeon" {
+            demo_dungeon::render_dungeon_audio_frame(seconds).unwrap();
+        } else {
+            render(&args[0], seconds).unwrap();
+        }
         timings.push(start.elapsed().as_secs_f64() * 1000.0);
-        if let Some(wav) = &mut wav {
-            wav.drain();
+        if let Some(wav) = &mut wav { wav.drain(); }
+        if audio_only {
+            continue;
         }
         let (mut width, mut height) = (0, 0);
         pixels.resize(
@@ -124,6 +130,4 @@ fn main() {
     if let Some(wav) = wav {
         wav.finish((frames as f64 * f64::from(RATE) / f64::from(fps)).round() as usize);
     }
-    timings.sort_by(f64::total_cmp);
-    eprintln!("frames={} median_ms={:.3} p95_ms={:.3}", timings.len(), timings[timings.len() / 2], timings[(timings.len() - 1) * 95 / 100]);
 }

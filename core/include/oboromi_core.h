@@ -238,6 +238,7 @@ bool oboromi_render_sprites_frame(float seconds);
 bool oboromi_render_dungeon_frame(float seconds);
 bool oboromi_dungeon_ray_queries(void);
 void oboromi_dungeon_settings(bool showcase, bool raytracing);
+void oboromi_set_dungeon_speakers(bool speakers);
 
 /// plays the music demo up to `seconds` through the audio renderer, false if it panicked.
 bool oboromi_render_music_demo(float seconds);

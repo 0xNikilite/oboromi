@@ -316,3 +316,8 @@ pub extern "C" fn oboromi_dungeon_settings(showcase: bool, raytracing: bool) {
     SHOWCASE.store(showcase, Relaxed);
     RAYS.store(raytracing, Relaxed);
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_dungeon_speakers(speakers: bool) {
+    crate::gpu::demo_dungeon_sound::set_mode(if speakers { crate::audio::spatial::Mode::Speakers } else { crate::audio::spatial::Mode::Headphones });
+}

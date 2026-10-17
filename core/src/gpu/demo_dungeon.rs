@@ -189,6 +189,27 @@ fn snap(v: f32) -> f32 {
 }
 
 impl World {
+    pub fn acoustic_rooms(&self) -> Vec<crate::audio::spatial::Room> {
+        use crate::audio::spatial::{Doorway, Material, Room};
+        self.zones.iter().enumerate().map(|(zone, room)| {
+            let stone = if room.kind == Kind::Cave { Material::WET_STONE } else { Material::DRY_STONE };
+            let mut walls = [stone; 6];
+            if room.kind == Kind::Cave { walls[2] = Material::WATER; }
+            let doorways = self.doors.iter().filter(|door| door.zone == zone).map(|door| {
+                let (mut min, mut max) = (room.space.lo, room.space.hi);
+                let plane = if door.side == 0 { room.space.lo[door.axis] } else { room.space.hi[door.axis] };
+                min[door.axis] = plane - 0.05;
+                max[door.axis] = plane + 0.05;
+                min[2 - door.axis] = door.span[0];
+                max[2 - door.axis] = door.span[1];
+                min[1] = room.space.lo[1];
+                max[1] = door.top;
+                Doorway { min, max, material: Material::OPEN }
+            }).collect();
+            Room { min: room.space.lo, max: room.space.hi, walls, doorways }
+        }).collect()
+    }
+
     /// The zones containing `p`.
     pub fn zones_at(&self, p: V3) -> impl Iterator<Item = usize> + '_ {
         (0..self.zones.len()).filter(move |&z| self.zones[z].space.contains(p))
@@ -806,7 +827,7 @@ const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
 pub struct Dungeon {
-    renderer: render::Renderer,
+    renderer: Option<render::Renderer>,
     world: World,
     sound: Sound,
     eye: V3,
@@ -818,29 +839,34 @@ pub struct Dungeon {
     foot_distance: f32,
     scream: bool,
     audio_time: f32,
-    river: River,
+    river: Option<River>,
 }
 impl Dungeon {
-    pub fn new(state: &'static VkState) -> Result<Self, String> {
-        let world = World::new(8);
-        let mut mesh = Builder::default();
-        world.build(&mut mesh);
-        let renderer = render::Renderer::new(state, &world, &mesh)?;
+    pub fn new(state: &'static VkState) -> Result<Self, String> { Self::with_state(Some(state)) }
+    fn with_state(state:Option<&'static VkState>)->Result<Self,String> {
+        let world=World::new(8);
+        let renderer=state.map(|state| {
+            let mut mesh=Builder::default();world.build(&mut mesh);
+            render::Renderer::new(state,&world,&mesh)
+        }).transpose()?;
         let eye = add(world.path[0], [0., EYE, 0.]);
         let sound = Sound::new(&world, &world.sources);
-        Ok(Self { renderer, world, sound, eye, yaw: PI/2., pitch: 0., time: 0., idle: 3., waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river: River::new(state)? })
+        Ok(Self { renderer, world, sound, eye, yaw: PI/2., pitch: 0., time: 0., idle: 3., waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river: state.map(River::new).transpose()? })
     }
 
     pub fn frame(&mut self, seconds: f32) -> Result<Vec<i16>, String> {
         use super::demo_dungeon_sound::Sample;
-        let showcase=render::SHOWCASE.load(std::sync::atomic::Ordering::Relaxed);
-        let rays=render::RAYS.load(std::sync::atomic::Ordering::Relaxed)&&device().map_err(|e|format!("{e:?}"))?.acceleration_structure.is_some();
-        if self.renderer.showcase!=showcase {
-            let mut mesh=Builder::default();self.world.build(&mut mesh);
-            self.river=River::new(device().map_err(|e|format!("{e:?}"))?)?;
-            self.renderer=render::Renderer::new(device().map_err(|e|format!("{e:?}"))?,&self.world,&mesh)?;
+        if let Some(renderer)=&mut self.renderer {
+            let showcase=render::SHOWCASE.load(std::sync::atomic::Ordering::Relaxed);
+            let state=device().map_err(|e|format!("{e:?}"))?;
+            let rays=render::RAYS.load(std::sync::atomic::Ordering::Relaxed)&&state.acceleration_structure.is_some();
+            if renderer.showcase!=showcase {
+                let mut mesh=Builder::default();self.world.build(&mut mesh);
+                self.river=Some(River::new(state)?);
+                *renderer=render::Renderer::new(state,&self.world,&mesh)?;
+            }
+            renderer.rays=rays;
         }
-        self.renderer.rays=rays;
         let dt = (seconds - self.time).clamp(0.0, 0.1);
         let old_eye = self.eye;
         let input = crate::input::state().0;
@@ -912,9 +938,11 @@ impl Dungeon {
         let view: Matrix = std::array::from_fn(|column| std::array::from_fn(|row| if row == 3 { if column == 3 { 1.0 } else { 0.0 } } else if column == 3 { -dot(axes[row], self.eye) } else { axes[row][column] }));
         let focal = 1.0 / (PI / 6.0).tan();
         let projection = [[focal * HEIGHT as f32 / WIDTH as f32, 0.0, 0.0, 0.0], [0.0, -focal, 0.0, 0.0], [0.0, 0.0, -100.0 / 99.9, -1.0], [0.0, 0.0, -10.0 / 99.9, 0.0]];
-        let waves = self.river.step(self.world.river, dt, &impacts,self.renderer.query_pool())?;
-        self.renderer.report("simulation")?;
-        self.renderer.frame(&self.world, self.eye, view, projection, seconds, right, up, &waves)?;
+        if let (Some(renderer),Some(river))=(&mut self.renderer,&mut self.river) {
+            let waves=river.step(self.world.river,dt,&impacts,renderer.query_pool())?;
+            renderer.report("simulation")?;
+            renderer.frame(&self.world,self.eye,view,projection,seconds,right,up,&waves)?;
+        }
         self.sound.listen(&self.world, self.eye, self.yaw, dt);
         self.audio_time += dt;
         let periods = (self.audio_time / 0.005).floor() as usize;
@@ -931,6 +959,15 @@ pub fn render_dungeon_frame(seconds: f32) -> Result<(), String> {
     let dungeon = slot.as_mut().unwrap();
     let audio = dungeon.frame(seconds)?;
     for period in audio.chunks(480) { crate::audio::play(&[period]); }
+    Ok(())
+}
+
+pub fn render_dungeon_audio_frame(seconds:f32)->Result<(),String> {
+    static AUDIO:Mutex<Option<Dungeon>>=Mutex::new(None);
+    let mut slot=AUDIO.lock().unwrap();
+    if slot.is_none(){*slot=Some(Dungeon::with_state(None)?);}
+    let audio=slot.as_mut().unwrap().frame(seconds)?;
+    for period in audio.chunks(480){crate::audio::play(&[period]);}
     Ok(())
 }
 

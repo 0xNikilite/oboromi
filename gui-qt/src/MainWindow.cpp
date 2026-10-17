@@ -1,9 +1,9 @@
 #include "MainWindow.h"
 
 #include <QDesktopServices>
+#include <QComboBox>
 #include <QFontDatabase>
 #include <QFrame>
-#include <QComboBox>
 #include <QCheckBox>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -124,6 +124,10 @@ void MainWindow::buildUi() {
     connect(rays, &QCheckBox::toggled, this, [quality](bool enabled) { oboromi_dungeon_settings(quality->currentIndex() == 0, enabled); });
     buttons->addWidget(quality);
     buttons->addWidget(rays);
+    auto *spatialMode = new QComboBox(central);
+    spatialMode->addItems({"Headphones", "Speakers"});
+    connect(spatialMode, &QComboBox::currentIndexChanged, this, [](int mode) { oboromi_set_dungeon_speakers(mode == 1); });
+    buttons->addWidget(spatialMode);
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
         if (m_demoFrame.isFinished())
             m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);

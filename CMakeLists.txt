@@ -18,7 +18,7 @@ corrosion_import_crate(MANIFEST_PATH ${CMAKE_SOURCE_DIR}/Cargo.toml)
 # Qt6 GUI
 # Configure with: cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.12.0/msvc2022_64" (or your path)
 # Qt kit ABI must match Rust toolchain (MSVC vs MinGW)
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia)
 qt_standard_project_setup()
 
 set(CMAKE_AUTOMOC ON)
@@ -27,6 +27,8 @@ set(CMAKE_AUTORCC ON)
 
 qt_add_executable(oboromi-gui
     gui-qt/src/main.cpp
+    gui-qt/src/AudioOutput.h
+    gui-qt/src/AudioOutput.cpp
     gui-qt/src/DisplayWidget.h
     gui-qt/src/DisplayWidget.cpp
     gui-qt/src/MainWindow.h
@@ -42,6 +44,7 @@ target_include_directories(oboromi-gui PRIVATE
 
 target_link_libraries(oboromi-gui PRIVATE
     Qt6::Widgets
+    Qt6::Multimedia
     oboromi_core
 )
 

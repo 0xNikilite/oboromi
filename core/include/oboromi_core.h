@@ -262,4 +262,23 @@ void oboromi_input_key(int32_t code, bool down);
 /// `out` must be valid for writes.
 void oboromi_input_state(OboromiInput *out);
 
+/// copies up to `frames` queued stereo frames into `dst` and zero-fills the
+/// rest, returns the frames copied.
+///
+/// # Safety
+/// `dst` must be null or valid for `frames * 2` writes.
+uintptr_t oboromi_audio_pull(int16_t *dst, uintptr_t frames);
+
+/// writes the output format, interleaved i16 samples.
+///
+/// # Safety
+/// `rate` and `channels` must be valid for writes.
+void oboromi_audio_format(uint32_t *rate, uint32_t *channels);
+
+/// frames ever queued, changes whenever something is produced.
+uint64_t oboromi_audio_generation();
+
+/// queues `seconds` more of a 440 hz test tone, returns the frames that fit.
+uintptr_t oboromi_audio_test_tone(float seconds);
+
 }  // extern "C"

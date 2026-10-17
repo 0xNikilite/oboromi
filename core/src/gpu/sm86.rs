@@ -390,9 +390,9 @@ fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
 
-// VOTE, VOTEU, SHFL, MATCH, REDUX and BAR, which every invocation of the workgroup must reach together.
+// VOTE, VOTEU, SHFL, MATCH, REDUX, BAR, HMMA, IMMA and LDSM, which every invocation of the workgroup must reach together.
 fn exchanges(inst: u128) -> bool {
-    matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d)
+    matches!(opcode(inst) & 0x1ff, 0x006 | 0x086 | 0x189 | 0x1a1 | 0x1c4 | 0x11d | 0x03c | 0x037 | 0x03b)
 }
 
 pub fn emit_module(device: Option<&VkState>, local_size: [u32; 3], body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
@@ -2332,7 +2332,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("BITEXTRACT");
     }
     pub fn bmma(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2352,7 +2352,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("BMMA");
     }
     pub fn bmov(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2677,7 +2677,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("DMMA");
     }
     pub fn dmul(&mut self, inst: u128) {
         Self::fp64_rounding(inst);
@@ -3080,7 +3080,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("GATHER");
     }
     pub fn genmetadata(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3102,7 +3102,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("GENMETADATA");
     }
     pub fn getlmembase(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3150,30 +3150,105 @@ impl<'a> Decoder<'a> {
     pub fn hfma2_mma(&mut self, inst: u128) {
         self.hfma2(inst);
     }
+    // Lane 4g + t of an MMA fragment holds row (or column) g of the tile, and t picks its k columns.
+    fn lane_quad(&mut self) -> [u32; 2] {
+        let lane = self.special_register(0);
+        let [two, three] = [2, 3].map(|c| self.cached_const_u32(c));
+        [self.ir.emit_shift_right_logical(self.type_u32[1], lane, two), self.ir.emit_bitwise_and(self.type_u32[1], lane, three)]
+    }
+    fn quad_lanes(&mut self, first: u32) -> Vec<u32> {
+        (0..4).map(|t| {
+            let t = self.cached_const_u32(t);
+            self.ir.emit_iadd(self.type_u32[1], first, t)
+        }).collect()
+    }
+    // Gathers the A rows g, g + 8 and B columns 2t, 2t + 1 that the D elements of lane 4g + t need, each in ascending k.
+    fn mma_operands(&mut self, inst: u128, k_regs: u32, mut unpack: impl FnMut(&mut Self, u32, bool) -> Vec<u32>) -> [[Vec<u32>; 2]; 2] {
+        let [ra, rb] = [24, 32].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let ty = self.type_u32[1];
+        let [group, thread] = self.lane_quad();
+        let [two, three, four] = [2, 3, 4].map(|c| self.cached_const_u32(c));
+        let own_quad = self.ir.emit_shift_left_logical(ty, group, two);
+        let row_lanes = self.quad_lanes(own_quad);
+        let column_quad = self.ir.emit_shift_left_logical(ty, thread, three);
+        let next_column_quad = self.ir.emit_iadd(ty, column_quad, four);
+        let mut column_lanes = self.quad_lanes(column_quad);
+        column_lanes.extend(self.quad_lanes(next_column_quad));
+        let (mut a, mut b) = ([Vec::new(), Vec::new()], [Vec::new(), Vec::new()]);
+        for k_reg in 0..k_regs {
+            for (half, row) in (0..).zip(&mut a) {
+                let own = self.load_register(nth_reg(ra, RZ, 2 * k_reg + half));
+                for [word, _] in self.warp_exchange(own, &row_lanes) {
+                    row.extend(unpack(self, word, false));
+                }
+            }
+            let own = self.load_register(nth_reg(rb, RZ, k_reg));
+            let words = self.warp_exchange(own, &column_lanes);
+            for (column, words) in b.iter_mut().zip(words.chunks(4)) {
+                for &[word, _] in words {
+                    column.extend(unpack(self, word, true));
+                }
+            }
+        }
+        [a, b]
+    }
+    // A bfloat16 is the upper half of an f32.
+    fn mma_source_pair(&mut self, word: u32, bf16: bool, neg: bool) -> [u32; 2] {
+        if !bf16 {
+            return self.half2_lanes(word, 0, false, neg, false);
+        }
+        let [sixteen, high] = [16, 0xffff_0000].map(|c| self.cached_const_u32(c));
+        let bits = [self.ir.emit_shift_left_logical(self.type_u32[1], word, sixteen), self.ir.emit_bitwise_and(self.type_u32[1], word, high)];
+        bits.map(|bits| {
+            let val = self.bitcast_f32(bits);
+            self.fp_src(self.type_f32[1], val, false, neg)
+        })
+    }
     pub fn hmma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _re = (((inst >> 40) & 0xff) << 0);
-        let _id = (((inst >> 48) & 0x3) << 0);
-        let _re_reuse_src_e = (((inst >> 50) & 0x1) << 0);
-        let _sc_negate = (((inst >> 63) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _size = (((inst >> 78) & 0x1) << 1) | (((inst >> 75) & 0x1) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _srcfmt = (((inst >> 82) & 0x3) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert_eq!(opcode(inst), 0x23c, "HMMA with a uniform register file");
+        assert!(inst >> 73 & 1 == 0, "HMMA.SP");
+        assert_eq!(inst >> 87 & 0xf, 0, "HMMA with a UPp condition");
+        let k_regs = match (inst >> 78 & 1) << 1 | inst >> 75 & 1 {
+            0 => 1,
+            1 => 2,
+            _ => todo!("HMMA.1684"),
+        };
+        let bf16 = match inst >> 82 & 3 {
+            0 => false,
+            1 => true,
+            _ => todo!("HMMA.TF32"),
+        };
+        let f32_acc = inst >> 76 & 1 != 0;
+        let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let negate = [inst >> 72 & 1 != 0, inst >> 63 & 1 != 0];
+        let [a, b] = self.mma_operands(inst, k_regs, |s, word, is_b| s.mma_source_pair(word, bf16, negate[is_b as usize]).to_vec());
+        let f32_ty = self.type_f32[1];
+        for (half, row) in (0..).zip(&a) {
+            let c = if f32_acc {
+                [0, 1].map(|column| {
+                    let word = self.load_register(nth_reg(rc, RZ, 2 * half + column));
+                    self.bitcast_f32(word)
+                })
+            } else {
+                let word = self.load_register(nth_reg(rc, RZ, half));
+                self.half2_lanes(word, 0, false, false, false)
+            };
+            let d = [0, 1].map(|column| {
+                row.iter().zip(&b[column]).fold(c[column], |sum, (&x, &y)| {
+                    let product = self.ir.emit_fmul(f32_ty, x, y);
+                    self.ir.emit_fadd(f32_ty, sum, product)
+                })
+            });
+            if f32_acc {
+                for (column, val) in (0..).zip(d) {
+                    let bits = self.bitcast_u32(val);
+                    self.store_register(nth_reg(rd, RZ, 2 * half + column), bits);
+                }
+            } else {
+                let packed = self.pack_half2(d);
+                self.store_register(nth_reg(rd, RZ, half), packed);
+            }
+        }
     }
     pub fn hmnmx2(&mut self, inst: u128) {
         let ofmt = (inst >> 85 & 1) << 1 | inst >> 78 & 1;
@@ -3501,28 +3576,36 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn imma(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _re_reuse_src_e = (((inst >> 50) & 0x1) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _rndsrc = (((inst >> 82) & 0x1) << 0);
-        let _srcfmta = (((inst >> 83) & 0x1) << 2) | (((inst >> 76) & 0x3) << 0);
-        let _srcfmtb = (((inst >> 84) & 0x1) << 2) | (((inst >> 78) & 0x3) << 0);
-        let _size = (((inst >> 85) & 0x3) << 1) | (((inst >> 75) & 0x1) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        assert!(inst >> 72 & 1 == 0, "IMMA.SP");
+        assert_eq!(inst >> 87 & 0xf, 0, "IMMA with a UPp condition");
+        assert!(inst >> 82 & 1 == 0, "IMMA.SAT");
+        assert!(inst >> 83 & 3 == 0, "IMMA with S4 or U4 sources");
+        let k_regs = match inst >> 84 & 6 | inst >> 75 & 1 {
+            4 => 1,
+            5 => 2,
+            size => todo!("IMMA size {size}"),
+        };
+        let signed = [76, 78].map(|bit| inst >> bit & 1 != 0);
+        let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
+        let ty = self.type_u32[1];
+        let eight = self.cached_const_u32(8);
+        let [a, b] = self.mma_operands(inst, k_regs, |s, word, is_b| {
+            (0..4).map(|byte| {
+                let offset = s.cached_const_u32(8 * byte);
+                if signed[is_b as usize] { s.ir.emit_bit_field_s_extract(ty, word, offset, eight) } else { s.ir.emit_bit_field_u_extract(ty, word, offset, eight) }
+            }).collect()
+        });
+        for (half, row) in (0..).zip(&a) {
+            for (column, col) in (0..).zip(&b) {
+                let reg = 2 * half + column;
+                let c = self.load_register(nth_reg(rc, RZ, reg));
+                let d = row.iter().zip(col).fold(c, |sum, (&x, &y)| {
+                    let product = self.ir.emit_imul(ty, x, y);
+                    self.ir.emit_iadd(ty, sum, product)
+                });
+                self.store_register(nth_reg(rd, RZ, reg), d);
+            }
+        }
     }
     pub fn imnmx(&mut self, inst: u128) {
         let a = self.load_register((inst >> 24 & 0xff) as u32);
@@ -3918,21 +4001,41 @@ impl<'a> Decoder<'a> {
         self.load_memory(ResourceKind::Shared, address, sz, rd);
     }
     pub fn ldsm(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_urb = (((inst >> 32) & 0x3f) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _num = (((inst >> 72) & 0x3) << 0);
-        let _sz = (((inst >> 75) & 0x7) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        let transposed = match inst >> 78 & 3 {
+            0 => false,
+            1 => true,
+            2 => todo!("LDSM.M816"),
+            _ => todo!("LDSM.M832"),
+        };
+        let ty = self.type_u32[1];
+        let address = self.global_address(inst, 32, 40);
+        let [group, thread] = self.lane_quad();
+        let first_column = self.ir.emit_shift_left_logical(ty, thread, self.const_u32_1);
+        let tiles = 1 << (inst >> 72 & 3);
+        let mut row_lanes = Vec::new();
+        let mut columns = Vec::new();
+        for tile in 0..tiles {
+            let first_row = self.cached_const_u32(8 * tile);
+            for half in [self.const_u32_0, self.const_u32_1] {
+                let column = self.ir.emit_iadd(ty, first_column, half);
+                let (row, column) = if transposed { (column, group) } else { (group, column) };
+                row_lanes.push(self.ir.emit_iadd(ty, first_row, row));
+                columns.push(column);
+            }
+        }
+        let row_addresses = self.warp_exchange(address, &row_lanes);
+        let halves: Vec<u32> = row_addresses.iter().zip(columns).map(|(&[row, _], column)| {
+            let offset = self.ir.emit_shift_left_logical(ty, column, self.const_u32_1);
+            let at = self.ir.emit_iadd(ty, row, offset);
+            let ptr = self.shared_word_at(at);
+            let word = self.ir.emit_load(ty, ptr);
+            self.load_narrow(word, at, 2)
+        }).collect();
+        let sixteen = self.cached_const_u32(16);
+        for (tile, pair) in (0..).zip(halves.chunks(2)) {
+            let word = self.ir.emit_bit_field_insert(ty, pair[0], pair[1], sixteen, sixteen);
+            self.store_register(nth_reg((inst >> 16 & 0xff) as u32, RZ, tile), word);
+        }
     }
     pub fn ldtram(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -4159,7 +4262,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("MOVM");
     }
     pub fn mufu(&mut self, inst: u128) {
         use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
@@ -4585,7 +4688,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("SCATTER");
     }
     pub fn sel(&mut self, inst: u128) {
         let p = self.pred_bit(is_uniform(inst), (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
@@ -4706,7 +4809,7 @@ impl<'a> Decoder<'a> {
         let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
         let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        todo!("SPMETADATA");
     }
     pub fn st(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

@@ -22,8 +22,8 @@ impl<'a> Decoder<'a> {
         };
         let and = inst >> 78 & 1 != 0;
         let ty = self.type_u32[1];
-        let operands = self.mma_operands(inst, rows, [k_regs; 2], |_, word, _| vec![word]);
-        self.mma_s32(inst, operands, false, |s, x, y| {
+        let [a, b] = self.mma_operands(inst, rows, [k_regs; 2], |_, word, _| vec![word]);
+        self.mma_s32(inst, a, b.to_vec(), false, |s, x, y| {
             let bits = if and { s.ir.emit_bitwise_and(ty, x, y) } else { s.ir.emit_bitwise_xor(ty, x, y) };
             s.ir.emit_bit_count(ty, bits)
         });
@@ -100,31 +100,39 @@ impl<'a> Decoder<'a> {
         }
         [a, b]
     }
-    // Each four k of a sparse A row keep two values, whose positions are the low and high two bits of nibble
-    // 4 * (chunk % 4) + 16 * half in Re of lane 4g + selector (k16), or 4g + 2 * selector + chunk / 4 (k32): PTX ISA 9.7.16.6.
-    fn expand_sparse_rows(&mut self, inst: u128, rows: [Vec<u32>; 2]) -> [Vec<u32>; 2] {
-        let (ty, f32_ty, bool_ty) = (self.type_u32[1], self.type_f32[1], self.type_bool[1]);
-        let k = 2 * rows[0].len() as u32;
+    // Session 7 silicon: kept A element e of row g + 8h in group q (`kept` elements of 2 * kept k) multiplies B row
+    // 4q + field, field being two-bit field e of a nibble of Re in lane 4g + t. For 16- and 32-bit sources t = selector *
+    // groups / 4 + q / 4 and the nibble is q % 4 + 4h, for 8-bit ones t = 2 * selector * groups / 8 + h + 2 * (q / 8) and the
+    // nibble q % 8. A TF32 element instead takes the 16-bit halves its low and high fields pick from its group's two raw B
+    // words, so only nibbles 0x4 and 0xe pick whole elements. Returns the gathered B column of each D register.
+    fn sparse_b(&mut self, inst: u128, val_ty: u32, compressed: usize, b: [Vec<u32>; 2], kept: usize, bytes: bool) -> Vec<Vec<u32>> {
+        let (ty, bool_ty, groups, selector) = (self.type_u32[1], self.type_bool[1], compressed / kept, (inst >> 48 & 3) as usize);
         let [group, _] = self.lane_quad();
-        let [two, selector] = [2, (inst >> 48 & 3) as u32 * k / 16].map(|c| self.cached_const_u32(c));
+        let [two, sixteen] = [2, 16].map(|c| self.cached_const_u32(c));
         let quad = self.ir.emit_shift_left_logical(ty, group, two);
-        let first = self.ir.emit_iadd(ty, quad, selector);
-        let lanes = self.quad_lanes(first);
+        let lanes = self.quad_lanes(quad);
         let own = self.load_register((inst >> 40 & 0xff) as u32);
-        let metadata = self.warp_exchange(own, &lanes[..k as usize / 16]);
-        let zero = self.ir.emit_constant_typed(f32_ty, 0.0f32);
-        let [top, bottom] = rows;
-        [(0, top), (1, bottom)].map(|(half, row)| (0..k).map(|position| {
-            let chunk = position / 4;
-            let [first, second] = [0, 2].map(|bit| {
-                let [offset, wanted] = [16 * half + 4 * (chunk % 4) + bit, position % 4].map(|c| self.cached_const_u32(c));
-                let index = self.ir.emit_bit_field_u_extract(ty, metadata[chunk as usize / 4][0], offset, two);
-                self.ir.emit_iequal(bool_ty, index, wanted)
-            });
-            let pair = &row[2 * chunk as usize..];
-            let val = self.ir.emit_select(f32_ty, second, pair[1], zero);
-            self.ir.emit_select(f32_ty, first, pair[0], val)
-        }).collect())
+        let metadata = self.warp_exchange(own, &lanes);
+        (0..4).map(|reg| (0..compressed).map(|c| {
+            let (h, q, e) = (reg / 2, c / kept, c % kept);
+            let (lane, nibble) = if bytes { (2 * selector * groups / 8 + h + 2 * (q / 8), q % 8) } else { (selector * groups / 4 + q / 4, q % 4 + 4 * h) };
+            let pick = |s: &mut Self, bit: usize, units: &[u32]| {
+                let shift = s.cached_const_u32((4 * nibble + bit) as u32);
+                let field = s.ir.emit_bit_field_u_extract(ty, metadata[lane][0], shift, two);
+                (1..units.len()).fold(units[0], |val, j| {
+                    let wanted = s.cached_const_u32(j as u32);
+                    let hit = s.ir.emit_iequal(bool_ty, field, wanted);
+                    s.ir.emit_select(val_ty, hit, units[j], val)
+                })
+            };
+            let units = &b[reg % 2][2 * kept * q..2 * kept * (q + 1)];
+            if kept == 2 {
+                return pick(self, 2 * e, units);
+            }
+            let halves: Vec<u32> = units.iter().flat_map(|&word| [self.ir.emit_bit_field_u_extract(ty, word, self.const_u32_0, sixteen), self.ir.emit_shift_right_logical(ty, word, sixteen)]).collect();
+            let [low, high] = [0, 2].map(|bit| pick(self, bit, &halves));
+            self.ir.emit_bit_field_insert(ty, low, high, sixteen, sixteen)
+        }).collect()).collect()
     }
     // A bfloat16 is the upper half of an f32.
     fn mma_source_pair(&mut self, word: u32, bf16: bool, neg: bool) -> [u32; 2] {
@@ -150,7 +158,7 @@ impl<'a> Decoder<'a> {
             _ => panic!("HMMA size 3"),
         };
         let format = inst >> 82 & 3;
-        assert!(!sparse || format < 2 && inst >> 81 & 1 == 0, "HMMA.SP with TF32 sources or REGOFFSET metadata");
+        assert!(!sparse || inst >> 81 & 1 == 0, "HMMA.SP with REGOFFSET metadata");
         let (k_regs, group, min_exponent) = match format {
             0 => (k / 8, 8, -14),
             1 => (k / 8, 8, -126),
@@ -165,22 +173,30 @@ impl<'a> Decoder<'a> {
         }
         let [a, b] = self.mma_operands(inst, 2, [k_regs >> sparse as u32, k_regs], |s, word, is_b| {
             let neg = negate[is_b as usize];
-            if format == 2 { vec![s.tf32_source(word, neg)] } else { s.mma_source_pair(word, format == 1, neg).to_vec() }
+            match format {
+                2 if is_b && sparse => vec![word],
+                2 => vec![s.tf32_source(word, neg)],
+                _ => s.mma_source_pair(word, format == 1, neg).to_vec(),
+            }
         });
-        let a = if sparse { self.expand_sparse_rows(inst, a) } else { a };
-        if self.tensor == TensorMode::Fast {
-            return self.fma_hmma([a, b], rd, rc, f32_acc, group);
-        }
         let (ty, f32_ty, ptr_ty, private) = (self.type_u32[1], self.type_f32[1], self.type_ptr_u32[1], spirv::storage_class::PRIVATE);
-        let [length, d_base] = [136, 132].map(|c| self.cached_const_u32(c));
+        let b = match (sparse, format) {
+            (false, _) => b.to_vec(),
+            (true, 2) => self.sparse_b(inst, ty, a[0].len(), b, 1, false).into_iter().map(|b| b.into_iter().map(|word| self.tf32_source(word, negate[1])).collect()).collect(),
+            (true, _) => self.sparse_b(inst, f32_ty, a[0].len(), b, 2, false),
+        };
+        if self.tensor == TensorMode::Fast {
+            return self.fma_hmma(&a, &b, rd, rc, f32_acc, group);
+        }
+        let [length, d_base] = [104, 100].map(|c| self.cached_const_u32(c));
         if self.mma_vars[0] == 0 {
             let staged_ty = self.ir.emit_type_array(ty, length);
             let staged_ptr_ty = self.ir.emit_type_pointer(private, staged_ty);
             self.mma_vars = [staged_ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty].map(|ptr| self.ir.emit_variable(ptr, private));
         }
         let [staged, output, group_index, term, acc, emax, special, ieee_sum, total] = self.mma_vars;
-        let values = a.iter().enumerate().flat_map(|(row, x)| x.iter().enumerate().map(move |(k, &x)| (32 * row + k, x)));
-        let values: Vec<_> = values.chain(b.iter().enumerate().flat_map(|(column, y)| y.iter().enumerate().map(move |(k, &y)| (64 + 32 * column + k, y)))).collect();
+        let values = a.iter().enumerate().flat_map(|(row, x)| x.iter().enumerate().map(move |(k, &x)| (16 * row + k, x)));
+        let values: Vec<_> = values.chain(b.iter().enumerate().flat_map(|(column, y)| y.iter().enumerate().map(move |(k, &y)| (32 + 16 * column + k, y)))).collect();
         for (index, val) in values {
             let slot = self.staged_slot(staged, index as u32);
             let bits = self.bitcast_u32(val);
@@ -194,20 +210,20 @@ impl<'a> Decoder<'a> {
                 self.half2_lanes(word, 0, false, false, false).map(|c| self.bitcast_u32(c))
             };
             for (column, bits) in (0..).zip(c) {
-                let slot = self.staged_slot(staged, 128 + 2 * half + column);
+                let slot = self.staged_slot(staged, 96 + 2 * half + column);
                 self.ir.emit_store(slot, bits);
             }
         }
         let f16_ty = self.type_f16();
-        let [one, four, thirty_two, sixty_four, c_base, group_len, groups, f32_floor, floor] =
-            [1, 4, 32, 64, 128, group as u32, a[0].len() as u32 / group as u32, -126i32 as u32, min_exponent as u32].map(|c| self.cached_const_u32(c));
+        let [one, four, sixteen, thirty_two, c_base, b_mask, group_len, groups, f32_floor, floor] =
+            [1, 4, 16, 32, 96, b.len() as u32 - 1, group as u32, a[0].len() as u32 / group as u32, -126i32 as u32, min_exponent as u32].map(|c| self.cached_const_u32(c));
         let zero = self.ir.emit_constant_typed(f32_ty, 0.0f32);
         self.counted_loop(output, four, |s, output| {
             let half = s.ir.emit_shift_right_logical(ty, output, one);
-            let column = s.ir.emit_bitwise_and(ty, output, one);
-            let a_base = s.ir.emit_imul(ty, half, thirty_two);
-            let b_base = s.ir.emit_imul(ty, column, thirty_two);
-            let b_base = s.ir.emit_iadd(ty, b_base, sixty_four);
+            let b_column = s.ir.emit_bitwise_and(ty, output, b_mask);
+            let a_base = s.ir.emit_imul(ty, half, sixteen);
+            let b_base = s.ir.emit_imul(ty, b_column, sixteen);
+            let b_base = s.ir.emit_iadd(ty, b_base, thirty_two);
             let c_index = s.ir.emit_iadd(ty, output, c_base);
             let c_slot = s.ir.emit_access_chain(ptr_ty, staged, &[c_index]);
             let c = s.ir.emit_load(ty, c_slot);
@@ -272,7 +288,7 @@ impl<'a> Decoder<'a> {
         });
         for half in 0..2 {
             let d = [0, 1].map(|column| {
-                let slot = self.staged_slot(staged, 132 + 2 * half + column);
+                let slot = self.staged_slot(staged, 100 + 2 * half + column);
                 self.ir.emit_load(ty, slot)
             });
             if f32_acc {
@@ -286,15 +302,16 @@ impl<'a> Decoder<'a> {
             }
         }
     }
-    // Fast gives up the silicon's exact group sums for f32 fmas in ascending k or the device's cooperative matrices: up to 38 ulp off
-    // under cancellation, the other infinity or a NaN past an intermediate overflow, and far worse through f16 cooperative accumulators.
+    // Fast gives up the silicon's exact group sums for f32 fmas in ascending k or the device's cooperative matrices: up to 38 ulp off on
+    // mixed exponents, any number of ulp on sums that cancel to near zero, the other infinity or a NaN past an intermediate overflow,
+    // and far worse through f16 cooperative accumulators.
     fn hmma_tile(&self, shape: (u32, bool)) -> Option<[u32; 3]> {
         let device = self.device.filter(|_| self.invocations % 32 == 0)?;
         let tile = cooperative_tile(device, shape)?;
         let exact = || device.exact_cooperative_hmma.get_or_init(|| crate::tests::gpu::silicon::exact_cooperative_hmma(device)).contains(&shape);
         self.force_cooperative_hmma.unwrap_or_else(|| self.tensor == TensorMode::Fast && shape.1 || exact()).then_some(tile)
     }
-    fn fma_hmma(&mut self, [a, b]: [[Vec<u32>; 2]; 2], rd: u32, rc: u32, f32_acc: bool, group: usize) {
+    fn fma_hmma(&mut self, a: &[Vec<u32>], b: &[Vec<u32>], rd: u32, rc: u32, f32_acc: bool, group: usize) {
         let (f32_ty, f16_ty) = (self.type_f32[1], self.type_f16());
         let d = [0, 1].map(|half| {
             let c = if f32_acc {
@@ -306,7 +323,7 @@ impl<'a> Decoder<'a> {
                 let word = self.load_register(nth_reg(rc, RZ, half));
                 self.half2_lanes(word, 0, false, false, false)
             };
-            [0, 1].map(|column| a[half as usize].chunks(group).zip(b[column].chunks(group)).fold(c[column], |acc, (x, y)| {
+            [0, 1].map(|column| a[half as usize].chunks(group).zip(b[(2 * half as usize + column) % b.len()].chunks(group)).fold(c[column], |acc, (x, y)| {
                 let sum = x.iter().zip(y).fold(acc, |acc, (&x, &y)| self.glsl(spirv::glsl::FMA, f32_ty, &[x, y, acc]));
                 if f32_acc {
                     return sum;
@@ -536,7 +553,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_bitwise_or(ty, bits, sign)
     }
     pub fn imma(&mut self, inst: u128) {
-        assert!(inst >> 72 & 1 == 0, "IMMA.SP");
+        let sparse = inst >> 72 & 1 != 0;
         assert_eq!(inst >> 87 & 0xf, 0, "IMMA with a UPp condition");
         let (rows, k) = match inst >> 84 & 6 | inst >> 75 & 1 {
             0 => (1, 16),
@@ -550,22 +567,24 @@ impl<'a> Decoder<'a> {
         let signed = [76, 78].map(|bit| inst >> bit & 1 != 0);
         let ty = self.type_u32[1];
         let width = self.cached_const_u32(bits);
-        let operands = self.mma_operands(inst, rows, [k * bits / 128; 2], |s, word, is_b| {
+        let [a, b] = self.mma_operands(inst, rows, [k * bits / 128 >> sparse as u32, k * bits / 128], |s, word, is_b| {
             (0..32 / bits).map(|element| {
                 let offset = s.cached_const_u32(bits * element);
                 if signed[is_b as usize] { s.ir.emit_bit_field_s_extract(ty, word, offset, width) } else { s.ir.emit_bit_field_u_extract(ty, word, offset, width) }
             }).collect()
         });
-        self.mma_s32(inst, operands, inst >> 82 & 1 != 0, |s, x, y| s.ir.emit_imul(ty, x, y));
+        let b = if sparse { self.sparse_b(inst, ty, a[0].len(), b, 2, true) } else { b.to_vec() };
+        self.mma_s32(inst, a, b, inst >> 82 & 1 != 0, |s, x, y| s.ir.emit_imul(ty, x, y));
     }
     // D register 2 * half + column of lane 4g + t is C + the sum over k of product(A[k], B[k]) for A row g + 8 * half and B column 2t + column.
     // Session 6 silicon clamps after each half of the 32 products.
-    fn mma_s32(&mut self, inst: u128, [a, b]: [[Vec<u32>; 2]; 2], saturate: bool, mut product: impl FnMut(&mut Self, u32, u32) -> u32) {
+    fn mma_s32(&mut self, inst: u128, a: [Vec<u32>; 2], b: Vec<Vec<u32>>, saturate: bool, mut product: impl FnMut(&mut Self, u32, u32) -> u32) {
         let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
         let ty = self.type_u32[1];
         for (half, row) in (0..).zip(a.iter().filter(|row| !row.is_empty())) {
-            for (column, col) in (0..).zip(&b) {
+            for column in 0..2 {
                 let reg = 2 * half + column;
+                let col = &b[reg as usize % b.len()];
                 let c = self.load_register(nth_reg(rc, RZ, reg));
                 let mut d = c;
                 for (row, col) in row.chunks(16).zip(col.chunks(16)) {

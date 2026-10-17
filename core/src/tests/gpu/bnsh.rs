@@ -43,6 +43,8 @@ mod tests {
         file[0x300..0x300 + code.len()].copy_from_slice(&code);
         let found = programs(&file);
         assert_eq!((found.len(), found[0].stage, &found[0].code), (1, Stage::Compute { local_size: [8, 4, 2] }, &code));
+        file[0x170..0x178].fill(0);
+        assert!(programs(&file).is_empty());
     }
 
     #[test]

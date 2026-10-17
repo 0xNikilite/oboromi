@@ -63,17 +63,18 @@ pub fn programs(file: &[u8]) -> Vec<Program> {
     let Some(pool) = pool() else { return Vec::new() };
     let entries = pool.clone().step_by(16).filter(|&at| file[at..].starts_with(&POOL_ENTRY_MAGIC));
     let mut programs: Vec<_> = entries.filter_map(|at| program(file, at + POOL_ENTRY_SPH, pool.end)).collect();
+    let pointer = |at| int(at, 8).filter(|&offset| offset != 0 && offset < file.len());
     let count = int(grsc + 0x1c, 4).unwrap_or(0);
-    let variations = int(grsc + 0x20, 8).unwrap_or(file.len());
-    for variation in 0..count {
-        let Some(binary) = int(variations + 0x40 * variation + 0x10, 8) else { continue };
-        let Some(array) = int(binary + 0x30, 8) else { continue };
-        let Some(pointers) = int(array + 0x10, 8) else { continue };
-        let Some(reflection) = int(binary + 0x80, 8).and_then(|at| int(at + 0x28, 8)) else { continue };
+    let variations = pointer(grsc + 0x20).unwrap_or(file.len());
+    for variation in 0..count.min(file.len().saturating_sub(variations) / 0x40) {
+        let Some(binary) = pointer(variations + 0x40 * variation + 0x10) else { continue };
+        let Some(array) = pointer(binary + 0x30) else { continue };
+        let Some(pointers) = pointer(array + 0x10) else { continue };
+        let Some(reflection) = pointer(binary + 0x80).and_then(|at| pointer(at + 0x28)) else { continue };
         let local_size = std::array::from_fn(|axis| int(reflection + 0x3c + 4 * axis, 4).unwrap_or(0) as u32);
         if local_size.contains(&0) { continue }
         for index in 0..int(array, 2).unwrap_or(0) {
-            let Some(start) = int(pointers + 8 * index, 8) else { continue };
+            let Some(start) = pointer(pointers + 8 * index) else { continue };
             if !pool.contains(&start) { continue }
             if let Some(program) = program_code(file, start, pool.end, Stage::Compute { local_size }, [0; 32]) {
                 programs.push(program);

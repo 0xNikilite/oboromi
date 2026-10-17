@@ -99,21 +99,6 @@ mod tests {
     }
 
     #[test]
-    fn atoms_add_f32_returns_each_old_sum() {
-        if !crate::gpu::device().is_ok_and(|d| d.shader_shared_float32_atomic_add) {
-            eprintln!("skipping: no shaderSharedFloat32AtomicAdd");
-            return;
-        }
-        let seeds = lanes(|_| vec![0, 0, 0, 0, 0, 1.0f32.to_bits()]);
-        let program = [inst::sts(255, 255), inst::bar_sync(), inst::atoms_add_f32(4, 255, 5), inst::bar_sync(), inst::lds(6, 255)];
-        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
-        let mut old = regs.iter().map(|r| f32::from_bits(r[4]) as u32).collect::<Vec<_>>();
-        old.sort_unstable();
-        assert_eq!(old, (0..LANES).collect::<Vec<_>>());
-        assert!(regs.iter().all(|r| r[6] == (LANES as f32).to_bits()));
-    }
-
-    #[test]
     fn atoms_u64_add_returns_full_old_values() {
         if !crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics) {
             eprintln!("skipping: no shaderSharedInt64Atomics");

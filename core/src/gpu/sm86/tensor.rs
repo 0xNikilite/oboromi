@@ -408,7 +408,7 @@ impl<'a> Decoder<'a> {
         self.mma_s32(inst, operands, inst >> 82 & 1 != 0, |s, x, y| s.ir.emit_imul(ty, x, y));
     }
     // D register 2 * half + column of lane 4g + t is C + the sum over k of product(A[k], B[k]) for A row g + 8 * half and B column 2t + column.
-    // .SAT clamps C + the exact sum of products to the s32 range.
+    // Session 6 silicon clamps after each half of the 32 products.
     fn mma_s32(&mut self, inst: u128, [a, b]: [[Vec<u32>; 2]; 2], saturate: bool, mut product: impl FnMut(&mut Self, u32, u32) -> u32) {
         let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
         let ty = self.type_u32[1];
@@ -416,19 +416,24 @@ impl<'a> Decoder<'a> {
             for (column, col) in (0..).zip(&b) {
                 let reg = 2 * half + column;
                 let c = self.load_register(nth_reg(rc, RZ, reg));
-                let sum = row.iter().zip(col).fold(self.const_u32_0, |sum, (&x, &y)| {
-                    let term = product(self, x, y);
-                    self.ir.emit_iadd(ty, sum, term)
-                });
-                let mut d = self.ir.emit_iadd(ty, c, sum);
-                if saturate {
+                let mut d = c;
+                for (row, col) in row.chunks(16).zip(col.chunks(16)) {
+                    let sum = row.iter().zip(col).fold(self.const_u32_0, |sum, (&x, &y)| {
+                        let term = product(self, x, y);
+                        self.ir.emit_iadd(ty, sum, term)
+                    });
+                    let next = self.ir.emit_iadd(ty, d, sum);
+                    if !saturate {
+                        d = next;
+                        continue;
+                    }
                     let [thirty_one, max] = [31, i32::MAX as u32].map(|v| self.cached_const_u32(v));
-                    let [c_flip, sum_flip] = [c, sum].map(|x| self.ir.emit_bitwise_xor(ty, x, d));
-                    let flips = self.ir.emit_bitwise_and(ty, c_flip, sum_flip);
+                    let [d_flip, sum_flip] = [d, sum].map(|x| self.ir.emit_bitwise_xor(ty, x, next));
+                    let flips = self.ir.emit_bitwise_and(ty, d_flip, sum_flip);
                     let overflow = self.ir.emit_sless_than(self.type_bool[1], flips, self.const_u32_0);
-                    let sign = self.ir.emit_shift_right_arithmetic(ty, c, thirty_one);
+                    let sign = self.ir.emit_shift_right_arithmetic(ty, d, thirty_one);
                     let clamped = self.ir.emit_bitwise_xor(ty, sign, max);
-                    d = self.ir.emit_select(ty, overflow, clamped, d);
+                    d = self.ir.emit_select(ty, overflow, clamped, next);
                 }
                 self.store_register(nth_reg(rd, RZ, reg), d);
             }
@@ -438,7 +443,7 @@ impl<'a> Decoder<'a> {
         let transposed = match inst >> 78 & 3 {
             0 => false,
             1 => true,
-            _ => panic!("LDSM.M816/M832 need a 4-bit or 2-bit size, masked on SM86"),
+            _ => panic!("LDSM.M816/M832 silicon executes this word; outputs are in the session 6 tensor fixtures"),
         };
         let ty = self.type_u32[1];
         let address = self.global_address(inst, 32, 40);
@@ -471,7 +476,7 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn movm(&mut self, inst: u128) {
-        assert_eq!(inst >> 75 & 0x1f, 0, "MOVM with a 4-bit or 2-bit source, masked on SM86");
+        assert_eq!(inst >> 75 & 0x1f, 0, "MOVM.M832 silicon executes this word; outputs are in the session 6 tensor fixtures");
         let ty = self.type_u32[1];
         let [group, thread] = self.lane_quad();
         let [three, four, sixteen] = [3, 4, 16].map(|c| self.cached_const_u32(c));

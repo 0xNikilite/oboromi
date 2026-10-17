@@ -60,7 +60,7 @@ mod tests {
     fn driver_module(device: Option<&VkState>, name: &str) -> (Emitter, Vec<ResourceKind>) {
         let bytes = DRIVER_SHADERS.iter().find(|shader| shader.0 == name).unwrap().1;
         let (stage, code) = match &name[name.len() - 4..] {
-            "vert" => (Stage::Vertex, &bytes[0x80..]),
+            "vert" => (Stage::Vertex { uint: 0, sint: 0 }, &bytes[0x80..]),
             "frag" => (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &bytes[0x80..]),
             _ => (Stage::Compute { local_size: [256, 1, 1] }, bytes),
         };
@@ -85,12 +85,15 @@ mod tests {
     fn draw(state: &VkState, shaders: [&str; 2], layout: &VertexLayout, vertices: &[u8], count: u32, buffers: &[(u32, &HostBuffer)], images: &[(u32, &HostImage)]) -> Vec<u8> {
         let [vertex, fragment] = shaders.map(|name| driver_module(Some(state), name).0.words());
         let uniform = |binding| if binding == GLOBAL_BINDING { DescriptorType::STORAGE_BUFFER } else { DescriptorType::UNIFORM_BUFFER };
-        let bindings: Vec<_> = buffers.iter().map(|&(b, _)| (b, uniform(b))).chain(images.iter().map(|&(b, _)| (b, DescriptorType::COMBINED_IMAGE_SAMPLER))).collect();
+        let vertex_bindings: Vec<_> = buffers.iter().map(|&(b, _)| (b, uniform(b))).collect();
+        let fragment_bindings: Vec<_> = vertex_bindings.iter().copied().chain(images.iter().map(|&(b, _)| (b, DescriptorType::COMBINED_IMAGE_SAMPLER))).collect();
         let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-        let mut pipeline = GraphicsPipeline::new(state, &vertex, &fragment, &bindings, layout, &TargetState { blend, depth: false }).unwrap();
-        pipeline.descriptors.bind(buffers);
-        pipeline.descriptors.bind_images(images);
-        let target = RenderTarget::new(state, SIZE, SIZE, false).unwrap();
+        let mut pipeline = GraphicsPipeline::new(state, &vertex, &fragment, [&vertex_bindings, &fragment_bindings], layout, &TargetState { blend, depth: None }).unwrap();
+        for descriptors in &mut pipeline.descriptors {
+            descriptors.bind(buffers);
+        }
+        pipeline.descriptors[1].bind_images(images);
+        let target = RenderTarget::new(state, SIZE, SIZE, None).unwrap();
         let mut buffer = HostBuffer::new(state, vertices.len() as u64).unwrap();
         buffer.write(vertices).unwrap();
         let raster = RasterState {
@@ -104,7 +107,18 @@ mod tests {
             depth_func: vk::CompareOp::ALWAYS,
             blend_const: [0.0; 4],
         };
-        let draw = DrawState { vertex_buffers: &[&buffer], index_buffer: None, vertex_count: count, first_vertex: 0, instance_count: 1, clear: Some([1.0; 4]), raster };
+        let draw = DrawState {
+            vertex_buffers: &[&buffer],
+            index_buffer: None,
+            vertex_count: count,
+            first_vertex: 0,
+            first_instance: 0,
+            instance_count: 1,
+            clear: Some([1.0; 4]),
+            clear_depth: None,
+            load: false,
+            raster,
+        };
         state.draw(&pipeline, &target, &draw).unwrap();
         let mut pixels = vec![0; (SIZE * SIZE * 4) as usize];
         target.read(&mut pixels).unwrap();

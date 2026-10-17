@@ -195,6 +195,10 @@ void oboromi_run_gpu_tests(LineCallback cb);
 /// or the dispatch fails. blocks, so call it from a worker thread.
 bool oboromi_render_test_frame();
 
+/// renders the julia set demo at `seconds` and presents it, false if vulkan
+/// is missing or the dispatch fails. blocks, so call it from a worker thread.
+bool oboromi_render_demo_frame(float seconds);
+
 /// generation of the last presented frame, 0 until the guest presents one.
 uint64_t oboromi_frame_generation();
 

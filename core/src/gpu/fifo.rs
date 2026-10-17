@@ -94,6 +94,15 @@ impl Pusher {
             while let Some(bytes) = words.next() {
                 let word = u32::from_le_bytes(bytes.try_into().unwrap());
                 if self.packet.is_some() {
+                    let remaining = self.packet.unwrap().remaining;
+                    if remaining > 1
+                        && remaining as usize <= words.len() + 1
+                        && words.clone().take(remaining as usize - 1).all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == word)
+                        && self.repeat_data(word, remaining, &mut events)
+                    {
+                        words.nth(remaining as usize - 2);
+                        continue;
+                    }
                     self.data(word, &mut fetch, &mut events)?;
                 } else if !self.header(word, &mut fetch, &mut events)? {
                     break;
@@ -172,6 +181,19 @@ impl Pusher {
         packet.consumed += 1;
         self.packet = (packet.remaining != 0).then_some(packet);
         Ok(())
+    }
+
+    fn repeat_data(&mut self, value: u32, count: u32, events: &mut [Event]) -> bool {
+        let packet = self.packet.unwrap();
+        if !matches!(packet.mode, Mode::NonIncrement) || self.classes[packet.subchannel] != Some(THREED_CLASS_ID) {
+            return false;
+        }
+        let Some(Event::Draw(draw)) = events.last_mut() else { return false };
+        if !self.threed.repeat_subsequent(packet.method, value, count, draw) {
+            return false;
+        }
+        self.packet = None;
+        true
     }
 
     fn dispatch<'a>(

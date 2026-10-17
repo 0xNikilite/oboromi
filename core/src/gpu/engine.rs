@@ -478,8 +478,13 @@ impl<'a> Gpu<'a> {
     }
 
     fn store(&mut self, va: u64, bytes: &[u8], writer: Writer) -> Result<(), MemoryError> {
-        self.settle(va, bytes.len() as u64)?;
         let ranges: Vec<_> = self.space.resolve(va, bytes.len() as u64)?.collect();
+        for (key, target) in &mut self.targets {
+            if key.ranges == ranges {
+                target.pending = None;
+            }
+        }
+        settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &ranges)?;
         self.memory.store(&mut self.ram, &ranges, bytes, writer);
         Ok(())
     }

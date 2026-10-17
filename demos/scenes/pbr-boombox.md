@@ -45,8 +45,8 @@ One contiguous mapping from 0x1000_0000, since the global window the uniform rea
 | 0x1003_f000 | 4 B | report |
 | 0x1004_0000 | 171600 B | vertices.bin, stride 48 |
 | 0x1007_0000 | 72432 B | indices.bin, 18108 u32 |
-| 0x1009_0000 + 0x6_0000 i | 351232 B each | the texture files in manifest order: baseColor, metallicRoughness (also occlusion, glTF reads it from R), normal, emissive; 256x256 block-linear, gob height 2, 9 levels back to back |
-| 0x1021_0000 | 0x38_4000 | colour target, 1280x720 A8B8G8R8 pitch 5120, read back to `display::present` |
+| 0x1009_0000 + 0x156_0000 i | 22371328 B each | the texture files in manifest order: baseColor, metallicRoughness (also occlusion, glTF reads it from R), normal, emissive; 2048x2048 block-linear, gob height 2, 12 levels back to back |
+| 0x1561_0000 | 0x38_4000 | colour target, 1280x720 A8B8G8R8 pitch 5120, read back to `display::present` |
 
 Each region after the vertices starts on the next 64 KiB boundary. The depth target lives on the host only, so its VA
 (0x2000_0000) needs no pages.
@@ -54,19 +54,19 @@ Each region after the vertices starts on the next 64 KiB boundary. The depth tar
 ## Texture pools
 
 TIC entries (8 words, word 0 first). Word 0 = components A8B8G8R8 (8), UNORM per channel, swizzle RGBA. Word 2 =
-header version BLOCKLINEAR (3 << 21). Word 3 = gobs per block height 2 (1 << 3), MAX_MIP_LEVEL 8 (8 << 28, nine
+header version BLOCKLINEAR (3 << 21). Word 3 = gobs per block height 2 (1 << 3), MAX_MIP_LEVEL 11 (11 << 28, twelve
 levels). Word 4 = width-1, TWO_D (1 << 23). Word 5 = height-1, normalized coords. No sRGB bit: pbr.frag decodes sRGB
 itself, so the bit would decode twice. Format and swizzle values are from clc797tex.h, never checked against a
 rig-written header (verify).
 
 | TIC | texture | w0 | w1 | w2 | w3 | w4 | w5 | w6 | w7 |
 |---|---|---|---|---|---|---|---|---|---|
-| 0 | baseColor | 0x58d24908 | 0x10090000 | 0x00600000 | 0x80000008 | 0x008000ff | 0x800000ff | 0 | 0 |
-| 1 | metallicRoughness / occlusion | 0x58d24908 | 0x100f0000 | 0x00600000 | 0x80000008 | 0x008000ff | 0x800000ff | 0 | 0 |
-| 2 | normal | 0x58d24908 | 0x10150000 | 0x00600000 | 0x80000008 | 0x008000ff | 0x800000ff | 0 | 0 |
-| 3 | emissive | 0x58d24908 | 0x101b0000 | 0x00600000 | 0x80000008 | 0x008000ff | 0x800000ff | 0 | 0 |
+| 0 | baseColor | 0x58d24908 | 0x10090000 | 0x00600000 | 0xb0000008 | 0x008007ff | 0x800007ff | 0 | 0 |
+| 1 | metallicRoughness / occlusion | 0x58d24908 | 0x115f0000 | 0x00600000 | 0xb0000008 | 0x008007ff | 0x800007ff | 0 | 0 |
+| 2 | normal | 0x58d24908 | 0x12b50000 | 0x00600000 | 0xb0000008 | 0x008007ff | 0x800007ff | 0 | 0 |
+| 3 | emissive | 0x58d24908 | 0x140b0000 | 0x00600000 | 0xb0000008 | 0x008007ff | 0x800007ff | 0 | 0 |
 
-TSC 0, repeat, trilinear: w0 = 0x00000000, w1 = 0x000000e2 (mag 2, min 2 << 4, MIP_LINEAR 3 << 6), w2 = 0x00f00000
+TSC 0, repeat, trilinear, 16x anisotropic: w0 = 0x00700000 (MAX_ANISOTROPY 7 << 20), w1 = 0x000000e2 (mag 2, min 2 << 4, MIP_LINEAR 3 << 6), w2 = 0x00f00000
 (max LOD clamp 15.0 in 4.8 fixed point at bits 23:12), w3-w7 = 0.
 
 PS bank 0x1d of the material: +0x0 = 0x00000000 (baseColor), +0x4 = 0x00000002 (normal), +0x8 = 0x00000001
@@ -79,7 +79,7 @@ PS bank 0x1d of the material: +0x0 = 0x00000000 (baseColor), +0x4 = 0x00000002 (
 | # | method | offset | value | meaning |
 |---|---|---|---|---|
 | 1 | SET_OBJECT | 0x0000 | 0x0000c797 | bind AMPERE_B 3D to subchannel 0 |
-| 2 | SET_COLOR_TARGET_A / B (0) | 0x0800 / 0x0804 | 0x00000000 / 0x10210000 | CT0 address |
+| 2 | SET_COLOR_TARGET_A / B (0) | 0x0800 / 0x0804 | 0x00000000 / 0x15610000 | CT0 address |
 | 3 | SET_COLOR_TARGET_WIDTH / HEIGHT (0) | 0x0808 / 0x080c | 0x00001400 / 0x000002d0 | pitch 5120 bytes, 720 rows |
 | 4 | SET_COLOR_TARGET_FORMAT / MEMORY (0) | 0x0810 / 0x0814 | 0x000000d5 / 0x00001000 | A8B8G8R8, LAYOUT PITCH |
 | 5 | SET_CT_WRITE (0) | 0x1a00 | 0x00001111 | write R, G, B, A |
@@ -90,7 +90,7 @@ PS bank 0x1d of the material: +0x0 = 0x00000000 (baseColor), +0x4 = 0x00000002 (
 | 10 | SET_VIEWPORT_CLIP_HORIZONTAL / VERTICAL (0) | 0x0c00 / 0x0c04 | 0x05000000 / 0x02d00000 | x 0 width 1280, y 0 height 720 |
 | 11 | SET_VIEWPORT_CLIP_MIN_Z / MAX_Z (0) | 0x0c08 / 0x0c0c | 0x00000000 / 0x3f800000 | depth 0..1 |
 | 12 | SET_SCISSOR_ENABLE / HORIZONTAL / VERTICAL (0) | 0x0e00 / 0x0e04 / 0x0e08 | 0x00000001 / 0x05000000 / 0x02d00000 | full target |
-| 13 | SET_COLOR_CLEAR_VALUE (0..3) | 0x0d80-0x0d8c | 0x3ca3d70a 0x3ca3d70a 0x3cf5c28f 0x3f800000 | clear colour 0.02, 0.02, 0.03, 1 |
+| 13 | SET_COLOR_CLEAR_VALUE (0..3) | 0x0d80-0x0d8c | 0x3e23d70a 0x3e2e147b 0x3e4ccccd 0x3f800000 | clear colour 0.16, 0.17, 0.2, 1 |
 | 14 | SET_Z_CLEAR_VALUE | 0x0d90 | 0x3f800000 | clear depth 1.0 |
 | 15 | SET_DEPTH_TEST / SET_DEPTH_WRITE | 0x12cc / 0x12e8 | 0x00000001 / 0x00000001 | depth on |
 | 16 | SET_DEPTH_FUNC | 0x130c | 0x00000201 | OGL_LESS |
@@ -117,10 +117,10 @@ values: no culling, opaque.
 ## Uniforms
 
 VS (pbr.vert): words 0-15 `model` (column-major), words 16-31 `view_proj` = Vulkan perspective (fov 45 deg, the
-target's aspect, near 0.1, far 20, y down) * look-at from (0, 0.3, 3) to the origin.
+target's aspect, near 0.1, far 20, y down) * look-at from (0, 0.35, 3.5) to the origin.
 
 PS (pbr.frag): words 0-3 light_dir (0.4, 0.8, 0.45, 0) normalised, 4-7 light_colour (3, 2.9, 2.7, 0), 8-11 ambient
-(0.08, 0.09, 0.11, 0), 12-15 camera_pos (0, 0.3, 3, 1), 16-19 base_colour_factor, 20-23 emissive_factor, 24-27 factors
+(0.6, 0.62, 0.66, 0), 12-15 camera_pos (0, 0.35, 3.5, 1), 16-19 base_colour_factor, 20-23 emissive_factor, 24-27 factors
 (metallic, roughness, normalScale, occlusionStrength), the last three from the material in manifest.json.
 
 ## Per-frame segment (subchannel 0)

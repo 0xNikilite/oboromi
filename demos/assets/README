@@ -2,4 +2,4 @@ Demo models from KhronosGroup/glTF-Sample-Assets (github.com/KhronosGroup/glTF-S
 Licence: CC0 1.0 (BoomBox: Microsoft, Avocado: Microsoft); per-model source URL and author are in each manifest.json.
 Layout: vertices.bin (f32 pos3 nrm3 tan4 uv2), indices.bin (u32), <slot>.rgba8 (RGBA8 mip chain in the layout and gob height its manifest entry records), manifest.json.
 Convert: pip install numpy Pillow; python3 -I scripts/gltf_to_raw.py Model.glb demos/assets/<name> --max-size 256 --block-linear --readme README.md
-BoomBox is converted with --max-size 256 (512 would be 5.8 MB), Avocado with 256.
+Avocado is converted with --max-size 256. BoomBox (--max-size 2048, source resolution) and FlightHelmet (--max-size 1024) are too big for the code branches, fetch.sh pulls them from the assets branch.

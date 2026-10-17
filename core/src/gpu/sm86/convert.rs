@@ -80,6 +80,9 @@ impl<'a> Decoder<'a> {
         let dstfmt = ((inst >> 75) & 3) as u32;
         let srcfmt = ((inst >> 84) & 3) as u32;
         let sat = inst >> 77 & 1 != 0;
+        if dstfmt == 1 && srcfmt == 1 && (rnd == 1 || sat) {
+            panic!("F2F.F16.F16 modifier is illegal instruction on silicon");
+        }
         let val = match (dstfmt, srcfmt) {
             (3, 2) => {
                 let val = self.fp_alu_src(inst, ftz);

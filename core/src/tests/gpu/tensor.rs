@@ -153,6 +153,23 @@ mod tests {
         assert_d(IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT, 32, &INT8, matrices, |x| x as i32 as u32);
     }
 
+    #[test]
+    fn imma_sat_clamps_after_each_half_of_the_products() {
+        let seeds: Vec<Vec<u32>> = (0..32).map(|_| {
+            let mut regs = vec![0; RC + 4];
+            regs[RA..RA + 4].fill(u32::from_le_bytes([100; 4]));
+            regs[RB] = u32::from_le_bytes([1; 4]);
+            regs[RB + 1] = u32::from_le_bytes([u8::MAX; 4]);
+            regs[RC..RC + 4].fill((i32::MAX - 100) as u32);
+            regs
+        }).collect();
+        let word = IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT;
+        let Some(lanes) = run(&[alu3(word, RD as u32, RA as u32, RB as u32, RC as u32)], &seeds) else { return };
+        for (lane, regs) in lanes.iter().enumerate() {
+            assert_eq!(regs[RD..RD + 4], [(i32::MAX - 1600) as u32; 4], "lane {lane}");
+        }
+    }
+
     // Lane L stores row L of the four 8x8 tiles at row slot 5L mod 32 and hands that address to LDSM, so a lane reading
     // the wrong lane's address reads the wrong row; half (row, col) holds 8 * row + col.
     #[test]

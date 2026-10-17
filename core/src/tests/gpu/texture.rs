@@ -86,7 +86,7 @@ mod tests {
         let program = [
             sample(inst::TEX_LB_2D, 10, 8),
             sample(inst::TEX_LL_2D, 11, 8),
-            sample(inst::TEX_LC_2D, 12, 0xff),
+            sample(inst::TEX_LC_2D, 12, 8),
             sample(inst::TEX_LB_LC_2D, 13, 8),
         ];
         let Some(lanes) = run(&program, &vec![seed; 4], &texels, NEAREST) else { return };

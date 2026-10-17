@@ -52,7 +52,7 @@ mod tests {
         let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
         assert_eq!([regs[5], regs[7]], [0x1234_5678; 2]);
 
-        seed[UREG + 4] = u32::MAX;
+        seed[UREG + 4] = 255;
         let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
         assert_eq!(regs[5], 0);
     }

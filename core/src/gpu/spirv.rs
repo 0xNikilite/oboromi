@@ -76,6 +76,7 @@ pub mod capability {
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
     pub const ATOMIC_FLOAT32_ADD: u32 = 6033;
+    pub const SHADER_CLOCK: u32 = 5055;
 }
 
 pub mod storage_class {
@@ -722,6 +723,10 @@ impl Emitter {
 
     pub fn emit_memory_barrier(&mut self, memory: u32, semantics: u32) {
         self.inst(225, &[memory, semantics]);
+    }
+
+    pub fn emit_read_clock(&mut self, ty: u32, scope: u32) -> u32 {
+        self.typed_un(5056, ty, scope)
     }
 
     pub fn emit_ext_inst(&mut self, ty: u32, set: u32, instruction: u32, operands: &[u32]) -> u32 {

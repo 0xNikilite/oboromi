@@ -389,6 +389,7 @@ impl<'a> Decoder<'a> {
         let clamp_value = self.load_register(ra + 2);
         let clamp = self.bitcast_f32(clamp_value);
         let mode = inst >> 87 & 7;
+        assert!(rb != RZ || !matches!(mode, 0 | 4 | 6), "TEX with Rb=RZ is illegal instruction on silicon");
         let (image_ops, operands) = match mode {
             0 => todo!("TEX implicit LOD waits for the fragment-stage translator"),
             1 => (LOD_OPERAND, vec![self.bitcast_f32(self.const_u32_0)]),

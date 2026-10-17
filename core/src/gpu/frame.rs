@@ -122,7 +122,7 @@ impl Frame {
     fn new(program: &[u128]) -> Result<Self, VkError> {
         let state = device()?;
         let size = u64::from(WIDTH * HEIGHT * 4);
-        let module = emit_module(Some(state), [GROUP, GROUP, 1], |decoder| decoder.translate_program(program));
+        let module = emit_module(Some(state), [GROUP, GROUP, 1], Default::default(), |decoder| decoder.translate_program(program));
         let pixels_buffer = HostBuffer::new(state, size)?;
         let cbuf0 = HostBuffer::new(state, 16)?;
         let mut support = HostBuffer::new(state, 16)?;

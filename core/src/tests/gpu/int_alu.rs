@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn mov_cx_validates_dynamic_constant_bank() {
-        let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None);
+        let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None, false);
         spirv_val(&module);
     }
 
@@ -52,7 +52,7 @@ mod tests {
         let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
         assert_eq!([regs[5], regs[7]], [0x1234_5678; 2]);
 
-        seed[UREG + 4] = u32::MAX;
+        seed[UREG + 4] = 255;
         let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
         assert_eq!(regs[5], 0);
     }

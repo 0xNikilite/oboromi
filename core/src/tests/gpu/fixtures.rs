@@ -12,6 +12,7 @@ mod tests {
         id: String,
         family: String,
         case: String,
+        observed: bool,
         words: Vec<u128>,
         inputs: Vec<u32>,
         outputs: Vec<u32>,
@@ -65,6 +66,7 @@ mod tests {
                 id: id(object),
                 family: string(object, "family"),
                 case: string(object, "case"),
+                observed: observed(object),
                 words: ["word_hex", "observer_word_hex"]
                     .into_iter()
                     .filter(|key| object.contains(&format!("\"{key}\"")))
@@ -78,6 +80,23 @@ mod tests {
                 global_after: numbers(object, "global_after"),
             })
             .collect()
+    }
+
+    #[test]
+    fn tex_rz_lod_operands_are_illegal_on_silicon() {
+        for word in [
+            0x000f4200001e0f0230005cff04127b60,
+            0x000f4200021e0f0230005cff04127b60,
+            0x000f4200031e0f0230005cff04127b60,
+        ] {
+            assert!(catch_unwind(|| translate_module(&[word], true, None, false)).is_err());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "ATOMS.ADD.INVALID3 is illegal instruction on silicon")]
+    fn atoms_invalid3_is_illegal_on_silicon() {
+        translate_module(&[0x004f5e0000000600000000070804038c], true, None, false);
     }
 
     #[derive(Default)]
@@ -99,7 +118,7 @@ mod tests {
                 eprintln!("{id}: skipped, ptxas kept the local array in registers so the instruction has no observable result");
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -130,7 +149,7 @@ mod tests {
                 eprintln!("{id}: skipped, R1 held the stack pointer so the first fp64 operand was not recorded");
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -179,6 +198,7 @@ mod tests {
         global_hi: usize,
         shared_after: Vec<u32>,
         global_after: Vec<u32>,
+        global_before: Vec<u32>,
         registers_after: Vec<u32>,
         marker_regs: Vec<usize>,
     }
@@ -218,6 +238,7 @@ mod tests {
                     global_hi,
                     shared_after: numbers(object, "shared_after"),
                     global_after: numbers(object, "global_after"),
+                    global_before: numbers(object, "global_before"),
                     registers_after: numbers(object, "registers_after"),
                     marker_regs: input_regs
                         .into_iter()
@@ -254,10 +275,26 @@ mod tests {
         "s3#026/fp32/mufu-tanh-r1-r3",
         // suatom: the order in which lanes hitting the same texel apply their atomics is up to the device.
         "s5suatom#000/suatom/d-2d-add",
+        "s6convert#002/convert-f16/f2f-f16-f64-rz",
+        "s6convert#003/convert-f16/f2f-f64-f16",
+        "s6atomic#000/atom/add-f16x2-rn",
+        "s6atomic#001/atom/add-f32-ftz-rn",
+        "s6atomic#002/atom/cast-32",
+        "s6atomic#003/atom/cast-64",
+        "s6atomic#004/atom/min-f16x2",
+        "s6atomic#006/atom/max-f16x2",
+        "s6atomic#007/atoms/cast-32",
+        "s6tex#002/tex-lod/lb-r6",
+        "s6tex#003/tex-lod/ll-r6",
+        "s6tex#004/tex-lod/lc-r6",
+        "s6tex#006/tex-lod/lb-lc-r6",
+        "s6tex#009/tex-lod/lz-dc-r6",
+        "s6tex#010/tex-lod/ll-dc-r6",
     ];
     const LLVMPIPE_FAILURES: &[&str] = &[
         // convert: llvmpipe truncates an f64 RoundEven.
         "s3#030/convert/f2i-s64-f64-r10-r12",
+        "s6atomic#008/atoms/cast-64",
         // tex: lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
         "tex#003/tex/lod-lz",
         "tex#005/tex/lod-ll",
@@ -568,7 +605,7 @@ mod tests {
                 continue;
             }
             let program = tensor_program(&fixture);
-            if catch_unwind(|| translate_module(&program, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&program, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -590,25 +627,41 @@ mod tests {
                         }
                         seed[PRED] = (case == "ldmatrix-x4-trans") as u32;
                     }
+                    case if case.starts_with("m8n8") || case.starts_with("m16n8k4") || case.starts_with("m16n8k32") || case.starts_with("m16n8k64") => {
+                        let [ra, rb, rc] = [24, 32, 64].map(|bit| (fixture.words[0] >> bit & 0xff) as usize);
+                        let (a, b, c) = match case {
+                            "m16n8k4-tf32" | "m16n8k32-s4" => (2, 1, 4),
+                            "m16n8k64-s4" | "m16n8k32-s8" | "m16n8k32-s8-satfinite" => (4, 2, 4),
+                            _ => (1, 1, 2),
+                        };
+                        seed[ra..ra + a].copy_from_slice(&before[..a]);
+                        seed[rb..rb + b].copy_from_slice(&before[a..a + b]);
+                        seed[rc..rc + c].copy_from_slice(&before[a + b..a + b + c]);
+                    }
                     _ => {
                         seed[12..16].copy_from_slice(&before[..4]);
                         seed[6..8].copy_from_slice(&before[4..6]);
                         seed[8..12].copy_from_slice(&before[6..10]);
                     }
                 }
+                let pg = (fixture.words[0] >> 12 & 7) as usize;
+                if pg != 7 && fixture.words[0] >> 15 & 1 == 0 {
+                    seed[PRED] |= 1 << pg;
+                }
             }
             let Some((lanes, _)) = run_lanes(&program, &seeds, &[], &[]) else {
                 eprintln!("skipping tensor silicon fixtures: no Vulkan device");
                 return;
             };
-            let width = if fixture.case == "m16n8k16-f16" || fixture.modifier == "dst-f16" {
+            let width = if fixture.case == "m16n8k16-f16" || fixture.modifier == "dst-f16" || fixture.case.starts_with("m8n8") {
                 2
             } else {
                 4
             };
+            let rd = (fixture.words[0] >> 16 & 0xff) as usize;
             let mismatch = lanes.iter().enumerate().find_map(|(lane, regs)| {
                 let expected = &fixture.after[lane * 4..][..width];
-                let actual = &regs[8..8 + width];
+                let actual = &regs[rd..rd + width];
                 (actual != expected).then_some((lane, expected.to_vec(), actual.to_vec()))
             });
             if let Some((lane, expected, actual)) = mismatch {
@@ -648,6 +701,10 @@ mod tests {
                 eprintln!("{id}: skipped, rig seed kernel wrote shared memory so one instruction cannot replay it");
                 continue;
             }
+            if fixture.family == "atoms" && fixture.text.contains(".64 ") && !crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics) {
+                score.unimplemented += 1;
+                continue;
+            }
             let mut words = vec![fixture.word];
             let shared = if fixture.text.contains("[R9]") {
                 fixture.shared_bank_addr
@@ -663,7 +720,7 @@ mod tests {
             if matches!(fixture.family.as_str(), "sts" | "atoms") {
                 words.push(0x004f_c800_0000_0800_0000_0000_0011_0984 | (shared as u128) << 24);
             }
-            if catch_unwind(|| translate_module(&words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -684,7 +741,9 @@ mod tests {
                 seed[PRED] = 1;
                 seed[LIVE] = fixture.lanes_active >> lane & 1;
             }
-            let global_before: Vec<_> = if fixture.id.starts_with("s4warp") {
+            let global_before: Vec<_> = if !fixture.global_before.is_empty() {
+                fixture.global_before.clone()
+            } else if fixture.id.starts_with("s4warp") {
                 (0..256)
                     .map(|i| if i & 1 == 0 { 0x7fff_ffff } else { 0x8000_0000 })
                     .collect()
@@ -752,7 +811,15 @@ mod tests {
         for fixture in fixtures(include_str!("../../../tests/fixtures/sm86-observer.jsonl")) {
             let score = scores.entry(fixture.family.clone()).or_default();
             let id = &fixture.id;
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if !fixture.observed {
+                score.skipped += 1;
+                continue;
+            }
+            if fixture.family == "mov-indexed" && fixture.case.starts_with("dst-cbuf") && !llvmpipe {
+                score.unimplemented += 1;
+                continue;
+            }
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }

@@ -8,7 +8,6 @@ pub struct Submit {
     pub command_buffer: vk::CommandBuffer,
     pub fence: vk::Fence,
     pub queries: vk::QueryPool,
-    pub timestamp_period_ns: f32,
     gpu_time_ns: u64,
 }
 
@@ -26,7 +25,8 @@ impl<'a> HostBuffer<'a> {
         let info = vk::BufferCreateInfo::default().size(size).usage(
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::UNIFORM_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_SRC,
+                | vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST,
         );
         let mut buf = Self {
             device: d,
@@ -359,7 +359,7 @@ impl VkState {
     }
 
     // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
-    fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
+    pub(crate) fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
         let mut submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
         let (d, cmd, fence, queries) = (&self.device, submit.command_buffer, submit.fence, submit.queries);
         let mut ticks = [0u64; 2];
@@ -379,7 +379,7 @@ impl VkState {
             d.wait_for_fences(&[fence], true, u64::MAX)?;
             d.get_query_pool_results(queries, 0, &mut ticks, vk::QueryResultFlags::TYPE_64)?;
         }
-        submit.gpu_time_ns = (ticks[1].wrapping_sub(ticks[0]) as f64 * f64::from(submit.timestamp_period_ns)) as u64;
+        submit.gpu_time_ns = (ticks[1].wrapping_sub(ticks[0]) as f64 * f64::from(self.timestamp_period)) as u64;
         Ok(())
     }
 }

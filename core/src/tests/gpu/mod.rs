@@ -16,6 +16,7 @@ mod memory_map;
 mod pipeline_cache;
 mod program;
 mod qmd;
+mod ray;
 mod shared;
 mod special;
 mod stages;

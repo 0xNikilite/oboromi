@@ -1,12 +1,12 @@
 //! A GPU channel over guest RAM: pushbuffers run through the pusher, and each draw or compute launch translates the
 //! guest's programs, mirrors the buffers and textures it reads and writes what it renders or stores back to guest
 //! memory, so guest-physical pages stay the only identity of every resource.
-use super::compute::{ComputePipeline, HostBuffer, HostImage};
+use super::compute::{AccelerationStructure, ComputePipeline, HostBuffer, HostImage, Triangles};
 use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
 use super::memory::{Mapping, MemoryError, MemoryTracker, PAGE, PaRange, PageMap, Writer};
-use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
+use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, acceleration_structure_binding, branch_target, emit_module};
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::VkState;
@@ -92,6 +92,27 @@ struct TargetKey {
 /// A texture's guest pages and the TIC and TSC entries it was decoded from.
 type TextureKey = (Vec<PaRange>, [u8; 32], [u8; 32]);
 
+/// Guest triangles one instance of an acceleration structure is built from: R32G32B32_SFLOAT positions at the start of
+/// each `stride`-byte vertex, u32 indices and the row-major 3x4 object-to-world transform.
+#[derive(Clone, Copy)]
+pub struct Geometry {
+    pub vertices: u64,
+    pub stride: u32,
+    pub vertex_count: u32,
+    pub indices: u64,
+    pub index_count: u32,
+    pub transform: [[f32; 4]; 3],
+    pub opaque: bool,
+}
+
+/// A registered guest acceleration structure, its geometry's guest pages and the host build of their `generation`.
+struct Traversable<'a> {
+    geometry: Vec<Geometry>,
+    ranges: Vec<PaRange>,
+    generation: u64,
+    built: Option<AccelerationStructure<'a>>,
+}
+
 /// A colour target and the depth target drawn with it, which lives only on the host: nothing reads guest depth.
 struct Target<'a> {
     render_target: RenderTarget<'a>,
@@ -108,7 +129,9 @@ pub struct Gpu<'a> {
     pusher: Pusher,
     modules: HashMap<u64, Module>,
     pipelines: HashMap<PipelineKey, GraphicsPipeline<'a>>,
-    kernels: HashMap<u64, (Vec<(u32, vk::DescriptorType)>, ComputePipeline<'a>)>,
+    /// Each kernel's bindings, its acceleration structure binding with the cbuf bank and offset of the TLAS address, and its pipeline.
+    kernels: HashMap<u64, (Vec<(u32, vk::DescriptorType)>, Option<(u32, u32, u32)>, ComputePipeline<'a>)>,
+    traversables: HashMap<u64, Traversable<'a>>,
     support: Option<HostBuffer<'a>>,
     targets: HashMap<TargetKey, Target<'a>>,
     mirrors: HashMap<Vec<PaRange>, (u64, Mapping<'a>)>,
@@ -325,6 +348,7 @@ impl<'a> Gpu<'a> {
             modules: HashMap::new(),
             pipelines: HashMap::new(),
             kernels: HashMap::new(),
+            traversables: HashMap::new(),
             support: None,
             targets: HashMap::new(),
             mirrors: HashMap::new(),
@@ -334,6 +358,41 @@ impl<'a> Gpu<'a> {
             pixels: Vec::new(),
             started: Instant::now(),
         }
+    }
+
+    /// Registers the acceleration structure the guest builds at `gpu_va` from `geometry`, one instance per entry, so a
+    /// program handing that address to the TTU traces a host build of it, rebuilt whenever the geometry's pages change.
+    // The guest's native BVH format is not known, so the host builds its own structure from the guest's build inputs.
+    pub fn register_acceleration_structure(&mut self, gpu_va: u64, geometry: Vec<Geometry>) -> Result<(), MemoryError> {
+        let mut ranges = Vec::new();
+        for g in &geometry {
+            ranges.extend(self.space.resolve(g.vertices, u64::from(g.stride) * u64::from(g.vertex_count))?);
+            ranges.extend(self.space.resolve(g.indices, 4 * u64::from(g.index_count))?);
+        }
+        self.traversables.insert(gpu_va, Traversable { geometry, ranges, generation: 0, built: None });
+        Ok(())
+    }
+
+    fn build_traversable(&mut self, va: u64) -> Result<(), String> {
+        let entry = self.traversables.get_mut(&va).ok_or_else(|| format!("no acceleration structure is registered at {va:#x}"))?;
+        let current = generation(&self.memory, &entry.ranges);
+        if entry.built.is_some() && entry.generation == current {
+            return Ok(());
+        }
+        let mut meshes = Vec::new();
+        for g in &entry.geometry {
+            let mut vertices = vec![0; (g.stride * g.vertex_count) as usize];
+            let mut indices = vec![0; 4 * g.index_count as usize];
+            gather(&self.space, &self.ram, g.vertices, &mut vertices).map_err(named)?;
+            gather(&self.space, &self.ram, g.indices, &mut indices).map_err(named)?;
+            let word = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            let positions: Vec<[f32; 3]> = vertices.chunks(g.stride as usize).map(|v| [0, 4, 8].map(|at| f32::from_bits(word(v, at)))).collect();
+            meshes.push((positions, indices.chunks(4).map(|i| word(i, 0)).collect::<Vec<_>>()));
+        }
+        let instances: Vec<_> = entry.geometry.iter().zip(&meshes).map(|(g, (positions, indices))| Triangles { positions, indices, transform: g.transform, opaque: g.opaque }).collect();
+        entry.built = Some(AccelerationStructure::new(self.state, &instances).map_err(named)?);
+        entry.generation = current;
+        Ok(())
     }
 
     /// A CPU write of guest memory at `va`.
@@ -487,20 +546,26 @@ impl<'a> Gpu<'a> {
             });
             let (ubo, ssbo) = (vk::DescriptorType::UNIFORM_BUFFER, vk::DescriptorType::STORAGE_BUFFER);
             let mut bindings = Vec::new();
-            for kind in resources {
+            let mut traversable = None;
+            for &kind in &resources {
                 let binding = match kind {
                     ResourceKind::Support => (SUPPORT_BINDING, ubo),
                     ResourceKind::Cbuf(slot) => (CBUF_BINDING + slot, ubo),
                     ResourceKind::Global | ResourceKind::Global64 => (GLOBAL_BINDING, ssbo),
-                    ResourceKind::BuiltIn(_) | ResourceKind::Local | ResourceKind::Shared | ResourceKind::Shared64 | ResourceKind::Warp | ResourceKind::Schedule => continue,
+                    ResourceKind::AccelerationStructure { cbuf_bank, byte_offset } => {
+                        traversable = Some((acceleration_structure_binding(&resources), cbuf_bank, byte_offset));
+                        continue;
+                    }
+                    ResourceKind::BuiltIn(_) | ResourceKind::Local | ResourceKind::Shared | ResourceKind::Shared64 | ResourceKind::Warp | ResourceKind::Schedule | ResourceKind::Ttu | ResourceKind::RayQuery => continue,
                     kind => return Err(format!("{kind:?} in a compute dispatch is not implemented")),
                 };
                 if !bindings.contains(&binding) {
                     bindings.push(binding);
                 }
             }
-            let pipeline = ComputePipeline::new(self.state, &module.words(), &bindings).map_err(named)?;
-            self.kernels.insert(key, (bindings, pipeline));
+            let layout: Vec<_> = bindings.iter().copied().chain(traversable.map(|(binding, ..)| (binding, vk::DescriptorType::ACCELERATION_STRUCTURE_KHR))).collect();
+            let pipeline = ComputePipeline::new(self.state, &module.words(), &layout).map_err(named)?;
+            self.kernels.insert(key, (bindings, traversable, pipeline));
         }
         let span = self.window_span()?;
         let mut buffers = Vec::new();
@@ -516,8 +581,22 @@ impl<'a> Gpu<'a> {
             };
             buffers.push((binding, ranges));
         }
+        let traversable = match self.kernels[&key].1 {
+            Some((binding, bank, offset)) => {
+                let buffer = dispatch.constant_buffers[bank as usize].ok_or_else(|| format!("QMD constant buffer {bank} with the TLAS address is not valid"))?;
+                let mut va = [0; 8];
+                gather(&self.space, &self.ram, buffer.address + u64::from(offset), &mut va).map_err(named)?;
+                let va = u64::from_le_bytes(va);
+                self.build_traversable(va)?;
+                Some((binding, va))
+            }
+            None => None,
+        };
         let support = self.support.as_ref().unwrap();
-        let (bindings, pipeline) = self.kernels.get_mut(&key).unwrap();
+        let (bindings, _, pipeline) = self.kernels.get_mut(&key).unwrap();
+        if let Some((binding, va)) = traversable {
+            pipeline.descriptors.bind_acceleration_structure(binding, self.traversables[&va].built.as_ref().unwrap());
+        }
         let mut bound: Vec<_> = buffers.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();
         if bindings.iter().any(|&(binding, _)| binding == SUPPORT_BINDING) {
             bound.push((SUPPORT_BINDING, support));

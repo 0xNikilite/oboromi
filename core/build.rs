@@ -148,6 +148,18 @@ fn generate<W: std::fmt::Write>(w: &mut W, data: &str) -> Result<(), Box<dyn std
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/nn/auto.defs");
+    let mut translator = vec![std::path::PathBuf::from("src/gpu/spirv.rs"), "src/gpu/sm86_decoder_generated.rs".into()];
+    for entry in std::fs::read_dir("src/gpu/sm86")? {
+        translator.push(entry?.path());
+    }
+    translator.sort();
+    println!("cargo:rerun-if-changed=src/gpu/sm86");
+    let mut hasher = std::hash::DefaultHasher::new();
+    for path in &translator {
+        println!("cargo:rerun-if-changed={}", path.display());
+        std::hash::Hash::hash(&std::fs::read(path)?, &mut hasher);
+    }
+    println!("cargo:rustc-env=TRANSLATOR_HASH={:016x}", std::hash::Hasher::finish(&hasher));
 
     let data = std::fs::read_to_string("src/nn/auto.defs").unwrap_or_default();
     let mut w = String::new();

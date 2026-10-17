@@ -65,7 +65,7 @@ fn gradient_program() -> Vec<u128> {
 
 // Julia set z = z * z + c with c circling the origin as the time in turns at c[0x0][0x0] grows,
 // coloured by i - log2(log2(|z|^2)) through a cosine palette and black where z never escapes.
-pub(crate) fn julia_program() -> Vec<u128> {
+pub fn julia_program() -> Vec<u128> {
     let channel = |rd, phase| [fadd_imm(rd, 14, phase), mufu(rd, MUFU_COS, rd), ffma_imm_b(rd, rd, 127.5, 15), f2i(rd, rd, cvt::S32, cvt::F32, cvt::RN)];
     let iterate = [
         fmul(12, 7, 7),

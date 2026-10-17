@@ -469,13 +469,18 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn fp_reg(&mut self, inst: u128, reg_lsb: u32, abs_bit: u32, neg_bit: u32, ftz: bool) -> u32 {
-        let bits = self.load_register((inst >> reg_lsb & 0xff) as u32);
+        let reg = (inst >> reg_lsb & 0xff) as u32;
+        let bits = if ignores_nan_payload(inst) { self.load_float_register(reg) } else { self.load_register(reg) };
         self.fp_operand(bits, inst >> abs_bit & 1 != 0, inst >> neg_bit & 1 != 0, ftz)
     }
 
     // An immediate fills all of bits 32..64, so it has no |x| (62) or -x (63) bit.
     pub(super) fn fp_alu_src(&mut self, inst: u128, ftz: bool) -> u32 {
-        let bits = self.alu_src(inst);
+        let bits = if inst >> 9 & 7 == 1 && inst >> 91 & 1 == 0 && ignores_nan_payload(inst) {
+            self.load_float_register((inst >> 32 & 0xff) as u32)
+        } else {
+            self.alu_src(inst)
+        };
         let imm = matches!(inst >> 9 & 7, 2 | 4);
         self.fp_operand(bits, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0, ftz)
     }

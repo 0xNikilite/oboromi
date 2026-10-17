@@ -285,6 +285,10 @@ impl<'a> Decoder<'a> {
         const MOV_R_IRF: u32 = 0x1c78;
         // Session 6: silicon faults on an index of 256 or more; here any index past R253 reads 0 and drops the write as RZ does.
         let indexed_ptr = |this: &mut Self, ur| {
+            // An indirect read observes any register; an indirect write must clear its old provenance.
+            for reg in this.pending_nan.keys().copied().collect::<Vec<_>>() {
+                this.load_register(reg);
+            }
             let index = this.load_ureg(ur);
             let limit = this.cached_const_u32(MAX_REG_COUNT as u32);
             let valid = this.ir.emit_uless_than(this.type_bool[1], index, limit);

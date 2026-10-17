@@ -74,8 +74,8 @@ impl<'a> Decoder<'a> {
         // NMin and NMax return the other operand when one is NaN, like the hardware.
         let [min, max] = [spirv::glsl::N_MIN, spirv::glsl::N_MAX].map(|op| self.glsl(op, self.type_f32[1], &[a, b]));
         let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
-        let bits = self.canonical_nan_bits(val);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        let bits = self.bitcast_u32(val);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fsel(&mut self, inst: u128) {
         let rd = (inst >> 16 & 0xff) as u32;

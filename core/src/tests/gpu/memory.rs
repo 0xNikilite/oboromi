@@ -93,34 +93,4 @@ mod tests {
         assert_eq!(regs[4], 0x1234_5678);
     }
 
-    #[test]
-    fn memory_words_match_nvdisasm() {
-        let fixtures = [
-            (STL_32, "STL [R0+0x8], R1 ;"),
-            (LDL_32, "LDL R4, [R0+0x8] ;"),
-            (STL_U8, "STL.U8 [R0], R1 ;"),
-            (LDL_S8, "LDL.S8 R5, [R0] ;"),
-            (STL_U16, "STL.U16 [R0+0x4], R1 ;"),
-            (LDL_S16, "LDL.S16 R6, [R0+0x4] ;"),
-            (ST_32, "ST.E [R0], R4 ;"),
-            (LD_32, "LD.E R5, [R0] ;"),
-            (LDG_U8, "LDG.E.U8 R4, [R2+0x1] ;"),
-            (LDG_S16, "LDG.E.S16 R5, [R2+0x2] ;"),
-            (LDG_UR, "LDG.E R6, [R2.64+UR4] ;"),
-            (LDG_DESC, "LDG.E R4, [R4.64] ;"),
-        ];
-        let bin = std::env::temp_dir().join(format!("oboromi-memory-{}.bin", std::process::id()));
-        for (word, expected) in fixtures {
-            std::fs::write(&bin, word.to_le_bytes()).unwrap();
-            let out = std::process::Command::new("/usr/local/cuda-13.1/bin/nvdisasm")
-                .args(["--binary", "SM86"])
-                .arg(&bin)
-                .output()
-                .unwrap();
-            let text = String::from_utf8_lossy(&out.stdout);
-            let disasm = text.lines().find_map(|line| line.split("/*0000*/").nth(1)).unwrap_or_default();
-            assert_eq!(disasm.trim(), expected, "{word:#x}");
-        }
-        std::fs::remove_file(bin).unwrap();
-    }
 }

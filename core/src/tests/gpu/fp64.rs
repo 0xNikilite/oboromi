@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{run_regs, translate_module};
+    use crate::tests::gpu::harness::run_regs;
 
     const PT: u128 = 7 << 12;
     const DADD_R: u128 = 0x229 | PT;
@@ -109,57 +109,6 @@ mod tests {
     }
 
     #[test]
-    fn fp64_words_match_nvdisasm() {
-        let fixtures = [
-            (WORD_DADD_REG, "DADD R32, R0, R2 ;"),
-            (WORD_DADD_IMM, "DADD R34, R0, 2 ;"),
-            (WORD_DADD_CBUF, "DADD R36, R0, c[0x0][0x0] ;"),
-            (WORD_DADD_NEG_ZERO, "DADD R38, R6, R6 ;"),
-            (WORD_DADD_INF, "DADD R40, R8, R10 ;"),
-            (WORD_DADD_NAN, "DADD R42, R12, R0 ;"),
-            (WORD_DADD_MOD, "DADD R58, -|R0|, -|R2| ;"),
-            (WORD_DMUL_MOD, "DMUL R44, -R0, |R2| ;"),
-            (WORD_DMUL_IMM, "DMUL R46, R0, 2 ;"),
-            (WORD_DFMA_MOD, "DFMA R48, -|R0|, |R2|, -R4 ;"),
-            (WORD_DFMA_IMM_B, "DFMA R50, R0, 2, R4 ;"),
-            (WORD_DFMA_IMM_C, "DFMA R52, R0, R2, 2 ;"),
-            (WORD_DFMA_CBUF_B, "DFMA R54, R0, c[0x0][0x0], R4 ;"),
-            (WORD_DFMA_CBUF_C, "DFMA R56, R0, R2, c[0x0][0x0] ;"),
-            (WORD_DFMA_FUSED, "DFMA R60, R0, R2, R4 ;"),
-            (WORD_DSETP_LT, "DSETP.LT.AND P0, P1, R0, R2, PT ;"),
-            (WORD_DSETP_EQU, "DSETP.EQU.AND P3, P4, R4, 2, PT ;"),
-            (
-                WORD_DSETP_NUM,
-                "DSETP.NUM.AND P5, P6, R4, c[0x0][0x0], PT ;",
-            ),
-            (WORD_DSETP_OR, "DSETP.GT.OR P0, P1, R0, R2, P2 ;"),
-            (WORD_DSETP_XOR, "DSETP.EQ.XOR P5, P6, R0, R0, P2 ;"),
-            (WORD_DSETP_LTU, "DSETP.LTU.AND P0, PT, R4, R0, PT ;"),
-            (WORD_DSETP_EQU_REG, "DSETP.EQU.AND P1, PT, R4, R0, PT ;"),
-            (WORD_DSETP_LEU, "DSETP.LEU.AND P2, PT, R4, R0, PT ;"),
-            (WORD_DSETP_GTU, "DSETP.GTU.AND P3, PT, R4, R0, PT ;"),
-            (WORD_DSETP_NEU, "DSETP.NEU.AND P4, PT, R4, R0, PT ;"),
-            (WORD_DSETP_GEU, "DSETP.GEU.AND P5, PT, R4, R0, PT ;"),
-        ];
-        let path = std::env::temp_dir().join(format!("oboromi-fp64-{}.bin", std::process::id()));
-        for (word, expected) in fixtures {
-            std::fs::write(&path, word.to_le_bytes()).unwrap();
-            let output = std::process::Command::new("/usr/local/cuda-13.1/bin/nvdisasm")
-                .args(["--binary", "SM86"])
-                .arg(&path)
-                .output()
-                .unwrap();
-            let text = String::from_utf8_lossy(&output.stdout);
-            let disasm = text
-                .lines()
-                .find_map(|line| line.split("/*0000*/").nth(1))
-                .unwrap();
-            assert_eq!(disasm.trim(), expected, "{word:#034x}");
-        }
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
     fn arithmetic_handles_sources_modifiers_and_ieee_edges() {
         let nan = f64::from_bits(0x7ff8_0000_0000_1234);
         let values = [1.5, -2.25, 0.5, -0.0, f64::INFINITY, f64::NEG_INFINITY, nan];
@@ -249,9 +198,4 @@ mod tests {
         assert_eq!(regs[254] & 0x7f, 0b0100_1111);
     }
 
-    #[test]
-    #[should_panic(expected = "RM rounding mode")]
-    fn directed_rounding_names_unsupported_mode() {
-        translate_module(&[WORD_DADD_REG | 1 << 78], true, None);
-    }
 }

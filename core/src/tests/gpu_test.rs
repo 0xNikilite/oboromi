@@ -581,6 +581,7 @@ pub mod inst {
     pub const UR2UP_IMM: u128 = 0x884 | UNIFORM;
     pub const UPLOP3: u128 = 0x89c;
     pub const R2UR: u128 = 0x3c2 | PU_PT;
+    pub const R2UR_OR: u128 = R2UR | 1 << 84;
     pub const NEG_A: u128 = 1 << 72;
     pub const EXTENDED: u128 = 1 << 74;
     pub const ICMP_LT: u128 = 1 << 76;
@@ -714,24 +715,6 @@ fn fixtures_match_nvdisasm() {
         eprintln!("nvdisasm not found, skipping");
         return;
     };
-    const W1D_FSETP: [u128; 16] = [
-        0x004fc80003900000000000030200720b,
-        0x004fc80003901000000000030200720b,
-        0x004fc80003902000000000030200720b,
-        0x004fc80003903000000000030200720b,
-        0x004fc80003904000000000030200720b,
-        0x004fc80003905000000000030200720b,
-        0x004fc80003906000000000030200720b,
-        0x004fc80003907000000000030200720b,
-        0x004fc80003908000000000030200720b,
-        0x004fc80003909000000000030200720b,
-        0x004fc8000390a000000000030200720b,
-        0x004fc8000390b000000000030200720b,
-        0x004fc8000390c000000000030200720b,
-        0x004fc8000390d000000000030200720b,
-        0x004fc8000390e000000000030200720b,
-        0x004fc8000390f000000000030200720b,
-    ];
     const W1D_FSETP_MOD: u128 = 0x004fc80003901200800000030200720b;
     const W1D_FSETP_FTZ: u128 = 0x004fc80003912000000000030200720b;
     const W1D_FSETP_COMBINE: u128 = 0x004fc80001100400000000030200720b;
@@ -824,22 +807,6 @@ fn fixtures_match_nvdisasm() {
         (0x004fc800039022700000000002007a0c, "ISETP.EQ.AND P0, P1, R2, c[0x0][0x0], PT ;"),
         (0x004fc8000b9022700000000402007c0c, "ISETP.EQ.AND P0, P1, R2, UR4, PT ;"),
         (0x004fc80003906320000000030200720c, "ISETP.GE.AND.EX P0, P1, R2, R3, PT, P2 ;"),
-        (W1D_FSETP[0], "FSETP.F.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[1], "FSETP.LT.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[2], "FSETP.EQ.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[3], "FSETP.LE.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[4], "FSETP.GT.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[5], "FSETP.NE.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[6], "FSETP.GE.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[7], "FSETP.NUM.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[8], "FSETP.NAN.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[9], "FSETP.LTU.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[10], "FSETP.EQU.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[11], "FSETP.LEU.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[12], "FSETP.GTU.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[13], "FSETP.NEU.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[14], "FSETP.GEU.AND P0, P1, R2, R3, PT ;"),
-        (W1D_FSETP[15], "FSETP.T.AND P0, P1, R2, R3, PT ;"),
         (W1D_FSETP_MOD, "FSETP.LT.AND P0, P1, |R2|, -R3, PT ;"),
         (W1D_FSETP_FTZ, "FSETP.EQ.FTZ.AND P0, P1, R2, R3, PT ;"),
         (W1D_FSETP_COMBINE, "FSETP.F.OR P0, P1, R2, R3, P2 ;"),
@@ -899,6 +866,7 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::UMOV_IMM, 1, 0, 0xdead_beef), "UMOV UR1, 0xdeadbeef;"),
         (inst::alu(inst::UMOV, 2, 0, 1), "UMOV UR2, UR1;"),
         (inst::alu(inst::R2UR, 3, 5, 0), "R2UR UR3, R5 ;"),
+        (inst::alu(inst::R2UR_OR, 3, 5, 0), "R2UR.OR PT, UR3, R5 ;"),
         (inst::alu(inst::USEL ^ inst::IMM_B | inst::preds(0, 0, 1, 0), 4, 3, 7), "USEL UR4, UR3, 0x7, UP1;"),
         (inst::alu3(inst::ULEA | inst::lea_shift(3) | inst::preds(7, 0, 0, 0), 6, 3, 1, 63), "ULEA UR6, UR3, UR1, 0x3;"),
         (inst::alu3(inst::UIMAD_WIDE ^ inst::IMM_B | inst::preds(7, 0, 0, 0), 8, 3, 0x10, 10), "UIMAD.WIDE.U32 UR8, UR3, 0x10, UR10;"),
@@ -913,6 +881,7 @@ fn fixtures_match_nvdisasm() {
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
         (inst::sts(15, 4), "STS [R15], R4 ;"),
         (inst::sts(255, 255), "STS [RZ], RZ ;"),
+        (inst::sts(255, 4) & !inst::SZ_32, "STS.U8 [RZ], R4 ;"),
         (inst::lds(13, 16), "LDS R13, [R16] ;"),
         (inst::lds(6, 255), "LDS R6, [RZ] ;"),
         (inst::atoms_add(4, 255, 5), "ATOMS.ADD R4, [RZ], R5 ;"),

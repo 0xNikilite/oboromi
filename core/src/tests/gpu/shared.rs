@@ -28,6 +28,16 @@ mod tests {
     }
 
     #[test]
+    fn sts_u8_from_every_lane_leaves_one_lanes_byte() {
+        let seeds = lanes(|i| vec![0, 0, 0, 0, i + 1]);
+        let program = [inst::sts(255, 255), inst::bar_sync(), inst::sts(255, 4) & !inst::SZ_32, inst::bar_sync(), inst::lds(6, 255)];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else {
+            return;
+        };
+        assert!(regs.iter().all(|r| r[6] == regs[0][6] && (1..=LANES).contains(&r[6])), "{}", regs[0][6]);
+    }
+
+    #[test]
     fn atoms_add_hands_each_lane_a_distinct_old_value() {
         let seeds = lanes(|_| vec![0, 0, 0, 0, 0, 1]);
         let program = [

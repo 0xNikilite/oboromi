@@ -453,7 +453,6 @@ mod tests {
     // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
     const KNOWN_FAILURES: &[&str] = &[
         "s3#026/fp32/mufu-tanh-r1-r3",
-        "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
         "s5suatom#000/suatom/d-2d-add",
     ];
     const LLVMPIPE_FAILURES: &[&str] = &[
@@ -475,6 +474,8 @@ mod tests {
         "s5tex#007/tex/mask-r",
         "s5tex#009/tex/mask-rg",
         "s5tex#010/tex/mask-a",
+        // lavapipe scales the lod of unnormalized coordinates by the texture size once more.
+        "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
     ];
 
     fn destination_width(fixture: &WarpFixture) -> usize {

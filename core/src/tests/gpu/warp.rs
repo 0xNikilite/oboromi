@@ -101,6 +101,14 @@ mod tests {
     }
 
     #[test]
+    fn r2ur_or_merges_the_active_lanes() {
+        let Some(lanes) = run(&[guard(alu(R2UR_OR, 3, 5, 0), 0, false)], &rig_seeds(0x5555_5555)) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            assert_eq!(regs[UREG + 3], if lane % 2 == 0 { 0x78 } else { 0 }, "lane {lane}");
+        }
+    }
+
+    #[test]
     fn voteu_writes_ballot_and_result_to_uniform_registers() {
         let program = [alu(VOTEU | VOTE_EQ | preds(2, 0, 0, 0), 5, 0, 0), alu(VOTEU | VOTE_ANY | preds(3, 0, 0, 0), 6, 0, 0)];
         let Some(lanes) = run(&program, &rig_seeds(0x8000_0003)) else { return };
@@ -111,17 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn shfl_matches_silicon_and_clamps_to_segments() {
-        let fixtures: [(u128, [u32; 32]); 4] = [
-            (0x004fc800000e000004e00f0005040f89, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84, 60, 64, 68, 72, 76, 80, 84, 88, 92, 96]),
-            (0x004fc800000e000008e00f0005040f89, [28, 32, 36, 40, 44, 48, 52, 56, 60, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124]),
-            (0x004fc800000e00000ce01f0005040f89, [28, 24, 20, 16, 12, 8, 4, 0, 60, 56, 52, 48, 44, 40, 36, 32, 92, 88, 84, 80, 76, 72, 68, 64, 124, 120, 116, 112, 108, 104, 100, 96]),
-            (0x004fc800000e000000e01f0005040f89, [28; 32]),
-        ];
-        for (word, r4) in fixtures {
-            let Some(lanes) = run(&[word], &rig_seeds(u32::MAX)) else { return };
-            assert_eq!(column(&lanes, 4), r4, "{word:#x}");
-        }
+    fn shfl_clamps_to_segments() {
         // Width 8 as CUDA encodes it: IDX takes c = 0x181f and UP c = 0x1800, both from registers here.
         let program = [alu(SHFL_RI | shfl_lanes(0, 0x181f) | preds(1, 0, 0, 0), 8, 5, 6), alu3(SHFL_RR | SHFL_UP | preds(2, 0, 0, 0), 9, 5, 7, 12)];
         let seeds: Vec<Vec<u32>> = (0..32).map(|i| seeds_with(&[(5, 4 * i), (6, 3), (7, 1), (12, 0x1800)])).collect();

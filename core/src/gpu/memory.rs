@@ -2,13 +2,58 @@
 //! `MemoryTracker` over those physical pages decides what host mirrors see, so mirrors key on PA and generation.
 use super::compute::HostBuffer;
 use super::{VkError, VkState};
+use ash::vk;
+use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
 use std::collections::HashMap;
 use std::ops::Range;
+use std::ptr::NonNull;
+use std::sync::Arc;
 
 // The big page size nvhost-as-gpu maps with (Ryujinx NvHostAsGpuDeviceFile BigPageSize).
 pub const PAGE: u64 = 0x1_0000;
 
 pub type PaRange = Range<u64>;
+
+pub struct Ram {
+    ptr: NonNull<u8>,
+    len: usize,
+    alignment: usize,
+}
+
+impl Ram {
+    pub fn new(bytes: usize, alignment: usize) -> Self {
+        let len = bytes.max(1).next_multiple_of(alignment);
+        let layout = Layout::from_size_align(len, alignment).unwrap();
+        let ptr = NonNull::new(unsafe { alloc_zeroed(layout) }).unwrap_or_else(|| handle_alloc_error(layout));
+        Self { ptr, len, alignment }
+    }
+
+    pub fn resize(&mut self, bytes: usize) {
+        let next = Self::new(bytes, self.alignment);
+        unsafe { next.ptr.as_ptr().copy_from_nonoverlapping(self.ptr.as_ptr(), self.len.min(next.len)) };
+        *self = next;
+    }
+}
+
+impl std::ops::Deref for Ram {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl std::ops::DerefMut for Ram {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for Ram {
+    fn drop(&mut self) {
+        unsafe { dealloc(self.ptr.as_ptr(), Layout::from_size_align_unchecked(self.len, self.alignment)) };
+    }
+}
 
 #[derive(Debug)]
 pub enum MemoryError {
@@ -165,6 +210,10 @@ impl MemoryTracker {
 
     /// Copies into `mapping` the page pieces written since it last matched them, one copy per contiguous run.
     pub fn refresh(&mut self, mapping: &mut Mapping, ram: &[u8]) -> Result<(), VkError> {
+        if mapping.buffer.imported.is_some() {
+            mapping.seen.iter_mut().for_each(|(piece, seen)| *seen = self.generation(piece.start, piece.end - piece.start));
+            return Ok(());
+        }
         let (mut offset, mut runs) = (0, Vec::<(u64, PaRange)>::new());
         for (piece, seen) in &mut mapping.seen {
             let generation = self.generation(piece.start, piece.end - piece.start);
@@ -186,8 +235,12 @@ impl MemoryTracker {
 
     /// Stores the page pieces the device changed in `mapping`, which matched guest memory before it ran.
     pub fn download(&mut self, mapping: &mut Mapping, ram: &mut [u8]) -> Result<(), VkError> {
-        let len = mapping.ranges.iter().map(|range| range.end - range.start).sum();
-        self.store(ram, &mapping.ranges, mapping.buffer.view(0..len)?, Writer::Gpu);
+        if mapping.buffer.imported.is_some() {
+            mapping.ranges.iter().for_each(|range| self.mark_gpu_written(range.start, range.end - range.start));
+        } else {
+            let len = mapping.ranges.iter().map(|range| range.end - range.start).sum();
+            self.store(ram, &mapping.ranges, mapping.buffer.view(0..len)?, Writer::Gpu);
+        }
         for (piece, seen) in &mut mapping.seen {
             *seen = self.generation(piece.start, piece.end - piece.start);
         }
@@ -213,5 +266,79 @@ impl MemoryTracker {
     pub fn window<'a>(&mut self, state: &'a VkState, ram: &[u8], space: &PageMap, va: u64, len: u64) -> Result<(Mapping<'a>, u64), MemoryError> {
         let base = va & !0xf;
         Ok((self.upload(state, ram, space.resolve(base, va + len - base)?)?, base))
+    }
+}
+
+/// Guest RAM imported as device memory.
+pub struct ImportedRam<'a> {
+    device: &'a ash::Device,
+    pub memory: vk::DeviceMemory,
+    pub memory_type: u32,
+}
+
+impl<'a> ImportedRam<'a> {
+    fn new(state: &'a VkState, ram: &mut [u8]) -> Result<Option<Self>, VkError> {
+        let Some((host, alignment)) = &state.external_memory_host else { return Ok(None) };
+        let (ptr, len) = (ram.as_mut_ptr(), ram.len() as u64);
+        // VK_EXT_external_memory_host, Host External Memory (VkImportMemoryHostPointerInfoEXT): the pointer and the
+        // allocation size must both be multiples of minImportedHostPointerAlignment, and the memory type one
+        // vkGetMemoryHostPointerPropertiesEXT reports; only a coherent type needs no flush through a mapping.
+        if !(ptr as u64 | len).is_multiple_of(*alignment) {
+            return Ok(None);
+        }
+        let handle_type = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
+        let mut pointer = vk::MemoryHostPointerPropertiesEXT::default();
+        unsafe { (host.fp().get_memory_host_pointer_properties_ext)(state.device.handle(), handle_type, ptr.cast(), &mut pointer) }.result()?;
+        let types = unsafe { state.instance.get_physical_device_memory_properties(state.physical_device) };
+        let coherent = (0..types.memory_type_count).find(|&i| {
+            pointer.memory_type_bits >> i & 1 == 1 && types.memory_types[i as usize].property_flags.contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+        });
+        let Some(memory_type) = coherent else { return Ok(None) };
+        let mut import = vk::ImportMemoryHostPointerInfoEXT::default().handle_type(handle_type).host_pointer(ptr.cast());
+        let alloc = vk::MemoryAllocateInfo::default().allocation_size(len).memory_type_index(memory_type).push_next(&mut import);
+        match unsafe { state.device.allocate_memory(&alloc, None) } {
+            Ok(memory) => Ok(Some(Self { device: &state.device, memory, memory_type })),
+            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY | vk::Result::ERROR_INVALID_EXTERNAL_HANDLE) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl Drop for ImportedRam<'_> {
+    fn drop(&mut self) {
+        unsafe { self.device.free_memory(self.memory, None) };
+    }
+}
+
+/// Imports guest RAM on first use, so buffers over contiguous physical ranges alias it instead of mirroring it.
+pub struct ZeroCopy<'a> {
+    state: &'a VkState,
+    imported: Option<Arc<ImportedRam<'a>>>,
+    failed: bool,
+}
+
+impl<'a> ZeroCopy<'a> {
+    pub fn new(state: &'a VkState) -> Option<Self> {
+        state.external_memory_host.is_some().then(|| Self { state, imported: None, failed: false })
+    }
+
+    pub fn imported(&self) -> bool {
+        self.imported.is_some()
+    }
+
+    /// A buffer over `ranges` in guest RAM itself, or None unless they are one range inside one importable span.
+    pub fn buffer(&mut self, ram: &mut [u8], ranges: &[PaRange]) -> Result<Option<HostBuffer<'a>>, VkError> {
+        let [range] = ranges else { return Ok(None) };
+        if range.end > ram.len() as u64 || self.failed {
+            return Ok(None);
+        }
+        if self.imported.is_none() {
+            self.imported = ImportedRam::new(self.state, ram)?.map(Arc::new);
+            self.failed = self.imported.is_none();
+        }
+        match &self.imported {
+            Some(imported) => HostBuffer::imported(self.state, imported, range.start, range.end - range.start),
+            None => Ok(None),
+        }
     }
 }

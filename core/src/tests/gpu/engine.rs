@@ -249,8 +249,9 @@ mod tests {
     const BLUE: [u8; 4] = [0, 0, 255, 255];
 
     fn map(gpu: &mut Gpu, va: u64, len: u64) {
-        gpu.space.map(va, gpu.ram.len() as u64, len);
-        gpu.ram.resize(gpu.ram.len() + len as usize, 0);
+        let pa = gpu.ram_len() as u64;
+        gpu.grow_ram((pa + len) as usize);
+        gpu.space.map(va, pa, len);
     }
 
     fn pixel(gpu: &Gpu, target: u64, x: u32, y: u32) -> [u8; 4] {
@@ -365,6 +366,21 @@ mod tests {
         let mut stored = [0; 4];
         gpu.read(REPORT, &mut stored).unwrap();
         assert_eq!(u32::from_le_bytes(stored), 0xfeed);
+    }
+
+    #[test]
+    fn imported_guest_ram_draws_a_cpu_store_without_uploading_and_the_mirror_still_does_without_import() {
+        let Some(state) = vk_state() else { return };
+        for imported in [true, false] {
+            let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+            if !imported {
+                gpu.zero_copy = None;
+            }
+            draw_and_check(&mut gpu, 1, [RED, GREEN, BLUE]);
+            gpu.write(VERTICES, &vertex_bytes(&[(CORNERS[0], GREEN), (CORNERS[1], BLUE), (CORNERS[2], RED)])).unwrap();
+            draw_and_check(&mut gpu, 2, [GREEN, BLUE, RED]);
+            assert_eq!(gpu.memory.uploaded == 0, imported, "{} bytes uploaded", gpu.memory.uploaded);
+        }
     }
 
     #[test]

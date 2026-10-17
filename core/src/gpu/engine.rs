@@ -5,7 +5,7 @@ use super::compute::{ComputePipeline, HostBuffer, HostImage};
 use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
-use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Writer, within};
+use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Ram, Writer, ZeroCopy, within};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
@@ -105,9 +105,10 @@ struct Target<'a> {
 
 pub struct Gpu<'a> {
     state: &'a VkState,
-    pub ram: Vec<u8>,
     pub space: PageMap,
     pub memory: MemoryTracker,
+    /// None where guest RAM cannot be imported, so buffers and render targets mirror it.
+    pub zero_copy: Option<ZeroCopy<'a>>,
     pusher: Pusher,
     modules: HashMap<u64, Module>,
     pipelines: HashMap<PipelineKey, GraphicsPipeline<'a>>,
@@ -122,6 +123,8 @@ pub struct Gpu<'a> {
     pixels: Vec<u8>,
     /// The report timestamp counts nanoseconds from here.
     started: Instant,
+    // Declared after every imported Vulkan resource so their memory is freed before its host allocation.
+    ram: Ram,
 }
 
 fn named(e: impl std::fmt::Debug) -> String {
@@ -332,9 +335,10 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
 
 impl<'a> Gpu<'a> {
     pub fn new(state: &'a VkState, ram_bytes: usize) -> Self {
+        let alignment = state.external_memory_host.as_ref().map_or(align_of::<u128>(), |(_, alignment)| *alignment as usize);
         Self {
             state,
-            ram: vec![0; ram_bytes],
+            zero_copy: ZeroCopy::new(state),
             space: PageMap::default(),
             memory: MemoryTracker::default(),
             pusher: Pusher::default(),
@@ -350,7 +354,19 @@ impl<'a> Gpu<'a> {
             pending_depth_clear: None,
             pixels: Vec::new(),
             started: Instant::now(),
+            ram: Ram::new(ram_bytes, alignment),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn grow_ram(&mut self, bytes: usize) {
+        assert!(self.zero_copy.as_ref().is_none_or(|zero_copy| !zero_copy.imported()));
+        self.ram.resize(bytes);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ram_len(&self) -> usize {
+        self.ram.len()
     }
 
     /// A CPU write of guest memory at `va`.
@@ -510,10 +526,21 @@ impl<'a> Gpu<'a> {
             self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
         }
         self.support.as_mut().unwrap().write(&span.start.to_le_bytes()).map_err(named)?;
-        let ranges = self.space.resolve(span.start, len).map_err(|e| format!("the global window over all mapped guest memory: {e:?}"))?.collect();
+        let ranges: Vec<_> = self.space.resolve(span.start, len).map_err(|e| format!("the global window over all mapped guest memory: {e:?}"))?.collect();
         match &mut self.window {
-            Some(window) if window.buffer.size >= len => window.retarget(ranges),
-            window => *window = Some(Mapping::new(HostBuffer::new(self.state, len.next_power_of_two()).map_err(named)?, ranges)),
+            Some(window) if window.buffer.imported.is_some() && window.ranges == ranges => {}
+            Some(window) if window.buffer.imported.is_none() && window.buffer.size >= len => window.retarget(ranges),
+            window => {
+                let imported = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let buffer = match imported {
+                    Some(buffer) => buffer,
+                    None => HostBuffer::new(self.state, len.next_power_of_two()).map_err(named)?,
+                };
+                *window = Some(Mapping::new(buffer, ranges));
+            }
         }
         self.memory.refresh(self.window.as_mut().unwrap(), &self.ram).map_err(named)
     }
@@ -626,7 +653,14 @@ impl<'a> Gpu<'a> {
         match self.mirrors.get_mut(&ranges) {
             Some(mapping) => self.memory.refresh(mapping, &self.ram).map_err(named)?,
             None => {
-                let mapping = self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?;
+                let imported = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let mapping = match imported {
+                    Some(buffer) => Mapping::new(buffer, ranges.clone()),
+                    None => self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?,
+                };
                 self.mirrors.insert(ranges.clone(), mapping);
             }
         }

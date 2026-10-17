@@ -275,6 +275,7 @@ mod tests {
         "s3#026/fp32/mufu-tanh-r1-r3",
         // suatom: the order in which lanes hitting the same texel apply their atomics is up to the device.
         "s5suatom#000/suatom/d-2d-add",
+        // tex-lod: silicon sampled a 3-level mipmapped array, but the ingest dropped mip_levels and textures decode one level.
         "s6tex#002/tex-lod/lb-r6",
         "s6tex#003/tex-lod/ll-r6",
         "s6tex#004/tex-lod/lc-r6",

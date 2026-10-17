@@ -937,25 +937,27 @@ impl<'a> Decoder<'a> {
         self.ir.emit_iadd(self.type_u32[1], address, offset)
     }
 
-    fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
+    fn global_atomic(&mut self, inst: u128, op: u32, sz: u32) -> u32 {
         use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY};
         if sz >= 2 {
             todo!("64-bit and float global atomics");
         }
         let address = self.global_address(inst, 64, 40);
         let ptr = self.global_word_at(address);
-        let value = self.load_register(rb);
         let scope = self.cached_const_u32(spirv::scope::DEVICE);
         let sem = self.cached_const_u32(ACQUIRE_RELEASE | UNIFORM_MEMORY);
-        if inst & 1 != 0 {
-            let swap = self.load_register((inst >> 64 & 0xff) as u32);
-            return self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value);
-        }
-        self.atomic_op(ptr, scope, sem, op, sz == 1, value)
+        self.atomic_op(inst, ptr, scope, sem, op, sz == 1)
     }
 
-    fn atomic_op(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
+    // Odd opcodes are CAS, which compares with Rb and stores Rc; the other ops apply Rb.
+    fn atomic_op(&mut self, inst: u128, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool) -> u32 {
         let ty = self.type_u32[1];
+        let b = self.load_register((inst >> 32 & 0xff) as u32);
+        if inst & 1 != 0 {
+            let c = self.load_register((inst >> 64 & 0xff) as u32);
+            let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
+            return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, relaxed, c, b);
+        }
         match op {
             0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, b),
             1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, b),
@@ -1670,18 +1672,15 @@ impl<'a> Decoder<'a> {
     }
     pub fn atomg(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let sz = (((inst >> 73) & 0xf) << 0) as u32;
         let op = (((inst >> 87) & 0xf) << 0) as u32;
-        let old = self.global_atomic(inst, op, sz, rb);
+        let old = self.global_atomic(inst, op, sz);
         self.store_register(rd, old);
     }
     pub fn atoms(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let sz = (((inst >> 73) & 0x3) << 0) as u32;
         let op = (((inst >> 87) & 0xf) << 0) as u32;
-        let cas = opcode(inst) == 0x38d;
         match opcode(inst) {
             0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC"),
             0x38d if op & 1 == 1 => todo!("ATOMS.CAST"),
@@ -1690,16 +1689,9 @@ impl<'a> Decoder<'a> {
         }
         let address = self.shared_address(inst, 64);
         let ptr = self.shared_word_at(address);
-        let b = self.load_register(rb);
-        let (ty, signed) = (self.type_u32[1], sz == 1);
         let scope = self.cached_const_u32(spirv::scope::WORKGROUP);
         let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
-        let old = if cas {
-            let c = self.load_register((inst >> 64) as u32 & 0xff);
-            self.ir.emit_atomic_compare_exchange(ty, ptr, scope, relaxed, relaxed, c, b)
-        } else {
-            self.atomic_op(ptr, scope, relaxed, op, signed, b)
-        };
+        let old = self.atomic_op(inst, ptr, scope, relaxed, op, sz == 1);
         self.store_register(rd, old);
     }
     pub fn b2r(&mut self, inst: u128) {
@@ -3392,10 +3384,9 @@ impl<'a> Decoder<'a> {
         self.store_ureg((inst >> 16 & 0x3f) as u32, value);
     }
     pub fn red(&mut self, inst: u128) {
-        let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let sz = (((inst >> 73) & 0xf) << 0) as u32;
         let pp = (((inst >> 87) & 0x7) << 0) as u32;
-        self.global_atomic(inst, pp, sz, rb);
+        self.global_atomic(inst, pp, sz);
     }
     pub fn redux(&mut self, inst: u128) {
         let ty = self.type_u32[1];

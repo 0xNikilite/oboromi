@@ -8,6 +8,7 @@ use super::{VkState, device};
 use super::demo_dungeon_sound::Sound;
 use std::f32::consts::{PI, TAU};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 pub type V3 = [f32; 3];
 pub fn add(a: V3, b: V3) -> V3 {
@@ -1240,14 +1241,16 @@ impl Dungeon {
         }
         let mut impacts = Vec::new();
         self.foot_distance += length(sub(self.eye, old_eye));
-        if self.foot_distance > 1.25 {
-            self.foot_distance %= 1.25;
+        let stride = 1.15 + 0.22 * (seconds * 2.3).sin() + 0.1 * (seconds * 5.1).sin();
+        if self.foot_distance > stride {
+            self.foot_distance %= stride;
             let r = self.world.river;
             if self.eye[0] > r.lo[0] && self.eye[0] < r.hi[0] && self.eye[2] > r.lo[2] - 1.0 && self.eye[2] < r.hi[2] + 1.0 {
                 impacts.push(([self.eye[0], WATER, self.eye[2].clamp(r.lo[2] + 0.2, r.hi[2] - 0.2)], 0.8));
             }
             let wet = self.stone.wet(self.eye[2] / 4.0, self.eye[0] / 4.0);
-            self.sound.play(if wet { Sample::WetStep } else { Sample::Step }, self.eye, 1.0, 0.96 + 0.08 * (seconds * 7.0).sin());
+            let gravel = self.world.zones_at(self.eye).any(|z| self.world.zones[z].kind == Kind::Corridor);
+            self.sound.play(if wet { Sample::WetStep } else if gravel { Sample::GravelStep } else { Sample::Step }, self.eye, 0.04, 1.0);
         }
         if !self.scream && self.world.zones[self.world.last].space.contains(self.eye) {
             self.sound.play(Sample::Scream, self.world.zones[self.world.last].space.centre(), 1.4, 1.0);
@@ -1375,6 +1378,13 @@ struct AudioCapture {
     waypoint: usize,
     foot_distance: f32,
     scream: bool,
+    solo: u8,
+}
+
+static CAPTURE_SOLO: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_dungeon_audio_solo(name: &str) {
+    CAPTURE_SOLO.store(match name { "torch" => 1, "river" => 2, "footsteps" => 3, "drips" => 4, _ => 0 }, Ordering::Relaxed);
 }
 
 pub fn render_dungeon_audio_frame(seconds: f32) {
@@ -1383,37 +1393,50 @@ pub fn render_dungeon_audio_frame(seconds: f32) {
     let capture = slot.get_or_insert_with(|| {
         let world = World::new(8);
         let eye = add(world.path[0], [0.0, EYE, 0.0]);
-        let sound = Sound::new(&world, &world.sources);
-        AudioCapture { world, sound, eye, yaw: PI / 2.0, time: 0.0, audio_time: 0.0, waypoint: 1, foot_distance: 0.0, scream: false }
+        let solo = CAPTURE_SOLO.load(Ordering::Relaxed);
+        let sources: Vec<_> = match solo {
+            1 => vec![(Sfx::Torch, add(eye, [-1.0, 0.0, 0.0]), 1.0)],
+            2 => world.sources.iter().copied().filter(|source| source.0 == Sfx::River).collect(),
+            3 | 4 => Vec::new(),
+            _ => world.sources.clone(),
+        };
+        let sound = Sound::new(&world, &sources);
+        AudioCapture { world, sound, eye, yaw: if solo == 1 { 0.0 } else { PI / 2.0 }, time: 0.0, audio_time: 0.0, waypoint: 1, foot_distance: 0.0, scream: false, solo }
     });
     let dt = (seconds - capture.time).clamp(0.0, 0.1);
     let old_eye = capture.eye;
-    let to = sub(add(capture.world.path[capture.waypoint], [0.0, EYE, 0.0]), capture.eye);
-    let distance = length(to);
-    if distance < 0.3 { capture.waypoint = (capture.waypoint + 1) % capture.world.path.len(); }
-    capture.eye = capture.world.clamp_walk(capture.eye, add(capture.eye, scale(unit(to), (dt * 4.8).min(distance))));
-    let angle = to[0].atan2(-to[2]);
-    capture.yaw += ((angle - capture.yaw + PI).rem_euclid(TAU) - PI) * (dt * 4.0).min(1.0);
-    capture.foot_distance += length(sub(capture.eye, old_eye));
-    if capture.foot_distance > 1.25 {
-        capture.foot_distance %= 1.25;
-        let wet = capture.world.river.contains(capture.eye) || capture.world.zones[capture.world.cave].space.contains(capture.eye);
-        capture.sound.play(if wet { super::demo_dungeon_sound::Sample::WetStep } else { super::demo_dungeon_sound::Sample::Step }, capture.eye, 1.0, 0.96 + 0.08 * (seconds * 7.0).sin());
+    if capture.solo != 1 {
+        let to = sub(add(capture.world.path[capture.waypoint], [0.0, EYE, 0.0]), capture.eye);
+        let distance = length(to);
+        if distance < 0.3 { capture.waypoint = (capture.waypoint + 1) % capture.world.path.len(); }
+        capture.eye = capture.world.clamp_walk(capture.eye, add(capture.eye, scale(unit(to), (dt * 4.8).min(distance))));
+        let angle = to[0].atan2(-to[2]);
+        capture.yaw += ((angle - capture.yaw + PI).rem_euclid(TAU) - PI) * (dt * 4.0).min(1.0);
     }
-    if !capture.scream && capture.world.zones[capture.world.last].space.contains(capture.eye) {
+    capture.foot_distance += length(sub(capture.eye, old_eye));
+    let stride = 1.15 + 0.22 * (seconds * 2.3).sin() + 0.1 * (seconds * 5.1).sin();
+    if matches!(capture.solo, 0 | 3) && capture.foot_distance > stride {
+        capture.foot_distance %= stride;
+        let wet = capture.world.river.contains(capture.eye) || capture.world.zones[capture.world.cave].space.contains(capture.eye);
+        let gravel = capture.world.zones_at(capture.eye).any(|z| capture.world.zones[z].kind == Kind::Corridor);
+        capture.sound.play(if wet { super::demo_dungeon_sound::Sample::WetStep } else if gravel { super::demo_dungeon_sound::Sample::GravelStep } else { super::demo_dungeon_sound::Sample::Step }, capture.eye, 0.04, 1.0);
+    }
+    if capture.solo == 0 && !capture.scream && capture.world.zones[capture.world.last].space.contains(capture.eye) {
         capture.sound.play(super::demo_dungeon_sound::Sample::Scream, capture.world.zones[capture.world.last].space.centre(), 1.4, 1.0);
         capture.scream = true;
     }
-    for (i, &(tip, floor)) in capture.world.drips.iter().enumerate() {
+    if matches!(capture.solo, 0 | 4) { for (i, &(tip, floor)) in capture.world.drips.iter().enumerate() {
         let period = 2.4 + (i % 5) as f32 * 0.3;
         let fall = ((tip[1] - floor) / 4.9).sqrt();
         let age = (seconds + i as f32 * 0.71).rem_euclid(period);
         let previous = (capture.time + i as f32 * 0.71).rem_euclid(period);
         if previous < fall && age >= fall { capture.sound.play(super::demo_dungeon_sound::Sample::Drip, [tip[0], floor, tip[2]], 0.5, 0.8 + i as f32 * 0.03); }
-    }
+    } }
     let bats = capture.world.zones[capture.world.bats].space.centre();
-    let bat_source = capture.world.sources.iter().position(|source| source.0 == Sfx::Bats).unwrap();
-    capture.sound.move_source(bat_source, add(bats, [0.5 * (seconds * 1.8).cos(), 0.5 + 0.2 * (seconds * 2.0).sin(), 0.5 * (seconds * 2.2).sin()]));
+    if capture.solo == 0 {
+        let bat_source = capture.world.sources.iter().position(|source| source.0 == Sfx::Bats).unwrap();
+        capture.sound.move_source(bat_source, add(bats, [0.5 * (seconds * 1.8).cos(), 0.5 + 0.2 * (seconds * 2.0).sin(), 0.5 * (seconds * 2.2).sin()]));
+    }
     capture.sound.listen(&capture.world, capture.eye, capture.yaw, dt);
     capture.audio_time += dt;
     let periods = (capture.audio_time / 0.005).floor() as usize;

@@ -25,6 +25,7 @@ pub enum Sample {
     Scream,
     Step,
     WetStep,
+    GravelStep,
 }
 
 impl From<Sfx> for Sample {
@@ -92,30 +93,53 @@ fn bursts(seconds: f32, rate: f32, seed: u32, out: &mut [f32], shape: &dyn Fn(f3
 }
 
 fn crackle(seconds: f32, roar: f32, pops: f32, seed: u32) -> Vec<f32> {
-    let mut low = Biquad::new(b'l', 380.0, 0.7);
-    let mut hiss = Biquad::new(b'b', 3000.0, 0.6);
+    let mut high = Biquad::new(b'h', 150.0, 0.7);
+    let mut low = Biquad::new(b'l', 1800.0, 0.7);
     let mut out = synth(seconds, &mut |t, r| {
         let swell = 0.6 + 0.4 * (t * TAU / seconds * 3.0).sin() * (t * TAU / seconds * 7.0).cos();
         let n = r.next() * 2.0 - 1.0;
-        roar * swell * low.run(n) * 2.5 + 0.03 * hiss.run(n)
+        roar * swell * low.run(high.run(n)) * 2.5
     });
-    let mut click = Biquad::new(b'b', 2600.0, 1.2);
-    bursts(seconds, pops, seed, &mut out, &|age, strength, r| (r.next() * 2.0 - 1.0) * strength * (-age / 0.004).exp() * 0.9, 0.03);
-    bursts(seconds, pops * 0.15, seed + 7, &mut out, &|age, strength, _| (age * TAU * 90.0).sin() * strength * (-age / 0.03).exp() * 0.5, 0.15);
-    out.iter_mut().for_each(|s| *s = 0.6 * *s + 0.4 * click.run(*s));
+    let mut events = vec![0.0; out.len()];
+    bursts(seconds, pops.clamp(4.0, 12.0), seed, &mut events, &|age, strength, r| (r.next() * 2.0 - 1.0) * strength * (-age / 0.006).exp(), 0.04);
+    let mut pop = Biquad::new(b'b', 3400.0, 0.8);
+    for (sample, event) in out.iter_mut().zip(events) { *sample += pop.run(event) * 1.4; }
+    bursts(seconds, 0.3, seed + 7, &mut out, &|age, strength, r| (r.next() * 2.0 - 1.0) * strength * (age / 0.08).min(1.0) * (-age / 0.18).exp() * 0.4, 0.5);
     out
+}
+
+fn step(wet: bool, gravel: bool, variation: usize) -> Vec<f32> {
+    let mut r = Rng(0x51ed_0001 + variation as u32 * 977 + u32::from(wet) * 31 + u32::from(gravel) * 67);
+    let [mut body, mut grit, mut splash] = [Biquad::new(b'l', 650.0, 0.7), Biquad::new(b'b', if gravel { 2400.0 } else { 1500.0 }, 0.8), Biquad::new(b'b', 3200.0, 0.7)];
+    let [mut ceiling_a, mut ceiling_b] = [Biquad::new(b'l', 4200.0, 0.7), Biquad::new(b'l', 4200.0, 0.7)];
+    (0..(0.24 * RATE) as usize).map(|n| {
+        let t = n as f32 / RATE;
+        let noise = r.next() * 2.0 - 1.0;
+        let heel = (t * TAU * (105.0 - t * 180.0)).sin() * (-t / (0.025 + variation as f32 * 0.001)).exp();
+        let toe_age = t - 0.055 - variation as f32 * 0.0015;
+        let toe = if toe_age > 0.0 { (toe_age * TAU * 145.0).sin() * (-toe_age / 0.035).exp() * 0.55 } else { 0.0 };
+        let scrape = grit.run(noise) * (-t / if gravel { 0.055 } else { 0.03 }).exp() * if gravel { 0.9 } else { 0.5 };
+        let water = if wet { splash.run(noise) * (-(t - 0.055).abs() / 0.05).exp() * 0.5 } else { 0.0 };
+        ceiling_b.run(ceiling_a.run(body.run(heel + toe) + scrape + water))
+    }).collect()
 }
 
 fn sample(kind: Sample) -> Vec<f32> {
     match kind {
-        Sample::Torch => crackle(4.0, 0.12, 14.0, 11),
-        Sample::Fire => crackle(6.0, 0.45, 40.0, 12),
+        Sample::Torch => crackle(4.0, 0.12, 8.0, 11),
+        Sample::Fire => {
+            let mut out = crackle(6.0, 0.45, 11.0, 12);
+            let mut rumble = Biquad::new(b'b', 80.0, 0.8);
+            let mut r = Rng(81);
+            for sample in &mut out { *sample += rumble.run(r.next() * 2.0 - 1.0) * 0.75; }
+            out
+        }
         Sample::River => {
-            let [mut low, mut mid, mut top] = [Biquad::new(b'l', 500.0, 0.6), Biquad::new(b'b', 1100.0, 0.5), Biquad::new(b'b', 4200.0, 0.8)];
+            let [mut rumble, mut low, mut mid, mut top] = [Biquad::new(b'b', 95.0, 0.6), Biquad::new(b'l', 500.0, 0.6), Biquad::new(b'b', 1100.0, 0.5), Biquad::new(b'b', 4200.0, 0.8)];
             let mut out = synth(5.0, &mut |t, r| {
                 let n = r.next() * 2.0 - 1.0;
                 let surge = 0.8 + 0.2 * (t * TAU * 0.4).sin();
-                surge * (1.6 * low.run(n) + 0.5 * mid.run(n)) + 0.08 * top.run(n)
+                surge * (2.2 * rumble.run(n) + 1.3 * low.run(n) + 0.45 * mid.run(n)) + 0.06 * top.run(n)
             });
             bursts(5.0, 30.0, 13, &mut out, &|age, strength, r| {
                 let f = 350.0 + 700.0 * r.next() + age * 4000.0;
@@ -165,9 +189,9 @@ fn sample(kind: Sample) -> Vec<f32> {
             bursts(1.0, 5.0, 15, &mut out, &|age, strength, _| (age * TAU * (7000.0 - age * 30000.0)).sin() * strength * (-age / 0.008).exp() * 0.25, 0.04);
             out
         }
-        Sample::Drip => synth(0.35, &mut |t, r| {
-            let f = 900.0 + 900.0 * (t / 0.03).min(1.0);
-            (t * TAU * f).sin() * (-t / 0.05).exp() * 0.8 + (r.next() - 0.5) * (-t / 0.004).exp() * 0.4
+        Sample::Drip => synth(0.22, &mut |t, r| {
+            let ping = ((t * TAU * 3100.0).sin() + 0.55 * (t * TAU * 3370.0).sin()) * (-t / 0.055).exp();
+            ping * 0.65 + (r.next() - 0.5) * (-t / 0.018).exp() * 0.25
         }),
         Sample::Scream => {
             let mut formants = [Biquad::new(b'b', 900.0, 4.0), Biquad::new(b'b', 2400.0, 5.0)];
@@ -180,24 +204,14 @@ fn sample(kind: Sample) -> Vec<f32> {
                 (formants[0].run(voice) * 1.4 + formants[1].run(voice)) * envelope * 1.5
             })
         }
-        Sample::Step | Sample::WetStep => {
-            let wet = kind == Sample::WetStep;
-            let [mut grit, mut splash] = [Biquad::new(b'b', 1800.0, 0.9), Biquad::new(b'h', 3500.0, 0.7)];
-            synth(if wet { 0.32 } else { 0.2 }, &mut |t, r| {
-                let n = r.next() * 2.0 - 1.0;
-                let thud = (t * TAU * (95.0 - t * 200.0)).sin() * (-t / 0.03).exp() * 0.9;
-                let scrape = grit.run(n) * (-t / 0.025).exp() * 1.2;
-                let water = if wet { splash.run(n) * (-(t - 0.01).abs() / 0.06).exp() * (1.0 + (t * 230.0).sin()) * 0.7 } else { 0.0 };
-                thud + scrape + water
-            })
-        }
+        Sample::Step | Sample::WetStep | Sample::GravelStep => step(kind == Sample::WetStep, kind == Sample::GravelStep, 0),
     }
 }
 
-const SAMPLES: [Sample; 11] = [Sample::Torch, Sample::Fire, Sample::River, Sample::Wind, Sample::Heart, Sample::Creak, Sample::Bats, Sample::Drip, Sample::Scream, Sample::Step, Sample::WetStep];
+const SAMPLES: [Sample; 12] = [Sample::Torch, Sample::Fire, Sample::River, Sample::Wind, Sample::Heart, Sample::Creak, Sample::Bats, Sample::Drip, Sample::Scream, Sample::Step, Sample::WetStep, Sample::GravelStep];
 
 fn looping(kind: Sample) -> bool {
-    !matches!(kind, Sample::Drip | Sample::Scream | Sample::Step | Sample::WetStep)
+    !matches!(kind, Sample::Drip | Sample::Scream | Sample::Step | Sample::WetStep | Sample::GravelStep)
 }
 
 struct Voice {
@@ -208,6 +222,7 @@ struct Voice {
     cursor: f32,
     active: bool,
     tail: usize,
+    variation: usize,
 }
 
 pub const DRIPS: usize = 8;
@@ -216,6 +231,7 @@ pub struct Sound {
     renderer: Renderer,
     memory: HostMemory,
     samples: Vec<Vec<f32>>,
+    steps: Vec<Vec<f32>>,
     voices: Vec<Voice>,
     spatial: Spatializer,
     configured: bool,
@@ -234,15 +250,16 @@ impl Sound {
     /// The renderer with one looping voice per source, then the drip, scream and footstep voices.
     pub fn new(world: &World, sources: &[(Sfx, V3, f32)]) -> Sound {
         let samples = SAMPLES.map(sample).into();
-        let mut voices: Vec<Voice> = sources.iter().enumerate().map(|(i, &(sfx, pos, gain))| Voice { sample: sfx.into(), pos, gain, pitch: 0.92 + 0.16 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active: true, tail: usize::MAX }).collect();
+        let steps = (0..24).map(|i| step(i / 8 == 1, i / 8 == 2, i % 8)).collect();
+        let mut voices: Vec<Voice> = sources.iter().enumerate().map(|(i, &(sfx, pos, gain))| Voice { sample: sfx.into(), pos, gain: gain * 2.0, pitch: 0.92 + 0.16 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active: true, tail: usize::MAX, variation: 0 }).collect();
         for sample in [[Sample::Drip; DRIPS].as_slice(), &[Sample::Scream, Sample::Step, Sample::Step]].concat() {
-            voices.push(Voice { sample, pos: [0.0; 3], gain: 0.0, pitch: 1.0, cursor: 0.0, active: false, tail: 0 });
+            voices.push(Voice { sample, pos: [0.0; 3], gain: 0.0, pitch: 1.0, cursor: 0.0, active: false, tail: 0, variation: 0 });
         }
         let parameter = AudioRendererParameter { sample_rate: 48_000, sample_count: BLOCK as u32, mix_buffer_count: 2, voice_count: 2, sink_count: 1, revision: MAGIC, ..Default::default() };
         let mut work = vec![0; work_buffer_size(&parameter).unwrap() as usize];
         let mut renderer = Renderer::open(parameter, &mut work).unwrap();
         renderer.start();
-        Sound { renderer, memory: HostMemory { base: BASE, bytes: vec![0; 0x1000] }, samples, voices, spatial: Spatializer::new(&world.acoustic_rooms(), Mode::Headphones), configured: false, next_drip: 0, next_step: 0, output: vec![0; 0x2_0000] }
+        Sound { renderer, memory: HostMemory { base: BASE, bytes: vec![0; 0x1000] }, samples, steps, voices, spatial: Spatializer::new(&world.acoustic_rooms(), Mode::Headphones), configured: false, next_drip: 0, next_step: 0, output: vec![0; 0x2_0000] }
     }
 
     pub fn move_source(&mut self, i: usize, pos: V3) {
@@ -259,11 +276,15 @@ impl Sound {
             }
             Sample::Scream => first + DRIPS,
             _ => {
-                self.next_step ^= 1;
-                first + DRIPS + 1 + self.next_step
+                self.next_step += 1;
+                first + DRIPS + 1 + (self.next_step & 1)
             }
         };
-        self.voices[slot] = Voice { sample, pos, gain, pitch, cursor: 0.0, active: true, tail: 800 };
+        let variation = self.next_step * 5 % 8;
+        let semitones = [-2.0, 1.0, -1.0, 2.0, 0.0, -1.5, 1.5, 0.5][variation];
+        let decibels = [-3.0, 2.0, -1.0, 3.0, 0.0, 1.0, -2.0, 0.5][variation];
+        let step = matches!(sample, Sample::Step | Sample::WetStep | Sample::GravelStep);
+        self.voices[slot] = Voice { sample, pos, gain: gain * if step { 10.0f32.powf(decibels / 20.0) } else { 1.0 }, pitch: pitch * if step { 2.0f32.powf(semitones / 12.0) } else { 1.0 }, cursor: 0.0, active: true, tail: 800, variation };
     }
 
     pub fn listen(&mut self, _world: &World, eye: V3, yaw: f32, _dt: f32) {
@@ -282,7 +303,7 @@ impl Sound {
         for _ in 0..periods {
             let mut mix = Mix::new();
             for (id, voice) in self.voices.iter_mut().enumerate().filter(|(_, voice)| voice.active || voice.tail > 0) {
-                let pcm = &self.samples[voice.sample as usize];
+                let pcm = if matches!(voice.sample, Sample::Step | Sample::WetStep | Sample::GravelStep) { &self.steps[(voice.sample as usize - Sample::Step as usize) * 8 + voice.variation] } else { &self.samples[voice.sample as usize] };
                 let mut mono = [0.0; BLOCK];
                 for sample in &mut mono {
                     if !voice.active { break; }

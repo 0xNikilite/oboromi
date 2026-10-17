@@ -12,7 +12,7 @@ mod tests {
         let Some(state) = vk_state() else { return };
         let mut post = Post::new(&state, SIZE, SIZE).unwrap();
         post.frame(0.0).unwrap();
-        let mut green = |va: u64, x: u32, y: u32| {
+        let green = |va: u64, x: u32, y: u32| {
             let mut rgba = [0; 4];
             post.gpu.read(va + u64::from(y * SIZE[0] + x) * 4, &mut rgba).unwrap();
             rgba[1]

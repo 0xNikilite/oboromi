@@ -31,8 +31,9 @@ impl<'a> Decoder<'a> {
         let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
         let words = (((inst >> 74) & 0x3) << 0) as u32 + 1;
         let (patch, output) = (inst >> 76 & 1 != 0, inst >> 79 & 1 != 0);
-        assert!(opcode(inst) == 0x321 && inst >> 24 & 0xff == RZ as u128 && inst >> 77 & 1 == 0, "only ALD at an immediate attribute address is implemented");
+        assert!(opcode(inst) == 0x321 && inst >> 77 & 1 == 0, "only ALD at a logical attribute address is implemented");
         let vertex = self.load_register(rb);
+        let indexed = self.attribute_index(inst, patch, ra_offset);
         let primitives = matches!(self.stage, Stage::Geometry { .. } | Stage::TessControl { .. } | Stage::TessEval { .. });
         for i in 0..words {
             let attr = ra_offset + 4 * i;
@@ -53,7 +54,7 @@ impl<'a> Decoder<'a> {
                     self.bitcast_u32(val)
                 }
                 _ => {
-                    let ptr = self.attribute_component(attr, patch, output, vertex);
+                    let ptr = self.attribute_component(attr, patch, output, vertex, indexed);
                     let ptr = ptr.unwrap_or_else(|| panic!("ALD a[{attr:#x}] in a {:?} module is not implemented", self.stage));
                     let val = self.ir.emit_load(self.type_f32[1], ptr);
                     self.bitcast_u32(val)
@@ -68,7 +69,8 @@ impl<'a> Decoder<'a> {
         let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
         let words = (((inst >> 74) & 0x3) << 0) as u32 + 1;
         let patch = inst >> 76 & 1 != 0;
-        assert!(opcode(inst) == 0x322 && inst >> 24 & 0xff == RZ as u128 && inst >> 77 & 1 == 0, "only AST at an immediate attribute address is implemented");
+        assert!(opcode(inst) == 0x322 && inst >> 77 & 1 == 0, "only AST at a logical attribute address is implemented");
+        let indexed = self.attribute_index(inst, patch, ra_offset);
         // A TCS writes only its own vertex, which driver SASS leaves Rc at RZ for.
         let vertex = if matches!(self.stage, Stage::TessControl { .. }) { self.builtin(BuiltIn::InvocationId) } else { self.const_u32_0 };
         for i in 0..words {
@@ -80,14 +82,20 @@ impl<'a> Decoder<'a> {
                 self.ir.emit_store(var, val);
                 continue;
             }
-            let ptr = self.attribute_component(attr, patch, true, vertex);
+            let ptr = self.attribute_component(attr, patch, true, vertex, indexed);
             let ptr = ptr.unwrap_or_else(|| panic!("AST a[{attr:#x}] in a {:?} module is not implemented", self.stage));
             let val = self.bitcast_f32(val);
             self.ir.emit_store(ptr, val);
         }
     }
-    // The f32 interface component at `attr`, of `vertex` where the stage keeps that attribute per vertex.
-    fn attribute_component(&mut self, attr: u32, patch: bool, output: bool, vertex: u32) -> Option<u32> {
+    // Driver SASS indexes only the tessellation levels by Ra, as a[Ra] and a[Ra+0x10].
+    fn attribute_index(&mut self, inst: u128, patch: bool, ra_offset: u32) -> Option<u32> {
+        let ra = (inst >> 24 & 0xff) as u32;
+        assert!(ra == RZ || patch && ra_offset < 0x18, "only the tessellation levels at a[R{ra}+{ra_offset:#x}] are implemented");
+        (ra != RZ).then(|| self.load_register(ra))
+    }
+    // The f32 interface component at `attr` plus `indexed` bytes, of `vertex` where the stage keeps that attribute per vertex.
+    fn attribute_component(&mut self, attr: u32, patch: bool, output: bool, vertex: u32, indexed: Option<u32>) -> Option<u32> {
         use spirv::{BuiltIn, storage_class::{INPUT, OUTPUT}};
         let storage = if output { OUTPUT } else { INPUT };
         let (tessellation, per_vertex) = match self.stage {
@@ -98,6 +106,16 @@ impl<'a> Decoder<'a> {
         };
         let kind = match (patch, attr) {
             (true, _) if !tessellation => return None,
+            (true, 0..0x18) if indexed.is_some() => {
+                let (builtin, base) = if attr < 0x10 { (BuiltIn::TessLevelOuter, 0) } else { (BuiltIn::TessLevelInner, 0x10) };
+                let var = self.interface_var(ResourceKind::BuiltIn(builtin as u32), storage);
+                let [offset, two] = [attr - base, 2].map(|c| self.cached_const_u32(c));
+                let address = self.ir.emit_iadd(self.type_u32[1], indexed.unwrap(), offset);
+                let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, two);
+                let ptr = self.ir.emit_type_pointer(storage, self.type_f32[1]);
+                return Some(self.ir.emit_access_chain(ptr, var, &[index]));
+            }
+            _ if indexed.is_some() => return None,
             (true, 0..0x10) => ResourceKind::BuiltIn(BuiltIn::TessLevelOuter as u32),
             (true, 0x10..0x18) => ResourceKind::BuiltIn(BuiltIn::TessLevelInner as u32),
             (true, 0x20..) => ResourceKind::Patch { location: (attr - 0x20) / 16 },
@@ -178,7 +196,7 @@ impl<'a> Decoder<'a> {
                 self.ir.emit_iadd(self.type_u32[1], index, offset)
             }
             (1, false, _) if ra == RZ && inst >> 74 & 3 == 2 => {
-                let ptr = self.attribute_component(ra_offset, true, output, self.const_u32_0);
+                let ptr = self.attribute_component(ra_offset, true, output, self.const_u32_0, None);
                 let ptr = ptr.unwrap_or_else(|| panic!("{form} [{ra_offset:#x}] in a {:?} module is not implemented", self.stage));
                 let val = self.ir.emit_load(self.type_f32[1], ptr);
                 self.bitcast_u32(val)

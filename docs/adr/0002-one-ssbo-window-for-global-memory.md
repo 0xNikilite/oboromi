@@ -12,7 +12,7 @@ SASS loads and stores use 64-bit guest addresses. Vulkan shaders cannot derefere
 
 ## Decision Outcome
 
-All global memory a dispatch touches is one storage buffer at binding 9. The host resolves the guest range through the page map, gathers it into one buffer aligned down to 16 bytes, and puts the window's base VA in the support buffer. A translated LDG or STG subtracts the base and indexes the buffer. Unmapped ranges fail; buffer device addresses are not used.
+All global memory a dispatch touches is one storage buffer at binding 33. The host resolves the guest range through the page map, gathers it into one buffer aligned down to 16 bytes, and puts the window's base VA in the support buffer. A translated LDG or STG subtracts the base and indexes the buffer. Unmapped ranges fail; buffer device addresses are not used.
 
 ### Consequences
 

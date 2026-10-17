@@ -8,11 +8,11 @@ component: [oboromi-gpu]
 
 ## Context and Problem Statement
 
-A translated program reads host support data, up to eight guest cbufs, global memory, and any number of textures and surfaces. Compute and graphics pipelines must agree on where each one lives, and graphics has two stages sharing one layout.
+A translated program reads host support data, any of the 32 guest cbuf banks a stage has, global memory, and any number of textures and surfaces. Compute and graphics pipelines must agree on where each one lives, and graphics has two stages sharing one layout.
 
 ## Decision Outcome
 
-Everything lives in set 0. Binding 0 is a host support uniform buffer, never a guest cbuf. Bindings 1 to 8 are guest cbuf slots 0 to 7 as std140 uvec4 arrays. Binding 9 is the global memory window, 10 and 11 the test-only register in and out buffers. Textures and surfaces take dense bindings from 12 in first-use order, deduplicated by where their handle comes from. Only used bindings are emitted.
+Everything lives in set 0. Binding 0 is a host support uniform buffer, never a guest cbuf. Bindings 1 to 32 are guest cbuf banks 0 to 31 as std140 uvec4 arrays. Binding 33 is the global memory window, 34 and 35 the test-only register in and out buffers. Textures and surfaces take dense bindings from 36 in first-use order, deduplicated by where their handle comes from. Only used bindings are emitted.
 
 ### Consequences
 

@@ -27,9 +27,11 @@ const MAX_REG_COUNT: usize = 254;
 const MAX_UNIFORM_REG_COUNT: usize = 63;
 pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1 + 1;
 pub const SUPPORT_BINDING: u32 = 0;
+// Bank n of the 32 a stage has (BIND_GROUP_CONSTANT_BUFFER SHADER_SLOT is 5 bits in clc797.h) is binding 1 + n.
 pub const CBUF_BINDING: u32 = 1;
-pub const GLOBAL_BINDING: u32 = 9;
-pub const TEXTURE_BINDING: u32 = 12;
+pub const CBUF_BANKS: u32 = 32;
+pub const GLOBAL_BINDING: u32 = CBUF_BINDING + CBUF_BANKS;
+pub const TEXTURE_BINDING: u32 = GLOBAL_BINDING + 3;
 const RZ: u32 = 255;
 const URZ: u32 = 63;
 const SRZ: u32 = 255;
@@ -67,7 +69,6 @@ const S2UR: u32 = 0x1c3;
 const R2UR: u32 = 0x3c2;
 const SHARED_WORDS: u32 = 256;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
-static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

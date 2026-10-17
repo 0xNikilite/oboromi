@@ -4,7 +4,7 @@ Two families need more than a one-line lowering. Textures need the guest's descr
 
 ## Textures
 
-A texture handle is a word in a constant buffer: the low 20 bits index the TIC pool (texture headers), the top 12 bits index the TSC pool (samplers). The translator records where each handle comes from, `(cbuf bank, byte offset)`, and gives each distinct one a set-0 binding from 12. The host reads the handle, decodes both pool entries and binds an image with its sampler.
+A texture handle is a word in a constant buffer: the low 20 bits index the TIC pool (texture headers), the top 12 bits index the TSC pool (samplers). The translator records where each handle comes from, `(cbuf bank, byte offset)`, and gives each distinct one a set-0 binding from 36. The host reads the handle, decodes both pool entries and binds an image with its sampler.
 
 ```mermaid
 flowchart LR

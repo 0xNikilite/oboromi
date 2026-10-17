@@ -251,15 +251,7 @@ mod tests {
         "s3#026/fp32/mufu-tanh-r1-r3",
         // suatom: the order in which lanes hitting the same texel apply their atomics is up to the device.
         "s5suatom#000/suatom/d-2d-add",
-        "s6convert#002/convert-f16/f2f-f16-f64-rz",
-        "s6convert#003/convert-f16/f2f-f64-f16",
-        "s6atomic#000/atom/add-f16x2-rn",
-        "s6atomic#001/atom/add-f32-ftz-rn",
-        "s6atomic#002/atom/cast-32",
-        "s6atomic#003/atom/cast-64",
-        "s6atomic#004/atom/min-f16x2",
-        "s6atomic#006/atom/max-f16x2",
-        "s6atomic#007/atoms/cast-32",
+        // tex-lod: silicon sampled a 3-level mipmapped array, but the ingest dropped mip_levels and textures decode one level.
         "s6tex#002/tex-lod/lb-r6",
         "s6tex#003/tex-lod/ll-r6",
         "s6tex#004/tex-lod/lc-r6",
@@ -270,7 +262,6 @@ mod tests {
     const LLVMPIPE_FAILURES: &[&str] = &[
         // convert: llvmpipe truncates an f64 RoundEven.
         "s3#030/convert/f2i-s64-f64-r10-r12",
-        "s6atomic#008/atoms/cast-64",
         // tex: lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
         "tex#003/tex/lod-lz",
         "tex#005/tex/lod-ll",
@@ -569,11 +560,11 @@ mod tests {
             if matches!(fixture.family.as_str(), "lds" | "sts" | "atoms") {
                 words.insert(
                     0,
-                    0x004f_c800_0000_0800_0000_0011_0000_0388 | (shared as u128) << 24,
+                    0x004f_c800_0000_0800_0000_0011_0000_7388 | (shared as u128) << 24,
                 );
             }
             if matches!(fixture.family.as_str(), "sts" | "atoms") {
-                words.push(0x004f_c800_0000_0800_0000_0000_0011_0984 | (shared as u128) << 24);
+                words.push(0x004f_c800_0000_0800_0000_0000_0011_7984 | (shared as u128) << 24);
             }
             if catch_unwind(|| translate_module(&words, true, None, false)).is_err() {
                 score.unimplemented += 1;
@@ -593,8 +584,9 @@ mod tests {
                 seed[fixture.global_lo] = global as u32;
                 seed[fixture.global_hi] = (global >> 32) as u32;
                 seed[fixture.output_regs[1]] = 0x5100_0000 | seed[shared] / 4;
-                seed[PRED] = 1;
-                seed[LIVE] = fixture.lanes_active >> lane & 1;
+                // The rig masks lanes through the word's own @P0, so the PT prelude still seeds every lane's shared word.
+                seed[PRED] = fixture.lanes_active >> lane & 1;
+                seed[LIVE] = 1;
             }
             let global_before: Vec<_> = if !fixture.global_before.is_empty() {
                 fixture.global_before.clone()
@@ -668,10 +660,6 @@ mod tests {
             let id = &fixture.id;
             if !fixture.observed {
                 score.skipped += 1;
-                continue;
-            }
-            if fixture.family == "mov-indexed" && fixture.case.starts_with("dst-cbuf") && !llvmpipe {
-                score.unimplemented += 1;
                 continue;
             }
             if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {

@@ -164,7 +164,7 @@ pub struct Textures<'a> {
 }
 
 /// Runs `body` as one workgroup of whole warps with an invocation per seed, the state words of invocation i seeded
-/// from `seeds[i]`, cbuf slot 0 holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
+/// from `seeds[i]`, every cbuf slot holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
 /// surface the body declares resolved through `textures`, returning every seeded invocation's state words and the
 /// global words, or `None` when there is no Vulkan device.
 pub fn run_textured(
@@ -227,15 +227,20 @@ pub fn run_on(
         _ => None,
     });
     let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
+    let cbufs: Vec<u32> = resources.iter().filter_map(|r| match r.kind {
+        ResourceKind::Cbuf(slot) if slot > 0 => Some(CBUF_BINDING + slot),
+        _ => None,
+    }).collect();
     let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let hint_binding = TEXTURE_BINDING + images.len() as u32;
     let mut hints = resources.iter().any(|r| r.kind == ResourceKind::Hints).then(|| HostBuffer::new(state, 4 * (PMTRIG_WORDS + 1) as u64).unwrap());
     if let Some(hints) = &mut hints {
         hints.write(&vec![0; 4 * (PMTRIG_WORDS + 1)]).unwrap();
     }
-    let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).chain(hints.as_ref().map(|_| (hint_binding, ssbo))).collect();
+    let bindings: Vec<_> = buffers.into_iter().chain(cbufs.iter().map(|&binding| (binding, ubo))).chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).chain(hints.as_ref().map(|_| (hint_binding, ssbo))).collect();
     let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
     let mut bound = vec![(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)];
+    bound.extend(cbufs.iter().map(|&binding| (binding, &cbuf)));
     bound.extend(hints.as_ref().map(|buffer| (hint_binding, buffer)));
     pipeline.bind(&bound);
     pipeline.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());

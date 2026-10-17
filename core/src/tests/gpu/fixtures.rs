@@ -806,10 +806,6 @@ mod tests {
                 score.skipped += 1;
                 continue;
             }
-            if fixture.family == "mov-indexed" && fixture.case.starts_with("dst-cbuf") && !llvmpipe {
-                score.unimplemented += 1;
-                continue;
-            }
             if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
                 score.unimplemented += 1;
                 continue;

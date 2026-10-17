@@ -302,6 +302,7 @@ impl<'a> Decoder<'a> {
         const MOV_IRF_I: u32 = 0x1878;
         const MOV_IRF_C: u32 = 0x1a78;
         const MOV_R_IRF: u32 = 0x1c78;
+        // Session 6: silicon faults on an index of 256 or more; here any index past R253 reads 0 and drops the write as RZ does.
         let indexed_ptr = |this: &mut Self, ur| {
             let index = this.load_ureg(ur);
             let limit = this.cached_const_u32(MAX_REG_COUNT as u32);

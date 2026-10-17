@@ -127,7 +127,7 @@ pub struct Textures<'a> {
 }
 
 /// Runs `body` as one workgroup of whole warps with an invocation per seed, the state words of invocation i seeded
-/// from `seeds[i]`, cbuf slot 0 holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
+/// from `seeds[i]`, every cbuf slot holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
 /// surface the body declares resolved through `textures`, returning every seeded invocation's state words and the
 /// global words, or `None` when there is no Vulkan device.
 pub fn run_textured(
@@ -179,10 +179,16 @@ pub fn run_textured(
         _ => None,
     });
     let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
+    let cbufs: Vec<u32> = resources.iter().filter_map(|r| match r.kind {
+        ResourceKind::Cbuf(slot) if slot > 0 => Some(CBUF_BINDING + slot),
+        _ => None,
+    }).collect();
     let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
-    let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).collect();
+    let bindings: Vec<_> = buffers.into_iter().chain(cbufs.iter().map(|&binding| (binding, ubo))).chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).collect();
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
+    let mut buffers = vec![(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)];
+    buffers.extend(cbufs.iter().map(|&binding| (binding, &cbuf)));
+    pipeline.bind(&buffers);
     pipeline.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {

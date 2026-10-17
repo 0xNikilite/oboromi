@@ -2,7 +2,7 @@
 //! `cargo run --release -p oboromi-core --example capture -- <demo> [--seconds 8] [--fps 60] --out <dir>`, then
 //! `ffmpeg -framerate 60 -i <dir>/frame_%04d.ppm -c:v libx264 -crf 20 -pix_fmt yuv420p -movflags +faststart demo.mp4`.
 use oboromi_core::ffi::oboromi_frame_read;
-use oboromi_core::gpu::{demo, demo_post, demo_sprites, frame};
+use oboromi_core::gpu::{demo, demo_particles, demo_post, demo_sprites, frame};
 
 fn render(demo: &str, seconds: f32) -> Result<(), String> {
     match demo {
@@ -12,6 +12,7 @@ fn render(demo: &str, seconds: f32) -> Result<(), String> {
         "post" => demo_post::render_post_frame(seconds),
         "boombox" => demo::render_boombox_frame(seconds),
         "helmet" => demo::render_helmet_frame(seconds),
+        "particles" => demo_particles::render_particles_frame(seconds),
         _ => Err(format!("unknown demo {demo}")),
     }
 }

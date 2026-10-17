@@ -6,6 +6,7 @@ mod compare;
 mod control;
 pub mod demos;
 mod convert;
+mod demos_particles;
 mod demos_post;
 mod demos_sprites;
 mod fifo;

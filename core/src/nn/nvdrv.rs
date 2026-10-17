@@ -9,6 +9,7 @@ use crate::gpu::memory::PAGE;
 use crate::kernel::{HandleTable, Object};
 use crate::nn::hipc::{Buffer, Request, Response, Service};
 use scene::threed::CLASS_ID as THREED;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
@@ -358,5 +359,11 @@ impl Service for Nvdrv {
         let error = result.err().map_or(0, |e| e as u32);
         let data = if cmd == 0 { vec![fd, error] } else { vec![error] };
         Response { data: data.iter().flat_map(|w| w.to_le_bytes()).collect(), copy_handles, ..Response::default() }
+    }
+}
+
+impl crate::nn::binder::NvmapResolve for RefCell<Nvdrv> {
+    fn address(&self, id: u32) -> Option<u64> {
+        self.borrow().nvmap.get(id).filter(|object| object.address != 0).map(|object| object.address)
     }
 }

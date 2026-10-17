@@ -100,3 +100,50 @@ pub fn test_tone(seconds: f32) -> usize {
     pushed
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip_stops_at_capacity() {
+        let ring = Ring::new();
+        let samples: Vec<i16> = (0..2 * CAPACITY as i32 + 2).map(|i| (i - 20_000) as i16).collect();
+        assert_eq!(ring.push(&samples), CAPACITY);
+        let mut out = vec![0; 2 * CAPACITY];
+        assert_eq!(ring.pull(&mut out), CAPACITY);
+        assert_eq!(out, samples[..2 * CAPACITY]);
+        assert_eq!(ring.underruns.load(Relaxed), 0);
+    }
+
+    #[test]
+    fn underrun_zero_fills_and_counts() {
+        let ring = Ring::new();
+        ring.push(&[1, -1, 2, -2]);
+        let mut out = [7; 8];
+        assert_eq!(ring.pull(&mut out), 2);
+        assert_eq!(out, [1, -1, 2, -2, 0, 0, 0, 0]);
+        assert_eq!(ring.pull(&mut out), 0);
+        assert_eq!(out, [0; 8]);
+        assert_eq!(ring.underruns.load(Relaxed), 2);
+    }
+
+    #[test]
+    fn wraps_around() {
+        let ring = Ring::new();
+        let mut out = vec![0; 2 * CAPACITY];
+        ring.push(&vec![0; 2 * (CAPACITY - 3)]);
+        ring.pull(&mut out[..2 * (CAPACITY - 3)]);
+        let samples: Vec<i16> = (1..=20).collect();
+        assert_eq!(ring.push(&samples), 10);
+        assert_eq!(ring.pull(&mut out[..20]), 10);
+        assert_eq!(out[..20], samples);
+    }
+
+    #[test]
+    fn tone_is_440_hz_at_minus_12_dbfs() {
+        let left: Vec<i16> = tone(0, RATE as usize).into_iter().step_by(2).collect();
+        let crossings = left.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count();
+        assert!((879..=881).contains(&crossings), "{crossings}");
+        assert_eq!(left.iter().max(), Some(&8230));
+    }
+}

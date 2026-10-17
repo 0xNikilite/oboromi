@@ -358,6 +358,11 @@ fn access_words(sz: u32) -> u32 {
 }
 
 // Uniform datapath ops set bit 91 with forms 1 (URb) and 2, 4 (imm32); vector ops with bit 91 read a UR through forms 5 to 7.
+fn assert_round_to_nearest(inst: u128) {
+    let mode = (inst >> 78 & 3) as usize;
+    assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
+}
+
 fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
@@ -1426,11 +1431,6 @@ impl<'a> Decoder<'a> {
         self.fp_src(ty, val, inst >> abs_bit & 1 != 0, inst >> neg_bit & 1 != 0)
     }
 
-    fn fp64_rounding(inst: u128) {
-        let mode = (inst >> 78 & 3) as usize;
-        assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
-    }
-
     fn fp_compare(&mut self, op: u32, a: u32, b: u32) -> u32 {
         let bool_ty = self.type_bool[1];
         let cmp = match op {
@@ -1539,8 +1539,7 @@ impl<'a> Decoder<'a> {
 
     // .SAT maps NaN to +0, which NClamp does and FClamp leaves undefined.
     fn fp_arith_result(&mut self, inst: u128, val: u32, ftz: bool) -> u32 {
-        let rnd = (inst >> 78 & 3) as usize;
-        assert!(rnd == 0, ".{} needs directed rounding, only RN is implemented", ["RN", "RM", "RP", "RZ"][rnd]);
+        assert_round_to_nearest(inst);
         let val = if inst >> 77 & 1 != 0 {
             let [zero, one] = [0.0f32, 1.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
             self.glsl(spirv::glsl::N_CLAMP, self.type_f32[1], &[val, zero, one])
@@ -1952,7 +1951,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dadd(&mut self, inst: u128) {
-        Self::fp64_rounding(inst);
+        assert_round_to_nearest(inst);
         let ty = self.type_f64();
         let a = self.fp64_reg(inst, 24, 73, 72);
         // DADD's second operand sits in the C slot, so a register comes from Rc.
@@ -1976,7 +1975,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dfma(&mut self, inst: u128) {
-        Self::fp64_rounding(inst);
+        assert_round_to_nearest(inst);
         let ty = self.type_f64();
         let a = self.fp64_reg(inst, 24, 73, 72);
         let src = self.fp64_alu_src(inst);
@@ -2010,7 +2009,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn dmul(&mut self, inst: u128) {
-        Self::fp64_rounding(inst);
+        assert_round_to_nearest(inst);
         let ty = self.type_f64();
         let a = self.fp64_reg(inst, 24, 73, 72);
         let b = self.fp64_alu_src(inst);
@@ -2301,8 +2300,7 @@ impl<'a> Decoder<'a> {
     }
     pub fn fswzadd(&mut self, inst: u128) {
         let (ty, f32_ty, bool_ty) = (self.type_u32[1], self.type_f32[1], self.type_bool[1]);
-        let rnd = inst >> 78 & 3;
-        assert!(rnd == 0, "FSWZADD rounding mode {rnd} needs directed rounding, only RN is implemented");
+        assert_round_to_nearest(inst);
         let ftz = inst >> 80 & 1 != 0;
         let [a, c] = [24, 64].map(|bit| {
             let bits = self.load_register((inst >> bit & 0xff) as u32);
@@ -2492,7 +2490,7 @@ impl<'a> Decoder<'a> {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let extract = ((inst >> 60) & 3) as u32;
         let size = ((inst >> 75) & 3) as u32;
-        let rnd = ((inst >> 78) & 3) as u32;
+        assert_round_to_nearest(inst);
         let srcfmt = ((((inst >> 84) & 0x3) << 1) | (((inst >> 74) & 0x1) << 0)) as u32;
         let signed = srcfmt & 1 != 0;
         let mut val = if srcfmt >= 6 {
@@ -2527,7 +2525,6 @@ impl<'a> Decoder<'a> {
             }
             _ => todo!("I2F destination format {size} requires f16 support"),
         };
-        assert!(rnd == 0, "directed I2F rounding is not implemented");
         if size == 3 {
             let u64_ty = self.type_u64();
             let result = self.ir.emit_bitcast(u64_ty, result);
@@ -2538,7 +2535,7 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn i2fp(&mut self, inst: u128) {
-        assert!(inst >> 78 & 3 == 0, "I2FP.RZ is not implemented");
+        assert_round_to_nearest(inst);
         let b = self.alu_src(inst);
         let val = if inst >> 74 & 1 != 0 {
             let b = self.ir.emit_bitcast(self.type_s32[1], b);

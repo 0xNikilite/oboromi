@@ -223,4 +223,8 @@ void *oboromi_vk_instance();
 /// false if the device cannot present to it.
 bool oboromi_display_surface(uint64_t surface, uint32_t width, uint32_t height);
 
+/// `fast` trades exact HMMA accumulation for speed in every translation from now on. pipelines
+/// already compiled keep the mode they were translated with.
+void oboromi_set_tensor_mode(bool fast);
+
 }  // extern "C"

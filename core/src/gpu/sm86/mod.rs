@@ -137,6 +137,7 @@ pub struct Decoder<'a> {
     mma_vars: [u32; 9],
     device: Option<&'a VkState>,
     pub force_cooperative_hmma: Option<bool>,
+    tensor: TensorMode,
     cooperative_types: HashMap<[u32; 4], u32>,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
@@ -153,6 +154,19 @@ pub struct Decoder<'a> {
 #[derive(Clone, Copy, Default)]
 pub struct Hints {
     pub timing: bool,
+    pub tensor: TensorMode,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum TensorMode {
+    Exact,
+    Fast,
+}
+
+impl Default for TensorMode {
+    fn default() -> Self {
+        if crate::gpu::SPEED_HACKS.lock().unwrap().fast_tensor { Self::Fast } else { Self::Exact }
+    }
 }
 
 enum Timing {
@@ -277,6 +291,7 @@ impl<'a> Decoder<'a> {
             mma_vars: [0; 9],
             device,
             force_cooperative_hmma: None,
+            tensor: hints.tensor,
             cooperative_types: HashMap::new(),
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,

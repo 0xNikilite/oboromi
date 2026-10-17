@@ -53,6 +53,14 @@ pub struct VkState {
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
 
+/// Accuracy traded for speed in every translation from the next one on.
+#[derive(Clone, Copy, Default)]
+pub struct SpeedHacks {
+    pub fast_tensor: bool,
+}
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false });
+
 /// `device`, but created with every window surface extension the loader has if this is the first call.
 pub fn surface_device() -> Result<&'static VkState, VkError> {
     SURFACES.store(true, Relaxed);

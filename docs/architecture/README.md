@@ -1,53 +1,55 @@
 # Architecture
 
-oboromi emulates the Nintendo Switch 2. The CPU side runs ARM code on Unicorn over one flat RAM block, the firmware services are named stubs, and nothing loads a game yet. The GPU side is the part with real depth: it reads guest pushbuffers, translates the guest's SM86 shader machine code (SASS) to SPIR-V and runs it on any Vulkan device.
+The emulator is made of a Qt window, an emulated ARM CPU, stubs for the Switch's operating system services, and a GPU emulator. Only the GPU part does real work today. For example, the Triangle button writes GPU commands into the emulated console's memory, and the GPU part draws them on the PC's graphics card.
 
 ```mermaid
 flowchart TB
-    GUI["Qt GUI<br/>gui-qt"] -->|"C FFI"| FFI["ffi.rs"]
-    FFI --> SYS["sys::State<br/>services"]
-    FFI --> CPU["cpu<br/>8 Unicorn cores"]
-    CPU --- RAM[("guest RAM<br/>one flat block")]
-    SYS --> NN["nn<br/>service stubs"]
+    GUI["Qt window<br/>Buttons and the picture"] -->|"C calls"| FFI["ffi.rs<br/>Rust functions the window calls"]
+    FFI --> SYS["sys::State<br/>List of OS services"]
+    FFI --> CPU["cpu<br/>Emulated ARM cores"]
+    CPU --- RAM[("Guest RAM<br/>The console's memory")]
+    SYS --> NN["nn<br/>Empty service stubs"]
     FFI --> ENG
-    subgraph GPU["gpu"]
-        FIFO["fifo + threed<br/>command processor"] --> ENG["engine<br/>draws over guest memory"]
-        ENG --> SASS["sm86<br/>SASS to SPIR-V"]
-        ENG --> VK["compute + graphics<br/>Vulkan backend"]
+    subgraph GPU["GPU"]
+        FIFO["fifo + threed<br/>Reads the game's GPU commands"] --> ENG["Engine<br/>Runs each draw against console memory"]
+        ENG --> SASS["sm86<br/>Rewrites NVIDIA shader code for Vulkan"]
+        ENG --> VK["compute + graphics<br/>Runs the work on the PC's GPU"]
         SASS --> VK
-        CUDA["cubin<br/>CUDA kernel loader"] --> SASS
+        CUDA["cubin<br/>Loads compiled CUDA programs"] --> SASS
     end
-    ENG --> DISP["display.rs<br/>last frame"]
-    DISP -->|"frame callback"| GUI
+    ENG --> DISP["display.rs<br/>Holds the last frame"]
+    DISP -->|"New frame"| GUI
     classDef gpu stroke:#61b7df,stroke-width:3px
     class FIFO,ENG,SASS,VK,CUDA gpu
 ```
 
-The blue-outlined boxes are the GPU work these pages describe. Everything else is context.
+*The whole emulator. Blue outlines mark the GPU work.*
 
-## The pages
+"Guest" in these pages means the emulated Switch 2, and "host" means the PC running oboromi.
 
-| page | what it answers |
+## Which page answers what?
+
+| Page | Question it answers |
 |---|---|
-| [oboromi overview](oboromi-overview.md) | what the rest of the emulator does today, and what is stub |
-| [GPU pipeline](gpu-pipeline.md) | the path from a guest pushbuffer to pixels, and which branch holds what |
-| [SASS translator](sass-translator.md) | how SM86 machine code becomes SPIR-V |
-| [Vulkan backend](vulkan-backend.md) | device, pipelines, buffers, images and the latency rules |
-| [Command processor and memory](command-processor-and-memory.md) | GPFIFO, the 3D and compute classes, the page map and coherence |
-| [Textures and tensors](textures-and-tensors.md) | TIC/TSC decode, texture layouts, the tensor core model |
-| [Verification](verification.md) | the four test tiers and the bugs each one caught |
-| [CUDA](cuda.md) | running compiled CUDA kernels on the translator and natively |
-| [Demos](demos.md) | what the window can draw today and the planned scenes |
-| [Roadmap](roadmap.md) | open items by area, and the honest limits |
-| [Glossary](../glossary.md) | SASS, SPIR-V, GPFIFO, TIC/TSC, QMD, SPH, cbuf and friends |
+| [Emulator overview](oboromi-overview.md) | What works outside the GPU, and what is only a stub |
+| [GPU pipeline](gpu-pipeline.md) | How a game's draw command becomes pixels, and which branch holds what |
+| [SASS translator](sass-translator.md) | How NVIDIA shader machine code becomes a Vulkan shader |
+| [Vulkan backend](vulkan-backend.md) | How oboromi drives the PC's graphics card, and how it stays fast |
+| [Command processor and memory](command-processor-and-memory.md) | How GPU commands are read, and how copies of memory stay correct |
+| [Textures and tensors](textures-and-tensors.md) | How game images are decoded, and how matrix instructions are made exact |
+| [Verification](verification.md) | How each instruction is proven against a real chip |
+| [CUDA](cuda.md) | How compiled NVIDIA compute programs run as test programs |
+| [Demos](demos.md) | What the window draws today, and the scenes planned next |
+| [Roadmap](roadmap.md) | What is done, what is open, and the honest limits |
+| [Glossary](../glossary.md) | Every term, in one plain sentence plus an example |
 
-## Decisions
+## Where are the design choices explained?
 
-The choices that shaped the GPU work are recorded as ADRs under [docs/adr](../adr/README.md): one page each, with the problem, the decision and what it costs.
+Each big choice has a decision record (ADR): the problem, the choice, and what it costs. Every record opens with a short "In plain words" section. They are listed under [decision records](../adr/README.md).
 
-## Reading order
+## Where should I start?
 
-New to the code: overview, then GPU pipeline, then the subsystem you are touching. Reviewing a GPU PR: GPU pipeline for the branch map, then verification for what has to pass.
+New to the code: read the overview, then the GPU pipeline, then the page for the part you are touching. Reviewing a GPU pull request: read the GPU pipeline for the branch map, then verification for what has to pass.
 
 Verified by: every page names its own checks in a "Verified by" line.
 

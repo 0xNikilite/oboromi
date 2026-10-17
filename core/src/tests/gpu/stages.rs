@@ -53,17 +53,20 @@ mod tests {
         ($($name:literal),*) => { [$(($name, include_bytes!(concat!("../../../tests/fixtures/driver-shaders/", $name, ".bin")).as_slice())),*] };
     }
 
-    const DRIVER_SHADERS: [(&str, &[u8]); 11] = driver_shaders!(
+    const DRIVER_SHADERS: [(&str, &[u8]); 15] = driver_shaders!(
         "triangle.vert", "triangle.frag", "particles.vert", "particles.frag", "particles_update.comp", "pbr.vert", "pbr.frag",
-        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag"
+        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag"
     );
 
-    // The code of a graphics stage follows its 0x80-byte program header; compute has none.
+    // The code of a graphics stage follows its 0x80-byte program header, whose byte 11 is a TCS's THREADS_PER_INPUT_PRIMITIVE
+    // (clc797sph.h:58); compute has none.
     fn driver_module(device: Option<&VkState>, name: &str) -> (Emitter, Vec<ResourceKind>) {
         let bytes = DRIVER_SHADERS.iter().find(|shader| shader.0 == name).unwrap().1;
         let (stage, code) = match &name[name.len() - 4..] {
             "vert" => (Stage::Vertex { uint: 0, sint: 0 }, &bytes[0x80..]),
             "frag" => (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &bytes[0x80..]),
+            "tesc" => (Stage::TessControl { vertices: bytes[11].into() }, &bytes[0x80..]),
+            "tese" => (Stage::TessEval { mode: 2, spacing: 0, order: 3 }, &bytes[0x80..]),
             _ => (Stage::Compute { local_size: [256, 1, 1] }, bytes),
         };
         let program: Vec<u128> = code.chunks(16).map(|word| u128::from_le_bytes(word.try_into().unwrap())).collect();
@@ -221,19 +224,6 @@ mod tests {
         let builtin = |b: B| BuiltIn(b as u32);
         let expected = [builtin(B::TessCoord), PerVertex { attr: 0x70, output: false }, builtin(B::TessLevelOuter), Patch { location: 0 }, builtin(B::Position)];
         assert_eq!(stage_interface(Stage::TessEval { mode: 1, spacing: 0, order: 3 }, &program), expected);
-    }
-
-    #[test]
-    fn driver_compiled_tessellation_and_multisample_programs_translate() {
-        let programs: [(Stage, &[u8]); 3] = [
-            (Stage::TessControl { vertices: 4 }, include_bytes!("../../../tests/fixtures/sm86-quad-tesc.bin")),
-            (Stage::TessEval { mode: 2, spacing: 0, order: 3 }, include_bytes!("../../../tests/fixtures/sm86-quad-tese.bin")),
-            (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, include_bytes!("../../../tests/fixtures/sm86-msaa-frag.bin")),
-        ];
-        for (stage, bytes) in programs {
-            let words: Vec<u128> = bytes.chunks(16).map(|word| u128::from_le_bytes(word.try_into().unwrap())).collect();
-            stage_interface(stage, &words);
-        }
     }
 
     #[test]

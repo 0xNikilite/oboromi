@@ -35,11 +35,11 @@ impl<'a> Decoder<'a> {
         let op = (((inst >> 87) & 0xf) << 0) as u32;
         let cas = opcode(inst) == 0x38d;
         assert!(sz != 3, "ATOMS.ADD.INVALID3 is illegal instruction on silicon");
-        match opcode(inst) {
-            0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC have no published shared-word state transition in the SM86 table, Eden, Ryujinx, or NAK"),
-            _ => {}
-        }
         let address = self.shared_address(inst, 64);
+        if opcode(inst) == 0x1f8c {
+            let [scope, sem] = [spirv::scope::WORKGROUP, spirv::memory_semantics::ACQUIRE_RELEASE | spirv::memory_semantics::WORKGROUP_MEMORY].map(|c| self.cached_const_u32(c));
+            return self.mbarrier(inst, address, Self::shared_word_at, scope, sem);
+        }
         if matches!(sz, 2 | 5) {
             assert!(crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics), "64-bit shared atomics require shaderSharedInt64Atomics");
             let ptr = self.shared_u64_at(address);

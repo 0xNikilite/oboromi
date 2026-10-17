@@ -54,12 +54,13 @@ mod tests {
             alu3(ULEA | lea_shift(3) | preds(7, 0, 0, 0), 6, 3, 1, 63),
             alu3(UIMAD_WIDE ^ IMM_B | preds(7, 0, 0, 0), 8, 3, 0x10, 10),
             alu3(UIADD3_64 ^ IMM_B | preds(7, 7, 7, 7), 12, 10, u32::MAX, 63),
+            alu(UCLEA | 4 << 73 | preds(7, 0, 0, 0), 14, 10, 0x30),
         ];
         let seed = [(5, 0x1234), (UREG + 10, u32::MAX), (UREG + 11, 1), (UPRED, 0b10)];
         let Some(regs) = run(&program, &seed) else { return };
         assert_eq!(
-            regs[UREG + 1..UREG + 14],
-            [0xdead_beef, 0xdead_beef, 0x1234, 0x1234, 7, 0xdeae_508f, 0, 0x0001_233f, 2, u32::MAX, 1, u32::MAX - 1, 1]
+            regs[UREG + 1..UREG + 16],
+            [0xdead_beef, 0xdead_beef, 0x1234, 0x1234, 7, 0xdeae_508f, 0, 0x0001_233f, 2, u32::MAX, 1, u32::MAX - 1, 1, 0x20, 0x20]
         );
     }
 

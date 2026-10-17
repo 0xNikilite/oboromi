@@ -64,6 +64,8 @@ pub mod inst {
     pub const MMA_BF16: u128 = 1 << 82;
     pub const MMA_1684: u128 = 1 << 78;
     pub const MMA_TF32: u128 = 2 << 82;
+    pub const MMA_SP: u128 = 1 << 73;
+    pub const MMA_SP_16832: u128 = MMA_SP | 9 << 75;
     pub const IMMA: u128 = 0x237 | 1 << 74;
     pub const IMMA_16816: u128 = 1 << 86;
     pub const IMMA_16832: u128 = IMMA_16816 | 1 << 75;
@@ -158,6 +160,7 @@ pub mod inst {
     pub const SUST_D_32: u128 = 0xb9d | SZ_32;
     pub const SUST_P_RGBA: u128 = 0xb9b | SU_RGBA;
     pub const SU_BA: u128 = 1 << 72;
+    pub const SUQUERY: u128 = 0xbb3;
     pub const SURED_ADD: u128 = 0x59f;
     pub const SUATOM_ADD: u128 = 0x593;
     pub const SUATOM_CAS: u128 = 0x595;
@@ -642,6 +645,7 @@ pub mod inst {
     pub const UIMAD_WIDE: u128 = 0x2a5 | UNIFORM;
     pub const UISETP: u128 = 0x28c | UNIFORM;
     pub const ULEA: u128 = 0x291 | UNIFORM;
+    pub const UCLEA: u128 = 0x8bc | UNIFORM;
     pub const USEL: u128 = 0x287 | UNIFORM;
     pub const UMOV: u128 = 0xc82 | UNIFORM;
     pub const UMOV_IMM: u128 = 0x882;
@@ -956,6 +960,8 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::R2UR_OR, 3, 5, 0), "R2UR.OR PT, UR3, R5 ;"),
         (inst::alu(inst::USEL ^ inst::IMM_B | inst::preds(0, 0, 1, 0), 4, 3, 7), "USEL UR4, UR3, 0x7, UP1;"),
         (inst::alu3(inst::ULEA | inst::lea_shift(3) | inst::preds(7, 0, 0, 0), 6, 3, 1, 63), "ULEA UR6, UR3, UR1, 0x3;"),
+        (inst::alu(inst::UCLEA | 4 << 73, 14, 10, 0x30), "UCLEA UR14, UP0, UR10, 0x30, 0x4;"),
+        (inst::alu(inst::UCLEA | 0x400 | 2 << 73 | inst::preds(7, 0, 0, 0), 14, 10, 8), "UCLEA UR14, UPT, UR10, UR8, 0x2;"),
         (inst::alu3(inst::UIMAD_WIDE ^ inst::IMM_B | inst::preds(7, 0, 0, 0), 8, 3, 0x10, 10), "UIMAD.WIDE.U32 UR8, UR3, 0x10, UR10;"),
         (inst::alu3(inst::UIADD3_64 ^ inst::IMM_B | inst::preds(7, 7, 7, 7), 12, 10, u32::MAX, 63), "UIADD3.64 UR12, UR10, -0x1, URZ;"),
         (inst::alu(inst::UISETP | inst::ICMP_LT | inst::preds(0, 1, 7, 0), 0, 5, 6), "UISETP.LT.U32.AND UP0, UP1, UR5, UR6, UPT;"),
@@ -1020,6 +1026,9 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::ATOM_MAX_F16X2, 4, 2, 5), "ATOM.E.MAX.F16x2.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::W2J_ATOMG_U64_ADD, "ATOMG.E.ADD.64.STRONG.GPU PT, R4, [R2], R6 ;"),
         (inst::W2J_ATOMS_U64_ADD, "ATOMS.ADD.64 R4, [RZ], R6 ;"),
+        (0x003e22000c80043f00000000ff027f8c, "ATOMS.ARRIVE.64 R2, [URZ] ;"),
+        (0x000fe2000d00003f00000000ffff7f8c, "ATOMS.POPC.INC.32 RZ, [URZ] ;"),
+        (0x000f62000c9ea54400000000ff047f8a, "ATOM.E.ARRIVE.64.STRONG.SM PT, R4, [UR4] ;"),
         (inst::W2J_F2FP_RZ_RELU_SATFINITE, "F2FP.SATFINITE.RELU.PACK_AB.RZ R20, R6, R7;"),
         (inst::W2J_I2FP_RZ, "I2FP.F32.U32.RZ R23, R11;"),
         (inst::W2J_UF2FP, "UF2FP.PACK_AB UR10, UR6, UR7;"),
@@ -1054,6 +1063,7 @@ fn fixtures_match_nvdisasm() {
         (inst::surface(inst::SUST_D_32, 0xff, 2, 5, 3, 0x10), "SUST.D.2D [R2], R5, 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_P_RGBA, 12, 2, 0xff, 3, 0x10), "SULD.P.2D R12, [R2], 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_D_32 | inst::SU_BA, 8, 6, 0xff, 0, 0x178), "SULD.D.BA.2D R8, [R6], 0x0, 0x5e ;"),
+        (inst::alu(inst::SUQUERY, 4, 2, 0) | 1 << 81 | 0x10 << 40, "SUQUERY.1D P1, R4, [R2], COMP_STATUS, 0x0, 0x10 ;"),
         (inst::texture(inst::TLD4_R_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.R R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TLD4_G_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.G R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::with_rb(inst::texture(inst::TXD_2D, 12, 14, 2, 3, 0x10, 0xf), 4), "TXD R14, R12, R2, R4, 0x3, 0x4, 2D ;"),
@@ -1081,6 +1091,9 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::BMMA | inst::BMMA_168128 | inst::BMMA_AND, 4, 8, 12, 16), "BMMA.168128.AND.POPC R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu3(inst::BMMA | inst::BMMA_168256, 4, 8, 12, 16), "BMMA.168256.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::MOVM, 4, 8, 0), "MOVM.16.MT88 R4, R8 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 3 << 48, "HMMA.SP.16816.F32 R4, R8, R12, R16, R20, 0x3 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 1 << 48, "HMMA.SP.16832.F32 R4, R8, R12, R16, R20, 0x1 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32 | inst::MMA_BF16, 4, 8, 12, 16) | 20 << 40, "HMMA.SP.16832.F32.BF16 R4, R8, R12, R16, R20, 0x0 ;"),
     ];
     use crate::tests::gpu::fp::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {

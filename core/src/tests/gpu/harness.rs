@@ -114,6 +114,23 @@ pub fn run_hints(
     Some((lanes.remove(0), global, counts))
 }
 
+pub fn run_timed(
+    state: &VkState,
+    instructions: &[u128],
+    timing_hints: bool,
+) -> Option<u64> {
+    run_on(
+        state,
+        |decoder| decoder.translate_program(instructions),
+        &[Vec::new()],
+        &[],
+        &[],
+        &Textures::default(),
+        Hints { timing: timing_hints, ..Default::default() },
+    )?;
+    Some(state.last_gpu_time_ns())
+}
+
 fn pad_to_warps(seeds: &[Vec<u32>]) -> Vec<u32> {
     let idle = vec![0; STATE_WORDS];
     let mut words = Vec::new();

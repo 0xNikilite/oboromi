@@ -23,18 +23,20 @@ pub fn load_segments(ram: &GuestRam, base: u64, segments: &[(u64, &[u8])]) -> Op
 mod tests {
     use super::*;
     use crate::cpu::cpu_manager::CpuManager;
+    use crate::input::InputState;
     use crate::kernel::Kernel;
 
     // guest.bin is what scripts/build-guest.sh builds from guest/.
     #[test]
-    fn the_guest_image_prints_its_debug_string_and_exits() {
+    fn the_guest_image_reads_the_host_pad_through_hid_shared_memory() {
         let cpu = CpuManager::new();
         let image = include_bytes!("../tests/fixtures/guest/guest.bin");
         let entry = load_flat_image(&cpu.ram, image, BASE).unwrap();
         let core = cpu.get_core(0).unwrap();
         let mut kernel = Kernel::default();
+        kernel.hid.borrow_mut().input = || InputState { buttons: 1, left: [0.5, -0.5], right: [0.0; 2], connected: true };
         kernel.start(core, entry, image.len() as u64);
         assert!(kernel.run(core));
-        assert_eq!(kernel.debug_output, ["hello from guest"]);
+        assert_eq!(kernel.debug_output, ["hello from guest", "buttons 0x1 left 16383 -16383"]);
     }
 }

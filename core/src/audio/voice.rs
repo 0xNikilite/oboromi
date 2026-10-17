@@ -5,9 +5,10 @@ use super::dsp::adpcm::{AdpcmContext, AdpcmParams, GcAdpcmDecoder};
 use super::dsp::biquad::{Biquad, BiquadParams};
 use super::dsp::resampler::{Resampler, ResamplerParams, SrcQuality};
 use super::dsp::volume::{VolumeRamp, VolumeRampParams};
-use super::parcel::{f32_at, i32_at, put, u16_at, u32_at, u64_at};
+use super::parcel::{VOICE_IN, f32_at, i32_at, put, u16_at, u32_at, u64_at};
 use super::renderer::{
-    Pools, REV_DECODING_FLAGS, REV_FLUSH, REV_LOOP_CONTEXT, REV_SPLITTER, REV_WAVE_BUFFER_V2,
+    Pools, REV_DECODING_FLAGS, REV_FLOAT_BIQUADS, REV_FLUSH, REV_LOOP_CONTEXT, REV_SPLITTER,
+    REV_WAVE_BUFFER_V2,
 };
 use super::{Error, GuestMemory, in_place};
 
@@ -97,22 +98,28 @@ pub struct Voice {
     raw: Vec<u8>,
 }
 
-pub fn biquad_q14(numerator: [i16; 3], denominator: [i16; 2]) -> BiquadParams {
-    let q14 = |v: i16| f32::from(v) / 16384.0;
+/// numerator[3] then denominator[2] at `at`, q14 shorts before REV15 and floats from it.
+pub fn biquad_coefficients(b: &[u8], at: usize, float: bool) -> BiquadParams {
+    let c = |i: usize| {
+        if float {
+            f32_at(b, at + i * 4)
+        } else {
+            f32::from(u16_at(b, at + i * 2) as i16) / 16384.0
+        }
+    };
     BiquadParams {
-        b0: q14(numerator[0]),
-        b1: q14(numerator[1]),
-        b2: q14(numerator[2]),
-        a1: -q14(denominator[0]),
-        a2: -q14(denominator[1]),
+        b0: c(0),
+        b1: c(1),
+        b2: c(2),
+        a1: -c(3),
+        a2: -c(4),
         new_state: false,
     }
 }
 
-/// a 0xC-byte BiquadFilterParameter: enable, then q14 numerator[3] and denominator[2].
-pub fn biquad_parameter(b: &[u8]) -> Option<BiquadParams> {
-    let i16_at = |at| u16_at(b, at) as i16;
-    (b[0] != 0).then(|| biquad_q14([i16_at(2), i16_at(4), i16_at(6)], [i16_at(8), i16_at(10)]))
+/// a BiquadFilterParameter: enable, then the coefficients at 2 (0xC bytes) or as floats at 4 (0x18 bytes).
+pub fn biquad_parameter(b: &[u8], float: bool) -> Option<BiquadParams> {
+    (b[0] != 0).then(|| biquad_coefficients(b, if float { 4 } else { 2 }, float))
 }
 
 fn sample_bytes(format: u8, channels: usize, samples: u32) -> Option<u64> {
@@ -182,7 +189,7 @@ impl Default for Voice {
 }
 
 impl Voice {
-    /// applies a 0x170-byte VoiceInParameter and writes its 0x10-byte VoiceOutStatus.
+    /// applies a 0x170-byte VoiceInParameter (0x188 from REV15) and writes its 0x10-byte VoiceOutStatus.
     pub fn update(
         &mut self,
         b: &[u8],
@@ -191,6 +198,17 @@ impl Voice {
         voice_count: usize,
         pools: &mut Pools,
     ) -> Result<(), Error> {
+        let float = rev >= REV_FLOAT_BIQUADS;
+        let stride = if float { 0x18 } else { 0xC };
+        let biquads = std::array::from_fn(|i| biquad_parameter(&b[0x24 + i * stride..], float));
+        let mut fixed = [0; VOICE_IN];
+        let b = if float {
+            fixed[..0x3C].copy_from_slice(&b[..0x3C]);
+            fixed[0x3C..].copy_from_slice(&b[0x54..]);
+            &fixed[..]
+        } else {
+            b
+        };
         self.in_use = b[9] != 0;
         if !self.in_use {
             return Ok(());
@@ -224,7 +242,7 @@ impl Voice {
         self.channel_count = channel_count;
         self.pitch = f32_at(b, 0x1C);
         self.volume = f32_at(b, 0x20);
-        self.biquads = std::array::from_fn(|i| biquad_parameter(&b[0x24 + i * 0xC..]));
+        self.biquads = biquads;
         if rev >= REV_FLUSH {
             self.flush += u32::from(b[0x159]);
         }

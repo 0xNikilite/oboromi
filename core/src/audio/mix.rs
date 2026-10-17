@@ -6,10 +6,12 @@ use super::dsp::depop::Depop;
 use super::dsp::volume::{VolumeRamp, VolumeRampParams};
 use super::effect::Effect;
 use super::parcel::{
-    DESTINATION_V1, DESTINATION_V2, MIX_DIRTY_HEADER, MIX_IN, Reader, SPLITTER_HEADER, SPLITTER_IN,
-    f32_at, f32s, i32_at, u32_at,
+    DESTINATION_V1, DESTINATION_V2, DESTINATION_V2B, MIX_DIRTY_HEADER, MIX_IN, Reader,
+    SPLITTER_HEADER, SPLITTER_IN, f32_at, f32s, i32_at, u32_at,
 };
-use super::renderer::{REV_DIRTY_MIXES, REV_SPLITTER_BIQUADS, REV_SPLITTER_PREVIOUS_VOLUME_RESET};
+use super::renderer::{
+    REV_DIRTY_MIXES, REV_FLOAT_BIQUADS, REV_SPLITTER_BIQUADS, REV_SPLITTER_PREVIOUS_VOLUME_RESET,
+};
 use super::voice::{ChannelResource, UNUSED_MIX, Voice};
 use super::{Error, GuestMemory, mix_into};
 
@@ -75,7 +77,9 @@ impl Graph {
                 *splitter = ids.collect();
             }
         }
-        let (len, used_at) = if rev >= REV_SPLITTER_BIQUADS {
+        let (len, used_at) = if rev >= REV_FLOAT_BIQUADS {
+            (DESTINATION_V2B, 0x9C)
+        } else if rev >= REV_SPLITTER_BIQUADS {
             (DESTINATION_V2, 0x84)
         } else {
             (DESTINATION_V1, 0x6C)

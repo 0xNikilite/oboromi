@@ -286,11 +286,17 @@ void oboromi_input_state(OboromiInput *out);
 /// `dst` must be null or valid for `frames * 2` writes.
 uintptr_t oboromi_audio_pull(int16_t *dst, uintptr_t frames);
 
-/// writes the output format, interleaved i16 samples.
+/// writes the output format, interleaved i16 samples produced `period` frames at a time.
 ///
 /// # Safety
-/// `rate` and `channels` must be valid for writes.
-void oboromi_audio_format(uint32_t *rate, uint32_t *channels);
+/// `rate`, `channels` and `period` must be valid for writes.
+void oboromi_audio_format(uint32_t *rate, uint32_t *channels, uint32_t *period);
+
+/// writes the frames waiting in the ring and the pulls that ran dry.
+///
+/// # Safety
+/// `queued` and `underruns` must be valid for writes.
+void oboromi_audio_stats(uintptr_t *queued, uint64_t *underruns);
 
 /// frames ever queued, changes whenever something is produced.
 uint64_t oboromi_audio_generation();

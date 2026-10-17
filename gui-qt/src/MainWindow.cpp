@@ -99,7 +99,11 @@ void MainWindow::buildUi() {
         auto *demoButton = new QPushButton(name, central);
         demoButton->setCheckable(true);
         connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
-            if (!on) return m_demoTimer.stop();
+            if (!on) {
+                m_demoTimer.stop();
+                RustBridge::flushDemoCaches();
+                return;
+            }
             m_demoRender = render;
             m_demoClock.start();
             m_demoTimer.start(16);

@@ -107,7 +107,7 @@ pub struct ComputePipeline<'a> {
 }
 
 impl<'a> ComputePipeline<'a> {
-    // All bindings live in set 0: 0 host support UBO, 1-8 guest cbufs, storage buffers from 9.
+    // All bindings live in set 0: 1-8 guest cbufs, storage buffers from 9.
     pub fn new(
         state: &'a VkState,
         spirv: &[u32],

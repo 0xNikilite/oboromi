@@ -58,11 +58,17 @@ pub mod inst {
     pub const MMA_16816: u128 = 1 << 75;
     pub const MMA_F32: u128 = 1 << 76;
     pub const MMA_BF16: u128 = 1 << 82;
+    pub const MMA_1684: u128 = 1 << 78;
+    pub const MMA_TF32: u128 = 2 << 82;
     pub const IMMA: u128 = 0x237 | 1 << 74;
     pub const IMMA_16816: u128 = 1 << 86;
     pub const IMMA_16832: u128 = IMMA_16816 | 1 << 75;
     pub const IMMA_S8_A: u128 = 1 << 76;
     pub const IMMA_S8_B: u128 = 1 << 78;
+    pub const IMMA_8832: u128 = 1 << 85;
+    pub const IMMA_16864: u128 = IMMA_16816 | IMMA_8832;
+    pub const IMMA_4_BIT: u128 = 1 << 83 | 1 << 84;
+    pub const IMMA_SAT: u128 = 1 << 82;
     pub const LDSM: u128 = 0x83b;
     pub const LDSM_X4: u128 = 2 << 72;
     pub const LDSM_MT88: u128 = 1 << 78;
@@ -979,6 +985,12 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::HMMA | inst::MMA_16816, 4, 8, 12, 16), "HMMA.16816.F16 R4, R8, R12, R16 ;"),
         (inst::alu3(inst::IMMA | inst::IMMA_16816, 4, 8, 12, 16), "IMMA.16816.U8.U8 R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S8.S8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_1684 | inst::MMA_F32 | inst::MMA_TF32, 4, 8, 12, 16), "HMMA.1684.F32.TF32 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::IMMA, 4, 8, 12, 16), "IMMA.8816.U8.U8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_8832 | inst::IMMA_4_BIT, 4, 8, 12, 16), "IMMA.8832.U4.U4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_4_BIT | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S4.S4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16864 | inst::IMMA_4_BIT | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16864.S4.S4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B | inst::IMMA_SAT, 4, 8, 12, 16), "IMMA.16832.S8.S8.SAT R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4, 4, 2, 0), "LDSM.16.M88.4 R4, [R2] ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4 | inst::LDSM_MT88, 12, 2, 0), "LDSM.16.MT88.4 R12, [R2] ;"),
         (inst::alu3(inst::DMMA, 4, 8, 12, 16), "DMMA.884 R4, R8, R12, R16 ;"),

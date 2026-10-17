@@ -245,6 +245,8 @@ impl Drop for Attachment<'_> {
 }
 
 pub struct RenderTarget<'a> {
+    state: &'a VkState,
+    pending_rows: std::cell::Cell<Option<(u32, u32)>>,
     pub extent: vk::Extent2D,
     color: Attachment<'a>,
     depth: Option<Attachment<'a>>,
@@ -256,6 +258,8 @@ impl<'a> RenderTarget<'a> {
         use vk::{ImageAspectFlags as Aspect, ImageUsageFlags as Usage};
         let (d, extent) = (&state.device, vk::Extent2D { width, height });
         Ok(Self {
+            state,
+            pending_rows: Default::default(),
             extent,
             color: Attachment::new(d, extent, COLOR_FORMAT, Usage::COLOR_ATTACHMENT | Usage::TRANSFER_SRC | Usage::TRANSFER_DST, Aspect::COLOR)?,
             depth: depth
@@ -273,15 +277,35 @@ impl<'a> RenderTarget<'a> {
     }
 
     pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
+        self.readback()?;
         self.staging.read(out)
     }
 
     /// `bytes` of the target as its last draw left it, row by row.
     pub fn staged(&self, bytes: std::ops::Range<u64>) -> Result<&[u8], VkError> {
+        self.readback()?;
         self.staging.view(bytes)
     }
 
+    pub fn readback(&self) -> Result<(), VkError> {
+        let Some((start, end)) = self.pending_rows.get() else { return Ok(()) };
+        let copy = [vk::BufferImageCopy::default()
+            .buffer_offset(u64::from(start * self.extent.width * 4))
+            .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
+            .image_offset(vk::Offset3D { y: start as i32, ..Default::default() })
+            .image_extent(vk::Extent3D { width: self.extent.width, height: end - start, depth: 1 })];
+        let barrier = vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::TRANSFER_WRITE).dst_access_mask(vk::AccessFlags::HOST_READ);
+        self.state.submit_and_wait(|cmd| unsafe {
+            let d = &self.state.device;
+            d.cmd_copy_image_to_buffer(cmd, self.color.image, vk::ImageLayout::TRANSFER_SRC_OPTIMAL, self.staging.buffer, &copy);
+            d.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::HOST, Default::default(), &[barrier], &[], &[]);
+        })?;
+        self.pending_rows.set(None);
+        Ok(())
+    }
+
     pub fn write(&mut self, pixels: &[u8]) -> Result<(), VkError> {
+        self.pending_rows.set(None);
         self.staging.write(pixels)
     }
 }
@@ -342,11 +366,6 @@ impl VkState {
             .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
             .image_extent(target.extent.into())];
         let rows = draw.rows(target.extent.height);
-        let readback = [copy[0]
-            .buffer_offset(u64::from(rows.start * target.extent.width * 4))
-            .image_offset(vk::Offset3D { y: rows.start as i32, ..Default::default() })
-            .image_extent(vk::Extent3D { height: rows.len() as u32, ..target.extent.into() })];
-        let to_host = vk::MemoryBarrier::default().src_access_mask(Access::TRANSFER_WRITE).dst_access_mask(Access::HOST_READ);
         let fragment_tests = Stage::EARLY_FRAGMENT_TESTS | Stage::LATE_FRAGMENT_TESTS;
         let none = vk::DependencyFlags::empty();
         let r = &draw.raster;
@@ -401,10 +420,11 @@ impl VkState {
             }
             d.cmd_end_rendering(cmd);
             d.cmd_pipeline_barrier(cmd, Stage::COLOR_ATTACHMENT_OUTPUT, Stage::TRANSFER, none, &[], &[], &[to_transfer]);
-            if !rows.is_empty() {
-                d.cmd_copy_image_to_buffer(cmd, target.color.image, Layout::TRANSFER_SRC_OPTIMAL, target.staging.buffer, &readback);
-            }
-            d.cmd_pipeline_barrier(cmd, Stage::TRANSFER, Stage::HOST, none, &[to_host], &[], &[]);
-        })
+        })?;
+        if !rows.is_empty() {
+            let (start, end) = target.pending_rows.get().unwrap_or((rows.start, rows.end));
+            target.pending_rows.set(Some((start.min(rows.start), end.max(rows.end))));
+        }
+        Ok(())
     }
 }

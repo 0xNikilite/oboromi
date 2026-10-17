@@ -7,4 +7,5 @@ pub mod depop;
 pub mod limiter;
 pub mod reverb;
 pub mod resampler;
+pub mod upsampler;
 pub mod volume;

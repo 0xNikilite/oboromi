@@ -3,11 +3,12 @@
 //! `ffmpeg -framerate 60 -i <dir>/frame_%04d.ppm -c:v libx264 -crf 20 -pix_fmt yuv420p -movflags +faststart demo.mp4`.
 use oboromi_core::audio::{CHANNELS, PERIOD, RATE, demo_music, pull, queued};
 use oboromi_core::ffi::oboromi_frame_read;
-use oboromi_core::gpu::{demo, demo_bounce, demo_particles, demo_post, demo_sprites, frame};
+use oboromi_core::gpu::{demo, demo_bounce, demo_dungeon, demo_particles, demo_post, demo_sprites, frame};
 use std::io::{Seek, Write};
 
 fn render(demo: &str, seconds: f32) -> Result<(), String> {
     match demo {
+        "dungeon" => demo_dungeon::render_dungeon_frame(seconds),
         "julia" => frame::render_demo_frame(seconds).map_err(|e| format!("{e:?}")),
         "triangle" => frame::render_triangle_demo(seconds),
         "sprites" => demo_sprites::render_sprites_frame(seconds),
@@ -73,17 +74,44 @@ fn main() {
             .position(|arg| arg == name)
             .map(|i| args[i + 1].clone())
     };
+    if args[0] == "dungeon" {
+        demo_dungeon::render::PROFILE.store(args.iter().any(|a|a=="--profile"), std::sync::atomic::Ordering::Relaxed);
+        if let Some(disabled) = flag("--disable") {
+            let mask=disabled.split(',').map(|effect|match effect {"fire"=>1,"water"=>2,"bloom"=>4,"fog"=>8,_=>panic!("unknown effect {effect}")}).fold(0,|a,b|a|b);
+            demo_dungeon::render::DISABLED.store(mask, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(quality) = flag("--quality") {
+            assert!(quality == "realtime" || quality == "showcase", "--quality realtime|showcase");
+            demo_dungeon::render::SHOWCASE.store(quality == "showcase", std::sync::atomic::Ordering::Relaxed);
+            demo_dungeon::render::RAYS.store(quality == "showcase", std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(rays) = flag("--raytracing") { demo_dungeon::render::RAYS.store(rays == "on", std::sync::atomic::Ordering::Relaxed); }
+        if let Some(view) = flag("--view") { demo_dungeon::VIEW.store(view.parse().unwrap(), std::sync::atomic::Ordering::Relaxed); }
+    }
     let seconds: f32 = flag("--seconds").map_or(8.0, |s| s.parse().unwrap());
     let fps: f32 = flag("--fps").map_or(60.0, |s| s.parse().unwrap());
     let out = std::path::PathBuf::from(flag("--out").expect("--out <dir>"));
     std::fs::create_dir_all(&out).unwrap();
     let mut wav = flag("--audio").map(Wav::new);
+    let audio_only = args.iter().any(|arg| arg == "--audio-only");
     let mut pixels = Vec::new();
+    let mut timings = Vec::new();
     let frames = (seconds * fps).round() as usize;
     for i in 0..frames {
-        render(&args[0], i as f32 / fps).unwrap();
-        if let Some(wav) = &mut wav {
-            wav.drain();
+        let start = std::time::Instant::now();
+        let seconds = (i + usize::from(args[0] == "dungeon")) as f32 / fps;
+        if audio_only && args[0] == "dungeon" {
+            demo_dungeon::render_dungeon_audio_frame(seconds).unwrap();
+        } else {
+            render(&args[0], seconds).unwrap();
+        }
+        timings.push(start.elapsed().as_secs_f64() * 1000.0);
+        if args.iter().any(|a| a == "--profile") {
+            eprintln!("dungeon_cpu,{i},{:.4}", timings.last().unwrap());
+        }
+        if let Some(wav) = &mut wav { wav.drain(); }
+        if audio_only {
+            continue;
         }
         let (mut width, mut height) = (0, 0);
         pixels.resize(
@@ -104,5 +132,10 @@ fn main() {
     }
     if let Some(wav) = wav {
         wav.finish((frames as f64 * f64::from(RATE) / f64::from(fps)).round() as usize);
+    }
+    if timings.len() > 1 {
+        timings.remove(0);
+        timings.sort_by(f64::total_cmp);
+        eprintln!("frame_ms,median,{:.3},p95,{:.3}", timings[timings.len() / 2], timings[(timings.len() * 95 / 100).min(timings.len() - 1)]);
     }
 }

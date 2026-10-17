@@ -5,6 +5,8 @@ pub mod bnsh;
 pub mod compute;
 pub mod compute_class;
 pub mod demo;
+pub mod demo_dungeon;
+pub(crate) mod demo_dungeon_sound;
 pub mod demo_bounce;
 pub mod demo_particles;
 pub mod demo_post;

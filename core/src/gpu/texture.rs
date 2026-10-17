@@ -159,7 +159,7 @@ impl TextureHeader {
 
 /// The gob height a mip level of `rows` texel block rows uses: the texture's, halved while half of it still covers the
 /// level, as Ryujinx SizeCalculator.GetBlockLinearTextureSize shrinks it.
-fn level_gob_height_log2(rows: u32, gob_height_log2: u32) -> u32 {
+pub(super) fn level_gob_height_log2(rows: u32, gob_height_log2: u32) -> u32 {
     (0..=gob_height_log2).rev().find(|&g| g == 0 || rows > 4 << g).unwrap()
 }
 

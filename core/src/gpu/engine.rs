@@ -185,6 +185,7 @@ fn settle_ranges(targets: &mut HashMap<TargetKey, Target>, memory: &mut MemoryTr
         let Some(pending) = target.pending.take_if(|pending| within(&key.ranges, pending.clone()).any(|(_, piece)| overlaps(&piece))) else { continue };
         let pieces: Vec<_> = within(&key.ranges, pending.clone()).map(|(_, piece)| piece).collect();
         if target.render_target.staging.imported.is_some() {
+            target.render_target.readback()?;
             pieces.iter().for_each(|piece| memory.mark_gpu_written(piece.start, piece.end - piece.start));
         } else {
             memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);

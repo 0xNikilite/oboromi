@@ -50,6 +50,9 @@ const SET_VERTEX_ATTRIBUTE_A: u32 = 0x1160;
 const SET_DEPTH_TEST: u32 = 0x12cc;
 const SET_DEPTH_WRITE: u32 = 0x12e8;
 const SET_DEPTH_FUNC: u32 = 0x130c;
+const SET_BLEND_CONST_RED: u32 = 0x131c;
+const SET_BLEND_COLOR_OP: u32 = 0x1340;
+const SET_BLEND: u32 = 0x1360;
 const SET_ZT_SELECT: u32 = 0x1538;
 const SET_TEX_SAMPLER_POOL_A: u32 = 0x155c;
 const SET_TEX_HEADER_POOL_A: u32 = 0x1574;
@@ -133,9 +136,9 @@ impl Json {
     }
 }
 
-type Matrix = [[f32; 4]; 4];
+pub type Matrix = [[f32; 4]; 4];
 
-fn multiply(a: Matrix, b: Matrix) -> Matrix {
+pub fn multiply(a: Matrix, b: Matrix) -> Matrix {
     std::array::from_fn(|column| std::array::from_fn(|row| (0..4).map(|k| a[k][row] * b[column][k]).sum()))
 }
 
@@ -177,6 +180,11 @@ pub struct Scene<'a> {
     height: u32,
     /// first index, index count and material of each primitive.
     draws: Vec<[u32; 3]>,
+    /// each material's blend op, source and destination factors and constant colour, drawn over the depth of
+    /// what is already there without writing it.
+    blends: Vec<Option<Vec<u32>>>,
+    /// guest address of each texture, for scenes that rewrite theirs.
+    pub textures: Vec<u64>,
     /// Model space centre and the scale that makes the asset two units across.
     fit: ([f32; 3], f32),
     geometry: Vec<Geometry>,
@@ -191,7 +199,11 @@ impl<'a> Scene<'a> {
             return Err("ray-traced demo needs ray queries and fragment subgroup arithmetic, ballot and shuffle".into());
         }
         let dir = asset_dir(if raytraced { "boombox" } else { asset });
-        let read = |file: &str| std::fs::read(dir.join(file)).map_err(|e| format!("{}: {e}", dir.join(file).display()));
+        Self::with_files(state, cache, &|file| std::fs::read(dir.join(file)).map_err(|e| format!("{}: {e}", dir.join(file).display())), width, height, raytraced)
+    }
+
+    /// Like `new`, with the asset's files from `read`.
+    pub fn with_files(state: &'static VkState, cache: Option<(&Path, &str)>, read: &dyn Fn(&str) -> Result<Vec<u8>, String>, width: u32, height: u32, raytraced: bool) -> Result<Self, String> {
         let text = String::from_utf8(read("manifest.json")?).map_err(|e| e.to_string())?;
         let manifest = Json::parse(&mut text.as_str()).ok_or("manifest.json does not parse")?;
         let [mut vertices, mut indices] = [read("vertices.bin")?, read("indices.bin")?];
@@ -248,8 +260,10 @@ impl<'a> Scene<'a> {
         let light = light.map(|c| c / light.iter().map(|c| c * c).sum::<f32>().sqrt());
         let texture_index = |file: &str| textures.iter().position(|t| t.get("file").is_ok_and(|f| f.text() == file)).map(|i| i as u32);
         let materials = manifest.get("materials")?.list();
+        let mut blends: Vec<Option<Vec<u32>>> = materials.iter().map(|m| m.get("blend").ok().map(|b| b.list().iter().map(|v| v.number() as u32).collect())).collect();
         let uniform_pointer = if raytraced { 0x28 / 4 } else { UNIFORM_POINTER };
         let eye = if raytraced { [0.0, 1.0, 3.5] } else { EYE };
+        if raytraced { blends.push(None); }
         for (m, material) in materials.iter().enumerate() {
             let maps = material.get("textures")?;
             let base = maps.get("baseColor")?.text();
@@ -266,7 +280,9 @@ impl<'a> Scene<'a> {
             emissive.resize(4, 0.0);
             let scalar = |key| material.get(key).map(Json::number);
             let factors = [scalar("metallicFactor")?, scalar("roughnessFactor")?, scalar("normalScale")?, scalar("occlusionStrength")?];
-            let mut uniforms = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.6, 0.62, 0.66, 0.0], &eye, &[1.0], &base_factor, &emissive, &factors].concat();
+            let default_light = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.6, 0.62, 0.66, 0.0]].concat();
+            let lights = numbers("light").unwrap_or(default_light);
+            let mut uniforms = [&lights[..], &eye, &[1.0], &base_factor, &emissive, &factors].concat();
             if raytraced { uniforms.extend([0.35, 0.45, 0.6, 0.002]); }
             gpu.write(va, &bytes(&table)).map_err(named)?;
             gpu.write(va + MATERIAL_UNIFORMS, &floats(&uniforms)).map_err(named)?;
@@ -348,7 +364,7 @@ impl<'a> Scene<'a> {
             vec![Geometry { vertices: VERTICES, stride: 48, vertex_count: model_vertices as u32, indices: indices_va, index_count: model_indices as u32, transform: [[0.0; 4]; 3], opaque: true },
                 Geometry { vertices: VERTICES, stride: 48, vertex_count: model_vertices as u32 + 4, indices: indices_va + model_indices as u64 * 4, index_count: 6, transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], opaque: true }]
         } else { Vec::new() };
-        Ok(Self { gpu, target, width, height, draws, fit, geometry, frame: 0 })
+        Ok(Self { gpu, target, width, height, draws, blends, textures: texture_va, fit, geometry, frame: 0 })
     }
 
     /// Turns the model to `seconds` at 0.8 rad/s, draws every primitive and waits for the frame's report.
@@ -370,7 +386,22 @@ impl<'a> Scene<'a> {
         let [up, back] = [[0.0, eye[2] / length, -eye[1] / length], [0.0, eye[1] / length, eye[2] / length]];
         let mut view = [[1.0, up[0], back[0], 0.0], [0.0, up[1], back[1], 0.0], [0.0, up[2], back[2], 0.0], [0.0, 0.0, 0.0, 1.0]];
         view[3] = [0.0, -(up[1] * eye[1] + up[2] * eye[2]), -length, 1.0];
-        let uniforms: Vec<u32> = [model, multiply(projection, view)].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
+        self.draw(model, multiply(projection, view), eye)
+    }
+
+    /// The guest address of `material`'s uniform block.
+    pub fn uniforms(material: u32) -> u64 {
+        MATERIALS + MATERIAL_STRIDE * u64::from(material) + MATERIAL_UNIFORMS
+    }
+
+    /// Draws every primitive with `model` and `view_proj`, lit as seen from `eye`, and waits for the frame's report.
+    pub fn draw(&mut self, model: Matrix, view_proj: Matrix, eye: [f32; 3]) -> Result<(), String> {
+        let raytraced = !self.geometry.is_empty();
+        let named = |e| format!("{e:?}");
+        for material in 0..self.blends.len() as u32 {
+            self.gpu.write(Self::uniforms(material) + 48, &floats(&eye)).map_err(named)?;
+        }
+        let uniforms: Vec<u32> = [model, view_proj].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
 
         const CLEAR_Z_AND_RGBA: u32 = 0x3d;
         const TRIANGLES: u32 = 4;
@@ -383,9 +414,23 @@ impl<'a> Scene<'a> {
             inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[16, split(RAY_CONSTANTS)[0], split(RAY_CONSTANTS)[1]], &mut words);
             inc(BIND_GROUP_CONSTANT_BUFFER + 4 * 32, &[1 << 4 | 1], &mut words);
         }
+        let mut blending = None;
         for &[first, count, material] in &self.draws {
+            let blend = &self.blends[material as usize];
+            if blending != Some(blend) {
+                const OGL_LEQUAL: u32 = 0x203;
+                const OGL_LESS: u32 = 0x201;
+                inc(SET_BLEND, &[u32::from(blend.is_some())], &mut words);
+                inc(SET_DEPTH_WRITE, &[u32::from(blend.is_none())], &mut words);
+                inc(SET_DEPTH_FUNC, &[if blend.is_some() { OGL_LEQUAL } else { OGL_LESS }], &mut words);
+                if let Some(blend) = blend {
+                    inc(SET_BLEND_COLOR_OP, &blend[..3], &mut words);
+                    inc(SET_BLEND_CONST_RED, &blend[3..].iter().map(|&c| (c as f32 / 255.0).to_bits()).collect::<Vec<_>>(), &mut words);
+                }
+                blending = Some(blend);
+            }
             if raytraced && count == 6 && first == self.geometry[0].index_count {
-                let uniforms: Vec<u32> = [IDENTITY, multiply(projection, view)].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
+                let uniforms: Vec<u32> = [IDENTITY, view_proj].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
                 inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[128, split(VERTEX_UNIFORMS)[0], split(VERTEX_UNIFORMS)[1], 0], &mut words);
                 non_inc(LOAD_CONSTANT_BUFFER, &uniforms, &mut words);
             }
@@ -400,7 +445,6 @@ impl<'a> Scene<'a> {
         self.frame += 1;
         let report = split(REPORT);
         inc(SET_REPORT_SEMAPHORE_A, &[report[0], report[1], self.frame, ONE_WORD], &mut words);
-        let named = |e| format!("{e:?}");
         self.gpu.write(FRAME_SEGMENT, &bytes(&words)).map_err(named)?;
         self.gpu.submit(&[entry(FRAME_SEGMENT, words.len())])?;
         let mut released = [0; 4];

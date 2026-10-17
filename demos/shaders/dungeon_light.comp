@@ -1,0 +1,19 @@
+#version 450
+layout(local_size_x = 64) in;
+struct Texel { vec4 position; vec4 colour; };
+layout(std430, binding = 0) readonly buffer Light { Texel texels[]; };
+layout(std430, binding = 1) writeonly buffer Image { uint pixels[]; };
+layout(std140, binding = 2) uniform Frame { vec4 eye_flicker; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= texels.length()) return;
+    Texel t = texels[i];
+    float fog = exp(-distance(eye_flicker.xyz, t.position.xyz) * 0.045);
+    vec3 c = pow(clamp(t.colour.rgb * (0.12 * eye_flicker.w * fog), 0.0, 1.0), vec3(1.0 / 2.2));
+    uvec3 rgb = uvec3(c * 255.0 + 0.5);
+    uint at = floatBitsToUint(t.position.w), x = (at % 1024) * 4, y = at / 1024;
+    // 1024-wide RGBA8, two GOBs high, matching the guest lightmap descriptor.
+    uint offset = (y / 16) * 65536 + (x / 64) * 1024 + ((y / 8) & 1) * 512
+        + ((x & 63) / 32) * 256 + ((y & 7) / 2) * 64 + ((x & 31) / 16) * 32 + (y & 1) * 16 + (x & 15);
+    pixels[offset / 4] = rgb.r | (rgb.g << 8) | (rgb.b << 16) | 0xff000000u;
+}

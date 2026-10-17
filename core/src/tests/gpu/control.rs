@@ -2,7 +2,7 @@
 mod tests {
     use crate::tests::gpu::harness::{PRED, UPRED, UREG, run_regs};
     use crate::tests::gpu_test::inst::{
-        IMM_B, UIADD3, alu3, bra, bra_conv, bra_div, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, preds, ret_rel,
+        IMM_B, UIADD3, alu3, bra, bra_conv, bra_pp, bra_div, bra_upred, brx, bssy, bsync, call_rel, exit, guard, iadd_imm, jmx, kill, mov_imm, preds, ret_rel,
         uldc64, W2I_ARRIVES, W2I_BREAK, W2I_CCTLT, W2I_CSMTEST, W2I_DEPBAR, W2I_ERRBAR, W2I_IDE, W2I_JMP,
         W2I_LEPC, W2I_NANOSLEEP, W2I_PMTRIG, W2I_QSPC, W2I_R2B, W2I_RPCMOV_HI, W2I_RPCMOV_LO, W2I_RPCMOV_SET_HI,
         W2I_RPCMOV_SET_LO, W2I_RTT, W2I_SETLMEMBASE, W2I_YIELD,
@@ -48,6 +48,20 @@ mod tests {
                 return;
             };
             assert_eq!(regs[0], expected, "P0 = {p0}");
+        }
+    }
+
+    #[test]
+    fn bra_takes_both_its_guard_and_its_condition_predicate() {
+        let program = [guard(bra_pp(1, 16), 0, false), mov_imm(0, 1)];
+        for (preds, expected) in [(0b11, 10), (0b01, 1), (0b10, 1)] {
+            let mut seed = vec![10];
+            seed.resize(PRED, 0);
+            seed.push(preds);
+            let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else {
+                return;
+            };
+            assert_eq!(regs[0], expected, "P1P0 = {preds:02b}");
         }
     }
 

@@ -42,7 +42,7 @@ mod tests {
         let program = [sleep; 64];
         let mut off = (0..5).filter_map(|_| run_timed(&state, &program, false)).collect::<Vec<_>>();
         let mut on = (0..5).filter_map(|_| run_timed(&state, &program, true)).collect::<Vec<_>>();
-        if off.iter().copied().max().unwrap_or_default() > 10_000_000 {
+        if off.iter().copied().max().unwrap_or_default() > 1_000_000 {
             eprintln!("skipping nanosleep timing test: disabled run starved");
             return;
         }

@@ -1,14 +1,15 @@
 use ash::vk;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 pub mod compute;
 pub mod compute_class;
-pub mod demo_sprites;
 pub mod engine;
 pub mod fifo;
 pub mod frame;
 pub mod graphics;
 pub mod memory;
 pub mod pipeline_cache;
+pub mod present;
 pub mod sm86;
 pub mod spirv;
 pub mod threed;
@@ -33,6 +34,7 @@ pub struct VkState {
     pub physical_device: vk::PhysicalDevice,
     pub shader_float64: bool,
     pub device: ash::Device,
+    pub queue_family: u32,
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub submit: std::sync::Mutex<compute::Submit>,
@@ -48,6 +50,16 @@ pub struct VkState {
     pub shader_buffer_int64_atomics: bool,
     pub shader_shared_int64_atomics: bool,
     pub index_type_uint8: bool,
+    pub surface: Option<ash::khr::surface::Instance>,
+    pub swapchain: Option<ash::khr::swapchain::Device>,
+}
+
+static SURFACES: AtomicBool = AtomicBool::new(false);
+
+/// `device`, but created with every window surface extension the loader has if this is the first call.
+pub fn surface_device() -> Result<&'static VkState, VkError> {
+    SURFACES.store(true, Relaxed);
+    device()
 }
 
 pub fn device() -> Result<&'static VkState, VkError> {
@@ -68,20 +80,37 @@ impl VkState {
     pub fn new() -> Result<Self, VkError> {
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
-        let instance_info = vk::InstanceCreateInfo::default().application_info(&app);
+        let extensions = if SURFACES.load(Relaxed) {
+            unsafe { entry.enumerate_instance_extension_properties(None)? }
+        } else {
+            Vec::new()
+        };
+        let surface_extensions: Vec<_> = extensions
+            .iter()
+            .filter_map(|e| e.extension_name_as_c_str().ok())
+            .filter(|name| name.to_bytes().ends_with(b"_surface"))
+            .map(std::ffi::CStr::as_ptr)
+            .collect();
+        let surfaces = !surface_extensions.is_empty();
+        let instance_info = vk::InstanceCreateInfo::default()
+            .application_info(&app)
+            .enabled_extension_names(&surface_extensions);
         let instance =
             unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| match e {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
         let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3]) =
-            Self::open_device(&instance)
+            Self::open_device(&instance, surfaces)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
         let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
         unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
         let mut state = Self {
+            queue_family,
             queue: unsafe { device.get_device_queue(queue_family, 0) },
+            surface: surfaces.then(|| ash::khr::surface::Instance::new(&entry, &instance)),
+            swapchain: surfaces.then(|| ash::khr::swapchain::Device::new(&instance, &device)),
             extended_dynamic_state3: extended_dynamic_state3.then(|| ash::ext::extended_dynamic_state3::Device::new(&instance, &device)),
             entry,
             instance,
@@ -131,6 +160,7 @@ impl VkState {
 
     fn open_device(
         instance: &ash::Instance,
+        surfaces: bool,
     ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, [bool; 2]), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
@@ -166,8 +196,6 @@ impl VkState {
         let shader_float64 = features.features.shader_float64 == vk::TRUE;
         let shader_int64 = features.features.shader_int64 == vk::TRUE;
         let texture_compression_bc = features.features.texture_compression_bc == vk::TRUE;
-        let vertex_stores = features.features.vertex_pipeline_stores_and_atomics == vk::TRUE;
-        let fragment_stores = features.features.fragment_stores_and_atomics == vk::TRUE;
         let _ = features;
         let shader_float16 = float16_int8.shader_float16 == vk::TRUE;
         let shader_buffer_int64_atomics = atomic_int64.shader_buffer_int64_atomics == vk::TRUE;
@@ -192,6 +220,7 @@ impl VkState {
             (graphics_pipeline_library, vk::KHR_PIPELINE_LIBRARY_NAME),
             (graphics_pipeline_library, vk::EXT_GRAPHICS_PIPELINE_LIBRARY_NAME),
             (extended_dynamic_state3, vk::EXT_EXTENDED_DYNAMIC_STATE3_NAME),
+            (surfaces, ash::khr::swapchain::NAME),
         ]
         .into_iter()
         .filter_map(|(enabled, name)| enabled.then_some(name.as_ptr()))
@@ -199,9 +228,7 @@ impl VkState {
         let device_features = vk::PhysicalDeviceFeatures::default()
             .shader_float64(shader_float64)
             .shader_int64(shader_int64)
-            .texture_compression_bc(texture_compression_bc)
-            .vertex_pipeline_stores_and_atomics(vertex_stores)
-            .fragment_stores_and_atomics(fragment_stores);
+            .texture_compression_bc(texture_compression_bc);
         let mut enabled_float16 = vk::PhysicalDeviceShaderFloat16Int8Features::default()
             .shader_float16(shader_float16);
         let mut enabled_atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()

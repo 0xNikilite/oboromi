@@ -20,7 +20,4 @@ bool renderDemoFrame(float seconds);
 // Draws the pushbuffer triangle demo at the given time into the display
 bool renderTriangleDemo(float seconds);
 
-// Draws the sprites demo at the given time into the display
-bool renderSpritesFrame(float seconds);
-
 }

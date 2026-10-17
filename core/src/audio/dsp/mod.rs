@@ -1,4 +1,5 @@
 pub mod adpcm;
+pub mod aux;
 pub mod biquad;
 pub mod delay;
 pub mod depop;

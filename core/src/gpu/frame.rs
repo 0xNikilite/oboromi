@@ -1,11 +1,15 @@
 //! Frames drawn by translated SASS programs that write RGBA8 pixels into global memory, presented as is.
 use super::compute::{ComputePipeline, HostBuffer};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, SUPPORT_BINDING, Stage, emit_module};
+use super::demo::SCENE;
+use super::demo_post::POST;
+use super::demo_sprites::SPRITES;
 use super::engine::Gpu;
 use super::{VkError, device};
 use crate::tests::gpu::engine::{TARGET, triangle_frame, triangle_guest};
 use crate::tests::gpu_test::inst::{cvt, *};
 use ash::vk::DescriptorType;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 const WIDTH: u32 = 1920;
@@ -157,19 +161,35 @@ pub fn render_demo_frame(seconds: f32) -> Result<(), VkError> {
     demo.render()
 }
 
+static TRIANGLE_DEMO: Mutex<Option<Gpu<'static>>> = Mutex::new(None);
+
+/// `$XDG_CACHE_HOME/oboromi`, or `~/.cache/oboromi`, or the temp dir's when there is no home.
+pub(super) fn cache_root() -> PathBuf {
+    let home = || std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"));
+    std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(home).unwrap_or_else(std::env::temp_dir).join("oboromi")
+}
+
 /// Draws a triangle from a pushbuffer in guest memory, turning once per `SECONDS_PER_TURN`, and presents it.
 pub fn render_triangle_demo(seconds: f32) -> Result<(), String> {
-    static DEMO: Mutex<Option<Gpu<'static>>> = Mutex::new(None);
-    let mut slot = DEMO.lock().unwrap();
+    let mut slot = TRIANGLE_DEMO.lock().unwrap();
     let gpu = match &mut *slot {
         Some(gpu) => gpu,
         empty => {
             let vertices = [([0.0, -0.8], [255, 0, 0, 255]), ([0.7, 0.4], [0, 255, 0, 255]), ([-0.7, 0.4], [0, 0, 255, 255])];
-            empty.insert(triangle_guest(device().map_err(|e| format!("{e:?}"))?, WIDTH, HEIGHT, &vertices).map_err(|e| format!("{e:?}"))?)
+            let state = device().map_err(|e| format!("{e:?}"))?;
+            empty.insert(triangle_guest(state, Some((&cache_root(), "demos")), WIDTH, HEIGHT, &vertices).map_err(|e| format!("{e:?}"))?)
         }
     };
     let (sin, cos) = (seconds / SECONDS_PER_TURN * std::f32::consts::TAU).sin_cos();
     let aspect = HEIGHT as f32 / WIDTH as f32;
     triangle_frame(gpu, WIDTH, HEIGHT, [cos * aspect, -sin * aspect, sin, cos], 0)?;
     gpu.present(TARGET, WIDTH, HEIGHT)
+}
+
+/// Saves the running demos' pipeline cache, so the next run starts warm.
+pub fn flush_demo_caches() -> std::io::Result<()> {
+    TRIANGLE_DEMO.lock().unwrap().as_ref().map_or(Ok(()), Gpu::flush_caches)?;
+    POST.lock().unwrap().as_ref().map_or(Ok(()), |post| post.gpu.flush_caches())?;
+    SCENE.lock().unwrap().as_ref().map_or(Ok(()), |(_, scene)| scene.gpu.flush_caches())?;
+    SPRITES.lock().unwrap().as_ref().map_or(Ok(()), Gpu::flush_caches)
 }

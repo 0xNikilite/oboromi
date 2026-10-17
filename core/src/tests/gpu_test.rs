@@ -190,6 +190,7 @@ pub mod inst {
     const BMOV_READ: u128 = 0x355;
     const BMOV_WRITE: u128 = 0x356;
     const BMOV_CLEAR: u128 = 1 << 84;
+    const BMOV_ATEXIT: u128 = 0x957;
     const CALL_REL: u128 = 0x944;
     const RET: u128 = 0x950;
     const EXIT: u128 = 0x94d;
@@ -466,6 +467,10 @@ pub mod inst {
 
     pub fn bmov_write(bar: u32, reg: u32) -> u128 {
         BMOV_WRITE | PT_GUARD | NO_SCOREBOARD | (bar as u128) << 24 | (reg as u128) << 32
+    }
+
+    pub fn bmov_atexit(address: u32) -> u128 {
+        BMOV_ATEXIT | PT_GUARD | NO_SCOREBOARD | ((address >> 2) as u128) << 34
     }
 
     pub fn call_rel(offset: i64) -> u128 {
@@ -840,6 +845,8 @@ fn fixtures_match_nvdisasm() {
         (inst::bmov_read(4, 1, false), "BMOV.32 R4, B1;"),
         (inst::bmov_read(255, 1, true), "BMOV.32.CLEAR RZ, B1;"),
         (inst::bmov_write(1, 4), "BMOV.32 B1, R4;"),
+        (inst::bmov_atexit(0x30), "BMOV.64 ATEXIT_PC, 0x30;"),
+        (0x0001e400000000000000000000007357, "BMOV.64 ATEXIT_PC, R0 ;"),
         (inst::call_rel(0x20), "CALL.REL 0x30;"),
         (inst::ret_rel(20, -0x60), "RET.REL.NODEC R20 -0x50;"),
         (inst::brx(4, -0x10), "BRX R4 -0x10;"),

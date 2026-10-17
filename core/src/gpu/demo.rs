@@ -2,10 +2,12 @@
 //! from a host-written pushbuffer by the NVIDIA driver's SM86 build of demos/shaders/pbr.vert and pbr.frag, one draw per
 //! primitive with its material's pointer table.
 use super::engine::{Geometry, Gpu};
+use super::frame::cache_root;
 use super::memory::PAGE;
 use super::{VkState, device};
 use crate::tests::gpu::engine::{bytes, entry, inc, non_inc};
 use crate::tests::gpu_test::inst::bra;
+use std::path::Path;
 use std::sync::Mutex;
 
 const BASE: u64 = 0x1000_0000;
@@ -183,7 +185,7 @@ pub struct Scene<'a> {
 
 impl<'a> Scene<'a> {
     /// Lays the asset in demos/assets/`asset` out in guest memory and runs the init segment.
-    pub fn new(state: &'a VkState, asset: &str, width: u32, height: u32) -> Result<Self, String> {
+    pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, asset: &str, width: u32, height: u32) -> Result<Self, String> {
         let raytraced = asset == "raytraced";
         if raytraced && !supports_raytraced(state) {
             return Err("ray-traced demo needs ray queries and fragment subgroup arithmetic, ballot and shuffle".into());
@@ -209,7 +211,7 @@ impl<'a> Scene<'a> {
         let ground_textures = texture_va.pop().unwrap();
         let target = ground_textures + if raytraced { ALIGN } else { 0 };
         let end = (target + u64::from(width * height * 4)).next_multiple_of(PAGE);
-        let mut gpu = Gpu::new(state, (end - BASE) as usize);
+        let mut gpu = Gpu::new(state, (end - BASE) as usize, cache, *super::SPEED_HACKS.lock().unwrap()).map_err(|e| format!("{e:?}"))?;
         gpu.space.map(BASE, 0, end - BASE);
         let named = |e| format!("{e:?}");
         for (va, data) in [(VERTICES, &vertices), (indices_va, &indices)] {
@@ -413,12 +415,13 @@ impl<'a> Scene<'a> {
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
+pub(super) static SCENE: Mutex<Option<(&str, Scene<'static>)>> = Mutex::new(None);
+
 fn render(asset: &'static str, seconds: f32) -> Result<(), String> {
-    static SCENE: Mutex<Option<(&str, Scene<'static>)>> = Mutex::new(None);
     let mut slot = SCENE.lock().unwrap();
     if slot.as_ref().is_none_or(|(name, _)| *name != asset) {
         *slot = None;
-        *slot = Some((asset, Scene::new(device().map_err(|e| format!("{e:?}"))?, asset, WIDTH, HEIGHT)?));
+        *slot = Some((asset, Scene::new(device().map_err(|e| format!("{e:?}"))?, Some((&cache_root(), "demos")), asset, WIDTH, HEIGHT)?));
     }
     let (_, scene) = slot.as_mut().unwrap();
     scene.frame(seconds)?;
@@ -448,7 +451,7 @@ mod tests {
         let Some(state) = vk_state() else { return };
         if !supports_raytraced(&state) { return eprintln!("skipped: device does not support the ray-traced demo"); }
         if !asset_dir("boombox").exists() { return eprintln!("skipped: run demos/assets/fetch.sh for boombox"); }
-        let mut scene = Scene::new(&state, "raytraced", 320, 180).unwrap();
+        let mut scene = Scene::new(Box::leak(Box::new(state)), None, "raytraced", 320, 180).unwrap();
         scene.frame(0.0).unwrap();
         let mut traced = vec![0; 320 * 180 * 4];
         scene.gpu.read(scene.target, &mut traced).unwrap();

@@ -76,7 +76,7 @@ mod tests {
             eprintln!("skipping: device has no ray queries");
             return;
         }
-        let mut gpu = Gpu::new(&state, (2 * PAGE) as usize);
+        let mut gpu = Gpu::new(Box::leak(Box::new(state)), (2 * PAGE) as usize, None, Default::default()).unwrap();
         gpu.space.map(GUEST, 0, 2 * PAGE);
         let code = include_bytes!("../../../tests/fixtures/driver-shaders/query-candidates.comp.bin");
         gpu.write(PROGRAM, &[&code[..], &bra(-16).to_le_bytes()].concat()).unwrap();
@@ -134,7 +134,7 @@ mod tests {
             return;
         }
         let vertices = [([-1.0, -1.0], [0; 4]), ([1.0, -1.0], [0; 4]), ([0.0, 1.0], [0; 4])];
-        let mut gpu = engine::triangle_guest(&state, 16, 16, &vertices).unwrap();
+        let mut gpu = engine::triangle_guest(Box::leak(Box::new(state)), None, 16, 16, &vertices).unwrap();
         const DATA: u64 = engine::TEXTURES + 0x1000;
         const SHADER: u64 = engine::TEXTURES + 0x2000;
         gpu.write(DATA, &triangles(1.0)).unwrap();

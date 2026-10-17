@@ -2,11 +2,13 @@
 //! them, drawn back to front as one instanced triangle strip a frame by the NVIDIA driver's SM86 build of
 //! demos/shaders/sprite2d.vert and sprite2d.frag from a host-written pushbuffer.
 use super::engine::Gpu;
+use super::frame::cache_root;
 use super::memory::PAGE;
 use super::{VkState, device};
 use crate::tests::gpu::engine::*;
 use crate::tests::gpu_test::inst::bra;
 use std::f32::consts::{FRAC_1_SQRT_2, TAU};
+use std::path::Path;
 use std::sync::Mutex;
 
 const BASE: u64 = 0x1000_0000;
@@ -152,10 +154,10 @@ fn init_segment(width: u32, height: u32) -> Vec<u32> {
 }
 
 /// Guest memory holding the scene with its init segment run, drawing into a `width` x `height` target at `TARGET`.
-pub fn sprites_guest(state: &VkState, width: u32, height: u32) -> Result<Gpu<'_>, String> {
+pub fn sprites_guest(state: &'static VkState, cache: Option<(&Path, &str)>, width: u32, height: u32) -> Result<Gpu<'static>, String> {
     let named = |e| format!("{e:?}");
     let len = (TARGET - BASE + u64::from(width * height) * 4).next_multiple_of(PAGE);
-    let mut gpu = Gpu::new(state, len as usize);
+    let mut gpu = Gpu::new(state, len as usize, cache, *super::SPEED_HACKS.lock().unwrap()).map_err(|e| format!("{e:?}"))?;
     gpu.space.map(BASE, 0, len);
     // The rig's programs stop at their last EXIT; the self-branch a compiled program ends with marks the end.
     let vertex = include_bytes!("../../tests/fixtures/driver-shaders/sprite2d.vert.bin");
@@ -192,13 +194,14 @@ pub fn sprites_frame(gpu: &mut Gpu, seconds: f32) -> Result<(), String> {
     gpu.submit(&[entry(FRAME_SEGMENT, words.len())])
 }
 
+pub(super) static SPRITES: Mutex<Option<Gpu<'static>>> = Mutex::new(None);
+
 /// Draws the sprites scene at `seconds` and presents it.
 pub fn render_sprites_frame(seconds: f32) -> Result<(), String> {
-    static DEMO: Mutex<Option<Gpu<'static>>> = Mutex::new(None);
-    let mut slot = DEMO.lock().unwrap();
+    let mut slot = SPRITES.lock().unwrap();
     let gpu = match &mut *slot {
         Some(gpu) => gpu,
-        empty => empty.insert(sprites_guest(device().map_err(|e| format!("{e:?}"))?, WIDTH, HEIGHT)?),
+        empty => empty.insert(sprites_guest(device().map_err(|e| format!("{e:?}"))?, Some((&cache_root(), "demos")), WIDTH, HEIGHT)?),
     };
     sprites_frame(gpu, seconds)?;
     gpu.present(TARGET, WIDTH, HEIGHT).map_err(|e| format!("{e:?}"))

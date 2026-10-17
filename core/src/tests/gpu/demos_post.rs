@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::demo_post::{Post, SCENE};
-    use crate::tests::gpu::harness::{sha256, vk_state};
+    use crate::tests::gpu::harness::{sha256, shared_device};
 
     const SIZE: [u32; 2] = [320, 180];
 
@@ -9,8 +9,8 @@ mod tests {
     // scene. post.frag keeps green unshifted, dims odd rows (scanlines, sin((y + 0.5) * pi) = -1) and fades corners.
     #[test]
     fn post_pass_darkens_odd_rows_and_corners_of_the_scene_it_samples() {
-        let Some(state) = vk_state() else { return };
-        let mut post = Post::new(&state, SIZE, SIZE).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut post = Post::new(state, None, SIZE, SIZE).unwrap();
         post.frame(0.0).unwrap();
         let green = |va: u64, x: u32, y: u32| {
             let mut rgba = [0; 4];

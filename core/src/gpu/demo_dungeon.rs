@@ -653,6 +653,15 @@ impl World {
                     let uv = |u: f32, v: f32| [(a + (c - a) * u) / 4.0 + start * e[k] / 4.0, (y0 + (y1 - y0) * v) / 4.0];
                     let cells = if cave { [((c - a) * 2.0) as usize, ((y1 - y0) * 2.0) as usize].map(|c| c.max(1)) } else { [1, 1] };
                     b.surface(&f, [c - a, y1 - y0], cells, &uv, if cave { LIMESTONE } else { STONE });
+                    if !cave && y0.abs()<0.01 {
+                        let blocks=((c-a)/0.55).ceil() as usize;
+                        for i in 0..blocks {
+                            let along=a+(i as f32+0.5)*(c-a)/blocks as f32;
+                            let h=0.13+0.06*(along*17.3).sin();
+                            let p=add(add(plane,scale(e,along)),add(scale(n,0.07),[0.,h*0.6,0.]));
+                            b.blob(p,[0.29,h,0.24],along,&|a,t|1.+0.12*(a*4.+t*5.).sin(),[8,5],STONE);
+                        }
+                    }
                 }
             }
             if !cave && zone.kind != Kind::Corridor {

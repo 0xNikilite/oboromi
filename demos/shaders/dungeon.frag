@@ -160,6 +160,12 @@ void main() {
         }
         vec4 s=surface(uv,m); rough=max(.36,s.g);metal=s.b;ao=s.r;
         base=albedo(uv,m)*colour;
+        if(m==1){
+            vec3 w=pow(abs(n),vec3(5.));w/=w.x+w.y+w.z;
+            base=(albedo(world.zy*.35,1)*w.x+albedo(world.xz*.35,1)*w.y+albedo(world.xy*.35,1)*w.z)*colour;
+            s=surface(world.zy*.35,1)*w.x+surface(world.xz*.35,1)*w.y+surface(world.xy*.35,1)*w.z;
+            rough=max(.48,s.g);ao=s.r;
+        }
         float moss=(1.-s.r)*smoothstep(.35,.65,noise(world.xz*.65+world.y));
         base=mix(base,vec3(.025,.06,.012),moss*.6);
         float macro=noise(world.xz*.19)*.65+noise(world.xz*.77+13.)*.35;

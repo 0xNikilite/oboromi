@@ -31,7 +31,7 @@ flowchart TB
 
 | Page | Question it answers |
 |---|---|
-| [Emulator overview](oboromi-overview.md) | What upstream built, and what each part does today |
+| [Emulator overview](oboromi-overview.md) | What was already there, and what each part does today |
 | [CPU and shared memory](cpu.md) | How the cores run ARM code, share memory with the GPU, and what the kernel layer adds |
 | [Services](services.md) | How a game reaches a service, and which services are being built |
 | [Audio](audio.md) | How the audio renderer works, and the planned audio demos |

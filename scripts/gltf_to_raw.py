@@ -141,7 +141,7 @@ def mip_chain(img, srgb, max_size, gob_height_log2):
         w, h = max(1, round(w * s)), max(1, round(h * s))
         a = box(a, w, h)
     levels = [a]
-    while max(w, h) > 1 and (gob_height_log2 is None or w >= 32):
+    while max(w, h) > 1:
         w, h = max(1, w // 2), max(1, h // 2)
         a = box(a, w, h)
         levels.append(a)

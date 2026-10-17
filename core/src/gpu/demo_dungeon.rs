@@ -929,7 +929,7 @@ impl Dungeon {
             let gravel = self.world.zones_at(self.eye).any(|z| self.world.zones[z].kind == Kind::Corridor);
             self.sound.play(if wet { Sample::WetStep } else if gravel { Sample::GravelStep } else { Sample::Step }, self.eye, 0.04, 1.0);
         }
-        if self.solo == 0 && !self.scream && self.world.zones[self.world.last].space.contains(self.eye) {
+        if self.solo == 0 && !self.scream && seconds >= 14.0 {
             self.sound.play(Sample::Scream, self.world.zones[self.world.last].space.centre(), 1.4, 1.0);
             self.scream = true;
         }
@@ -1041,6 +1041,18 @@ impl River {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drips_do_not_blanket_the_river_with_foam() {
+        let world = World::new(8);
+        let mut river = River::new(device().unwrap()).unwrap();
+        let mut foam = 0.;
+        for frame in 0..1200 {
+            let impacts = [(world.river.centre(), 0.55)];
+            let waves = river.step(world.river, 1. / 60., if frame % 20 == 0 { &impacts } else { &[] }, None).unwrap();
+            foam = waves.iter().filter(|p| p[3] > 0.5).count() as f32 / waves.len() as f32;
+        }
+        assert!(foam < 0.05, "{foam}");
+    }
     #[test]
     fn autopilot_reaches_every_chamber_in_twenty_seconds() {
         let world=World::new(8);

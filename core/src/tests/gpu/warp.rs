@@ -54,6 +54,26 @@ mod tests {
         assert_eq!(regs[4], 1);
     }
 
+    // The long path sits after the BSYNC, so running the lowest pc alone would take the short half past it first.
+    #[test]
+    fn bsync_holds_the_short_path_until_the_long_one_arrives() {
+        let program = [
+            bssy(0, 0x20),
+            guard(bra(0x40), 0, false),
+            mov_imm(8, 1),
+            bsync(0),
+            alu(VOTE | VOTE_ANY | preds(7, 0, 7, 0), 9, 0, 0),
+            exit(),
+            mov_imm(8, 2),
+            iadd_imm(8, 8, 3),
+            bra(-0x60),
+        ];
+        let Some(lanes) = run(&program, &rig_seeds(0xffff)) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            assert_eq!(regs[8..10], [if lane < 16 { 5 } else { 1 }, u32::MAX], "lane {lane}");
+        }
+    }
+
     #[test]
     fn voteu_writes_ballot_and_result_to_uniform_registers() {
         let program = [alu(VOTEU | VOTE_EQ | preds(2, 0, 0, 0), 5, 0, 0), alu(VOTEU | VOTE_ANY | preds(3, 0, 0, 0), 6, 0, 0)];

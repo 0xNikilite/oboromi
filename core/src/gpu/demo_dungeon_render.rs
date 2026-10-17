@@ -88,7 +88,7 @@ impl Renderer {
         }
         .map_err(named)?;
         let showcase = SHOWCASE.load(Ordering::Relaxed);
-        let rays = state.acceleration_structure.is_some();
+        let rays = RAYS.load(Ordering::Relaxed) && state.acceleration_structure.is_some();
         let mut vertices = mesh.vertices.clone();
         let water_vertex = vertices.len();
         let grid = water_grid();

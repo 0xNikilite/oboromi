@@ -22,12 +22,12 @@ void main(){
         float y=uv.y*.5+.5;float distortion=(noise(vec2(y*8.-eye_time.w*2.3,seed))-.5)*y*.45+sin(y*11.-eye_time.w*9.+seed)*.12*y+sin(y*23.-eye_time.w*13.+seed)*.055;
         float width=(1.-y)*.65+.03;
         float body=1.-smoothstep(width*.35,width,abs(uv.x+distortion));
-        float turbulence=noise(vec2(uv.x*5.+seed,y*9.-eye_time.w*2.5));
-        turbulence=turbulence*.65+noise(vec2(uv.x*13.+seed,y*19.-eye_time.w*4.))*.35;
-        a=body*smoothstep(0.,.12,y)*(1.-smoothstep(.7,1.,y))*smoothstep(.15,.6,turbulence+(1.-y)*.5);
+        vec2 flow=vec2((uv.x+distortion)*6.+seed,y*12.-eye_time.w*3.);
+        float turbulence=noise(flow)*.5+noise(flow*2.03)*.3+noise(flow*4.07)*.2;
+        a=body*smoothstep(0.,.12,y)*(1.-smoothstep(.7,1.,y))*smoothstep(.3,.72,turbulence+(1.-y)*.2);
         float core=pow(max(0.,1.-abs(uv.x+distortion)/max(width,.01)),3.)*(1.-y);
-        c=mix(vec3(3.5,.07,.003),vec3(5.,1.2,.06),clamp(a+core,0.,1.));
-        c=mix(c,vec3(10.,5.,.9),core);a*=colour.a;
+        c=mix(vec3(1.5,.025,.001),vec3(4.,.7,.025),clamp(turbulence+core,0.,1.));
+        c=mix(c,vec3(7.,3.,.4),core*turbulence);a*=colour.a;
     }else if(kind<1.5){a=exp(-dot(uv,uv)*5.)*(1.-smoothstep(.6,1.,length(uv)))*colour.a;c*=12.;}
     else if(kind<2.5){a=pow(max(0.,1.-dot(uv,uv)),2.)*colour.a*(.6+.4*sin(uv.x*9.+sin(uv.y*7.)+seed));}
     else if(kind<3.5) { a=pow(max(0.,1.-dot(uv,uv)),3.)*colour.a; }

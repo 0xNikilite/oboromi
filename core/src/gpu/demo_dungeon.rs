@@ -860,7 +860,7 @@ impl Dungeon {
             let showcase=render::SHOWCASE.load(std::sync::atomic::Ordering::Relaxed);
             let state=device().map_err(|e|format!("{e:?}"))?;
             let rays=render::RAYS.load(std::sync::atomic::Ordering::Relaxed)&&state.acceleration_structure.is_some();
-            if renderer.showcase!=showcase {
+            if renderer.showcase!=showcase || renderer.rays!=rays {
                 let mut mesh=Builder::default();self.world.build(&mut mesh);
                 self.river=Some(River::new(state)?);
                 *renderer=render::Renderer::new(state,&self.world,&mesh)?;

@@ -71,6 +71,11 @@ float shadowMap(vec3 direction,int light,vec3 normal) {
     }
     return result*.25;
 }
+float softVisibility(vec3 p,vec3 n,vec3 to) {
+    vec3 axis=normalize(cross(normalize(to),abs(normalize(to).y)>.9?vec3(1,0,0):vec3(0,1,0)))*.07;
+    vec3 other=cross(normalize(to),axis);
+    return (visibility(p,n,to+axis)+visibility(p,n,to-axis)+visibility(p,n,to+other)+visibility(p,n,to-other))*.25;
+}
 vec3 brdf(vec3 base,vec3 n,vec3 v,vec3 l,float rough,float metal) {
     vec3 h=normalize(v+l); float nl=max(dot(n,l),0.), nv=max(dot(n,v),.001), nh=max(dot(n,h),0.);
     float a2=pow(rough,4.), d=nh*nh*(a2-1.)+1., k=pow(rough+1.,2.)/8.;
@@ -84,7 +89,7 @@ vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shad
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
         if(d2>min(180.,lights[i].colour.r*24.) || dot(n,to)<=0.)continue;
         float flicker=1.+.09*sin(eye_time.w*11.7+float(i)*2.3)+.045*sin(eye_time.w*23.1+float(i));
-        float vis=(shadow && settings.z<.5)?(up_rt.w>.5?visibility(p,n,to):shadowMap(-to,i,n)):1.;
+        float vis=(shadow && settings.z<.5)?(up_rt.w>.5?softVisibility(p,n,to):shadowMap(-to,i,n)):1.;
         c+=brdf(base,n,v,normalize(to),rough,metal)*lights[i].colour.rgb*flicker*vis*5./max(.22,d2);
     }
     return c;
@@ -112,7 +117,8 @@ vec3 reflected(vec3 p,vec3 direction,vec3 fallback) {
             vec3 pos=triangles[i].position.xyz*w.x+triangles[i+1].position.xyz*w.y+triangles[i+2].position.xyz*w.z;
             vec3 n=normalize(triangles[i].normal.xyz*w.x+triangles[i+1].normal.xyz*w.y+triangles[i+2].normal.xyz*w.z);
             int m=int(triangles[i].position.w); vec2 uv=abs(n.y)>.6?pos.xz*.35:abs(n.x)>.6?pos.zy*.35:pos.xy*.35;
-            vec3 base=albedo(uv,m)*triangles[i].tint.rgb;
+            vec3 reflected_texel=m==0?textureLod(floor_colour,uv,2.).rgb:m==2?textureLod(iron_colour,uv,2.).rgb:textureLod(rock_colour,uv,2.).rgb;
+            vec3 base=pow(reflected_texel,vec3(2.2))*triangles[i].tint.rgb;
             return illuminate(pos,n,-direction,base,.55,0.,false)+reflectedFlames(p,direction,rayQueryGetIntersectionTEXT(q,true));
         }
         return vec3(.008,.013,.025)+reflectedFlames(p,direction,45.);
@@ -127,16 +133,20 @@ void main() {
     vec2 uv=tex; vec3 base; float rough=.6,metal=0.,ao=1.; float wet=0.;
     if(m==4) {
         vec2 flow=world.xz*2.+vec2(-eye_time.w*.2,eye_time.w*.04);
-        n=normalize(n+vec3((noise(flow)-.5)*.22,0,(noise(flow+9.)-.5)*.22));
+        vec2 ripple=vec2(cos(world.x*6.+world.z*3.-eye_time.w*2.1),cos(world.x*4.-world.z*7.+eye_time.w*1.7));
+        n=normalize(n+vec3(ripple.x*.12+(noise(flow*3.)-.5)*.12,0,ripple.y*.1+(noise(flow*3.+9.)-.5)*.12));
         vec2 screen=gl_FragCoord.xy/settings.xy;
         vec4 r=reflected_vp*vec4(world,1); vec2 refl=r.xy/r.w*.5+.5;
         vec3 reflected_colour=reflected(world+n*.025,reflect(-v,n),screenSample(refl+n.xz*.025,true));
         float fresnel=.02+.98*pow(1.-max(dot(n,v),0.),5.);
-        vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.9,.36,.23)*1.3)+vec3(.006,.026,.023);
+        ivec2 pixel=clamp(ivec2(gl_FragCoord.xy),ivec2(0),ivec2(settings.xy)-1);
+        float bed_distance=unpackHalf2x16(refraction[pixel.y*int(settings.x)+pixel.x].y).y;
+        float thickness=clamp(bed_distance-distance(world,eye_time.xyz),.05,3.);
+        vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.55,.22,.16)*thickness)+vec3(.003,.008,.007);
         float edge=min(abs(world.z-river.y),abs(world.z-river.w));
         float foam=(1.-smoothstep(.02,.18,edge))*.55+colour.x*.6;
         foam*=smoothstep(.24,.68,noise(flow*5.));
-        vec3 c=mix(transmitted,reflected_colour,max(.16,fresnel))+illuminate(world,n,v,vec3(0),.09,0.,true)+vec3(foam*.12);
+        vec3 c=mix(transmitted,reflected_colour,max(.24,fresnel))+illuminate(world,n,v,vec3(0),.09,0.,true)+vec3(foam*.12);
         output_colour=vec4(c,distance(world,eye_time.xyz)); return;
     }
     vec3 dp1=dFdx(world),dp2=dFdy(world); vec2 du1=dFdx(tex),du2=dFdy(tex);

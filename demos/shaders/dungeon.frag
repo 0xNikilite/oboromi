@@ -29,6 +29,7 @@ layout(set=1,binding=12,std430) readonly buffer Refraction { uvec2 refraction[];
 struct Vertex { vec4 position; vec4 normal; vec4 tint; };
 layout(set=1,binding=13,std430) readonly buffer Geometry { Vertex triangles[]; };
 layout(set=1,binding=15,std430) readonly buffer Shadows { uvec2 shadows[]; };
+layout(set=1,binding=16,std430) readonly buffer Rooms { vec4 rooms[]; };
 const float PI=3.14159265;
 float hash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 float noise(vec2 p) {
@@ -161,9 +162,21 @@ void main() {
         base=albedo(uv,m)*colour;
         float moss=(1.-s.r)*smoothstep(.35,.65,noise(world.xz*.65+world.y));
         base=mix(base,vec3(.025,.06,.012),moss*.6);
-        wet=m==0?smoothstep(.43,.64,noise(world.xz*.43)):(m==1?.08:0.);
-        base*=1.-wet*.38; rough=mix(rough,.085,wet);
-        vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.65;n=normalize(basis*nt);
+        float macro=noise(world.xz*.19)*.65+noise(world.xz*.77+13.)*.35;
+        float wall=10.;
+        for(int i=0;i<rooms.length();i++) {
+            vec4 r=rooms[i];vec2 d=min(world.xz-r.xy,r.zw-world.xz);
+            if(min(d.x,d.y)>=-.02)wall=min(wall,min(d.x,d.y));
+        }
+        float grime=(1.-smoothstep(0.,.65,wall))*smoothstep(.2,.7,noise(world.xz*3.1));
+        if(m==0){
+            base*=mix(vec3(.52,.59,.43),vec3(1.12,.94,.76),macro);
+            base=mix(base,vec3(.018,.035,.009),grime*(1.-s.r*.6)*.75);
+            rough=clamp(rough+.18+(macro-.5)*.22,.62,.96);
+        }else if(m==1){base*=mix(.55,1.,smoothstep(0.,.55,world.y));}
+        wet=m==0?smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22):(m==1?.08:0.);
+        base*=1.-wet*.38; rough=mix(rough,.055,wet);
+        vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;n=normalize(basis*nt);
     } else { base=colour*mix(vec3(.24),albedo(uv,1),.2); rough=clamp(surface(uv,1).g,.4,.85); }
     vec3 c=illuminate(world,n,v,base,max(.065,rough),metal,true)*ao;
     if(m==0 && wet>.05 && settings.z<.5) {

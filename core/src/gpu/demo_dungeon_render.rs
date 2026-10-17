@@ -64,6 +64,7 @@ pub(super) struct Renderer {
     lights: HostBuffer<'static>,
     shadows_ready: bool,
     shadow_maps: HostBuffer<'static>,
+    _rooms: HostBuffer<'static>,
     _geometry: HostBuffer<'static>,
     _textures: Vec<HostImage<'static>>,
     _structure: Option<AccelerationStructure<'static>>,
@@ -195,6 +196,9 @@ impl Renderer {
             .collect();
         let mut lights = HostBuffer::new(state, (lights_data.len() * 4) as u64).map_err(named)?;
         lights.write(&floats(&lights_data)).map_err(named)?;
+        let bounds: Vec<_> = world.zones.iter().flat_map(|z| [z.space.lo[0],z.space.lo[2],z.space.hi[0],z.space.hi[2]]).collect();
+        let mut rooms=HostBuffer::new(state,(bounds.len()*4) as u64).map_err(named)?;
+        rooms.write(&floats(&bounds)).map_err(named)?;
         let uniforms = HostBuffer::new(state, 256).map_err(named)?;
         let particle_time = HostBuffer::new(state, 16).map_err(named)?;
         let per_emitter = if showcase { 96 } else { 32 };
@@ -256,7 +260,7 @@ impl Renderer {
         let mut fragment = vec![(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER)];
         fragment.extend((2..11).map(|b| (b, D::COMBINED_IMAGE_SAMPLER)));
         fragment.extend((11..14).map(|b| (b, D::STORAGE_BUFFER)));
-        fragment.push((15, D::STORAGE_BUFFER));
+        fragment.extend([(15, D::STORAGE_BUFFER),(16, D::STORAGE_BUFFER)]);
         if rays {
             fragment.push((14, D::ACCELERATION_STRUCTURE_KHR));
         }
@@ -284,6 +288,7 @@ impl Renderer {
             (12, &target.staging),
             (13, &geo),
             (15, &shadow_maps),
+            (16, &rooms),
         ]);
         opaque.descriptors[1]
             .bind_images(&textures.iter().enumerate().map(|(i, t)| (i as u32 + 2, t)).collect::<Vec<_>>());
@@ -309,6 +314,7 @@ impl Renderer {
             (12, &target.staging),
             (13, &geo),
             (15, &shadow_maps),
+            (16, &rooms),
         ]);
         cones.descriptors[1]
             .bind_images(&textures.iter().enumerate().map(|(i, t)| (i as u32 + 2, t)).collect::<Vec<_>>());
@@ -381,6 +387,7 @@ impl Renderer {
             lights,
             shadows_ready: false,
             shadow_maps,
+            _rooms: rooms,
             _geometry: geo,
             _textures: textures,
             _structure: structure,

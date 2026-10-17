@@ -655,6 +655,21 @@ impl World {
                     b.surface(&f, [c - a, y1 - y0], cells, &uv, if cave { LIMESTONE } else { STONE });
                 }
             }
+            if !cave && zone.kind != Kind::Corridor {
+                let mut debris=Rng(290+z as u32);
+                for _ in 0..65 {
+                    let axis=if debris.next()<0.5 {0}else{2};let k=2-axis;
+                    let mut p=[0.;3];p[axis]=if debris.next()<0.5{s.lo[axis]+debris.range(0.15,0.8)}else{s.hi[axis]-debris.range(0.15,0.8)};
+                    p[k]=debris.range(s.lo[k]+0.3,s.hi[k]-0.3);p[1]=0.025;
+                    if debris.next()<0.3 {
+                        let size=debris.range(0.035,0.13);
+                        b.blob(p,[size,size*0.6,size*0.8],debris.next()*TAU,&|a,t|1.+0.16*(a*5.+t*3.).sin(),[6,4],LIMESTONE);
+                    }else{
+                        let d=turn(debris.next()*TAU,[debris.range(0.06,0.19),0.,0.]);
+                        b.tube(sub(p,d),add(p,d),&|_|0.005,3,[0.75,0.53,0.24]);
+                    }
+                }
+            }
             let [w, d] = [s.hi[0] - s.lo[0], s.hi[2] - s.lo[2]];
             let ceiling = |x: f32, zz: f32| if cave { self.ceiling(x, zz) } else { s.hi[1] };
             let cells = if cave { [(d * 2.0) as usize, (w * 2.0) as usize] } else { [1, 1] };

@@ -14,6 +14,7 @@ fn render(demo: &str, seconds: f32) -> Result<(), String> {
         "post" => demo_post::render_post_frame(seconds),
         "boombox" => demo::render_boombox_frame(seconds),
         "raytraced" => demo::render_raytraced_frame(seconds),
+        "raytraced-off" => { demo::set_raytracing_enabled(false); demo::render_raytraced_frame(seconds) },
         "helmet" => demo::render_helmet_frame(seconds),
         "particles" => demo_particles::render_particles_frame(seconds),
         "bounce" => demo_bounce::render_bounce_frame(seconds),
@@ -74,6 +75,7 @@ fn main() {
             .map(|i| args[i + 1].clone())
     };
     let seconds: f32 = flag("--seconds").map_or(8.0, |s| s.parse().unwrap());
+    let start: f32 = flag("--start").map_or(0.0, |s| s.parse().unwrap());
     let fps: f32 = flag("--fps").map_or(60.0, |s| s.parse().unwrap());
     let out = std::path::PathBuf::from(flag("--out").expect("--out <dir>"));
     std::fs::create_dir_all(&out).unwrap();
@@ -81,7 +83,7 @@ fn main() {
     let mut pixels = Vec::new();
     let frames = (seconds * fps).round() as usize;
     for i in 0..frames {
-        render(&args[0], i as f32 / fps).unwrap();
+        render(&args[0], start + i as f32 / fps).unwrap();
         if let Some(wav) = &mut wav {
             wav.drain();
         }

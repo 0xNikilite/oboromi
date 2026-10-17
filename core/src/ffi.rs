@@ -108,6 +108,16 @@ pub extern "C" fn oboromi_render_boombox_demo(seconds: f32) -> bool {
     matches!(catch_unwind(|| crate::gpu::demo::render_boombox_frame(seconds)), Ok(Ok(())))
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_raytraced_demo(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo::render_raytraced_frame(seconds)), Ok(Ok(())))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_raytracing_enabled(enabled: bool) {
+    crate::gpu::demo::set_raytracing_enabled(enabled);
+}
+
 /// draws the pbr FlightHelmet demo like the BoomBox one, false too when
 /// demos/assets/fetch.sh has not fetched the asset.
 #[unsafe(no_mangle)]

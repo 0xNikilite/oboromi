@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QDesktopServices>
+#include <QCheckBox>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -94,7 +95,7 @@ void MainWindow::buildUi() {
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
     for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}, {"Post", RustBridge::renderPostFrame},
-                                {"Sprites", RustBridge::renderSpritesFrame}, {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Helmet", RustBridge::renderHelmetDemo},
+                                {"Sprites", RustBridge::renderSpritesFrame}, {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Ray traced", RustBridge::renderRaytracedDemo}, {"Helmet", RustBridge::renderHelmetDemo},
                                 {"Particles", RustBridge::renderParticlesFrame}, {"Music", RustBridge::renderMusicDemo}, {"Bounce", RustBridge::renderBounceDemo}}) {
         auto *demoButton = new QPushButton(name, central);
         demoButton->setCheckable(true);
@@ -110,6 +111,10 @@ void MainWindow::buildUi() {
         });
         buttons->addWidget(demoButton);
     }
+    auto *rayTracing = new QCheckBox("Ray tracing", central);
+    rayTracing->setChecked(true);
+    connect(rayTracing, &QCheckBox::toggled, this, RustBridge::setRaytracingEnabled);
+    buttons->addWidget(rayTracing);
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
         if (m_demoFrame.isFinished())
             m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);

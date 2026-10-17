@@ -8,7 +8,7 @@ use super::{VkState, device};
 use crate::tests::gpu::engine::{bytes, entry, inc, non_inc};
 use crate::tests::gpu_test::inst::bra;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, atomic::{AtomicBool, Ordering}};
 
 const BASE: u64 = 0x1000_0000;
 const PUSHBUFFER: u64 = BASE;
@@ -31,6 +31,13 @@ const EYE: [f32; 3] = [0.0, 0.35, 3.5];
 const TLAS: u64 = BASE + 0x2_f000;
 const RAY_CONSTANTS: u64 = TLAS + 0x800;
 const IDENTITY: Matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+const ROOM_EYE: [f32; 3] = [0.0, 1.0, 5.5];
+const ROOM_MATERIALS: [([u8; 3], f32, f32); 8] = [
+    ([28, 31, 38], 0.75, 0.18), ([150, 18, 24], 0.0, 0.72), ([20, 112, 52], 0.0, 0.72),
+    ([218, 205, 174], 0.0, 0.72), ([226, 215, 188], 0.0, 0.8), ([205, 218, 232], 1.0, 0.06),
+    ([120, 195, 220], 0.2, 0.42),
+    ([80, 190, 255], 0.0, 0.25),
+];
 
 // The driver's bank 0x1d: TEX handle k at +4k in GLSL declaration order, the binding 1 block's address at +0x18
 // (pbr.vert and pbr.frag SASS: `TEX ... 0x1d, 0x4`, `ULDC.64 UR4, c[0x1d][0x18]`).
@@ -152,6 +159,39 @@ fn floats(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
+fn vertex(out: &mut Vec<u8>, position: [f32; 3], normal: [f32; 3]) {
+    out.extend(floats(&[position[0], position[1], position[2], normal[0], normal[1], normal[2], 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+}
+
+fn quad(vertices: &mut Vec<u8>, indices: &mut Vec<u32>, corners: [[f32; 3]; 4], normal: [f32; 3]) -> [u32; 2] {
+    let base = (vertices.len() / 48) as u32;
+    for corner in corners { vertex(vertices, corner, normal); }
+    let first = indices.len() as u32;
+    indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    [first, 6]
+}
+
+fn sphere(vertices: &mut Vec<u8>, indices: &mut Vec<u32>, centre: [f32; 3], radius: f32) -> [u32; 2] {
+    const RINGS: u32 = 16;
+    const SEGMENTS: u32 = 32;
+    let base = (vertices.len() / 48) as u32;
+    for ring in 0..=RINGS {
+        let latitude = std::f32::consts::PI * ring as f32 / RINGS as f32;
+        for segment in 0..=SEGMENTS {
+            let longitude = std::f32::consts::TAU * segment as f32 / SEGMENTS as f32;
+            let normal = [latitude.sin() * longitude.cos(), latitude.cos(), latitude.sin() * longitude.sin()];
+            vertex(vertices, std::array::from_fn(|i| centre[i] + normal[i] * radius), normal);
+        }
+    }
+    let first = indices.len() as u32;
+    for ring in 0..RINGS { for segment in 0..SEGMENTS {
+        let a = base + ring * (SEGMENTS + 1) + segment;
+        let b = a + SEGMENTS + 1;
+        indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+    }}
+    [first, indices.len() as u32 - first]
+}
+
 fn align(va: u64) -> u64 {
     va.next_multiple_of(ALIGN)
 }
@@ -180,27 +220,42 @@ pub struct Scene<'a> {
     /// Model space centre and the scale that makes the asset two units across.
     fit: ([f32; 3], f32),
     geometry: Vec<Geometry>,
+    traced: bool,
+    room: bool,
+    material_count: usize,
+    model_indices: u32,
+    light_first: u32,
     frame: u32,
 }
 
 impl<'a> Scene<'a> {
     /// Lays the asset in demos/assets/`asset` out in guest memory and runs the init segment.
     pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, asset: &str, width: u32, height: u32) -> Result<Self, String> {
-        let raytraced = asset == "raytraced";
-        if raytraced && !supports_raytraced(state) {
+        let room = asset.starts_with("raytraced");
+        let traced = asset == "raytraced";
+        if traced && !supports_raytraced(state) {
             return Err("ray-traced demo needs ray queries and fragment subgroup arithmetic, ballot and shuffle".into());
         }
-        let dir = asset_dir(if raytraced { "boombox" } else { asset });
+        let dir = asset_dir(if room { "boombox" } else { asset });
         let read = |file: &str| std::fs::read(dir.join(file)).map_err(|e| format!("{}: {e}", dir.join(file).display()));
         let text = String::from_utf8(read("manifest.json")?).map_err(|e| e.to_string())?;
         let manifest = Json::parse(&mut text.as_str()).ok_or("manifest.json does not parse")?;
         let [mut vertices, mut indices] = [read("vertices.bin")?, read("indices.bin")?];
         let (model_vertices, model_indices) = (vertices.len() / 48, indices.len() / 4);
-        if raytraced {
-            for [x, z] in [[-3.0, -3.0], [-3.0, 3.0], [3.0, 3.0], [3.0, -3.0]] {
-                vertices.extend(floats(&[x, -1.0, z, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
-            }
-            indices.extend(bytes(&[0, 1, 2, 0, 2, 3].map(|i| i + model_vertices as u32)));
+        let mut room_draws = Vec::new();
+        if room {
+            let mut room_indices = Vec::new();
+            for (corners, normal) in [
+                ([[-3.0, -1.0, -3.0], [3.0, -1.0, -3.0], [3.0, -1.0, 3.0], [-3.0, -1.0, 3.0]], [0.0, 1.0, 0.0]),
+                ([[-3.0, -1.0, 3.0], [-3.0, -1.0, -3.0], [-3.0, 3.0, -3.0], [-3.0, 3.0, 3.0]], [1.0, 0.0, 0.0]),
+                ([[3.0, -1.0, -3.0], [3.0, -1.0, 3.0], [3.0, 3.0, 3.0], [3.0, 3.0, -3.0]], [-1.0, 0.0, 0.0]),
+                ([[-3.0, -1.0, -3.0], [3.0, -1.0, -3.0], [3.0, 3.0, -3.0], [-3.0, 3.0, -3.0]], [0.0, 0.0, 1.0]),
+                ([[-3.0, 3.0, -3.0], [3.0, 3.0, -3.0], [3.0, 3.0, 3.0], [-3.0, 3.0, 3.0]], [0.0, -1.0, 0.0]),
+            ] { room_draws.push(quad(&mut vertices, &mut room_indices, corners, normal)); }
+            room_draws.push(sphere(&mut vertices, &mut room_indices, [-1.65, -0.35, -0.55], 0.65));
+            room_draws.push(sphere(&mut vertices, &mut room_indices, [1.65, -0.35, -0.45], 0.65));
+            room_draws.push(sphere(&mut vertices, &mut room_indices, [0.0; 3], 0.12));
+            indices.extend(bytes(&room_indices));
         }
         let textures = manifest.get("textures")?.list();
         let indices_va = align(VERTICES + vertices.len() as u64);
@@ -208,8 +263,8 @@ impl<'a> Scene<'a> {
         for texture in textures {
             texture_va.push(align(texture_va.last().unwrap() + texture.get("bytes")?.number() as u64));
         }
-        let ground_textures = texture_va.pop().unwrap();
-        let target = ground_textures + if raytraced { ALIGN } else { 0 };
+        let room_textures = texture_va.pop().unwrap();
+        let target = room_textures + if room { ALIGN } else { 0 };
         let end = (target + u64::from(width * height * 4)).next_multiple_of(PAGE);
         let mut gpu = Gpu::new(state, (end - BASE) as usize, cache, *super::SPEED_HACKS.lock().unwrap()).map_err(|e| format!("{e:?}"))?;
         gpu.space.map(BASE, 0, end - BASE);
@@ -230,10 +285,12 @@ impl<'a> Scene<'a> {
             let [hi, lo] = split(va);
             tic.extend([A8B8G8R8_UNORM, lo, hi | BLOCK_LINEAR, gob_height_log2 << 3 | (mips - 1) << 28, (width - 1) | TWO_D, (height - 1) | NORMALIZED, 0, 0]);
         }
-        if raytraced {
-            for (i, pixel) in [[180, 180, 180, 255], [128, 128, 255, 255], [255, 230, 0, 255]].iter().enumerate() {
-                let va = ground_textures + i as u64 * 512;
-                gpu.write(va, pixel).map_err(named)?;
+        if room {
+            for (i, pixel) in ROOM_MATERIALS.iter().flat_map(|(base, metallic, roughness)| [
+                [base[0], base[1], base[2], 255], [128, 128, 255, 255], [0, (roughness * 255.0) as u8, (metallic * 255.0) as u8, 255], [255; 4], [base[0], base[1], base[2], 255],
+            ]).enumerate() {
+                let va = room_textures + i as u64 * 512;
+                gpu.write(va, &pixel).map_err(named)?;
                 let [hi, lo] = split(va);
                 tic.extend([A8B8G8R8_UNORM, lo, hi | BLOCK_LINEAR, 0, TWO_D, NORMALIZED, 0, 0]);
             }
@@ -248,8 +305,8 @@ impl<'a> Scene<'a> {
         let light = light.map(|c| c / light.iter().map(|c| c * c).sum::<f32>().sqrt());
         let texture_index = |file: &str| textures.iter().position(|t| t.get("file").is_ok_and(|f| f.text() == file)).map(|i| i as u32);
         let materials = manifest.get("materials")?.list();
-        let uniform_pointer = if raytraced { 0x28 / 4 } else { UNIFORM_POINTER };
-        let eye = if raytraced { [0.0, 1.0, 3.5] } else { EYE };
+        let uniform_pointer = if traced { 0x28 / 4 } else { UNIFORM_POINTER };
+        let eye = if room { ROOM_EYE } else { EYE };
         for (m, material) in materials.iter().enumerate() {
             let maps = material.get("textures")?;
             let base = maps.get("baseColor")?.text();
@@ -259,33 +316,38 @@ impl<'a> Scene<'a> {
                 table[k] = texture_index(file).ok_or_else(|| format!("material {m} {slot} {file} is not in textures"))?;
             }
             let va = MATERIALS + MATERIAL_STRIDE * m as u64;
-            [table[uniform_pointer], table[uniform_pointer + 1]] = uniform_handle(va + MATERIAL_UNIFORMS, if raytraced { 128 } else { 112 });
-            if raytraced { [table[6], table[7]] = [TLAS as u32, (TLAS >> 32) as u32]; }
+            [table[uniform_pointer], table[uniform_pointer + 1]] = uniform_handle(va + MATERIAL_UNIFORMS, if traced { 128 } else { 112 });
+            if traced { [table[6], table[7]] = [TLAS as u32, (TLAS >> 32) as u32]; }
             let numbers = |key| material.get(key).map(|value| value.list().iter().map(Json::number).collect::<Vec<_>>());
             let [base_factor, mut emissive] = [numbers("baseColorFactor")?, numbers("emissiveFactor")?];
             emissive.resize(4, 0.0);
             let scalar = |key| material.get(key).map(Json::number);
             let factors = [scalar("metallicFactor")?, scalar("roughnessFactor")?, scalar("normalScale")?, scalar("occlusionStrength")?];
             let mut uniforms = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.6, 0.62, 0.66, 0.0], &eye, &[1.0], &base_factor, &emissive, &factors].concat();
-            if raytraced { uniforms.extend([0.35, 0.45, 0.6, 0.002]); }
+            if traced { uniforms.extend([0.35, 0.45, 0.6, 0.002]); }
             gpu.write(va, &bytes(&table)).map_err(named)?;
             gpu.write(va + MATERIAL_UNIFORMS, &floats(&uniforms)).map_err(named)?;
         }
-        if raytraced {
-            let va = MATERIALS + MATERIAL_STRIDE * materials.len() as u64;
-            let t = textures.len() as u32;
-            let mut table = [t, t + 1, t + 2, t + 2, t, 0, TLAS as u32, (TLAS >> 32) as u32, 0, 0, 0, 0];
-            [table[uniform_pointer], table[uniform_pointer + 1]] = uniform_handle(va + MATERIAL_UNIFORMS, 128);
-            let uniforms = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.6, 0.62, 0.66, 0.0], &eye, &[1.0], &[1.0; 4], &[0.0; 4], &[0.0, 0.9, 1.0, 0.0], &[0.35, 0.45, 0.6, 0.002]].concat();
-            gpu.write(va, &bytes(&table)).map_err(named)?;
-            gpu.write(va + MATERIAL_UNIFORMS, &floats(&uniforms)).map_err(named)?;
-            gpu.write(RAY_CONSTANTS, &0x20u32.to_le_bytes()).map_err(named)?;
+        if room {
+            for (i, (_, metallic, roughness)) in ROOM_MATERIALS.iter().enumerate() {
+                let va = MATERIALS + MATERIAL_STRIDE * (materials.len() + i) as u64;
+                let t = textures.len() as u32 + i as u32 * 5;
+                let mut table = [t, t + 1, t + 2, t + 3, t + 4, 0, 0, 0, 0, 0, 0, 0];
+                if traced { [table[6], table[7]] = [TLAS as u32, (TLAS >> 32) as u32]; }
+                [table[uniform_pointer], table[uniform_pointer + 1]] = uniform_handle(va + MATERIAL_UNIFORMS, if traced { 128 } else { 112 });
+                let emissive = if i + 1 == ROOM_MATERIALS.len() { [2.0, 4.0, 8.0, 0.0] } else { [0.0; 4] };
+                let mut uniforms = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.18, 0.18, 0.2, 0.0], &eye, &[1.0], &[1.0; 4], &emissive, &[*metallic, *roughness, 1.0, 1.0]].concat();
+                if traced { uniforms.extend([0.65, 0.75, 0.9, 0.002]); }
+                gpu.write(va, &bytes(&table)).map_err(named)?;
+                gpu.write(va + MATERIAL_UNIFORMS, &floats(&uniforms)).map_err(named)?;
+            }
+            if traced { gpu.write(RAY_CONSTANTS, &0x20u32.to_le_bytes()).map_err(named)?; }
         }
         let mut vertex_table = [0; 12];
         [vertex_table[uniform_pointer], vertex_table[uniform_pointer + 1]] = uniform_handle(VERTEX_UNIFORMS, 128);
         gpu.write(VERTEX_TABLE, &bytes(&vertex_table)).map_err(named)?;
         // The rig's programs stop at their last EXIT; the self-branch a compiled program ends with marks the end.
-        let programs: [&[u8]; 2] = if raytraced {
+        let programs: [&[u8]; 2] = if traced {
             [include_bytes!("../../tests/fixtures/driver-shaders/rt.vert.bin"), include_bytes!("../../tests/fixtures/driver-shaders/rt.frag.bin")]
         } else {
             [include_bytes!("../../tests/fixtures/driver-shaders/pbr.vert.bin"), include_bytes!("../../tests/fixtures/driver-shaders/pbr.frag.bin")]
@@ -300,12 +362,14 @@ impl<'a> Scene<'a> {
             .iter()
             .map(|p| Ok([p.get("first_index")?.number() as u32, p.get("index_count")?.number() as u32, p.get("material")?.number() as u32]))
             .collect::<Result<Vec<_>, String>>()?;
-        if raytraced { draws.push([model_indices as u32, 6, materials.len() as u32]); }
+        let light_count = room_draws.last().map_or(0, |draw| draw[1]);
+        let light_first = room_draws.last().map_or(0, |draw| model_indices as u32 + draw[0]);
+        if room { draws.extend(room_draws.into_iter().enumerate().map(|(material, [first, count])| [model_indices as u32 + first, count, (materials.len() + material) as u32])); }
         let positions: Vec<[f32; 3]> = vertices[..model_vertices * 48].chunks(48).map(|v| std::array::from_fn(|i| f32::from_le_bytes(v[4 * i..4 * i + 4].try_into().unwrap()))).collect();
         let [low, high] = [f32::min, f32::max].map(|pick| std::array::from_fn::<f32, 3, _>(|i| positions.iter().map(|p| p[i]).reduce(pick).unwrap_or(0.0)));
         let extent = (0..3).map(|i| high[i] - low[i]).fold(0.0, f32::max);
         let mut fit = (std::array::from_fn(|i| (low[i] + high[i]) / 2.0), 2.0 / extent);
-        if raytraced { fit.0[1] = low[1] + 1.0 / fit.1; }
+        if room { fit.0[1] = low[1] + 1.0 / fit.1; }
 
         let mut words = Vec::new();
         let [vs, fs, vertex_table, ct, depth, vb, ib, tic_pool, tsc_pool] = [VERTEX_PROGRAM, PIXEL_PROGRAM, VERTEX_TABLE, target, DEPTH, VERTICES, indices_va, TIC, TSC].map(split);
@@ -344,33 +408,43 @@ impl<'a> Scene<'a> {
         inc(SET_TEX_SAMPLER_POOL_A, &[tsc_pool[0], tsc_pool[1], 0], &mut words);
         gpu.write(PUSHBUFFER, &bytes(&words)).map_err(named)?;
         gpu.submit(&[entry(PUSHBUFFER, words.len())])?;
-        let geometry = if raytraced {
+        let geometry = if traced {
             vec![Geometry { vertices: VERTICES, stride: 48, vertex_count: model_vertices as u32, indices: indices_va, index_count: model_indices as u32, transform: [[0.0; 4]; 3], opaque: true },
-                Geometry { vertices: VERTICES, stride: 48, vertex_count: model_vertices as u32 + 4, indices: indices_va + model_indices as u64 * 4, index_count: 6, transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], opaque: true }]
+                Geometry { vertices: VERTICES, stride: 48, vertex_count: (vertices.len() / 48) as u32, indices: indices_va + (model_indices as u64 + 30) * 4, index_count: (indices.len() / 4 - model_indices - 30) as u32 - light_count, transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], opaque: true }]
         } else { Vec::new() };
-        Ok(Self { gpu, target, width, height, draws, fit, geometry, frame: 0 })
+        Ok(Self { gpu, target, width, height, draws, fit, geometry, traced, room, material_count: materials.len() + if room { ROOM_MATERIALS.len() } else { 0 }, model_indices: model_indices as u32, light_first, frame: 0 })
     }
 
     /// Turns the model to `seconds` at 0.8 rad/s, draws every primitive and waits for the frame's report.
     pub fn frame(&mut self, seconds: f32) -> Result<(), String> {
         let ([cx, cy, cz], scale) = self.fit;
-        let raytraced = !self.geometry.is_empty();
-        let (sin, cos) = (seconds * 0.8 + if raytraced { std::f32::consts::PI } else { 0.0 }).sin_cos();
+        let (sin, cos) = (seconds * 0.8 + if self.room { std::f32::consts::PI } else { 0.0 }).sin_cos();
         let mut model = [[cos * scale, 0.0, -sin * scale, 0.0], [0.0, scale, 0.0, 0.0], [sin * scale, 0.0, cos * scale, 0.0], [0.0; 4]];
         model[3] = [-(cos * cx + sin * cz) * scale, -cy * scale, (sin * cx - cos * cz) * scale, 1.0];
-        if raytraced {
+        if self.traced {
             self.geometry[0].transform = std::array::from_fn(|row| std::array::from_fn(|col| model[col][row]));
             self.gpu.register_acceleration_structure(TLAS, self.geometry.clone()).map_err(|e| format!("{e:?}"))?;
         }
         // Vulkan clip space, y down and z in 0..1: 45 degrees vertical, near 0.1, far 20, looking from EYE at the origin.
         let (near, far, focal) = (0.1, 20.0, 1.0 / (22.5f32.to_radians()).tan());
         let projection = [[focal * self.height as f32 / self.width as f32, 0.0, 0.0, 0.0], [0.0, -focal, 0.0, 0.0], [0.0, 0.0, far / (near - far), -1.0], [0.0, 0.0, near * far / (near - far), 0.0]];
-        let eye = if raytraced { [0.0, 1.0, 3.5] } else { EYE };
-        let length = (eye[1] * eye[1] + eye[2] * eye[2]).sqrt();
-        let [up, back] = [[0.0, eye[2] / length, -eye[1] / length], [0.0, eye[1] / length, eye[2] / length]];
-        let mut view = [[1.0, up[0], back[0], 0.0], [0.0, up[1], back[1], 0.0], [0.0, up[2], back[2], 0.0], [0.0, 0.0, 0.0, 1.0]];
-        view[3] = [0.0, -(up[1] * eye[1] + up[2] * eye[2]), -length, 1.0];
+        let eye = if self.room { [(seconds * 0.18).sin() * 0.55, ROOM_EYE[1], ROOM_EYE[2]] } else { EYE };
+        let length = eye.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let back = eye.map(|v| v / length);
+        let side_length = (back[0] * back[0] + back[2] * back[2]).sqrt();
+        let right = [back[2] / side_length, 0.0, -back[0] / side_length];
+        let up = [-back[1] * right[2], back[2] * right[0] - back[0] * right[2], -back[1] * right[0]];
+        let mut view = [[right[0], up[0], back[0], 0.0], [right[1], up[1], back[1], 0.0], [right[2], up[2], back[2], 0.0], [0.0; 4]];
+        view[3] = [-right.iter().zip(eye).map(|(a, b)| a * b).sum::<f32>(), -up.iter().zip(eye).map(|(a, b)| a * b).sum::<f32>(), -length, 1.0];
         let uniforms: Vec<u32> = [model, multiply(projection, view)].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
+        if self.room {
+            let (orbit, bob) = ((seconds * 0.45).sin(), (seconds * 1.4).sin());
+            let mut light = [orbit * 0.65, 0.7 + bob * 0.08, 0.55 * (seconds * 0.45).cos()];
+            let length = light.iter().map(|v| v * v).sum::<f32>().sqrt();
+            light.iter_mut().for_each(|v| *v /= length);
+            let head = [&light[..], &[3.6 + bob * 0.25, 2.55 + bob * 0.15, 1.75 + (1.0 - bob) * 0.2, 0.0], &[0.13 + 0.08 * (orbit + 1.0), 0.13 + 0.08 * (1.0 - orbit), 0.2 + 0.04 * bob, 0.0], &eye, &[1.0]].concat();
+            for material in 0..self.material_count { self.gpu.write(MATERIALS + MATERIAL_STRIDE * material as u64 + MATERIAL_UNIFORMS, &floats(&head)).map_err(|e| format!("{e:?}"))?; }
+        }
 
         const CLEAR_Z_AND_RGBA: u32 = 0x3d;
         const TRIANGLES: u32 = 4;
@@ -379,13 +453,15 @@ impl<'a> Scene<'a> {
         inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[128, split(VERTEX_UNIFORMS)[0], split(VERTEX_UNIFORMS)[1], 0], &mut words);
         non_inc(LOAD_CONSTANT_BUFFER, &uniforms, &mut words);
         inc(CLEAR_SURFACE, &[CLEAR_Z_AND_RGBA], &mut words);
-        if raytraced {
+        if self.traced {
             inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[16, split(RAY_CONSTANTS)[0], split(RAY_CONSTANTS)[1]], &mut words);
             inc(BIND_GROUP_CONSTANT_BUFFER + 4 * 32, &[1 << 4 | 1], &mut words);
         }
         for &[first, count, material] in &self.draws {
-            if raytraced && count == 6 && first == self.geometry[0].index_count {
-                let uniforms: Vec<u32> = [IDENTITY, multiply(projection, view)].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
+            if self.room && first >= self.model_indices {
+                let mut object = IDENTITY;
+                if first == self.light_first { object[3] = [-1.65, 0.7 + 0.25 * (seconds * 1.4).sin(), -0.55, 1.0]; }
+                let uniforms: Vec<u32> = [object, multiply(projection, view)].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
                 inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[128, split(VERTEX_UNIFORMS)[0], split(VERTEX_UNIFORMS)[1], 0], &mut words);
                 non_inc(LOAD_CONSTANT_BUFFER, &uniforms, &mut words);
             }
@@ -416,6 +492,7 @@ const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
 pub(super) static SCENE: Mutex<Option<(&str, Scene<'static>)>> = Mutex::new(None);
+static RAY_TRACING: AtomicBool = AtomicBool::new(true);
 
 fn render(asset: &'static str, seconds: f32) -> Result<(), String> {
     let mut slot = SCENE.lock().unwrap();
@@ -433,7 +510,11 @@ pub fn render_boombox_frame(seconds: f32) -> Result<(), String> {
 }
 
 pub fn render_raytraced_frame(seconds: f32) -> Result<(), String> {
-    render("raytraced", seconds)
+    render(if RAY_TRACING.load(Ordering::Relaxed) { "raytraced" } else { "raytraced-off" }, seconds)
+}
+
+pub fn set_raytracing_enabled(enabled: bool) {
+    RAY_TRACING.store(enabled, Ordering::Relaxed);
 }
 
 /// Needs demos/assets/fetch.sh run first.

@@ -61,7 +61,7 @@ pub trait ServiceTrait {
 }
 
 pub fn start_host_services(state: &mut sys::State) {
-    let entries: [(&str, fn(&mut sys::State)); 159] = [
+    let entries: [(&str, fn(&mut sys::State)); 158] = [
         ("acc", nn::acc::State::run),
         ("adraw", nn::adraw::State::run),
         ("ahid", nn::ahid::State::run),

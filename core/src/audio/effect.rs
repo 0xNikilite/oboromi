@@ -1,9 +1,10 @@
-//! mix effects, run per mix in processing order on that mix's buffers: buffer mix, aux send and
-//! return through guest rings, delay and biquad; the other types report their state and pass
-//! their input through.
+//! mix effects, run per mix in processing order on that mix's buffers: buffer mix, aux send
+//! and return through guest rings, delay, reverb and biquad; the other types report their
+//! state and pass their input through.
 
 use super::dsp::biquad::{Biquad, BiquadParams};
 use super::dsp::delay::{Delay, DelayParams};
+use super::dsp::reverb::{Reverb, ReverbParams};
 use super::parcel::{f32_at, i32_at, u16_at, u32_at, u64_at};
 use super::renderer::{Pools, REV_BIQUAD_STATE_CLEAR_FIX};
 use super::voice::biquad_q14;
@@ -12,6 +13,7 @@ use super::{GuestMemory, mix_into};
 const BUFFER_MIX: u8 = 1;
 const AUX: u8 = 2;
 const DELAY: u8 = 3;
+const REVERB: u8 = 4;
 const BIQUAD: u8 = 6;
 const ENABLED: u8 = 3;
 const DISABLED: u8 = 4;
@@ -20,6 +22,7 @@ enum Kernel {
     None,
     Biquads(Vec<Biquad>),
     Delay(Delay),
+    Reverb(Reverb),
     Aux {
         send_info: u64,
         send: u64,
@@ -111,6 +114,31 @@ impl Effect {
                     }
                 }
             }
+            REVERB => {
+                let q = |at| q14(u32_at(p, at));
+                let params = ReverbParams {
+                    channel_count: usize::from(u16_at(p, 0xE)),
+                    sample_rate: rate,
+                    early_gain: q(0x18),
+                    pre_delay_time_ms: q(0x1C),
+                    late_gain: q(0x24),
+                    decay_time: q(0x28),
+                    high_frequency_decay_ratio: q(0x2C),
+                    coloration: q(0x30),
+                    reverb_gain: q(0x34),
+                    out_gain: q(0x38),
+                    dry_gain: q(0x3C),
+                };
+                match &mut self.kernel {
+                    Kernel::Reverb(reverb) => reverb.set(params),
+                    _ => {
+                        self.kernel = Kernel::Reverb(Reverb::new(ReverbParams {
+                            channel_count: usize::from(u16_at(p, 0xC)).max(params.channel_count),
+                            ..params
+                        }))
+                    }
+                }
+            }
             AUX => {
                 let ring = u64::from(u32_at(p, 0x38)) * 4;
                 let (send_info, send, return_info, returned) = (
@@ -188,11 +216,12 @@ impl Effect {
                     filter.process(&dry[c], &mut wet[c], frames);
                 }
             }
-            Kernel::Delay(delay) if self.enabled => {
-                let input: Vec<&[f32]> = dry.iter().map(Vec::as_slice).collect();
-                let mut output: Vec<&mut [f32]> = wet.iter_mut().map(Vec::as_mut_slice).collect();
-                delay.process(&input, &mut output, frames);
-            }
+            Kernel::Delay(delay) if self.enabled => planar(&dry, &mut wet, |input, output| {
+                delay.process(input, output, frames)
+            }),
+            Kernel::Reverb(reverb) if self.enabled => planar(&dry, &mut wet, |input, output| {
+                reverb.process(input, output, frames)
+            }),
             Kernel::Aux {
                 send_info,
                 send,
@@ -223,6 +252,16 @@ impl Effect {
             buffers[index(outputs, c)].copy_from_slice(&wet[c]);
         }
     }
+}
+
+fn planar(
+    dry: &[Vec<f32>],
+    wet: &mut [Vec<f32>],
+    kernel: impl FnOnce(&[&[f32]], &mut [&mut [f32]]),
+) {
+    let input: Vec<&[f32]> = dry.iter().map(Vec::as_slice).collect();
+    let mut output: Vec<&mut [f32]> = wet.iter_mut().map(Vec::as_mut_slice).collect();
+    kernel(&input, &mut output);
 }
 
 fn read_u32(memory: &dyn GuestMemory, va: u64) -> u32 {

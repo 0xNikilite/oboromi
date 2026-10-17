@@ -231,8 +231,12 @@ impl<'a> Decoder<'a> {
         let address = self.global_address(inst, 32, 40);
         self.load_memory(ResourceKind::Local, address, sz, rd);
     }
-    pub fn ldtram(&mut self, _inst: u128) {
-        todo!("LDTRAM reads tessellation attribute memory, which is not implemented");
+    pub fn ldtram(&mut self, inst: u128) {
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let attr = (((inst >> 64) & 0xff) << 2) as u32;
+        let c = (((inst >> 72) & 0x1) << 0) as usize;
+        let vertices = ["vertices 0 and 1", "vertex 2"][c];
+        panic!("LDTRAM.{} R{rd}, a[{attr:#x}] reads the attribute at {vertices} of the primitive (NAK load_input_vertex), which needs VK_KHR_fragment_shader_barycentric and is not implemented", ["AB", "C"][c]);
     }
     pub fn membar(&mut self, inst: u128) {
         let dstfmt = (((inst >> 76) & 0x7) << 0) as u32;

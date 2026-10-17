@@ -300,7 +300,6 @@ mod tests {
         "s3#102/memory/ldl-s16-r6-r0-0x4",
         "warp3#053/sts/bank-conflict",
     ];
-    const LIVE_MASK_SUPPORTED: bool = false;
     const KNOWN_FAILURES: &[&str] = &[
         "s3#011/fp32/fadd-r1-r2-r3",
         "s3#012/fp32/fadd-r1-r2-r3",
@@ -548,7 +547,7 @@ mod tests {
         let mut unexpected = Vec::new();
         for fixture in warp_fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
-            if !fixture.observed || fixture.lanes_active != u32::MAX && !LIVE_MASK_SUPPORTED {
+            if !fixture.observed {
                 score.skipped += 1;
                 continue;
             }

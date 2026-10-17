@@ -404,7 +404,7 @@ impl<'a> ComputePipeline<'a> {
         let info = [vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(p.layout)];
-        p.pipeline = unsafe { d.create_compute_pipelines(state.pipeline_cache, &info, None) }
+        p.pipeline = unsafe { d.create_compute_pipelines(*state.pipeline_cache.read().unwrap(), &info, None) }
             .map_err(|(_, e)| e)?[0];
         Ok(p)
     }

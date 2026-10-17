@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::demo_sprites::{SHAPES, SKY, SUNSET, TARGET, instances, sprites_frame, sprites_guest};
-    use crate::tests::gpu::harness::vk_state;
+    use crate::tests::gpu::harness::shared_device;
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -17,8 +17,8 @@ mod tests {
     // the sky clear colour by the instance's alpha.
     #[test]
     fn sprites_frame_blends_the_tinted_sun_over_the_sky() {
-        let Some(state) = vk_state() else { return };
-        let mut gpu = sprites_guest(&state, WIDTH, HEIGHT).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = sprites_guest(state, None, WIDTH, HEIGHT).unwrap();
         sprites_frame(&mut gpu, 0.0).unwrap();
         let mut frame = vec![0; (WIDTH * HEIGHT * 4) as usize];
         gpu.read(TARGET, &mut frame).unwrap();

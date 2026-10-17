@@ -31,6 +31,16 @@ impl From<vk::Result> for VkError {
     }
 }
 
+/// Settings that trade accuracy for speed, all off by default.
+#[derive(Clone, Copy, Default)]
+pub struct SpeedHacks {
+    pub fast_tensor: bool,
+    /// Skips draws whose pipeline is still compiling instead of waiting, so new shaders pop in.
+    pub skip_draw_while_compiling: bool,
+}
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false, skip_draw_while_compiling: false });
+
 pub struct VkState {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
@@ -41,7 +51,8 @@ pub struct VkState {
     pub queue: vk::Queue,
     pub command_pool: vk::CommandPool,
     pub submit: std::sync::Mutex<compute::Submit>,
-    pub pipeline_cache: vk::PipelineCache,
+    /// vkMergePipelineCaches needs its dstCache externally synchronized, so merges take the write lock and pipeline creation the read one.
+    pub pipeline_cache: std::sync::RwLock<vk::PipelineCache>,
     /// Graphics pipelines link from libraries shared between them, compiled once per stage or interface.
     pub graphics_pipeline_library: bool,
     pub(crate) libraries: std::sync::Mutex<std::collections::HashMap<(vk::GraphicsPipelineLibraryFlagsEXT, u64), vk::Pipeline>>,
@@ -67,6 +78,10 @@ pub fn surface_device() -> Result<&'static VkState, VkError> {
     device()
 }
 
+// The Vulkan loader unlinks a destroyed device under a different lock than vkGetDeviceProcAddr walks the device list
+// with, so creating a device while another thread destroys one reads freed memory.
+static DEVICE_LIFETIMES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn device() -> Result<&'static VkState, VkError> {
     static DEVICE: std::sync::OnceLock<VkState> = std::sync::OnceLock::new();
     if let Some(state) = DEVICE.get() {
@@ -83,6 +98,7 @@ impl VkState {
     }
 
     pub fn new() -> Result<Self, VkError> {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
         let extensions = if SURFACES.load(Relaxed) {
@@ -125,7 +141,7 @@ impl VkState {
             device,
             command_pool,
             submit: Default::default(),
-            pipeline_cache: vk::PipelineCache::null(),
+            pipeline_cache: Default::default(),
             graphics_pipeline_library,
             libraries: Default::default(),
             signed_zero_inf_nan_preserve: [
@@ -160,7 +176,7 @@ impl VkState {
         submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
         // Created without EXTERNALLY_SYNCHRONIZED_BIT, so the implementation synchronises it and any thread may create
         // pipelines through it (VUID-vkCreateGraphicsPipelines-pipelineCache-02876, fundamentals-threadingbehavior).
-        state.pipeline_cache = unsafe { state.device.create_pipeline_cache(&Default::default(), None)? };
+        *state.pipeline_cache.get_mut().unwrap() = unsafe { state.device.create_pipeline_cache(&Default::default(), None)? };
         Ok(state)
     }
 
@@ -304,11 +320,12 @@ impl VkState {
 
 impl Drop for VkState {
     fn drop(&mut self) {
+        let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let _ = self.device.device_wait_idle();
             let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());
             self.device.destroy_fence(submit.fence, None);
-            self.device.destroy_pipeline_cache(self.pipeline_cache, None);
+            self.device.destroy_pipeline_cache(*self.pipeline_cache.get_mut().unwrap_or_else(|e| e.into_inner()), None);
             let libraries = self.libraries.get_mut().unwrap_or_else(|e| e.into_inner());
             libraries.values().for_each(|&library| self.device.destroy_pipeline(library, None));
             self.device.destroy_command_pool(self.command_pool, None);

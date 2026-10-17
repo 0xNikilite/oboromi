@@ -48,6 +48,14 @@ bool renderBoomBoxDemo(float seconds) {
     return oboromi_render_boombox_demo(seconds);
 }
 
+bool renderRaytracedDemo(float seconds) {
+    return oboromi_render_raytraced_demo(seconds);
+}
+
+void setRaytracingEnabled(bool enabled) {
+    oboromi_set_raytracing_enabled(enabled);
+}
+
 bool renderHelmetDemo(float seconds) {
     return oboromi_render_helmet_demo(seconds);
 }

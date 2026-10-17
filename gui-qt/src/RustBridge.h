@@ -25,6 +25,8 @@ bool flushDemoCaches();
 
 // Draws the pbr BoomBox and FlightHelmet demos at the given time into the display
 bool renderBoomBoxDemo(float seconds);
+bool renderRaytracedDemo(float seconds);
+void setRaytracingEnabled(bool enabled);
 bool renderHelmetDemo(float seconds);
 
 // Draws the post-effect demo at the given time into the display

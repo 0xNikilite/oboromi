@@ -137,7 +137,7 @@ void main() {
         n=normalize(n+vec3(ripple.x*.12+(noise(flow*3.)-.5)*.12,0,ripple.y*.1+(noise(flow*3.+9.)-.5)*.12));
         vec2 screen=gl_FragCoord.xy/settings.xy;
         vec4 r=reflected_vp*vec4(world,1); vec2 refl=r.xy/r.w*.5+.5;
-        vec3 reflected_colour=reflected(world+n*.025,reflect(-v,n),screenSample(refl+n.xz*.025,true));
+        vec3 reflected_colour=reflected(world+n*.025,reflect(-v,n),(up_rt.w>.5?vec3(0):screenSample(refl+n.xz*.025,true)));
         float fresnel=.02+.98*pow(1.-max(dot(n,v),0.),5.);
         ivec2 pixel=clamp(ivec2(gl_FragCoord.xy),ivec2(0),ivec2(settings.xy)-1);
         float bed_distance=unpackHalf2x16(refraction[pixel.y*int(settings.x)+pixel.x].y).y;
@@ -170,7 +170,7 @@ void main() {
     if(m==0 && wet>.05 && settings.z<.5) {
         vec4 r=reflected_vp*vec4(world,1);vec2 refl=r.xy/r.w*.5+.5;
         float f=.035+.965*pow(1.-max(dot(n,v),0.),5.);
-        c=mix(c,reflected(world+n*.03,reflect(-v,n),screenSample(refl+n.xz*.012,true)),wet*f*.8);
+        c=mix(c,reflected(world+n*.03,reflect(-v,n),(up_rt.w>.5?vec3(0):screenSample(refl+n.xz*.012,true))),wet*f*.8);
     }
 #ifdef RAY_QUERY
     if(up_rt.w>.5 && right_quality.w>.5 && settings.z<.5) {

@@ -4,9 +4,15 @@ use super::{VkState, device};
 use super::demo_dungeon_sound::Sound;
 use std::f32::consts::{PI, TAU};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 #[path = "demo_dungeon_render.rs"]
 pub mod render;
 pub static VIEW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static CAPTURE_SOLO: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_dungeon_audio_solo(name: &str) {
+    CAPTURE_SOLO.store(match name { "torch" => 1, "river" => 2, "footsteps" => 3, "drips" => 4, _ => 0 }, Ordering::Relaxed);
+}
 
 pub type V3 = [f32; 3];
 pub fn add(a: V3, b: V3) -> V3 {
@@ -840,6 +846,7 @@ pub struct Dungeon {
     scream: bool,
     audio_time: f32,
     river: Option<River>,
+    solo: u8,
 }
 impl Dungeon {
     pub fn new(state: &'static VkState) -> Result<Self, String> { Self::with_state(Some(state)) }
@@ -850,8 +857,15 @@ impl Dungeon {
             render::Renderer::new(state,&world,&mesh)
         }).transpose()?;
         let eye = add(world.path[0], [0., EYE, 0.]);
-        let sound = Sound::new(&world, &world.sources);
-        Ok(Self { renderer, world, sound, eye, yaw: PI/2., pitch: 0., time: 0., idle: 3., waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river: state.map(River::new).transpose()? })
+        let solo = if state.is_none() { CAPTURE_SOLO.load(Ordering::Relaxed) } else { 0 };
+        let sources: Vec<_> = match solo {
+            1 => vec![(Sfx::Torch, add(eye, [-1.0, 0.0, 0.0]), 1.0)],
+            2 => world.sources.iter().copied().filter(|source| source.0 == Sfx::River).collect(),
+            3 | 4 => Vec::new(),
+            _ => world.sources.clone(),
+        };
+        let sound = Sound::new(&world, &sources);
+        Ok(Self { renderer, world, sound, eye, yaw: if solo == 1 { 0. } else { PI/2. }, pitch: 0., time: 0., idle: if solo == 1 { f32::NEG_INFINITY } else { 3. }, waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river: state.map(River::new).transpose()?, solo })
     }
 
     pub fn frame(&mut self, seconds: f32) -> Result<Vec<i16>, String> {
@@ -904,26 +918,30 @@ impl Dungeon {
         }
         let mut impacts = Vec::new();
         self.foot_distance += length(sub(self.eye, old_eye));
-        if self.foot_distance > 1.25 {
-            self.foot_distance %= 1.25;
+        let stride = 1.15 + 0.22 * (seconds * 2.3).sin() + 0.1 * (seconds * 5.1).sin();
+        if matches!(self.solo, 0 | 3) && self.foot_distance > stride {
+            self.foot_distance %= stride;
             let r = self.world.river;
             if self.eye[0] > r.lo[0] && self.eye[0] < r.hi[0] && self.eye[2] > r.lo[2] - 1.0 && self.eye[2] < r.hi[2] + 1.0 {
                 impacts.push(([self.eye[0], WATER, self.eye[2].clamp(r.lo[2] + 0.2, r.hi[2] - 0.2)], 0.8));
             }
             let wet = noise(self.eye[0]*0.43, self.eye[2]*0.43,64,11) > 0.43;
-            self.sound.play(if wet { Sample::WetStep } else { Sample::Step }, self.eye, 1.0, 0.96 + 0.08 * (seconds * 7.0).sin());
+            let gravel = self.world.zones_at(self.eye).any(|z| self.world.zones[z].kind == Kind::Corridor);
+            self.sound.play(if wet { Sample::WetStep } else if gravel { Sample::GravelStep } else { Sample::Step }, self.eye, 0.04, 1.0);
         }
-        if !self.scream && self.world.zones[self.world.last].space.contains(self.eye) {
+        if self.solo == 0 && !self.scream && self.world.zones[self.world.last].space.contains(self.eye) {
             self.sound.play(Sample::Scream, self.world.zones[self.world.last].space.centre(), 1.4, 1.0);
             self.scream = true;
         }
         let right = [self.yaw.cos(), 0.0, self.yaw.sin()];
         let forward = [self.yaw.sin() * self.pitch.cos(), self.pitch.sin(), -self.yaw.cos() * self.pitch.cos()];
         let up = cross(right, forward);
-        let bat_source=self.world.sources.iter().position(|s|s.0==Sfx::Bats).unwrap();
-        let t=seconds*1.8;
-        self.sound.move_source(bat_source,add(self.world.zones[self.world.bats].space.centre(),[0.7*t.cos(),0.5+0.2*t.sin(),0.7*(t*1.2).sin()]));
-        for (i, &(tip, floor)) in self.world.drips.iter().enumerate() {
+        if self.solo == 0 {
+            let bat_source=self.world.sources.iter().position(|s|s.0==Sfx::Bats).unwrap();
+            let t=seconds*1.8;
+            self.sound.move_source(bat_source,add(self.world.zones[self.world.bats].space.centre(),[0.7*t.cos(),0.5+0.2*t.sin(),0.7*(t*1.2).sin()]));
+        }
+        if matches!(self.solo, 0 | 4) { for (i, &(tip, floor)) in self.world.drips.iter().enumerate() {
             let period = 2.4 + (i % 5) as f32 * 0.3;
             let fall = ((tip[1] - floor) / 4.9).sqrt();
             let age = (seconds + i as f32 * 0.71).rem_euclid(period);
@@ -932,7 +950,7 @@ impl Dungeon {
                 if floor == WATER { impacts.push(([tip[0], floor, tip[2]], 0.55)); }
                 self.sound.play(Sample::Drip, [tip[0], floor, tip[2]], 0.5, 0.8 + i as f32 * 0.03);
             }
-        }
+        } }
         let back = scale(forward, -1.0);
         let axes = [right, up, back];
         let view: Matrix = std::array::from_fn(|column| std::array::from_fn(|row| if row == 3 { if column == 3 { 1.0 } else { 0.0 } } else if column == 3 { -dot(axes[row], self.eye) } else { axes[row][column] }));

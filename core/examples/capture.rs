@@ -15,6 +15,7 @@ fn render(demo: &str, seconds: f32) -> Result<(), String> {
         "post" => demo_post::render_post_frame(seconds),
         "boombox" => demo::render_boombox_frame(seconds),
         "raytraced" => demo::render_raytraced_frame(seconds),
+        "raytraced-off" => { demo::set_raytracing_enabled(false); demo::render_raytraced_frame(seconds) },
         "helmet" => demo::render_helmet_frame(seconds),
         "particles" => demo_particles::render_particles_frame(seconds),
         "bounce" => demo_bounce::render_bounce_frame(seconds),
@@ -89,23 +90,27 @@ fn main() {
         if let Some(view) = flag("--view") { demo_dungeon::VIEW.store(view.parse().unwrap(), std::sync::atomic::Ordering::Relaxed); }
     }
     let seconds: f32 = flag("--seconds").map_or(8.0, |s| s.parse().unwrap());
+    let start: f32 = flag("--start").map_or(0.0, |s| s.parse().unwrap());
     let fps: f32 = flag("--fps").map_or(60.0, |s| s.parse().unwrap());
     let out = std::path::PathBuf::from(flag("--out").expect("--out <dir>"));
     std::fs::create_dir_all(&out).unwrap();
     let mut wav = flag("--audio").map(Wav::new);
     let audio_only = args.iter().any(|arg| arg == "--audio-only");
+    if let Some(solo) = flag("--solo") {
+        demo_dungeon::set_dungeon_audio_solo(&solo);
+    }
     let mut pixels = Vec::new();
     let mut timings = Vec::new();
     let frames = (seconds * fps).round() as usize;
     for i in 0..frames {
-        let start = std::time::Instant::now();
-        let seconds = (i + usize::from(args[0] == "dungeon")) as f32 / fps;
+        let tick = std::time::Instant::now();
+        let seconds = start + (i + usize::from(args[0] == "dungeon")) as f32 / fps;
         if audio_only && args[0] == "dungeon" {
             demo_dungeon::render_dungeon_audio_frame(seconds).unwrap();
         } else {
             render(&args[0], seconds).unwrap();
         }
-        timings.push(start.elapsed().as_secs_f64() * 1000.0);
+        timings.push(tick.elapsed().as_secs_f64() * 1000.0);
         if args.iter().any(|a| a == "--profile") {
             eprintln!("dungeon_cpu,{i},{:.4}", timings.last().unwrap());
         }

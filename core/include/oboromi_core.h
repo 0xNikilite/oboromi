@@ -224,6 +224,12 @@ bool oboromi_flush_demo_caches();
 /// missing or the draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_boombox_demo(float seconds);
 
+/// draws the Cornell-room BoomBox demo with the selected ray tracing mode.
+bool oboromi_render_raytraced_demo(float seconds);
+
+/// selects ray-query or rasterised shading for the ray-traced demo.
+void oboromi_set_raytracing_enabled(bool enabled);
+
 /// draws the pbr FlightHelmet demo like the BoomBox one, false too when
 /// demos/assets/fetch.sh has not fetched the asset.
 bool oboromi_render_helmet_demo(float seconds);

@@ -265,7 +265,7 @@ fn colour_extent(ct: ColourTarget) -> Result<vk::Extent2D, String> {
     Ok(vk::Extent2D { width: ct.width / 4, height: ct.height })
 }
 
-fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::PrimitiveTopology) -> RasterState {
+fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::PrimitiveTopology, blend: vk::PipelineColorBlendAttachmentState) -> RasterState {
     let ([sx, mut sy, _], [ox, mut oy, _]) = (draw.viewport.scale, draw.viewport.offset);
     let s = draw.scissor;
     let [x_min, x_max, mut y_min, mut y_max] = match s.enabled {
@@ -310,6 +310,7 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
         depth_write: draw.depth_write_enabled && draw.depth_target.is_some(),
         depth_func,
         blend_const: draw.blend_constant,
+        blend,
     }
 }
 
@@ -764,7 +765,8 @@ impl<'a> Gpu<'a> {
         if let Some((address, _)) = depth.filter(|_| !target.depth_cleared) {
             return Err(format!("depth target at {address:#x} is drawn before any clear, and its contents only live on the host"));
         }
-        let vertex_buffers: Vec<&HostBuffer> = vertex_ranges.iter().map(|ranges| &self.mirrors[ranges].1.buffer).collect();
+        let vertex_buffers: Vec<(&HostBuffer, u32)> =
+            vertex_ranges.iter().zip(&streams).map(|(ranges, &(_, stride, _))| (&self.mirrors[ranges].1.buffer, stride)).collect();
         let draw_state = DrawState {
             vertex_buffers: &vertex_buffers,
             index_buffer: index_buffer.as_ref().map(|(ranges, index_type)| (&self.mirrors[ranges].1.buffer, *index_type)),
@@ -775,7 +777,7 @@ impl<'a> Gpu<'a> {
             clear,
             clear_depth,
             load,
-            raster: raster_state(draw, extent, topology),
+            raster: raster_state(draw, extent, topology, blend_state(draw.blend, draw.colour_write_mask)?),
         };
         self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
         self.pixels.resize((extent.width * extent.height * 4) as usize, 0);

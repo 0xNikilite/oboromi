@@ -18,9 +18,9 @@ A pushbuffer, the game's command list, interleaves state writes, draws, constant
 
 `Pusher::submit` reads the GPFIFO, the queue of command lists, to the end and returns an ordered list of events. The 3D class keeps the raw register words. At each draw it copies what that draw needs into a frozen `DrawSnapshot`.
 
-`LOAD_CONSTANT_BUFFER`, which updates a constant table, is an event in the same list. So are reports and semaphore releases. They therefore apply in command order.
+`LOAD_CONSTANT_BUFFER`, which updates a constant table, is an event in the same list. So are compute launches, clears, reports, semaphore releases and acquires. They therefore apply in command order.
 
-The engine runs each event before the next, and `Gpu::submit` returns once every draw is back in guest memory. There are no macros (MME) yet, and no overlap of GPU work.
+The engine runs each event before the next, and `Gpu::submit` returns once every draw is back in guest memory. An acquire must already be met when it is reached, since nothing else runs that could release it. There are no macros (MME) yet, and no overlap of GPU work.
 
 ### What this makes easy
 
@@ -30,10 +30,11 @@ The engine runs each event before the next, and `Gpu::submit` returns once every
 ### What this makes hard
 
 * The CPU waits for the GPU on every submit, so real games will need the game's done-signals decoupled from the host's.
+* An acquire that waits for a later release fails instead of waiting.
 * Command lists that use macros fail until the GPU's macro processor, MME64, is emulated.
 
 ### Confirmation
 
-`core/src/tests/gpu/fifo.rs` for decoding and ordering, and the engine acceptance test for the report and semaphore values landing in guest memory.
+`core/src/tests/gpu/fifo.rs` for decoding and ordering, and the engine tests for report sizes, semaphore values and acquires in guest memory.
 
 Sources: core/src/gpu/fifo.rs, core/src/gpu/threed.rs, core/src/gpu/engine.rs.

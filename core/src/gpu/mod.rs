@@ -198,6 +198,7 @@ impl VkState {
         let shader_float64 = features.features.shader_float64 == vk::TRUE;
         let shader_int64 = features.features.shader_int64 == vk::TRUE;
         let texture_compression_bc = features.features.texture_compression_bc == vk::TRUE;
+        let sampler_anisotropy = features.features.sampler_anisotropy == vk::TRUE;
         let _ = features;
         let shader_float16 = float16_int8.shader_float16 == vk::TRUE;
         let shader_buffer_int64_atomics = atomic_int64.shader_buffer_int64_atomics == vk::TRUE;
@@ -230,7 +231,8 @@ impl VkState {
         let device_features = vk::PhysicalDeviceFeatures::default()
             .shader_float64(shader_float64)
             .shader_int64(shader_int64)
-            .texture_compression_bc(texture_compression_bc);
+            .texture_compression_bc(texture_compression_bc)
+            .sampler_anisotropy(sampler_anisotropy);
         let mut enabled_float16 = vk::PhysicalDeviceShaderFloat16Int8Features::default()
             .shader_float16(shader_float16);
         let mut enabled_atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()

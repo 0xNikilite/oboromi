@@ -89,14 +89,14 @@ mod tests {
             0x000f4200021e0f0230005cff04127b60,
             0x000f4200031e0f0230005cff04127b60,
         ] {
-            assert!(catch_unwind(|| translate_module(&[word], true, None)).is_err());
+            assert!(catch_unwind(|| translate_module(&[word], true, None, false)).is_err());
         }
     }
 
     #[test]
     #[should_panic(expected = "ATOMS.ADD.INVALID3 is illegal instruction on silicon")]
     fn atoms_invalid3_is_illegal_on_silicon() {
-        translate_module(&[0x004f5e0000000600000000070804038c], true, None);
+        translate_module(&[0x004f5e0000000600000000070804038c], true, None, false);
     }
 
     #[derive(Default)]
@@ -118,7 +118,7 @@ mod tests {
                 eprintln!("{id}: skipped, ptxas kept the local array in registers so the instruction has no observable result");
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -149,7 +149,7 @@ mod tests {
                 eprintln!("{id}: skipped, R1 held the stack pointer so the first fp64 operand was not recorded");
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -605,7 +605,7 @@ mod tests {
                 continue;
             }
             let program = tensor_program(&fixture);
-            if catch_unwind(|| translate_module(&program, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&program, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -720,7 +720,7 @@ mod tests {
             if matches!(fixture.family.as_str(), "sts" | "atoms") {
                 words.push(0x004f_c800_0000_0800_0000_0000_0011_0984 | (shared as u128) << 24);
             }
-            if catch_unwind(|| translate_module(&words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }
@@ -819,7 +819,7 @@ mod tests {
                 score.unimplemented += 1;
                 continue;
             }
-            if catch_unwind(|| translate_module(&fixture.words, true, None)).is_err() {
+            if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
                 score.unimplemented += 1;
                 continue;
             }

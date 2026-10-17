@@ -38,6 +38,8 @@ pub struct VkState {
     pub shader_shared_int64_atomics: bool,
     pub shader_buffer_float32_atomic_add: bool,
     pub shader_shared_float32_atomic_add: bool,
+    pub shader_device_clock: bool,
+    pub timestamp_period: f32,
 }
 
 pub fn device() -> Result<&'static VkState, VkError> {
@@ -64,12 +66,13 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add) =
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, shader_device_clock) =
             Self::open_device(&instance)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
         let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
         unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
+        let timestamp_period = props.properties.limits.timestamp_period;
         let mut state = Self {
             queue: unsafe { device.get_device_queue(queue_family, 0) },
             entry,
@@ -103,6 +106,8 @@ impl VkState {
             shader_shared_int64_atomics,
             shader_buffer_float32_atomic_add,
             shader_shared_float32_atomic_add,
+            shader_device_clock,
+            timestamp_period,
         };
         let alloc = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
@@ -115,7 +120,7 @@ impl VkState {
 
     fn open_device(
         instance: &ash::Instance,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, bool), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, bool, bool), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -137,11 +142,13 @@ impl VkState {
         let mut atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default();
         let mut atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
         let mut derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
+        let mut shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut float16_int8)
             .push_next(&mut atomic_int64)
             .push_next(&mut atomic_float)
-            .push_next(&mut derivatives);
+            .push_next(&mut derivatives)
+            .push_next(&mut shader_clock);
         unsafe { instance.get_physical_device_features2(physical_device, &mut features) };
         let shader_float64 = features.features.shader_float64 == vk::TRUE;
         let shader_int64 = features.features.shader_int64 == vk::TRUE;
@@ -157,9 +164,12 @@ impl VkState {
         let linear_derivatives = derivatives.compute_derivative_group_linear == vk::TRUE
             && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(derivatives_extension));
         let atomic_float_extension = extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::EXT_SHADER_ATOMIC_FLOAT_NAME));
+        let shader_device_clock = shader_clock.shader_device_clock == vk::TRUE
+            && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::KHR_SHADER_CLOCK_NAME));
         let enabled_extensions: Vec<_> = [
             linear_derivatives.then_some(derivatives_extension.as_ptr()),
             atomic_float_extension.then_some(vk::EXT_SHADER_ATOMIC_FLOAT_NAME.as_ptr()),
+            shader_device_clock.then_some(vk::KHR_SHADER_CLOCK_NAME.as_ptr()),
         ].into_iter().flatten().collect();
         let device_features = vk::PhysicalDeviceFeatures::default()
             .shader_float64(shader_float64)
@@ -174,6 +184,8 @@ impl VkState {
             .shader_shared_float32_atomic_add(shader_shared_float32_atomic_add);
         let mut enabled_derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
             .compute_derivative_group_linear(linear_derivatives);
+        let mut enabled_shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default()
+            .shader_device_clock(shader_device_clock);
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&enabled_extensions)
@@ -181,13 +193,14 @@ impl VkState {
             .push_next(&mut enabled_float16)
             .push_next(&mut enabled_atomic_int64)
             .push_next(&mut enabled_atomic_float)
-            .push_next(&mut enabled_derivatives);
+            .push_next(&mut enabled_derivatives)
+            .push_next(&mut enabled_shader_clock);
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add)),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, shader_device_clock)),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

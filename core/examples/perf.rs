@@ -36,7 +36,10 @@ fn main() {
     ];
     let program: Vec<u128> = fixtures.iter().copied().cycle().take(1000).collect();
     bench("translate 1000 inst", 20, 200, || {
-        black_box(translate_module(black_box(&program), true, None));
+        black_box(translate_module(black_box(&program), true, None, false));
+    });
+    bench("translate hints on", 20, 200, || {
+        black_box(translate_module(black_box(&program), true, None, true));
     });
     let (w, h) = (1920, 1080);
     let pixels = vec![0x80u8; w * h * 4];
@@ -59,7 +62,7 @@ fn main() {
     };
     println!("device: {:?}", props.device_name_as_c_str().unwrap());
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
-    let words = translate_module(&program, true, Some(state)).words();
+    let words = translate_module(&program, true, Some(state), false).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (11, ssbo)];
     bench("pipeline create (cold)", 0, 1, || {

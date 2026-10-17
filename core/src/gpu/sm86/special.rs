@@ -1,6 +1,7 @@
 use super::*;
 
 impl<'a> Decoder<'a> {
+    // No-ops: CSMTEST(external), IDE(host), QSPC(explicit), RTT(unsupported).
     pub fn cs2r(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let sr = (((inst >> 72) & 0xff) << 0) as u32;
@@ -42,7 +43,19 @@ impl<'a> Decoder<'a> {
     pub fn nop(&mut self, _inst: u128) {
         self.ir.emit_nop();
     }
-    pub fn pmtrig(&mut self, _inst: u128) {}
+    pub fn pmtrig(&mut self, inst: u128) {
+        if matches!(self.timing, Timing::Off) {
+            return;
+        }
+        let buffer = self.hint_buffer();
+        let ptr = self.ssbo_word(buffer, self.const_u32_0, (inst >> 32 & 0xffff) as u32);
+        let [scope, relaxed] = [spirv::scope::DEVICE, spirv::memory_semantics::RELAXED].map(|v| self.cached_const_u32(v));
+        self.ir.emit_atomic_iadd(self.type_u32[1], ptr, scope, relaxed, self.const_u32_1);
+    }
+
+    pub(super) fn hint_buffer(&mut self) -> u32 {
+        self.resource(ResourceKind::Hints).unwrap_or_else(|| self.declare_ssbo(ResourceKind::Hints, 0))
+    }
     pub fn qspc(&mut self, _inst: u128) {}
     pub fn rtt(&mut self, _inst: u128) {}
     pub fn s2r(&mut self, inst: u128) {

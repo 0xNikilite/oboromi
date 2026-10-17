@@ -1,0 +1,459 @@
+//! A GPU channel over guest RAM: pushbuffers run through the pusher, and each draw translates the guest's shader
+//! programs, mirrors the vertex and constant buffers it reads, renders into colour target 0 and writes that back to
+//! guest memory, so guest-physical pages stay the only identity of every resource.
+use super::compute::HostBuffer;
+use super::fifo::{Event, Pusher};
+use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
+use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Writer};
+use super::sm86::{CBUF_BINDING, ResourceKind, Stage, branch_target, emit_module};
+use super::threed::{ColourTarget, ConstantBuffer, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
+use super::VkState;
+use ash::vk;
+use std::collections::{HashMap, hash_map::Entry};
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+const SPH_BYTES: usize = 0x50;
+const VERTEX_PIPELINE: usize = 1;
+const PIXEL_PIPELINE: usize = 5;
+const SHADER_TYPE_VERTEX: u32 = 1;
+const SHADER_TYPE_PIXEL: u32 = 5;
+const A8B8G8R8: u8 = 0xd5;
+const CLEAR_RGBA: u32 = 0x3c;
+
+/// The fields of a version 4 shader program header (clc797sph.h) the translation depends on.
+#[derive(Debug)]
+struct ProgramHeader {
+    sph_type: u32,
+    shader_type: u32,
+    /// Bit n: generic attribute n is read.
+    inputs: u32,
+    /// Bit n: generic attribute n is written, by a type 1 header.
+    outputs: u32,
+    flat: u32,
+    screen_linear: u32,
+    colour_targets: u32,
+    depth: bool,
+}
+
+impl ProgramHeader {
+    fn new(sph: &[u8; SPH_BYTES]) -> Self {
+        let field = |lo: usize, bits: usize| (lo..lo + bits).rev().fold(0, |v, i| v << 1 | u32::from(sph[i / 8] >> (i % 8) & 1));
+        let generics = |used: &dyn Fn(usize) -> bool| (0..32).filter(|&i| used(i)).fold(0, |mask, i| mask | 1 << i);
+        let pixel = field(0, 5) == 2;
+        // A type 2 IMAP has two bits per component: 1 constant, 2 perspective, 3 screen linear.
+        let pixel_mode = |i: usize, mode: &dyn Fn(u32) -> bool| pixel && (0..4).any(|c| mode(field(192 + 8 * i + 2 * c, 2)));
+        Self {
+            sph_type: field(0, 5),
+            shader_type: field(10, 4),
+            inputs: generics(&|i| pixel_mode(i, &|m| m != 0) || !pixel && field(192 + 4 * i, 4) != 0),
+            outputs: generics(&|i| !pixel && field(432 + 4 * i, 4) != 0),
+            flat: generics(&|i| pixel_mode(i, &|m| m == 1)),
+            screen_linear: generics(&|i| pixel_mode(i, &|m| m == 3)),
+            colour_targets: if pixel { field(576, 32) } else { 0 },
+            depth: pixel && field(609, 1) != 0,
+        }
+    }
+}
+
+struct Module {
+    header: ProgramHeader,
+    words: Vec<u32>,
+    resources: Vec<ResourceKind>,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct PipelineKey {
+    shaders: [u64; 2],
+    streams: Vec<(u32, u32)>,
+    attributes: Vec<(u32, u32, vk::Format, u32)>,
+    topology: vk::PrimitiveTopology,
+    colour_write_mask: u8,
+    depth: bool,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct TargetKey {
+    ranges: Vec<PaRange>,
+    format: u8,
+    extent: (u32, u32),
+    depth: bool,
+}
+
+struct Target<'a> {
+    render_target: RenderTarget<'a>,
+    /// The generation of the target's pages when its image last matched them.
+    generation: u64,
+}
+
+pub struct Gpu<'a> {
+    state: &'a VkState,
+    pub ram: Vec<u8>,
+    pub space: PageMap,
+    pub memory: MemoryTracker,
+    pusher: Pusher,
+    modules: HashMap<u64, Module>,
+    pipelines: HashMap<PipelineKey, GraphicsPipeline<'a>>,
+    targets: HashMap<TargetKey, Target<'a>>,
+    mirrors: HashMap<Vec<PaRange>, (u64, Mapping<'a>)>,
+    pending_clear: Option<(ColourTarget, [f32; 4])>,
+    pixels: Vec<u8>,
+}
+
+fn named(e: impl std::fmt::Debug) -> String {
+    format!("{e:?}")
+}
+
+fn generation(memory: &MemoryTracker, ranges: &[PaRange]) -> u64 {
+    ranges.iter().map(|r| memory.generation(r.start, r.end - r.start)).max().unwrap_or(0)
+}
+
+fn gather(space: &PageMap, ram: &[u8], va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+    let mut rest = out;
+    for range in space.resolve(va, rest.len() as u64)? {
+        let (head, tail) = rest.split_at_mut((range.end - range.start) as usize);
+        head.copy_from_slice(&ram[range.start as usize..range.end as usize]);
+        rest = tail;
+    }
+    Ok(())
+}
+
+// SET_VERTEX_ATTRIBUTE_A COMPONENT_BIT_WIDTHS and NUMERICAL_TYPE values from clc797.h.
+fn vertex_format(attribute: VertexAttribute) -> Result<vk::Format, String> {
+    const R32_G32_B32_A32: u8 = 0x01;
+    const R32_G32_B32: u8 = 0x02;
+    const R16_G16_B16_A16: u8 = 0x03;
+    const R32_G32: u8 = 0x04;
+    const R8_G8_B8_A8: u8 = 0x0a;
+    const R16_G16: u8 = 0x0f;
+    const UNORM: u8 = 2;
+    const FLOAT: u8 = 7;
+    use vk::Format as F;
+    Ok(match (attribute.size, attribute.kind, attribute.bgra) {
+        (R32_G32_B32_A32, FLOAT, false) => F::R32G32B32A32_SFLOAT,
+        (R32_G32_B32, FLOAT, false) => F::R32G32B32_SFLOAT,
+        (R32_G32, FLOAT, false) => F::R32G32_SFLOAT,
+        (R16_G16_B16_A16, FLOAT, false) => F::R16G16B16A16_SFLOAT,
+        (R16_G16_B16_A16, UNORM, false) => F::R16G16B16A16_UNORM,
+        (R16_G16, FLOAT, false) => F::R16G16_SFLOAT,
+        (R16_G16, UNORM, false) => F::R16G16_UNORM,
+        (R8_G8_B8_A8, UNORM, false) => F::R8G8B8A8_UNORM,
+        (size, kind, bgra) => return Err(format!("vertex attribute widths {size:#x} type {kind} swap {bgra} is not implemented")),
+    })
+}
+
+fn topology(topology: PrimitiveTopology) -> Result<vk::PrimitiveTopology, String> {
+    use vk::PrimitiveTopology as T;
+    Ok(match topology {
+        PrimitiveTopology::Points => T::POINT_LIST,
+        PrimitiveTopology::Lines => T::LINE_LIST,
+        PrimitiveTopology::LineStrip => T::LINE_STRIP,
+        PrimitiveTopology::Triangles => T::TRIANGLE_LIST,
+        PrimitiveTopology::TriangleStrip => T::TRIANGLE_STRIP,
+        PrimitiveTopology::TriangleFan => T::TRIANGLE_FAN,
+        topology => return Err(format!("{topology:?} draws are not implemented")),
+    })
+}
+
+fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::PrimitiveTopology) -> RasterState {
+    let ([sx, sy, _], [ox, oy, _]) = (draw.viewport.scale, draw.viewport.offset);
+    let s = draw.scissor;
+    let scissor = if s.enabled {
+        vk::Rect2D {
+            offset: vk::Offset2D { x: s.x_min.into(), y: s.y_min.into() },
+            extent: vk::Extent2D { width: s.x_max.saturating_sub(s.x_min).into(), height: s.y_max.saturating_sub(s.y_min).into() },
+        }
+    } else {
+        extent.into()
+    };
+    // OGL_SET_CULL_FACE and OGL_SET_FRONT_FACE take GL enums, and SET_DEPTH_FUNC GL (0x200 + op) or D3D (1 + op) ones in Vulkan's order.
+    let cull_face = match (draw.cull_enabled, draw.cull_face) {
+        (false, _) => vk::CullModeFlags::NONE,
+        (true, 0x404) => vk::CullModeFlags::FRONT,
+        (true, 0x405) => vk::CullModeFlags::BACK,
+        (true, _) => vk::CullModeFlags::FRONT_AND_BACK,
+    };
+    let depth_func = match draw.depth_func as i32 {
+        f @ 0x200..=0x207 => vk::CompareOp::from_raw(f - 0x200),
+        f @ 1..=8 => vk::CompareOp::from_raw(f - 1),
+        _ => vk::CompareOp::ALWAYS,
+    };
+    RasterState {
+        viewport: vk::Viewport {
+            x: ox - sx,
+            y: oy - sy,
+            width: 2.0 * sx,
+            height: 2.0 * sy,
+            min_depth: draw.viewport.min_depth,
+            max_depth: draw.viewport.max_depth,
+        },
+        scissor,
+        cull_face,
+        front_face: if draw.front_face == 0x900 { vk::FrontFace::CLOCKWISE } else { vk::FrontFace::COUNTER_CLOCKWISE },
+        topology,
+        depth_test: draw.depth_test_enabled,
+        depth_write: draw.depth_write_enabled,
+        depth_func,
+        blend_const: [0.0; 4],
+    }
+}
+
+impl<'a> Gpu<'a> {
+    pub fn new(state: &'a VkState, ram_bytes: usize) -> Self {
+        Self {
+            state,
+            ram: vec![0; ram_bytes],
+            space: PageMap::default(),
+            memory: MemoryTracker::default(),
+            pusher: Pusher::default(),
+            modules: HashMap::new(),
+            pipelines: HashMap::new(),
+            targets: HashMap::new(),
+            mirrors: HashMap::new(),
+            pending_clear: None,
+            pixels: Vec::new(),
+        }
+    }
+
+    /// A CPU write of guest memory at `va`.
+    pub fn write(&mut self, va: u64, bytes: &[u8]) -> Result<(), MemoryError> {
+        self.store(va, bytes, Writer::Cpu)
+    }
+
+    pub fn read(&self, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+        gather(&self.space, &self.ram, va, out)
+    }
+
+    fn store(&mut self, va: u64, bytes: &[u8], writer: Writer) -> Result<(), MemoryError> {
+        let ranges: Vec<_> = self.space.resolve(va, bytes.len() as u64)?.collect();
+        self.memory.store(&mut self.ram, &ranges, bytes, writer);
+        Ok(())
+    }
+
+    /// Runs GPFIFO entries to completion: every draw has landed in guest memory when this returns.
+    pub fn submit(&mut self, entries: &[[u8; 8]]) -> Result<(), String> {
+        let (space, ram) = (&self.space, &self.ram);
+        let events = self.pusher.submit(entries.iter().copied(), |va, len| {
+            let mut pieces = space.resolve(va, len as u64).map_err(named)?;
+            match (pieces.next(), pieces.next()) {
+                (Some(range), None) => Ok(&ram[range.start as usize..range.end as usize]),
+                _ => Err(format!("pushbuffer at {va:#x} spans discontiguous pages")),
+            }
+        })?;
+        for event in events {
+            match event {
+                Event::Draw(draw) => self.draw(&draw)?,
+                Event::Report { addr, payload } | Event::SemaphoreRelease { addr, payload } => {
+                    self.store(addr, &payload.to_le_bytes(), Writer::Gpu).map_err(named)?
+                }
+                Event::LoadConstantBuffer { addr, value } => self.store(addr, &value.to_le_bytes(), Writer::Gpu).map_err(named)?,
+                Event::Clear { value: CLEAR_RGBA, colour, target } => self.pending_clear = Some((target, colour)),
+                Event::Clear { value, .. } => return Err(format!("CLEAR_SURFACE {value:#x} is not implemented, only RGBA of target 0")),
+                Event::SemaphoreAcquire { addr, .. } => return Err(format!("semaphore acquire at {addr:#x} is not implemented")),
+            }
+        }
+        Ok(())
+    }
+
+    /// Presents a pitch-linear RGBA8 surface from guest memory.
+    pub fn present(&mut self, va: u64, width: u32, height: u32) -> Result<(), MemoryError> {
+        self.pixels.resize(width as usize * height as usize * 4, 0);
+        gather(&self.space, &self.ram, va, &mut self.pixels)?;
+        crate::display::present(width, height, &self.pixels);
+        Ok(())
+    }
+
+    fn module(&mut self, program: ShaderProgram, shader_type: u32) -> Result<u64, String> {
+        let mut sph = [0; SPH_BYTES];
+        gather(&self.space, &self.ram, program.address, &mut sph).map_err(named)?;
+        // Nothing records a program's length, but compiled programs end with a branch to itself after their last EXIT.
+        let mut code = Vec::new();
+        while !code.last().is_some_and(|&inst: &u128| {
+            let pc = code.len() as u32 - 1;
+            inst >> 12 & 0xf == 7 && branch_target(pc, inst) == Some(pc)
+        }) {
+            let mut word = [0; 16];
+            gather(&self.space, &self.ram, program.address + (SPH_BYTES + 16 * code.len()) as u64, &mut word).map_err(named)?;
+            code.push(u128::from_le_bytes(word));
+        }
+        let mut hasher = DefaultHasher::new();
+        (sph, &code).hash(&mut hasher);
+        let key = hasher.finish();
+        if self.modules.contains_key(&key) {
+            return Ok(key);
+        }
+        let header = ProgramHeader::new(&sph);
+        let stage = match (header.sph_type, header.shader_type) {
+            (1, SHADER_TYPE_VERTEX) if shader_type == SHADER_TYPE_VERTEX => Stage::Vertex,
+            (2, SHADER_TYPE_PIXEL) if shader_type == SHADER_TYPE_PIXEL && header.colour_targets == 0xf => {
+                Stage::Fragment { flat: header.flat, screen_linear: header.screen_linear, depth: header.depth }
+            }
+            _ => return Err(format!("shader program at {:#x} with {header:?} is not implemented for shader type {shader_type}", program.address)),
+        };
+        let mut resources = Vec::new();
+        let module = emit_module(Some(self.state), stage, |decoder| {
+            decoder.translate_program(&code);
+            resources = decoder.resources.iter().map(|r| r.kind).collect();
+        });
+        self.modules.insert(key, Module { header, words: module.words(), resources });
+        Ok(key)
+    }
+
+    /// Mirrors guest memory at `va` into a host buffer, rewritten when any of its pages changed, keyed by its ranges.
+    fn mirror(&mut self, va: u64, len: u64) -> Result<Vec<PaRange>, String> {
+        let ranges: Vec<_> = self.space.resolve(va, len).map_err(named)?.collect();
+        let generation = generation(&self.memory, &ranges);
+        match self.mirrors.get_mut(&ranges) {
+            Some((seen, _)) if *seen == generation => {}
+            Some((seen, mapping)) => {
+                mapping.refresh(&self.ram).map_err(named)?;
+                *seen = generation;
+            }
+            None => {
+                let mapping = self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?;
+                self.mirrors.insert(ranges.clone(), (generation, mapping));
+            }
+        }
+        Ok(ranges)
+    }
+
+    fn draw(&mut self, draw: &DrawSnapshot) -> Result<(), String> {
+        if draw.indexed {
+            return Err("indexed draws are not implemented".into());
+        }
+        if let Some(i) = [0, 2, 3, 4].into_iter().find(|&i| draw.shader_programs[i].enabled) {
+            return Err(format!("shader pipeline {i} is not implemented"));
+        }
+        if draw.blend_enabled || draw.blend_per_target {
+            return Err("blending is not implemented".into());
+        }
+        let shaders = [
+            self.module(draw.shader_programs[VERTEX_PIPELINE], SHADER_TYPE_VERTEX)?,
+            self.module(draw.shader_programs[PIXEL_PIPELINE], SHADER_TYPE_PIXEL)?,
+        ];
+        let [vs, fs] = shaders.map(|key| &self.modules[&key]);
+        if fs.header.inputs & !vs.header.outputs != 0 {
+            return Err(format!("pixel shader reads attributes {:#x} the vertex shader does not write", fs.header.inputs & !vs.header.outputs));
+        }
+
+        let (mut streams, mut attributes): (Vec<(u32, u32)>, _) = (Vec::new(), Vec::new());
+        for location in (0..32).filter(|location| vs.header.inputs >> location & 1 != 0) {
+            let attribute = draw.vertex_attributes[location as usize];
+            let binding = match streams.iter().position(|&(stream, _)| stream == u32::from(attribute.stream)) {
+                Some(binding) => binding,
+                None => {
+                    let stream = draw.vertex_streams[attribute.stream as usize];
+                    if !stream.enabled {
+                        return Err(format!("attribute {location} reads disabled vertex stream {}", attribute.stream));
+                    }
+                    streams.push((attribute.stream.into(), stream.stride.into()));
+                    streams.len() - 1
+                }
+            };
+            attributes.push((location, binding as u32, vertex_format(attribute)?, attribute.offset.into()));
+        }
+        let mut cbufs: Vec<(u32, ConstantBuffer)> = Vec::new();
+        for (module, pipeline) in [(vs, VERTEX_PIPELINE), (fs, PIXEL_PIPELINE)] {
+            let group = draw.shader_programs[pipeline].binding_group as usize;
+            for &kind in &module.resources {
+                match kind {
+                    ResourceKind::Cbuf(slot) => {
+                        let buffer = draw.constant_buffers[group][slot as usize]
+                            .ok_or_else(|| format!("constant buffer slot {slot} of binding group {group} is not bound"))?;
+                        match cbufs.iter().find(|&&(bound, _)| bound == slot) {
+                            Some(&(_, other)) if other != buffer => return Err(format!("both stages read constant buffer slot {slot} from different buffers")),
+                            Some(_) => {}
+                            None => cbufs.push((slot, buffer)),
+                        }
+                    }
+                    ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
+                    kind => return Err(format!("{kind:?} in a graphics stage is not implemented")),
+                }
+            }
+        }
+
+        let ct = draw.colour_target;
+        if ct.format != A8B8G8R8 || ct.layout != MemoryLayout::Pitch {
+            return Err(format!("colour target format {:#x} with {:?} layout is not implemented", ct.format, ct.layout));
+        }
+        // A pitch-linear colour target's WIDTH holds its pitch in bytes (Ryujinx RtColorState.WidthOrStride).
+        let extent = vk::Extent2D { width: ct.width / 4, height: ct.height };
+        let topology = topology(draw.topology)?;
+        let key = PipelineKey {
+            shaders,
+            streams: streams.iter().enumerate().map(|(binding, &(_, stride))| (binding as u32, stride)).collect(),
+            attributes,
+            topology,
+            colour_write_mask: draw.colour_write_mask,
+            depth: draw.depth_test_enabled,
+        };
+
+        let vertex_ranges = streams
+            .iter()
+            .map(|&(stream, _)| self.mirror(draw.vertex_streams[stream as usize].address, draw.vertex_streams[stream as usize].size))
+            .collect::<Result<Vec<_>, _>>()?;
+        let cbuf_ranges = cbufs
+            .iter()
+            .map(|&(slot, buffer)| Ok((CBUF_BINDING + slot, self.mirror(buffer.address, buffer.size.into())?)))
+            .collect::<Result<Vec<_>, String>>()?;
+
+        let pipeline = match self.pipelines.entry(key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let key = entry.key();
+                let bindings: Vec<_> = key
+                    .streams
+                    .iter()
+                    .map(|&(binding, stride)| vk::VertexInputBindingDescription { binding, stride, input_rate: vk::VertexInputRate::VERTEX })
+                    .collect();
+                let attributes: Vec<_> = key
+                    .attributes
+                    .iter()
+                    .map(|&(location, binding, format, offset)| vk::VertexInputAttributeDescription { location, binding, format, offset })
+                    .collect();
+                let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology: key.topology };
+                let colour_write_mask = vk::ColorComponentFlags::from_raw(key.colour_write_mask.into());
+                let target = TargetState {
+                    blend: vk::PipelineColorBlendAttachmentState::default().color_write_mask(colour_write_mask),
+                    depth: key.depth,
+                };
+                let ubo = vk::DescriptorType::UNIFORM_BUFFER;
+                let descriptor_bindings: Vec<_> = cbuf_ranges.iter().map(|&(binding, _)| (binding, ubo)).collect();
+                let [vs, fs] = key.shaders.map(|key| &self.modules[&key].words);
+                entry.insert(GraphicsPipeline::new(self.state, vs, fs, &descriptor_bindings, &layout, &target).map_err(named)?)
+            }
+        };
+        let buffers: Vec<_> = cbuf_ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();
+        pipeline.descriptors.bind(&buffers);
+
+        let ranges: Vec<_> = self.space.resolve(ct.address, u64::from(extent.width * extent.height * 4)).map_err(named)?.collect();
+        let current = generation(&self.memory, &ranges);
+        let clear = self.pending_clear.take_if(|(target, _)| *target == ct).map(|(_, colour)| colour);
+        let target_key = TargetKey { ranges: ranges.clone(), format: ct.format, extent: (extent.width, extent.height), depth: draw.depth_test_enabled };
+        let target = match self.targets.entry(target_key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let render_target = RenderTarget::new(self.state, extent.width, extent.height, draw.depth_test_enabled).map_err(named)?;
+                entry.insert(Target { render_target, generation: u64::MAX })
+            }
+        };
+        if clear.is_none() && target.generation != current {
+            return Err(format!("colour target at {:#x} changed outside its draws, and loading it is not implemented", ct.address));
+        }
+        let vertex_buffers: Vec<&HostBuffer> = vertex_ranges.iter().map(|ranges| &self.mirrors[ranges].1.buffer).collect();
+        let draw_state = DrawState {
+            vertex_buffers: &vertex_buffers,
+            index_buffer: None,
+            vertex_count: draw.vertex_count,
+            first_vertex: draw.first_vertex,
+            instance_count: draw.instance_count,
+            clear,
+            raster: raster_state(draw, extent, topology),
+        };
+        self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
+        self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
+        target.render_target.read(&mut self.pixels).map_err(named)?;
+        self.memory.store(&mut self.ram, &ranges, &self.pixels, Writer::Gpu);
+        target.generation = generation(&self.memory, &ranges);
+        Ok(())
+    }
+}

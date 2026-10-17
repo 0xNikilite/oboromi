@@ -12,7 +12,7 @@ impl<'a> Decoder<'a> {
         let and = inst >> 78 & 1 != 0;
         let ty = self.type_u32[1];
         let operands = self.mma_operands(inst, rows, k_regs, |_, word, _| vec![word]);
-        self.mma_s32(inst, operands, |s, x, y| {
+        self.mma_s32(inst, operands, false, |s, x, y| {
             let bits = if and { s.ir.emit_bitwise_and(ty, x, y) } else { s.ir.emit_bitwise_xor(ty, x, y) };
             s.ir.emit_bit_count(ty, bits)
         });
@@ -143,16 +143,17 @@ impl<'a> Decoder<'a> {
         assert_eq!(opcode(inst), 0x23c, "HMMA with a uniform register file");
         assert!(inst >> 73 & 1 == 0, "HMMA.SP");
         assert_eq!(inst >> 87 & 0xf, 0, "HMMA with a UPp condition");
-        let k_regs = match (inst >> 78 & 1) << 1 | inst >> 75 & 1 {
-            0 => 1,
-            1 => 2,
-            _ => todo!("HMMA.1684"),
+        let k = match (inst >> 78 & 1) << 1 | inst >> 75 & 1 {
+            0 => 8,
+            1 => 16,
+            2 => 4,
+            _ => panic!("HMMA size 3"),
         };
         let format = inst >> 82 & 3;
         let (k_regs, group, min_exponent) = match format {
-            0 => (k_regs, 8, -14),
-            1 => (k_regs, 8, -126),
-            2 => (2 * k_regs, 4, -126),
+            0 => (k / 8, 8, -14),
+            1 => (k / 8, 8, -126),
+            2 => (k / 4, 4, -126),
             _ => panic!("HMMA source format 3"),
         };
         let f32_acc = inst >> 76 & 1 != 0;
@@ -386,36 +387,49 @@ impl<'a> Decoder<'a> {
     pub fn imma(&mut self, inst: u128) {
         assert!(inst >> 72 & 1 == 0, "IMMA.SP");
         assert_eq!(inst >> 87 & 0xf, 0, "IMMA with a UPp condition");
-        assert!(inst >> 82 & 1 == 0, "IMMA.SAT");
-        assert!(inst >> 83 & 3 == 0, "IMMA with S4 or U4 sources");
-        let k_regs = match inst >> 84 & 6 | inst >> 75 & 1 {
-            4 => 1,
-            5 => 2,
-            size => todo!("IMMA size {size}"),
+        let (rows, k) = match inst >> 84 & 6 | inst >> 75 & 1 {
+            0 => (1, 16),
+            2 => (1, 32),
+            4 => (2, 16),
+            5 => (2, 32),
+            6 => (2, 64),
+            size => panic!("IMMA size {size}"),
         };
+        let bits = if inst >> 83 & 1 != 0 { 4 } else { 8 };
         let signed = [76, 78].map(|bit| inst >> bit & 1 != 0);
         let ty = self.type_u32[1];
-        let eight = self.cached_const_u32(8);
-        let operands = self.mma_operands(inst, 2, k_regs, |s, word, is_b| {
-            (0..4).map(|byte| {
-                let offset = s.cached_const_u32(8 * byte);
-                if signed[is_b as usize] { s.ir.emit_bit_field_s_extract(ty, word, offset, eight) } else { s.ir.emit_bit_field_u_extract(ty, word, offset, eight) }
+        let width = self.cached_const_u32(bits);
+        let operands = self.mma_operands(inst, rows, k * bits / 128, |s, word, is_b| {
+            (0..32 / bits).map(|element| {
+                let offset = s.cached_const_u32(bits * element);
+                if signed[is_b as usize] { s.ir.emit_bit_field_s_extract(ty, word, offset, width) } else { s.ir.emit_bit_field_u_extract(ty, word, offset, width) }
             }).collect()
         });
-        self.mma_s32(inst, operands, |s, x, y| s.ir.emit_imul(ty, x, y));
+        self.mma_s32(inst, operands, inst >> 82 & 1 != 0, |s, x, y| s.ir.emit_imul(ty, x, y));
     }
     // D register 2 * half + column of lane 4g + t is C + the sum over k of product(A[k], B[k]) for A row g + 8 * half and B column 2t + column.
-    fn mma_s32(&mut self, inst: u128, [a, b]: [[Vec<u32>; 2]; 2], mut product: impl FnMut(&mut Self, u32, u32) -> u32) {
+    // .SAT clamps C + the exact sum of products to the s32 range.
+    fn mma_s32(&mut self, inst: u128, [a, b]: [[Vec<u32>; 2]; 2], saturate: bool, mut product: impl FnMut(&mut Self, u32, u32) -> u32) {
         let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
         let ty = self.type_u32[1];
         for (half, row) in (0..).zip(a.iter().filter(|row| !row.is_empty())) {
             for (column, col) in (0..).zip(&b) {
                 let reg = 2 * half + column;
                 let c = self.load_register(nth_reg(rc, RZ, reg));
-                let d = row.iter().zip(col).fold(c, |sum, (&x, &y)| {
+                let sum = row.iter().zip(col).fold(self.const_u32_0, |sum, (&x, &y)| {
                     let term = product(self, x, y);
                     self.ir.emit_iadd(ty, sum, term)
                 });
+                let mut d = self.ir.emit_iadd(ty, c, sum);
+                if saturate {
+                    let [thirty_one, max] = [31, i32::MAX as u32].map(|v| self.cached_const_u32(v));
+                    let [c_flip, sum_flip] = [c, sum].map(|x| self.ir.emit_bitwise_xor(ty, x, d));
+                    let flips = self.ir.emit_bitwise_and(ty, c_flip, sum_flip);
+                    let overflow = self.ir.emit_sless_than(self.type_bool[1], flips, self.const_u32_0);
+                    let sign = self.ir.emit_shift_right_arithmetic(ty, c, thirty_one);
+                    let clamped = self.ir.emit_bitwise_xor(ty, sign, max);
+                    d = self.ir.emit_select(ty, overflow, clamped, d);
+                }
                 self.store_register(nth_reg(rd, RZ, reg), d);
             }
         }
@@ -424,8 +438,7 @@ impl<'a> Decoder<'a> {
         let transposed = match inst >> 78 & 3 {
             0 => false,
             1 => true,
-            2 => todo!("LDSM.M816"),
-            _ => todo!("LDSM.M832"),
+            _ => panic!("LDSM.M816/M832 need a 4-bit or 2-bit size, masked on SM86"),
         };
         let ty = self.type_u32[1];
         let address = self.global_address(inst, 32, 40);
@@ -458,12 +471,7 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn movm(&mut self, inst: u128) {
-        assert_eq!(inst >> 75 & 7, 0, "MOVM with a 4-bit or 2-bit source");
-        match inst >> 78 & 3 {
-            0 => {}
-            1 => todo!("MOVM.M832"),
-            _ => todo!("MOVM.M864"),
-        }
+        assert_eq!(inst >> 75 & 0x1f, 0, "MOVM with a 4-bit or 2-bit source, masked on SM86");
         let ty = self.type_u32[1];
         let [group, thread] = self.lane_quad();
         let [three, four, sixteen] = [3, 4, 16].map(|c| self.cached_const_u32(c));

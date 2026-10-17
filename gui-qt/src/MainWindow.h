@@ -1,7 +1,9 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QMainWindow>
+#include <QTimer>
 #include <string>
 #include <vector>
 
@@ -33,4 +35,9 @@ private:
 
     QFutureWatcher<std::vector<std::string>> m_cpuWatcher;
     QFutureWatcher<std::vector<std::string>> m_gpuWatcher;
+
+    QTimer m_demoTimer;
+    QElapsedTimer m_demoClock;
+    QFuture<bool> m_demoFrame;
+    bool (*m_demoRender)(float) = nullptr;
 };

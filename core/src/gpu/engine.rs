@@ -10,9 +10,11 @@ use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, S
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::VkState;
+use crate::cpu::GuestRam;
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 use std::time::Instant;
 
 // SM 7.3 and later lead each graphics program with the 32-word SPHV4 header (NAK sph.rs), not the 20-word SPHV3 one.
@@ -102,7 +104,7 @@ struct Target<'a> {
 
 pub struct Gpu<'a> {
     state: &'a VkState,
-    pub ram: Vec<u8>,
+    pub ram: Arc<GuestRam>,
     pub space: PageMap,
     pub memory: MemoryTracker,
     pusher: Pusher,
@@ -128,11 +130,11 @@ fn generation(memory: &MemoryTracker, ranges: &[PaRange]) -> u64 {
     ranges.iter().map(|r| memory.generation(r.start, r.end - r.start)).max().unwrap_or(0)
 }
 
-fn gather(space: &PageMap, ram: &[u8], va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+fn gather(space: &PageMap, ram: &GuestRam, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
     let mut rest = out;
     for range in space.resolve(va, rest.len() as u64)? {
         let (head, tail) = rest.split_at_mut((range.end - range.start) as usize);
-        head.copy_from_slice(&ram[range.start as usize..range.end as usize]);
+        head.copy_from_slice(unsafe { ram.slice(range.start, head.len()) });
         rest = tail;
     }
     Ok(())
@@ -315,10 +317,10 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
 }
 
 impl<'a> Gpu<'a> {
-    pub fn new(state: &'a VkState, ram_bytes: usize) -> Self {
+    pub fn new(state: &'a VkState, ram: Arc<GuestRam>) -> Self {
         Self {
             state,
-            ram: vec![0; ram_bytes],
+            ram,
             space: PageMap::default(),
             memory: MemoryTracker::default(),
             pusher: Pusher::default(),
@@ -336,28 +338,43 @@ impl<'a> Gpu<'a> {
         }
     }
 
+    /// Maps `va` onto guest-physical `pa`; the pages start CPU-written, and every core hooks its writes to them.
+    pub fn map(&mut self, va: u64, pa: u64, len: u64) {
+        self.space.map(va, pa, len);
+        self.memory.mark_cpu_written(pa, len);
+        self.ram.watch(pa..pa + len);
+    }
+
     /// A CPU write of guest memory at `va`.
     pub fn write(&mut self, va: u64, bytes: &[u8]) -> Result<(), MemoryError> {
+        let ram = Arc::clone(&self.ram);
+        let _turn = ram.turn();
         self.store(va, bytes, Writer::Cpu)
     }
 
     pub fn read(&self, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+        let _turn = self.ram.turn();
         gather(&self.space, &self.ram, va, out)
     }
 
     fn store(&mut self, va: u64, bytes: &[u8], writer: Writer) -> Result<(), MemoryError> {
         let ranges: Vec<_> = self.space.resolve(va, bytes.len() as u64)?.collect();
-        self.memory.store(&mut self.ram, &ranges, bytes, writer);
+        self.memory.store(&self.ram, &ranges, bytes, writer);
         Ok(())
     }
 
-    /// Runs GPFIFO entries to completion: every draw has landed in guest memory when this returns.
+    /// Runs GPFIFO entries to completion under the RAM turn: every page the GPU wrote is in guest RAM when this returns.
     pub fn submit(&mut self, entries: &[[u8; 8]]) -> Result<(), String> {
-        let (space, ram) = (&self.space, &self.ram);
+        let ram = Arc::clone(&self.ram);
+        let _turn = ram.turn();
+        for pa in ram.take_cpu_written() {
+            self.memory.mark_cpu_written(pa, PAGE);
+        }
+        let space = &self.space;
         let events = self.pusher.submit(entries.iter().copied(), |va, len| {
             let mut pieces = space.resolve(va, len as u64).map_err(named)?;
             match (pieces.next(), pieces.next()) {
-                (Some(range), None) => Ok(&ram[range.start as usize..range.end as usize]),
+                (Some(range), None) => Ok(unsafe { ram.slice(range.start, (range.end - range.start) as usize) }),
                 _ => Err(format!("pushbuffer at {va:#x} spans discontiguous pages")),
             }
         })?;
@@ -408,6 +425,7 @@ impl<'a> Gpu<'a> {
 
     /// Presents a pitch-linear RGBA8 surface from guest memory.
     pub fn present(&mut self, va: u64, width: u32, height: u32) -> Result<(), MemoryError> {
+        let _turn = self.ram.turn();
         self.pixels.resize(width as usize * height as usize * 4, 0);
         gather(&self.space, &self.ram, va, &mut self.pixels)?;
         crate::display::present(width, height, &self.pixels);
@@ -522,17 +540,7 @@ impl<'a> Gpu<'a> {
             let (seen, mapping) = self.mirrors.get_mut(window).unwrap();
             self.pixels.resize((span.end - span.start) as usize, 0);
             mapping.buffer.read(&mut self.pixels).map_err(named)?;
-            let mut bytes = &self.pixels[..];
-            for range in window {
-                for start in (range.start..range.end).step_by(PAGE as usize) {
-                    let page = start..range.end.min(start + PAGE);
-                    let (written, rest) = bytes.split_at((page.end - page.start) as usize);
-                    if self.ram[page.start as usize..page.end as usize] != *written {
-                        self.memory.store(&mut self.ram, &[page], written, Writer::Gpu);
-                    }
-                    bytes = rest;
-                }
-            }
+            self.memory.store(&self.ram, window, &self.pixels, Writer::Gpu);
             *seen = generation(&self.memory, window);
         }
         for release in dispatch.release_semaphores.iter().flatten() {
@@ -760,7 +768,7 @@ impl<'a> Gpu<'a> {
         self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
         self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
         target.render_target.read(&mut self.pixels).map_err(named)?;
-        self.memory.store(&mut self.ram, &ranges, &self.pixels, Writer::Gpu);
+        self.memory.store(&self.ram, &ranges, &self.pixels, Writer::Gpu);
         target.generation = generation(&self.memory, &ranges);
         Ok(())
     }

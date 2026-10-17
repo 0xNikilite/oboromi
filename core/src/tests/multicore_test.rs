@@ -8,7 +8,7 @@ mod tests {
         let manager = CpuManager::new();
         
         assert_eq!(manager.cores.len(), 8, "Should have 8 cores");
-        assert_eq!(manager.shared_memory.len() as u64, MEMORY_SIZE, "Memory should be 12GB");
+        assert_eq!(manager.ram.size() as u64, MEMORY_SIZE, "Memory should be 12GB");
     }
 
     #[test]

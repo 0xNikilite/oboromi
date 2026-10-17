@@ -38,6 +38,10 @@ pub struct VkState {
     pub shader_shared_int64_atomics: bool,
     pub shader_buffer_float32_atomic_add: bool,
     pub shader_shared_float32_atomic_add: bool,
+    pub subgroup_size: u32,
+    /// The (M, N, K) subgroup tiles VK_KHR_cooperative_matrix multiplies f16 A and B in, and whether C is f32 rather than f16.
+    pub cooperative_f16_tiles: Vec<([u32; 3], bool)>,
+    pub exact_cooperative_hmma: std::sync::OnceLock<Vec<(u32, bool)>>,
 }
 
 pub fn device() -> Result<&'static VkState, VkError> {
@@ -64,12 +68,22 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add) =
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, cooperative_matrix) =
             Self::open_device(&instance)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
-        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
+        let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls).push_next(&mut subgroup);
         unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
+        let cooperative_f16_tiles = if cooperative_matrix {
+            let extension = ash::khr::cooperative_matrix::Instance::new(&entry, &instance);
+            let properties = unsafe { extension.get_physical_device_cooperative_matrix_properties(physical_device)? };
+            use vk::ComponentTypeKHR as C;
+            properties.iter().filter(|p| p.scope == vk::ScopeKHR::SUBGROUP && p.saturating_accumulation == vk::FALSE && [p.a_type, p.b_type] == [C::FLOAT16; 2] && p.c_type == p.result_type && matches!(p.c_type, C::FLOAT16 | C::FLOAT32))
+                .map(|p| ([p.m_size, p.n_size, p.k_size], p.c_type == C::FLOAT32)).collect()
+        } else {
+            Vec::new()
+        };
         let mut state = Self {
             queue: unsafe { device.get_device_queue(queue_family, 0) },
             entry,
@@ -103,6 +117,9 @@ impl VkState {
             shader_shared_int64_atomics,
             shader_buffer_float32_atomic_add,
             shader_shared_float32_atomic_add,
+            subgroup_size: subgroup.subgroup_size,
+            cooperative_f16_tiles,
+            exact_cooperative_hmma: Default::default(),
         };
         let alloc = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
@@ -115,7 +132,7 @@ impl VkState {
 
     fn open_device(
         instance: &ash::Instance,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, bool), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, bool, bool), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -137,7 +154,11 @@ impl VkState {
         let mut atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default();
         let mut atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
         let mut derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
+        let mut cooperative = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
+        let mut memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut cooperative)
+            .push_next(&mut memory_model)
             .push_next(&mut float16_int8)
             .push_next(&mut atomic_int64)
             .push_next(&mut atomic_float)
@@ -157,9 +178,12 @@ impl VkState {
         let linear_derivatives = derivatives.compute_derivative_group_linear == vk::TRUE
             && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(derivatives_extension));
         let atomic_float_extension = extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::EXT_SHADER_ATOMIC_FLOAT_NAME));
+        let cooperative_matrix = cooperative.cooperative_matrix == vk::TRUE && memory_model.vulkan_memory_model == vk::TRUE
+            && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::KHR_COOPERATIVE_MATRIX_NAME));
         let enabled_extensions: Vec<_> = [
             linear_derivatives.then_some(derivatives_extension.as_ptr()),
             atomic_float_extension.then_some(vk::EXT_SHADER_ATOMIC_FLOAT_NAME.as_ptr()),
+            cooperative_matrix.then_some(vk::KHR_COOPERATIVE_MATRIX_NAME.as_ptr()),
         ].into_iter().flatten().collect();
         let device_features = vk::PhysicalDeviceFeatures::default()
             .shader_float64(shader_float64)
@@ -174,6 +198,8 @@ impl VkState {
             .shader_shared_float32_atomic_add(shader_shared_float32_atomic_add);
         let mut enabled_derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
             .compute_derivative_group_linear(linear_derivatives);
+        let mut enabled_cooperative = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default().cooperative_matrix(cooperative_matrix);
+        let mut enabled_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default().vulkan_memory_model(cooperative_matrix);
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&enabled_extensions)
@@ -181,13 +207,15 @@ impl VkState {
             .push_next(&mut enabled_float16)
             .push_next(&mut enabled_atomic_int64)
             .push_next(&mut enabled_atomic_float)
-            .push_next(&mut enabled_derivatives);
+            .push_next(&mut enabled_derivatives)
+            .push_next(&mut enabled_cooperative)
+            .push_next(&mut enabled_memory_model);
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add)),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, cooperative_matrix)),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

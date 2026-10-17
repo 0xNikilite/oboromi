@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::gpu::demo_particles::{COUNT, HEIGHT, PARTICLES, Particles, RELEASE, TARGET, WIDTH, update_uniforms};
-use crate::tests::gpu::harness::vk_state;
+use crate::tests::gpu::harness::shared_device;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -13,8 +13,8 @@ fn particles(scene: &Particles) -> Vec<[f32; 12]> {
 
 #[test]
 fn update_moves_every_particle_one_integrator_step() {
-    let Some(state) = vk_state() else { return };
-    let mut scene = Particles::new(&state).unwrap();
+    let Some(state) = shared_device() else { return };
+    let mut scene = Particles::new(state).unwrap();
     let before = particles(&scene);
     scene.update(0.0).unwrap();
     let mut release = [0; 4];
@@ -48,8 +48,8 @@ fn update_moves_every_particle_one_integrator_step() {
 
 #[test]
 fn particles_frame_glows_where_the_particles_cluster() {
-    let Some(state) = vk_state() else { return };
-    let mut scene = Particles::new(&state).unwrap();
+    let Some(state) = shared_device() else { return };
+    let mut scene = Particles::new(state).unwrap();
     scene.update(0.0).unwrap();
     scene.draw(0.0).unwrap();
     let mut frame = vec![0; (WIDTH * HEIGHT * 4) as usize];

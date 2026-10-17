@@ -190,8 +190,8 @@ pub struct Particles<'a> {
 }
 
 impl<'a> Particles<'a> {
-    pub fn new(state: &'a VkState) -> Result<Self, String> {
-        let mut gpu = Gpu::new(state, MAPPED as usize);
+    pub fn new(state: &'static VkState) -> Result<Self, String> {
+        let mut gpu = Gpu::new(state, MAPPED as usize, None, *super::SPEED_HACKS.lock().unwrap()).map_err(named)?;
         gpu.space.map(BASE, 0, MAPPED);
         let program = |code: &[u8]| [code, &bra(-16).to_le_bytes()].concat();
         let mut cs_c0 = [0; 19];

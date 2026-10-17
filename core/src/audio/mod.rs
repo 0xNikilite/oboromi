@@ -3,6 +3,7 @@
 
 #[path = "dsp_stub.rs"]
 mod dsp;
+pub mod audout;
 pub mod effect;
 pub mod mix;
 pub mod parcel;

@@ -1,3 +1,4 @@
+mod audout;
 mod renderer;
 
 use crate::audio::HostMemory;

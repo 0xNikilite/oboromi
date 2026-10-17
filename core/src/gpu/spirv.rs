@@ -1065,6 +1065,7 @@ pub mod glsl {
     pub const S_CLAMP: u32 = 45;
     pub const F_MIX: u32 = 46;
     pub const FMA: u32 = 50;
+    pub const LDEXP: u32 = 53;
     pub const PACK_UNORM_4X8: u32 = 55;
     pub const UNPACK_UNORM_4X8: u32 = 64;
     pub const FIND_I_LSB: u32 = 73;

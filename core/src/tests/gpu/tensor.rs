@@ -103,9 +103,10 @@ mod tests {
         assert_d(HMMA | MMA_F32, 8, &F16, SMALL_INTS, f32::to_bits);
     }
 
-    // 2048 + 16 * 17/32 = 2056.5 rounds to 2056, so C is kept in f32 across k; summing in f16 would stay at 2048.
+    // 2048 + 8 * 17/32 rounds to 2052 and 2052 + 8 * 17/32 to 2056, so D is rounded per group of eight k; rounding after
+    // every product would stay at 2048.
     #[test]
-    fn hmma_f16_accumulates_in_f32_and_rounds_d_to_f16() {
+    fn hmma_f16_rounds_each_group_of_eight_k_to_f16() {
         let matrices: [Matrix; 3] = [|_, _| 1.0, |_, _| 17.0 / 32.0, |_, _| 2048.0];
         let Some(lanes) = mma(HMMA | MMA_16816, 16, &F16, matrices, None) else { return };
         for (lane, (got, _)) in lanes.iter().enumerate() {
@@ -228,5 +229,7 @@ mod tests {
             let (g, t) = quad(lane);
             assert_eq!(regs[RD], half(2 * t + 1, g) << 16 | half(2 * t, g), "lane {lane}");
         }
+    }
+
     }
 }

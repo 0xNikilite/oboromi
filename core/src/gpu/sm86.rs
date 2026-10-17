@@ -3280,7 +3280,7 @@ impl<'a> Decoder<'a> {
         }).collect()
     }
     // Gathers the A rows g (and g + 8 when rows is 2) and B columns 2t, 2t + 1 that the D elements of lane 4g + t need, each in ascending k.
-    fn mma_operands(&mut self, inst: u128, rows: u32, k_regs: u32, mut unpack: impl FnMut(&mut Self, u32, bool) -> Vec<u32>) -> [[Vec<u32>; 2]; 2] {
+    fn mma_operands<T>(&mut self, inst: u128, rows: u32, k_regs: u32, mut unpack: impl FnMut(&mut Self, u32, bool) -> Vec<T>) -> [[Vec<T>; 2]; 2] {
         let [ra, rb] = [24, 32].map(|lsb| (inst >> lsb & 0xff) as u32);
         let ty = self.type_u32[1];
         let [group, thread] = self.lane_quad();
@@ -3330,16 +3330,22 @@ impl<'a> Decoder<'a> {
             1 => 2,
             _ => todo!("HMMA.1684"),
         };
-        let bf16 = match inst >> 82 & 3 {
-            0 => false,
-            1 => true,
-            _ => todo!("HMMA.TF32"),
+        let format = inst >> 82 & 3;
+        let (k_regs, group, min_exponent) = match format {
+            0 => (k_regs, 8, -14),
+            1 => (k_regs, 8, -126),
+            2 => (2 * k_regs, 4, -126),
+            _ => panic!("HMMA source format 3"),
         };
         let f32_acc = inst >> 76 & 1 != 0;
         let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
         let negate = [inst >> 72 & 1 != 0, inst >> 63 & 1 != 0];
-        let [a, b] = self.mma_operands(inst, 2, k_regs, |s, word, is_b| s.mma_source_pair(word, bf16, negate[is_b as usize]).to_vec());
-        let f32_ty = self.type_f32[1];
+        let [a, b] = self.mma_operands(inst, 2, k_regs, |s, word, is_b| {
+            let neg = negate[is_b as usize];
+            let values = if format == 2 { vec![s.tf32_source(word, neg)] } else { s.mma_source_pair(word, format == 1, neg).to_vec() };
+            values.into_iter().map(|val| s.mma_term(val, min_exponent, 10)).collect()
+        });
+        let f16_ty = self.type_f16();
         for (half, row) in (0..).zip(&a) {
             let c = if f32_acc {
                 [0, 1].map(|column| {
@@ -3351,9 +3357,14 @@ impl<'a> Decoder<'a> {
                 self.half2_lanes(word, 0, false, false, false)
             };
             let d = [0, 1].map(|column| {
-                row.iter().zip(&b[column]).fold(c[column], |sum, (&x, &y)| {
-                    let product = self.ir.emit_fmul(f32_ty, x, y);
-                    self.ir.emit_fadd(f32_ty, sum, product)
+                let products: Vec<_> = row.iter().zip(&b[column]).collect();
+                products.chunks(group).fold(c[column], |acc, products| {
+                    let sum = self.truncated_group_sum(acc, products);
+                    if f32_acc {
+                        return sum;
+                    }
+                    let rounded = self.ir.emit_f_convert(f16_ty, sum);
+                    self.ir.emit_f_convert(self.type_f32[1], rounded)
                 })
             });
             if f32_acc {
@@ -3366,6 +3377,76 @@ impl<'a> Decoder<'a> {
                 self.store_register(nth_reg(rd, RZ, half), packed);
             }
         }
+    }
+    fn tf32_source(&mut self, word: u32, neg: bool) -> u32 {
+        let mask = self.cached_const_u32(0xffff_e000);
+        let bits = self.ir.emit_bitwise_and(self.type_u32[1], word, mask);
+        let val = self.bitcast_f32(bits);
+        self.fp_src(self.type_f32[1], val, false, neg)
+    }
+    fn mma_term(&mut self, val: u32, min_exponent: i32, fraction_bits: u32) -> [u32; 5] {
+        let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
+        let [twenty_three, field_mask, mantissa_mask, bias, floor, zero_exponent, narrowing] =
+            [23, 0xff, 0x7f_ffff, 127, min_exponent as u32, -1000i32 as u32, 23 - fraction_bits].map(|c| self.cached_const_u32(c));
+        let bits = self.bitcast_u32(val);
+        let field = self.ir.emit_shift_right_logical(ty, bits, twenty_three);
+        let field = self.ir.emit_bitwise_and(ty, field, field_mask);
+        let special = self.ir.emit_iequal(bool_ty, field, field_mask);
+        let hidden = self.glsl(spirv::glsl::U_MIN, ty, &[field, self.const_u32_1]);
+        let hidden = self.ir.emit_shift_left_logical(ty, hidden, twenty_three);
+        let mantissa = self.ir.emit_bitwise_and(ty, bits, mantissa_mask);
+        let significand = self.ir.emit_bitwise_or(ty, mantissa, hidden);
+        let biased = self.glsl(spirv::glsl::U_MAX, ty, &[field, self.const_u32_1]);
+        let exponent = self.ir.emit_isub(ty, biased, bias);
+        let clamped = self.glsl(spirv::glsl::S_MAX, ty, &[exponent, floor]);
+        let denormal_shift = self.ir.emit_isub(ty, clamped, exponent);
+        let shift = self.ir.emit_iadd(ty, denormal_shift, narrowing);
+        let significand = self.ir.emit_shift_right_logical(ty, significand, shift);
+        let zero = self.ir.emit_iequal(bool_ty, significand, self.const_u32_0);
+        let exponent = self.ir.emit_select(ty, zero, zero_exponent, clamped);
+        [val, bits, exponent, significand, special]
+    }
+    fn truncated_group_sum(&mut self, acc: u32, products: &[(&[u32; 5], &[u32; 5])]) -> u32 {
+        let (ty, bool_ty, f32_ty) = (self.type_u32[1], self.type_bool[1], self.type_f32[1]);
+        let [_, c_bits, c_exponent, c_significand, mut special] = self.mma_term(acc, -126, 23);
+        let [one, four, max_shift, twenty_three, twenty_four] = [1, 4, 31, 23, 24].map(|c| self.cached_const_u32(c));
+        let mut terms = vec![(c_bits, c_exponent, c_significand, one)];
+        let mut ieee_sum = acc;
+        for &(&[x, x_bits, x_exponent, x_significand, x_special], &[y, y_bits, y_exponent, y_significand, y_special]) in products {
+            let sign = self.ir.emit_bitwise_xor(ty, x_bits, y_bits);
+            // A product's exponent is ea + eb, not that of the normalized product.
+            let exponent = self.ir.emit_iadd(ty, x_exponent, y_exponent);
+            let significand = self.ir.emit_imul(ty, x_significand, y_significand);
+            terms.push((sign, exponent, significand, four));
+            let either = self.ir.emit_logical_or(bool_ty, x_special, y_special);
+            special = self.ir.emit_logical_or(bool_ty, special, either);
+            let product = self.ir.emit_fmul(f32_ty, x, y);
+            ieee_sum = self.ir.emit_fadd(f32_ty, ieee_sum, product);
+        }
+        let emax = terms[1..].iter().fold(c_exponent, |emax, term| self.glsl(spirv::glsl::S_MAX, ty, &[emax, term.1]));
+        let total = terms.iter().fold(self.const_u32_0, |total, &(sign, exponent, significand, unit_shift)| {
+            let widened = self.ir.emit_shift_left_logical(ty, significand, unit_shift);
+            let distance = self.ir.emit_isub(ty, emax, exponent);
+            let distance = self.glsl(spirv::glsl::U_MIN, ty, &[distance, max_shift]);
+            let aligned = self.ir.emit_shift_right_logical(ty, widened, distance);
+            let negative = self.ir.emit_sless_than(bool_ty, sign, self.const_u32_0);
+            let negated = self.ir.emit_snegate(ty, aligned);
+            let signed = self.ir.emit_select(ty, negative, negated, aligned);
+            self.ir.emit_iadd(ty, total, signed)
+        });
+        let magnitude = self.glsl(spirv::glsl::S_ABS, ty, &[total]);
+        let msb = self.glsl(spirv::glsl::FIND_U_MSB, ty, &[magnitude]);
+        let excess = self.ir.emit_isub(ty, msb, twenty_three);
+        let dropped = self.glsl(spirv::glsl::S_MAX, ty, &[excess, self.const_u32_0]);
+        let kept = self.ir.emit_shift_right_logical(ty, magnitude, dropped);
+        let kept = self.ir.emit_shift_left_logical(ty, kept, dropped);
+        let negative = self.ir.emit_sless_than(bool_ty, total, self.const_u32_0);
+        let negated = self.ir.emit_snegate(ty, kept);
+        let kept = self.ir.emit_select(ty, negative, negated, kept);
+        let kept = self.ir.emit_convert_s_to_f(f32_ty, kept);
+        let scale = self.ir.emit_isub(ty, emax, twenty_four);
+        let exact = self.glsl(spirv::glsl::LDEXP, f32_ty, &[kept, scale]);
+        self.ir.emit_select(f32_ty, special, ieee_sum, exact)
     }
     pub fn hmnmx2(&mut self, inst: u128) {
         let ofmt = (inst >> 85 & 1) << 1 | inst >> 78 & 1;

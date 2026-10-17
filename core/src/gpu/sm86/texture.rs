@@ -322,6 +322,7 @@ impl<'a> Decoder<'a> {
     // `op` numbers the operation as ATOM does, None is CAS comparing with Rb and swapping in Rb+1.
     fn surface_atomic(&mut self, inst: u128, op: Option<u32>) -> u32 {
         use spirv::memory_semantics::{ACQUIRE_RELEASE, IMAGE_MEMORY};
+        self.assert_stage_stores();
         assert!(matches!(opcode(inst), 0x593 | 0x595 | 0x59f), "surface atomics only in the bound cbuf form: {inst:#034x}");
         let size = (inst >> 73 & 7) as usize;
         let name = ["U32", "S32", "U64", "F32.FTZ.RN", "F16x2.RN", "S64", "SD32", "SD64"][size];
@@ -342,6 +343,7 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn sust(&mut self, inst: u128) {
+        self.assert_stage_stores();
         let (image, coord, raw) = self.surface_2d(inst, [0xb9d, 0xb9b], "SUST");
         let rb = (inst >> 32 & 0xff) as u32;
         let texel = if raw {
@@ -473,6 +475,9 @@ impl<'a> Decoder<'a> {
         let binding = TEXTURE_BINDING + images.count() as u32;
         let ptr = self.ir.emit_type_pointer(UNIFORM_CONSTANT, ty);
         let var = self.ir.emit_variable(ptr, UNIFORM_CONSTANT);
+        if matches!(kind, ResourceKind::Surface2D { .. }) && !matches!(self.stage, Stage::Compute { .. }) {
+            self.ir.emit_decorate(var, deco::NON_WRITABLE, &[]);
+        }
         self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         self.resources.push(Resource { kind, var });

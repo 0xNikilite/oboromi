@@ -546,6 +546,9 @@ impl<'a> Decoder<'a> {
             self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
         }
         let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
+        if !matches!(self.stage, Stage::Compute { .. }) {
+            self.ir.emit_decorate(var, deco::NON_WRITABLE, &[]);
+        }
         self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         self.resources.push(Resource { kind, var });
@@ -681,6 +684,12 @@ impl<'a> Decoder<'a> {
         let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
         let bit = self.pred_bit(uniform, pg, pg_not);
         Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
+    }
+
+    // Without vertexPipelineStoresAndAtomics or fragmentStoresAndAtomics, the storage buffers and images of those stages must be
+    // decorated NonWritable (VUID-RuntimeSpirv-NonWritable-06340 and -06341), and the device enables neither.
+    fn assert_stage_stores(&self) {
+        assert!(matches!(self.stage, Stage::Compute { .. }), "stores and atomics to memory or a surface in a {:?} module are not implemented", self.stage);
     }
 
     // A pixel program binds its constant buffers and textures apart from the vertex program's, in descriptor set 1.

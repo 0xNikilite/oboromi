@@ -31,6 +31,7 @@ impl<'a> Decoder<'a> {
 
     fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
         use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY};
+        self.assert_stage_stores();
         let wide = matches!(sz, 2 | 5);
         if sz >= 2 && !wide {
             todo!("floating-point global atomics require VK_EXT_shader_atomic_float");

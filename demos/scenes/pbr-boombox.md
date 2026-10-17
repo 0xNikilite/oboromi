@@ -173,6 +173,6 @@ After the report the host reads CT0 back (pitch 5120) and hands it to `display::
 
 ## What the pipeline must provide
 
-Indexed u32 draws, four vertex attributes from one interleaved stream, a depth target (`SET_ZT_*`, depth write and
-func; DrawSnapshot only carries `depth_test_enabled` today), five sampled textures through the TIC/TSC pools, two cbuf
+Indexed u32 draws, four vertex attributes from one interleaved stream, a depth target (`SET_ZT_*`, which DrawSnapshot
+does not carry yet; depth test, write and func it does), five sampled textures through the TIC/TSC pools, two cbuf
 slots per stage plus the handle bank, and full mip chains for the textures once block-linear TICs decode.

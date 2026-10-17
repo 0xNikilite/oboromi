@@ -50,43 +50,36 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        match Self::open_device(&instance) {
-            Ok((physical_device, queue_family, device, command_pool, shader_float16)) => {
-                let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
-                let mut props =
-                    vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
-                unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
-                let mut state = Self {
-                    queue: unsafe { device.get_device_queue(queue_family, 0) },
-                    entry,
-                    instance,
-                    physical_device,
-                    device,
-                    command_pool,
-                    submit: Default::default(),
-                    signed_zero_inf_nan_preserve: float_controls
-                        .shader_signed_zero_inf_nan_preserve_float32
-                        == vk::TRUE,
-                    // The entry point only sets the 32-bit mode, which NONE forbids.
-                    denorm_preserve: float_controls.shader_denorm_preserve_float32 == vk::TRUE
-                        && float_controls.denorm_behavior_independence
-                            != vk::ShaderFloatControlsIndependence::NONE,
-                    shader_float16,
-                };
-                let alloc = vk::CommandBufferAllocateInfo::default()
-                    .command_pool(command_pool)
-                    .command_buffer_count(1);
-                let submit = state.submit.get_mut().unwrap();
-                submit.command_buffer =
-                    unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
-                submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
-                Ok(state)
-            }
-            Err(e) => {
-                unsafe { instance.destroy_instance(None) };
-                Err(e)
-            }
-        }
+        let (physical_device, queue_family, device, command_pool, shader_float16) =
+            Self::open_device(&instance)
+                .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
+        let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
+        unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
+        let mut state = Self {
+            queue: unsafe { device.get_device_queue(queue_family, 0) },
+            entry,
+            instance,
+            physical_device,
+            device,
+            command_pool,
+            submit: Default::default(),
+            signed_zero_inf_nan_preserve: float_controls
+                .shader_signed_zero_inf_nan_preserve_float32
+                == vk::TRUE,
+            // The entry point only sets the 32-bit mode, which NONE forbids.
+            denorm_preserve: float_controls.shader_denorm_preserve_float32 == vk::TRUE
+                && float_controls.denorm_behavior_independence
+                    != vk::ShaderFloatControlsIndependence::NONE,
+            shader_float16,
+        };
+        let alloc = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .command_buffer_count(1);
+        let submit = state.submit.get_mut().unwrap();
+        submit.command_buffer = unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
+        submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
+        Ok(state)
     }
 
     fn open_device(

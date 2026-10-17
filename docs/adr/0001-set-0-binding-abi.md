@@ -4,7 +4,7 @@ date: 2026-10-16
 decision-makers: jopdorp
 component: [oboromi-gpu]
 ---
-# Every shader finds its data in one fixed table of numbered slots
+# Every shader finds its data in a fixed table of numbered slots
 
 ## In plain words
 
@@ -12,11 +12,11 @@ A Vulkan shader cannot follow a pointer to its data. Instead it reads from numbe
 
 ## Context and Problem Statement
 
-A translated shader needs several kinds of data: our own helper values, the game's constant tables, the game's main memory, and any number of textures. Compute shaders and drawing shaders must agree on which slot holds what. A vertex shader and a pixel shader drawing together also share one slot layout.
+A translated shader needs several kinds of data: our own helper values, the game's constant tables, the game's main memory, and any number of textures. Compute shaders and drawing shaders must agree on which slot holds what. A vertex shader and a pixel shader drawing together may each want their own buffer in the same slot.
 
 ## Decision Outcome
 
-Vulkan calls a slot a binding and a group of slots a descriptor set. Everything lives in one group, set 0, with these slots:
+Vulkan calls a slot a binding and a group of slots a descriptor set. Compute and vertex shaders use set 0. Pixel shaders use set 1, with the same slot numbers. Each set holds these slots:
 
 | Binding | Vulkan kind | Holds |
 |---|---|---|
@@ -37,12 +37,13 @@ Two texture reads whose handle comes from the same cbuf word share one slot. A s
 
 ### What this makes easy
 
-* One piece of host code, `Descriptors`, plugs in data for both compute and drawing.
+* One piece of host code, `Descriptors`, plugs in data for compute and for both drawing stages.
 * Our helper values can never be confused with what the game put in its first constant buffer.
+* A draw's vertex and pixel shaders can read different buffers through the same cbuf slot, because each has its own set.
 
 ### What this makes hard
 
-* In one draw, a vertex and a pixel shader cannot read one cbuf slot from different buffers, and the engine refuses it by name.
+* Every draw binds two sets instead of one, and the host must keep them apart.
 * Shaders that pick a texture by a run-time index will need arrays of slots next to this layout.
 
 ### Confirmation

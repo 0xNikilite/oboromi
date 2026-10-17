@@ -114,6 +114,10 @@ flowchart LR
 | Deswizzle | Reorder tiled pixels back into plain rows. | Turning a block-linear texture into a Vulkan image. |
 | Surface | An image a shader writes pixel by pixel instead of sampling; Vulkan calls it a storage image. | `SUST` stores one pixel. |
 | Render target | The image a draw writes its pixels into. | A colour image plus an optional depth image. |
+| Index buffer | A list of vertex numbers saying which vertices form each triangle, so shared corners are stored once. | A square as four vertices and six indices. |
+| Instancing | Drawing the same mesh many times in one call, with per-copy data such as position. | A thousand particles in one draw. |
+| Blending | Mixing a new pixel's colour with the one already in the image. | A see-through window over a wall. |
+| Window origin | Whether screen y counts from the top or the bottom row of the image. | OpenGL-style games count from the bottom. |
 | Depth | Per-pixel distance, used to hide what is behind. | A wall in front of a door. |
 
 ## Tensor cores
@@ -210,5 +214,7 @@ flowchart LR
 | Mesa | The open-source graphics driver stack on Linux. | It ships lavapipe. |
 | glTF | A standard 3D model file format. | The BoomBox sample model. |
 | PBR | Physically based rendering: lighting that follows real material behaviour. | Metal and rough surfaces lit by one light. |
+| Ray query | A shader asking "what does this ray hit first?" against the scene. | A shadow ray from a pixel towards the light. |
+| Acceleration structure | A search tree over a scene's triangles that makes ray queries fast. | Built once per model, then queried per pixel. |
 
 Sources: core/src/gpu/{fifo,threed,texture,engine}.rs, core/src/gpu/compute_class.rs on gpu/qmd-dispatch, NVIDIA's open-gpu-doc class headers.

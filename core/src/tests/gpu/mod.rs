@@ -3,6 +3,7 @@ pub mod harness;
 mod atomics;
 mod compare;
 mod control;
+pub mod demos;
 mod convert;
 mod fifo;
 mod fixtures;

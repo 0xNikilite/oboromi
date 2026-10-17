@@ -1,0 +1,7 @@
+Silicon captures from an RTX 3090 (GA102, SM86), taken by patching one instruction word into nvcc-compiled seed kernels and reading the registers back through the CUDA driver API.
+One fixture per line, id is <capture>#<index in that capture> and word_hex the instruction.
+observed:true means the outputs were captured on silicon, false marks a case that could not be run.
+The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
+mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.
+kernels.cubin is kernels.cu built with nvcc -arch=sm_86 -O3 -cubin (CUDA 13.1), its mul_add has the words of the mul-add fixtures and gradient draws the gradient fixture's frame.
+bench/ holds the perf example's microbenchmarks: bench.cubin is bench.cu built the same way, and each <kernel>.spv is its GLSL twin <kernel>.comp built with glslangValidator -V --target-env vulkan1.2.

@@ -1,7 +1,6 @@
-// removed empty field #9 sb of HADD2
 // this file is autogenered, do not modify
 impl<'a> Decoder<'a> {
-	// 1271 instructions
+	// 999 instructions
 	pub fn translate(&mut self, inst: u128) {
 		if false {
 			unreachable!();
@@ -207,15 +206,9 @@ impl<'a> Decoder<'a> {
 			self.bpt(inst);
 		} else if /*BRA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x947 {
 			self.bra(inst);
-		} else if /*BRA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x947 {
-			self.bra(inst);
 		} else if /*BRA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1947 {
 			self.bra(inst);
 		} else if /*BRA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1547 {
-			self.bra(inst);
-		} else if /*BRA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1547 {
-			self.bra(inst);
-		} else if /*BRA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1947 {
 			self.bra(inst);
 		} else if /*BREAK*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x942 {
 			self.break_(inst);
@@ -231,14 +224,8 @@ impl<'a> Decoder<'a> {
 			self.brev(inst);
 		} else if /*BRX*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x949 {
 			self.brx(inst);
-		} else if /*BRX*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x949 {
-			self.brx(inst);
 		} else if /*BRXU*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1958 {
 			self.brxu(inst);
-		} else if /*BRXU*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1958 {
-			self.brxu(inst);
-		} else if /*BSSY*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x945 {
-			self.bssy(inst);
 		} else if /*BSSY*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x945 {
 			self.bssy(inst);
 		} else if /*BSYNC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x941 {
@@ -252,16 +239,6 @@ impl<'a> Decoder<'a> {
 		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1943 {
 			self.call(inst);
 		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x944 {
-			self.call(inst);
-		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x344 {
-			self.call(inst);
-		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1944 {
-			self.call(inst);
-		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x944 {
-			self.call(inst);
-		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x344 {
-			self.call(inst);
-		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1944 {
 			self.call(inst);
 		} else if /*CALL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x344 {
 			self.call(inst);
@@ -317,10 +294,6 @@ impl<'a> Decoder<'a> {
 			self.cs2r(inst);
 		} else if /*CSMTEST*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80d {
 			self.csmtest(inst);
-		} else if /*CSMTEST*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80d {
-			self.csmtest(inst);
-		} else if /*CSMTEST*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80d {
-			self.csmtest(inst);
 		} else if /*DADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x629 {
 			self.dadd(inst);
 		} else if /*DADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1629 {
@@ -331,8 +304,6 @@ impl<'a> Decoder<'a> {
 			self.dadd(inst);
 		} else if /*DADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x429 {
 			self.dadd(inst);
-		} else if /*DEPBAR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x91a {
-			self.depbar(inst);
 		} else if /*DEPBAR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x91a {
 			self.depbar(inst);
 		} else if /*DEPBAR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x91a {
@@ -367,16 +338,6 @@ impl<'a> Decoder<'a> {
 			self.dmul(inst);
 		} else if /*DMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x828 {
 			self.dmul(inst);
-		} else if /*DSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x62a {
-			self.dsetp(inst);
-		} else if /*DSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x162a {
-			self.dsetp(inst);
-		} else if /*DSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x22a {
-			self.dsetp(inst);
-		} else if /*DSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e2a {
-			self.dsetp(inst);
-		} else if /*DSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x42a {
-			self.dsetp(inst);
 		} else if /*DSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x62a {
 			self.dsetp(inst);
 		} else if /*DSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x162a {
@@ -575,8 +536,6 @@ impl<'a> Decoder<'a> {
 			self.fadd(inst);
 		} else if /*FADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e21 {
 			self.fadd(inst);
-		} else if /*FADD32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x421 {
-			self.fadd32i(inst);
 		} else if /*FCHK*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xb02 {
 			self.fchk(inst);
 		} else if /*FCHK*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1b02 {
@@ -605,8 +564,6 @@ impl<'a> Decoder<'a> {
 			self.ffma(inst);
 		} else if /*FFMA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c23 {
 			self.ffma(inst);
-		} else if /*FFMA32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x823 {
-			self.ffma32i(inst);
 		} else if /*FLO*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xb00 {
 			self.flo(inst);
 		} else if /*FLO*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1b00 {
@@ -637,8 +594,6 @@ impl<'a> Decoder<'a> {
 			self.fmul(inst);
 		} else if /*FMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c20 {
 			self.fmul(inst);
-		} else if /*FMUL32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x820 {
-			self.fmul32i(inst);
 		} else if /*FOOTPRINT*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xb72 {
 			self.footprint(inst);
 		} else if /*FOOTPRINT*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xb72 {
@@ -709,26 +664,6 @@ impl<'a> Decoder<'a> {
 			self.fset(inst);
 		} else if /*FSET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c0a {
 			self.fset(inst);
-		} else if /*FSET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa0a {
-			self.fset(inst);
-		} else if /*FSET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a0a {
-			self.fset(inst);
-		} else if /*FSET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80a {
-			self.fset(inst);
-		} else if /*FSET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x20a {
-			self.fset(inst);
-		} else if /*FSET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c0a {
-			self.fset(inst);
-		} else if /*FSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa0b {
-			self.fsetp(inst);
-		} else if /*FSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a0b {
-			self.fsetp(inst);
-		} else if /*FSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80b {
-			self.fsetp(inst);
-		} else if /*FSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x20b {
-			self.fsetp(inst);
-		} else if /*FSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c0b {
-			self.fsetp(inst);
 		} else if /*FSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa0b {
 			self.fsetp(inst);
 		} else if /*FSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a0b {
@@ -757,8 +692,6 @@ impl<'a> Decoder<'a> {
 			self.hadd2(inst);
 		} else if /*HADD2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e30 {
 			self.hadd2(inst);
-		} else if /*HADD2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x430 {
-			self.hadd2(inst);
 		} else if /*HADD2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x630 {
 			self.hadd2(inst);
 		} else if /*HADD2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1630 {
@@ -769,8 +702,6 @@ impl<'a> Decoder<'a> {
 			self.hadd2(inst);
 		} else if /*HADD2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e30 {
 			self.hadd2(inst);
-		} else if /*HADD2_32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x430 {
-			self.hadd2_32i(inst);
 		} else if /*HFMA2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa31 {
 			self.hfma2(inst);
 		} else if /*HFMA2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a31 {
@@ -843,8 +774,6 @@ impl<'a> Decoder<'a> {
 			self.hfma2_mma(inst);
 		} else if /*HFMA2.MMA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c35 {
 			self.hfma2_mma(inst);
-		} else if /*HFMA2_32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x831 {
-			self.hfma2_32i(inst);
 		} else if /*HMMA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x23c {
 			self.hmma(inst);
 		} else if /*HMMA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e79 {
@@ -873,8 +802,6 @@ impl<'a> Decoder<'a> {
 			self.hmul2(inst);
 		} else if /*HMUL2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c32 {
 			self.hmul2(inst);
-		} else if /*HMUL2_32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x832 {
-			self.hmul2_32i(inst);
 		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x633 {
 			self.hset2(inst);
 		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1633 {
@@ -885,26 +812,6 @@ impl<'a> Decoder<'a> {
 			self.hset2(inst);
 		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e33 {
 			self.hset2(inst);
-		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x633 {
-			self.hset2(inst);
-		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1633 {
-			self.hset2(inst);
-		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x433 {
-			self.hset2(inst);
-		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x233 {
-			self.hset2(inst);
-		} else if /*HSET2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e33 {
-			self.hset2(inst);
-		} else if /*HSETP2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x634 {
-			self.hsetp2(inst);
-		} else if /*HSETP2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1634 {
-			self.hsetp2(inst);
-		} else if /*HSETP2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x434 {
-			self.hsetp2(inst);
-		} else if /*HSETP2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x234 {
-			self.hsetp2(inst);
-		} else if /*HSETP2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e34 {
-			self.hsetp2(inst);
 		} else if /*HSETP2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x634 {
 			self.hsetp2(inst);
 		} else if /*HSETP2*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1634 {
@@ -1047,36 +954,6 @@ impl<'a> Decoder<'a> {
 			self.i2ip(inst);
 		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x839 {
 			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x239 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x839 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x239 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x839 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x239 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c39 {
-			self.i2ip(inst);
-		} else if /*I2IP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x839 {
-			self.i2ip(inst);
 		} else if /*IABS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa13 {
 			self.iabs(inst);
 		} else if /*IABS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a13 {
@@ -1087,26 +964,6 @@ impl<'a> Decoder<'a> {
 			self.iabs(inst);
 		} else if /*IABS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x813 {
 			self.iabs(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa10 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a10 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x210 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c10 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa10 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a10 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x210 {
-			self.iadd(inst);
-		} else if /*IADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c10 {
-			self.iadd(inst);
 		} else if /*IADD3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
 			self.iadd3(inst);
 		} else if /*IADD3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa10 {
@@ -1127,10 +984,6 @@ impl<'a> Decoder<'a> {
 			self.iadd3(inst);
 		} else if /*IADD3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c10 {
 			self.iadd3(inst);
-		} else if /*IADD32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
-			self.iadd32i(inst);
-		} else if /*IADD32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x810 {
-			self.iadd32i(inst);
 		} else if /*IDE*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x951 {
 			self.ide(inst);
 		} else if /*IDP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa26 {
@@ -1149,14 +1002,6 @@ impl<'a> Decoder<'a> {
 			self.idp(inst);
 		} else if /*IDP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c26 {
 			self.idp(inst);
-		} else if /*IDP4A*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa26 {
-			self.idp4a(inst);
-		} else if /*IDP4A*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a26 {
-			self.idp4a(inst);
-		} else if /*IDP4A*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x226 {
-			self.idp4a(inst);
-		} else if /*IDP4A*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c26 {
-			self.idp4a(inst);
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa24 {
 			self.imad(inst);
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a24 {
@@ -1207,56 +1052,6 @@ impl<'a> Decoder<'a> {
 			self.imad(inst);
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x827 {
 			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x627 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1627 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x227 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x827 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x627 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1627 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x227 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c27 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x827 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x624 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1624 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x224 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x424 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x824 {
-			self.imad(inst);
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa25 {
 			self.imad(inst);
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a25 {
@@ -1288,56 +1083,6 @@ impl<'a> Decoder<'a> {
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c25 {
 			self.imad(inst);
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x825 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x625 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1625 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x225 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x825 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x625 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1625 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x225 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c25 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x825 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x624 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1624 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x224 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1e24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x424 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c24 {
-			self.imad(inst);
-		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x824 {
 			self.imad(inst);
 		} else if /*IMAD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa24 {
 			self.imad(inst);
@@ -1371,30 +1116,6 @@ impl<'a> Decoder<'a> {
 			self.imnmx(inst);
 		} else if /*IMNMX*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x817 {
 			self.imnmx(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa24 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a24 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x224 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c24 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x824 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa25 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a25 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x225 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c25 {
-			self.imul(inst);
-		} else if /*IMUL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x825 {
-			self.imul(inst);
-		} else if /*IMUL32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x824 {
-			self.imul32i(inst);
-		} else if /*IMUL32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x825 {
-			self.imul32i(inst);
 		} else if /*IPA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x326 {
 			self.ipa(inst);
 		} else if /*IPA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xb26 {
@@ -1413,38 +1134,6 @@ impl<'a> Decoder<'a> {
 			self.isberd(inst);
 		} else if /*ISBEWR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x927 {
 			self.isbewr(inst);
-		} else if /*ISCADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x811 {
-			self.iscadd(inst);
-		} else if /*ISCADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa11 {
-			self.iscadd(inst);
-		} else if /*ISCADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a11 {
-			self.iscadd(inst);
-		} else if /*ISCADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x211 {
-			self.iscadd(inst);
-		} else if /*ISCADD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c11 {
-			self.iscadd(inst);
-		} else if /*ISCADD32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x811 {
-			self.iscadd32i(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa0c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa0c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a0c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a0c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x20c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x20c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c0c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c0c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80c {
-			self.isetp(inst);
-		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80c {
-			self.isetp(inst);
 		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa0c {
 			self.isetp(inst);
 		} else if /*ISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa0c {
@@ -1473,22 +1162,12 @@ impl<'a> Decoder<'a> {
 			self.jmp(inst);
 		} else if /*JMP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x94a {
 			self.jmp(inst);
-		} else if /*JMP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x94a {
-			self.jmp(inst);
 		} else if /*JMP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x194a {
 			self.jmp(inst);
 		} else if /*JMP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x154a {
 			self.jmp(inst);
-		} else if /*JMP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x154a {
-			self.jmp(inst);
-		} else if /*JMP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x194a {
-			self.jmp(inst);
 		} else if /*JMX*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x94c {
 			self.jmx(inst);
-		} else if /*JMX*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x94c {
-			self.jmx(inst);
-		} else if /*JMXU*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1959 {
-			self.jmxu(inst);
 		} else if /*JMXU*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1959 {
 			self.jmxu(inst);
 		} else if /*KILL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x95b {
@@ -1537,10 +1216,6 @@ impl<'a> Decoder<'a> {
 			self.ldgsts(inst);
 		} else if /*LDGSTS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1dae {
 			self.ldgsts(inst);
-		} else if /*LDGSTS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1fae {
-			self.ldgsts(inst);
-		} else if /*LDGSTS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1dae {
-			self.ldgsts(inst);
 		} else if /*LDL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x983 {
 			self.ldl(inst);
 		} else if /*LDL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x983 {
@@ -1555,10 +1230,6 @@ impl<'a> Decoder<'a> {
 			self.lds(inst);
 		} else if /*LDS*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1984 {
 			self.lds(inst);
-		} else if /*LDSM*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x183b {
-			self.ldsm(inst);
-		} else if /*LDSM*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x83b {
-			self.ldsm(inst);
 		} else if /*LDSM*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x183b {
 			self.ldsm(inst);
 		} else if /*LDSM*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x83b {
@@ -1631,30 +1302,6 @@ impl<'a> Decoder<'a> {
 			self.lea(inst);
 		} else if /*LEPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x34e {
 			self.lepc(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa12 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a12 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x212 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c12 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa12 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a12 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x212 {
-			self.lop(inst);
-		} else if /*LOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c12 {
-			self.lop(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
-			self.lop3(inst);
 		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa12 {
 			self.lop3(inst);
 		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a12 {
@@ -1665,36 +1312,6 @@ impl<'a> Decoder<'a> {
 			self.lop3(inst);
 		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
 			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x212 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x212 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a12 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x212 {
-			self.lop3(inst);
-		} else if /*LOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c12 {
-			self.lop3(inst);
-		} else if /*LOP32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
-			self.lop32i(inst);
-		} else if /*LOP32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x812 {
-			self.lop32i(inst);
 		} else if /*MATCH*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3a1 {
 			self.match_(inst);
 		} else if /*MATCH*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3a1 {
@@ -1719,8 +1336,6 @@ impl<'a> Decoder<'a> {
 			self.mov(inst);
 		} else if /*MOV*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c78 {
 			self.mov(inst);
-		} else if /*MOV32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x802 {
-			self.mov32i(inst);
 		} else if /*MOVM*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x23a {
 			self.movm(inst);
 		} else if /*MUFU*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xb08 {
@@ -1777,8 +1392,6 @@ impl<'a> Decoder<'a> {
 			self.out(inst);
 		} else if /*OUT*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x324 {
 			self.out(inst);
-		} else if /*OUT*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x324 {
-			self.out(inst);
 		} else if /*P2R*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa03 {
 			self.p2r(inst);
 		} else if /*P2R*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a03 {
@@ -1789,42 +1402,8 @@ impl<'a> Decoder<'a> {
 			self.p2r(inst);
 		} else if /*P2R*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x803 {
 			self.p2r(inst);
-		} else if /*P2R*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x803 {
-			self.p2r(inst);
 		} else if /*PIXLD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x925 {
 			self.pixld(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa1d {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a1d {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x21d {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c1d {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa1e {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a1e {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x21e {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c1e {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa1f {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a1f {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x21f {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c1f {
-			self.plop3(inst);
-		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
-			self.plop3(inst);
 		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
 			self.plop3(inst);
 		} else if /*PLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa1d {
@@ -1883,35 +1462,9 @@ impl<'a> Decoder<'a> {
 			self.prmt(inst);
 		} else if /*PRMT*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x816 {
 			self.prmt(inst);
-		} else if /*PSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
-			self.psetp(inst);
-		} else if /*PSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
-			self.psetp(inst);
-		} else if /*PSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x81c {
-			self.psetp(inst);
 		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3aa {
 			self.qspc(inst);
 		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x19aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x19aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x19aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x19aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x19aa {
-			self.qspc(inst);
-		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x19aa {
 			self.qspc(inst);
 		} else if /*QSPC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x19aa {
 			self.qspc(inst);
@@ -1949,14 +1502,6 @@ impl<'a> Decoder<'a> {
 			self.red(inst);
 		} else if /*REDUX*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3c4 {
 			self.redux(inst);
-		} else if /*RET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x950 {
-			self.ret(inst);
-		} else if /*RET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1950 {
-			self.ret(inst);
-		} else if /*RET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x950 {
-			self.ret(inst);
-		} else if /*RET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1950 {
-			self.ret(inst);
 		} else if /*RET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x950 {
 			self.ret(inst);
 		} else if /*RET*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1950 {
@@ -2043,28 +1588,6 @@ impl<'a> Decoder<'a> {
 			self.shfl(inst);
 		} else if /*SHFL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x389 {
 			self.shfl(inst);
-		} else if /*SHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa19 {
-			self.shl(inst);
-		} else if /*SHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a19 {
-			self.shl(inst);
-		} else if /*SHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x219 {
-			self.shl(inst);
-		} else if /*SHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c19 {
-			self.shl(inst);
-		} else if /*SHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x819 {
-			self.shl(inst);
-		} else if /*SHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x419 {
-			self.shl(inst);
-		} else if /*SHR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa19 {
-			self.shr(inst);
-		} else if /*SHR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a19 {
-			self.shr(inst);
-		} else if /*SHR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x819 {
-			self.shr(inst);
-		} else if /*SHR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x219 {
-			self.shr(inst);
-		} else if /*SHR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c19 {
-			self.shr(inst);
 		} else if /*SPMETADATA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x20e {
 			self.spmetadata(inst);
 		} else if /*ST*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x385 {
@@ -2241,8 +1764,6 @@ impl<'a> Decoder<'a> {
 			self.tmml(inst);
 		} else if /*TTUCCTL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3d5 {
 			self.ttucctl(inst);
-		} else if /*TTUCLOSE*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3d2 {
-			self.ttuclose(inst);
 		} else if /*TTUGO*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3d3 {
 			self.ttugo(inst);
 		} else if /*TTULD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x3d2 {
@@ -2345,19 +1866,9 @@ impl<'a> Decoder<'a> {
 			self.uisetp(inst);
 		} else if /*UISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x188c {
 			self.uisetp(inst);
-		} else if /*UISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x128c {
-			self.uisetp(inst);
-		} else if /*UISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x188c {
-			self.uisetp(inst);
-		} else if /*UISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x128c {
-			self.uisetp(inst);
-		} else if /*UISETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x188c {
-			self.uisetp(inst);
 		} else if /*ULDC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xab9 {
 			self.uldc(inst);
 		} else if /*ULDC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1ab9 {
-			self.uldc(inst);
-		} else if /*ULDC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x18b8 {
 			self.uldc(inst);
 		} else if /*ULDC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x18b8 {
 			self.uldc(inst);
@@ -2393,34 +1904,10 @@ impl<'a> Decoder<'a> {
 			self.ulea(inst);
 		} else if /*ULEA*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1291 {
 			self.ulea(inst);
-		} else if /*ULOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
-			self.ulop(inst);
-		} else if /*ULOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
-			self.ulop(inst);
-		} else if /*ULOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1292 {
-			self.ulop(inst);
-		} else if /*ULOP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1292 {
-			self.ulop(inst);
-		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
-			self.ulop3(inst);
-		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
-			self.ulop3(inst);
 		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1292 {
 			self.ulop3(inst);
 		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
 			self.ulop3(inst);
-		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1292 {
-			self.ulop3(inst);
-		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
-			self.ulop3(inst);
-		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1292 {
-			self.ulop3(inst);
-		} else if /*ULOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1292 {
-			self.ulop3(inst);
-		} else if /*ULOP32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
-			self.ulop32i(inst);
-		} else if /*ULOP32I*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1892 {
-			self.ulop32i(inst);
 		} else if /*UMOV*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x882 {
 			self.umov(inst);
 		} else if /*UMOV*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c82 {
@@ -2429,18 +1916,6 @@ impl<'a> Decoder<'a> {
 			self.up2ur(inst);
 		} else if /*UP2UR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c83 {
 			self.up2ur(inst);
-		} else if /*UP2UR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1883 {
-			self.up2ur(inst);
-		} else if /*UPLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x89c {
-			self.uplop3(inst);
-		} else if /*UPLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x89c {
-			self.uplop3(inst);
-		} else if /*UPLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x129d {
-			self.uplop3(inst);
-		} else if /*UPLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x129e {
-			self.uplop3(inst);
-		} else if /*UPLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x129f {
-			self.uplop3(inst);
 		} else if /*UPLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x89c {
 			self.uplop3(inst);
 		} else if /*UPLOP3*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x129d {
@@ -2457,10 +1932,6 @@ impl<'a> Decoder<'a> {
 			self.uprmt(inst);
 		} else if /*UPRMT*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1296 {
 			self.uprmt(inst);
-		} else if /*UPSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x89c {
-			self.upsetp(inst);
-		} else if /*UPSETP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x89c {
-			self.upsetp(inst);
 		} else if /*UR2UP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1884 {
 			self.ur2up(inst);
 		} else if /*UR2UP*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1c84 {
@@ -2479,16 +1950,6 @@ impl<'a> Decoder<'a> {
 			self.ushf(inst);
 		} else if /*USHF*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1899 {
 			self.ushf(inst);
-		} else if /*USHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1299 {
-			self.ushl(inst);
-		} else if /*USHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1899 {
-			self.ushl(inst);
-		} else if /*USHL*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1499 {
-			self.ushl(inst);
-		} else if /*USHR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1899 {
-			self.ushr(inst);
-		} else if /*USHR*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1299 {
-			self.ushr(inst);
 		} else if /*VABSDIFF*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xa14 {
 			self.vabsdiff(inst);
 		} else if /*VABSDIFF*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1a14 {
@@ -2529,12 +1990,6 @@ impl<'a> Decoder<'a> {
 			self.vote(inst);
 		} else if /*VOTEU*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x886 {
 			self.voteu(inst);
-		} else if /*VOTE_VTG*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80d {
-			self.vote_vtg(inst);
-		} else if /*VOTE_VTG*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80d {
-			self.vote_vtg(inst);
-		} else if /*VOTE_VTG*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x80d {
-			self.vote_vtg(inst);
 		} else if /*WARPSYNC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0xb48 {
 			self.warpsync(inst);
 		} else if /*WARPSYNC*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x1b48 {
@@ -2547,6 +2002,8 @@ impl<'a> Decoder<'a> {
 			self.warpsync(inst);
 		} else if /*YIELD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x946 {
 			self.yield_(inst);
-		} 
+		} else {
+			panic!("unknown sm86 instruction {inst:#034x}");
+		}
 	}
 }

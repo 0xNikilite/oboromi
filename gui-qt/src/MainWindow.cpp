@@ -8,11 +8,13 @@
 #include <QListWidget>
 #include <QMenuBar>
 #include <QPushButton>
+#include <QThreadPool>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QtConcurrent/QtConcurrent>
 
+#include "DisplayWidget.h"
 #include "RustBridge.h"
 
 namespace {
@@ -76,8 +78,25 @@ void MainWindow::buildUi() {
     connect(m_gpuButton, &QPushButton::clicked, this, &MainWindow::onRunGpuTestsClicked);
     buttons->addWidget(m_cpuButton);
     buttons->addWidget(m_gpuButton);
+    auto *frameButton = new QPushButton("Render Test Frame", central);
+    connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
+    buttons->addWidget(frameButton);
+    auto *demoButton = new QPushButton("Demo", central);
+    demoButton->setCheckable(true);
+    connect(demoButton, &QPushButton::toggled, this, [this](bool on) {
+        if (!on) return m_demoTimer.stop();
+        m_demoClock.start();
+        m_demoTimer.start(16);
+    });
+    connect(&m_demoTimer, &QTimer::timeout, this, [this] {
+        if (m_demoFrame.isFinished())
+            m_demoFrame = QtConcurrent::run(RustBridge::renderDemoFrame, m_demoClock.elapsed() / 1000.0f);
+    });
+    buttons->addWidget(demoButton);
     buttons->addStretch();
     layout->addLayout(buttons);
+
+    layout->addWidget(createDisplay(central), /*stretch=*/3);
 
     auto *resultsLabel = new QLabel("Results:", central);
     resultsLabel->setStyleSheet("color: rgb(200, 200, 200);");
@@ -118,6 +137,13 @@ void MainWindow::onRunGpuTestsClicked() {
     m_logList->addItem("Initializing GPU decoder environment...");
     m_logList->addItem("Running SM86 instruction translations...");
     m_gpuWatcher.setFuture(QtConcurrent::run(RustBridge::runGpuTests));
+}
+
+void MainWindow::onRenderTestFrameClicked() {
+    QThreadPool::globalInstance()->start([this] {
+        if (!RustBridge::renderTestFrame())
+            QMetaObject::invokeMethod(this, [this] { m_logList->addItem("Render test frame failed"); });
+    });
 }
 
 void MainWindow::onCpuTestsFinished() {

@@ -1,0 +1,81 @@
+#[cfg(test)]
+pub(super) mod tests {
+    use crate::tests::gpu::harness::run_grid;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    pub(crate) fn arrays<'a>(json: &'a str, key: &str) -> Vec<Vec<&'a str>> {
+        json.split(&format!("\"{key}\":")).skip(1).map(|value| {
+            let items = value.split_once('[').unwrap().1.split_once(']').unwrap().0;
+            items.split(',').map(|item| item.trim().trim_matches('"')).collect()
+        }).collect()
+    }
+
+    pub(crate) fn string<'a>(json: &'a str, key: &str) -> &'a str {
+        json.split_once(&format!("\"{key}\":\"")).unwrap().1.split_once('"').unwrap().0
+    }
+
+    pub(crate) fn u32s(items: &[&str]) -> Vec<u32> {
+        items.iter().map(|item| item.parse().unwrap()).collect()
+    }
+
+    pub(crate) fn bytes(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|word| word.to_le_bytes()).collect()
+    }
+
+    pub(crate) fn sha256(bytes: &[u8]) -> String {
+        let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        sha256sum.stdin.take().unwrap().write_all(bytes).unwrap();
+        String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap()[..64].to_string()
+    }
+
+    fn launch(json: &str, cbuf0: &[u8], regions: &[(u64, &[u8])]) -> Option<Vec<Vec<u8>>> {
+        let words: Vec<u128> = arrays(json, "words")[0].iter().map(|word| u128::from_str_radix(word, 16).unwrap()).collect();
+        let [grid, block] = ["grid", "block"].map(|key| u32s(&arrays(json, key)[0]).try_into().unwrap());
+        run_grid(&words, block, grid, cbuf0, regions)
+    }
+
+    // nvcc -arch=sm_86 for c[i] = a[i] * b[i] + i: the kernel reads its pointer parameters from c[0x0][0x160..0x178].
+    fn run_mul_add(json: &str) {
+        let cbuf_hex = string(json, "cbuf0");
+        let cbuf0: Vec<u8> = (0..cbuf_hex.len()).step_by(2).map(|i| u8::from_str_radix(&cbuf_hex[i..i + 2], 16).unwrap()).collect();
+        let param = |offset: usize| u64::from_le_bytes(cbuf0[offset..offset + 8].try_into().unwrap());
+        let [a, b] = [0, 1].map(|i| bytes(&u32s(&arrays(json, "f32_bits")[i])));
+        let expected = u32s(&arrays(json, "outputs")[0]);
+        let c = vec![0; 4 * expected.len()];
+        let Some(regions) = launch(json, &cbuf0, &[(param(0x160), &a), (param(0x168), &b), (param(0x170), &c)]) else {
+            return;
+        };
+        assert_eq!(regions[2], bytes(&expected));
+    }
+
+    #[test]
+    fn compiled_mul_add_kernel_matches_silicon() {
+        run_mul_add(include_str!("../../../tests/fixtures/mul-add-32.json"));
+        run_mul_add(include_str!("../../../tests/fixtures/mul-add-1024.json"));
+    }
+
+    // The program writes a 1920x1080 RGBA8 frame to the address its MOV R4, 0x1000 and MOV R5, 0x2 build.
+    #[test]
+    fn translated_gradient_program_matches_silicon_hash() {
+        let json = include_str!("../../../tests/fixtures/gradient-sm86.json");
+        let Some(regions) = launch(json, &[], &[(0x2_0000_1000, &vec![0; 1920 * 1080 * 4])]) else {
+            return;
+        };
+        assert_eq!(sha256(&regions[0]), string(json, "sha256"));
+    }
+
+    // c = 0.7885 * e^(2 pi i turns): at half a turn c sits in the period-two bulb, so z = 0 never escapes.
+    #[test]
+    fn julia_demo_centre_is_inside_the_set_only_when_c_is_in_the_bulb() {
+        let centre = |turns: f32| {
+            let frame = run_grid(&crate::gpu::frame::julia_program(), [16, 16, 1], [120, 68, 1], &turns.to_le_bytes(), &[(0x2_0000_1000, &vec![0; 1920 * 1080 * 4])]);
+            frame.map(|regions| regions[0][(540 * 1920 + 960) * 4..][..4].to_vec())
+        };
+        let (Some(bulb), Some(dust)) = (centre(0.5), centre(0.0)) else {
+            return;
+        };
+        assert_eq!(bulb, [0, 0, 0, 255]);
+        assert_ne!(dust, [0, 0, 0, 255]);
+    }
+}

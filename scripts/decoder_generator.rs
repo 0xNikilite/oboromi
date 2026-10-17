@@ -27,13 +27,16 @@ struct ParserInst {
 fn collect_sass_instructions(f: &str) -> Result<Vec<ParserInst>, Box<dyn std::error::Error>> {
     let mut instructions = Vec::new();
     let mut dfa_state = ParserState::None;
+    // ALTERNATE CLASS is NVIDIA's alternate syntax for an encoding a primary CLASS already owns
+    let mut alternate = false;
     for line in f.lines() {
-        if line == "OPCODES" {
-            dfa_state = ParserState::Opcodes;
-        } else if line == "ENCODING" {
-            dfa_state = ParserState::Encoding;
-        } else if line == "CLASS" {
+        if line.starts_with("CLASS") || line.starts_with("ALTERNATE CLASS") {
+            alternate = line.starts_with("ALTERNATE");
             dfa_state = ParserState::Class;
+        } else if line == "OPCODES" && !alternate {
+            dfa_state = ParserState::Opcodes;
+        } else if line == "ENCODING" && !alternate {
+            dfa_state = ParserState::Encoding;
         } else if dfa_state == ParserState::Opcodes && line.starts_with("        ") {
             let mut iter = line.split("=").map(|x| x.trim());
             let name = iter.next().unwrap();
@@ -180,7 +183,7 @@ fn write_rust<W: std::fmt::Write>(w: &mut W, list: &Vec<ParserInst>) -> Result<(
 }}")?;*/
     writeln!(w, "impl<'a> Decoder<'a> {{")?;
     writeln!(w, "\t// {} instructions", instructions.len())?;
-    writeln!(w, "\tpub fn translate(&self, inst: u128) {{")?;
+    writeln!(w, "\tpub fn translate(&mut self, inst: u128) {{")?;
     writeln!(w, "\t\tif false {{")?;
     writeln!(w, "\t\t\tunreachable!();")?;
     write!(w, "\t\t}} ")?;
@@ -197,33 +200,12 @@ fn write_rust<W: std::fmt::Write>(w: &mut W, list: &Vec<ParserInst>) -> Result<(
             write!(w, "\t\t}} ")?;
         }
     }
-    writeln!(w, "")?;
+    writeln!(w, "else {{")?;
+    writeln!(w, "\t\t\tpanic!(\"unknown sm86 instruction {{inst:#034x}}\");")?;
+    writeln!(w, "\t\t}}")?;
     writeln!(w, "\t}}")?;
     writeln!(w, "}}")?;
 
-    let mut seen_names = std::collections::BTreeSet::<String>::new();
-    writeln!(w, "/*")?;
-    writeln!(w, "impl Decoder {{")?;
-    for inst in instructions.iter() {
-        if let Some(opcode_field) = inst.fixed_fields.iter().find(|&e| e.name == "opcode") {
-            if seen_names.contains(&inst.name) {
-                //writeln!(w, "// dup {}", inst.name)?;
-                continue;
-            }
-            seen_names.insert(inst.name.clone());
-            
-            let b_opcode = &opcode_field.bits;
-            assert!(b_opcode.len() == 2);
-            writeln!(w, "\tpub fn {}(&self, inst: u128) {{", get_canon_inst_name(&inst.name.to_lowercase()))?;
-            for f in inst.fields.iter() {
-                writeln!(w, "\t\tlet _{} = {};", f.name, get_multi_merge_stmt("inst", f.total_bits, &f.bits))?;
-            }
-            writeln!(w, "\t\ttodo!();")?;
-            writeln!(w, "\t}}")?;
-        }
-    }
-    writeln!(w, "}}")?;
-    writeln!(w, "*/")?;
     Ok(())
 }
 

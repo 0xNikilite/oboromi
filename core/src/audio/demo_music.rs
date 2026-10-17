@@ -262,5 +262,7 @@ pub fn play_music(seconds: f32) {
             }
         }
     }
+    let cursor = (seconds * 60.0).round() as usize % width;
+    pixels[(height - 1) * width * 4 + cursor * 4..][..4].copy_from_slice(&[48, 210, 160, 255]);
     crate::display::present(width as u32, height as u32, &pixels);
 }

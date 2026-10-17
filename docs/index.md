@@ -6,7 +6,7 @@ A game hands the Switch 2's GPU small programs called shaders, for example one t
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/julia-demo-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/julia-demo.mp4" type="video/mp4"></video>
 
-*The Demo button: a 64-instruction SM86 program, translated to SPIR-V, redrawing a Julia set every frame on an Intel laptop GPU.*
+*The Demo button: a hand-written SM86 program, translated to SPIR-V, redrawing a Julia set every frame on an Intel laptop GPU.*
 
 | Start here | For |
 |---|---|

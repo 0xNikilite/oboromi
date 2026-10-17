@@ -1,6 +1,6 @@
 # Demos
 
-The Qt window has buttons that draw through the GPU work today. Each planned scene needs one more missing feature, so the scenes double as a to-do list. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
+The Qt window has buttons that draw through the GPU work today. Six bigger scenes are prepared, and the first, a lit 3D model, is being wired now. For example, the Triangle button writes GPU commands into emulated memory every frame, and the full engine draws them.
 
 ## What runs today?
 
@@ -24,13 +24,13 @@ Every frame ends in `display::present`, which the window shows.
 
 ## What does it look like?
 
-![The Render Test Frame button: a 1080p gradient](https://raw.githubusercontent.com/jopdorp/oboromi/assets/test-frame.png)
+![The Render Test Frame button: a full-HD gradient](https://raw.githubusercontent.com/jopdorp/oboromi/assets/test-frame.png)
 
-*Render Test Frame: three SASS instructions (S2R, IMAD, STG) write a gradient, translated to SPIR-V and run on an Intel laptop GPU.*
+*Render Test Frame: a short SASS program (S2R, IMAD, STG) writes a gradient, translated to SPIR-V and run on an Intel laptop GPU.*
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/julia-demo-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/julia-demo.mp4" type="video/mp4"></video>
 
-*Demo: a 64-instruction SM86 program, translated to SPIR-V, redrawing a Julia set every frame on an Intel laptop GPU.*
+*Demo: a hand-written SM86 program, translated to SPIR-V, redrawing a Julia set every frame on an Intel laptop GPU.*
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/triangle-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/triangle.mp4" type="video/mp4"></video>
 
@@ -56,17 +56,16 @@ Measured on an Intel Arc (MTL), p50 per frame:
 
 ```mermaid
 flowchart LR
-    TRI["Triangle<br/>Runs today"] --> PBR["pbr-boombox<br/>A lit 3D model"]
+    TRI["Triangle<br/>Runs today"] --> PBR["pbr-boombox<br/>A lit 3D model, being wired"]
     PBR --> POST["post-effect<br/>The model, then screen filters"]
+    PBR --> FH["pbr-flighthelmet<br/>A heavy model, to time throughput"]
+    PBR --> RT["raytraced<br/>Shadows and reflections by ray queries"]
     TRI --> SPR["sprites2d<br/>Layered 2D sprites"]
-    TRI --> PART["particles<br/>Compute-driven particles"]
-    PBR -.->|"Needs"| N1["Indexed draws, depth,<br/>Five textures, mip levels"]
-    POST -.->|"Needs"| N2["Drawing into a texture by address,<br/>Draws without vertex buffers"]
-    PART -.->|"Needs"| N3["Compute launches from commands,<br/>Many copies per draw, blending"]
-    SPR -.->|"Needs"| N4["Many copies per draw, see-through blending,<br/>Repeating texture edges"]
+    TRI --> PART["particles<br/>Particles moved by a compute launch"]
+    RT -.->|"Still needs"| N1["Acceleration structures,<br/>Depth kept in guest memory"]
 ```
 
-*Each planned scene, and the engine features it needs first.*
+*The six prepared scenes. The engine has what they need, except two features for the ray-traced one.*
 
 | Scene | Content | Shaders |
 |---|---|---|
@@ -74,6 +73,8 @@ flowchart LR
 | post-effect | The PBR scene drawn offscreen, then colour fringing, scanlines and a vignette | post.vert, post.frag |
 | particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag |
 | sprites2d | Scrolling layers and floating sprites, blended over a generated texture sheet | sprite2d.vert, sprite2d.frag |
+| pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material, timed against pbr-boombox | pbr.vert, pbr.frag |
+| raytraced | BoomBox on a ground plane with ray-query shadows and reflections, plus ray-traced ambient occlusion | rt.frag, rt_ao.comp |
 
 Each scene document in `demos/scenes` lists its guest memory layout and the register writes it sends. Every convention not yet confirmed is tagged "(verify)". The shaders are GLSL that `glslangValidator -V` accepts. The plan is to compile them with NVIDIA's driver on a rented card, which yields the SM86 programs the scenes load.
 
@@ -92,7 +93,7 @@ flowchart LR
 
 *The converter turns a standard 3D model file into raw files the scenes copy into guest memory.*
 
-BoomBox and Avocado are CC0 1.0 by Microsoft, from KhronosGroup's glTF-Sample-Assets. Base colour and emissive textures are sRGB, the others linear. DamagedHelmet is avoided because its source carries a non-commercial licence.
+BoomBox, Avocado and FlightHelmet are CC0 1.0 by Microsoft, from KhronosGroup's glTF-Sample-Assets. FlightHelmet is too big for the code branches, so `demos/assets/fetch.sh` pulls it from the assets branch. Base colour and emissive textures are sRGB, the others linear. DamagedHelmet is avoided because its source carries a non-commercial licence.
 
 Verified by: an offscreen screenshot of each button's output, the engine acceptance test for the triangle, the Julia centre test, and the block-linear tiling matching the converter.
 

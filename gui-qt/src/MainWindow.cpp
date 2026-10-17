@@ -81,7 +81,7 @@ void MainWindow::buildUi() {
     auto *frameButton = new QPushButton("Render Test Frame", central);
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
-    for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}}) {
+    for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}, {"Post", RustBridge::renderPostFrame}}) {
         auto *demoButton = new QPushButton(name, central);
         demoButton->setCheckable(true);
         connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
@@ -103,7 +103,7 @@ void MainWindow::buildUi() {
     buttons->addStretch();
     layout->addLayout(buttons);
 
-    layout->addWidget(new DisplayWidget(central), /*stretch=*/3);
+    layout->addWidget(createDisplay(central), /*stretch=*/3);
 
     auto *resultsLabel = new QLabel("Results:", central);
     resultsLabel->setStyleSheet("color: rgb(200, 200, 200);");

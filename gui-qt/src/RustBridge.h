@@ -23,4 +23,7 @@ bool renderTriangleDemo(float seconds);
 // Saves the demos' pipeline cache so their next run starts warm
 bool flushDemoCaches();
 
+// Draws the post-effect demo at the given time into the display
+bool renderPostFrame(float seconds);
+
 }

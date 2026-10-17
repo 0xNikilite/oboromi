@@ -1,6 +1,6 @@
 # oboromi
 
-This is the documentation of oboromi, an early Nintendo Switch 2 emulator written in Rust. An emulator is a program that lets a PC act like the console. It cannot run a game yet. Most of the work so far is on the graphics chip, the GPU.
+This is the documentation of oboromi, an early Nintendo Switch 2 emulator written in Rust. An emulator is a program that lets a PC act like the console. It builds on the foundations its maintainer and contributors laid down. Most of the recent work is on the graphics chip, the GPU, with the CPU, services and audio in progress.
 
 A game hands the Switch 2's GPU small programs called shaders, for example one that computes the colour of each pixel of a sky. Those shaders are NVIDIA machine code. The emulator rewrites them into SPIR-V, the shader format of the cross-vendor graphics API Vulkan. Then an Intel, AMD or NVIDIA card in a PC can run them.
 

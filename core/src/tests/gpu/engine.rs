@@ -212,10 +212,8 @@ pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::gpu::harness::shared_device;
+    use crate::tests::gpu::harness::{sha256, shared_device};
     use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f};
-    use std::io::Write;
-    use std::process::{Command, Stdio};
 
     const END: u32 = 0x1614;
     const BEGIN: u32 = 0x1618;
@@ -321,10 +319,7 @@ mod tests {
         gpu.submit(&[entry(CONTROL, words.len())]).unwrap();
         let mut frame = vec![0; 1920 * 1080 * 4];
         gpu.read(FRAME, &mut frame).unwrap();
-        let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-        sha256sum.stdin.take().unwrap().write_all(&frame).unwrap();
-        let digest = String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap();
-        assert_eq!(&digest[..64], field("sha256", '"', '"'));
+        assert_eq!(sha256(&frame), field("sha256", '"', '"'));
         let mut release = [0; 4];
         gpu.read(release_va, &mut release).unwrap();
         assert_eq!(u32::from_le_bytes(release), 0xfeed_beef);

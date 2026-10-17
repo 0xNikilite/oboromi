@@ -44,4 +44,8 @@ bool flushDemoCaches() {
     return oboromi_flush_demo_caches();
 }
 
+bool renderPostFrame(float seconds) {
+    return oboromi_render_post_frame(seconds);
+}
+
 }

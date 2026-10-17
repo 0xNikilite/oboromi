@@ -44,7 +44,7 @@ fn main() {
                 cached += 1;
             } else if let Some(words) = bnsh::translate(Some(state), program) {
                 translated += 1;
-                cached += usize::from(disk.store_spirv(key, &words).is_ok());
+                cached += usize::from(disk.store_spirv(key, &words, &[], false).is_ok());
             } else {
                 failed += 1;
             }

@@ -360,12 +360,21 @@ impl<'a> Decoder<'a> {
         self.ir.emit_load(ty, var)
     }
 
+    // The vertex fetch converts each attribute to its format's type, so an integer attribute reaches ALD as an integer.
+    pub(super) fn interface_type(&self, kind: ResourceKind, width: usize) -> u32 {
+        match (kind, self.stage) {
+            (ResourceKind::VertexInput { location }, Stage::Vertex { uint, .. }) if uint >> location & 1 != 0 => self.type_u32[width],
+            (ResourceKind::VertexInput { location }, Stage::Vertex { sint, .. }) if sint >> location & 1 != 0 => self.type_s32[width],
+            _ => self.type_f32[width],
+        }
+    }
+
     pub(super) fn interface_vec4(&mut self, kind: ResourceKind, storage: u32) -> u32 {
         use spirv::decoration::{BUILTIN, FLAT, LOCATION, NO_PERSPECTIVE};
         if let Some(var) = self.resource(kind) {
             return var;
         }
-        let ptr = self.ir.emit_type_pointer(storage, self.type_f32[4]);
+        let ptr = self.ir.emit_type_pointer(storage, self.interface_type(kind, 4));
         let var = self.ir.emit_variable(ptr, storage);
         match kind {
             ResourceKind::BuiltIn(builtin) => self.ir.emit_decorate(var, BUILTIN, &[builtin]),
@@ -398,7 +407,7 @@ impl<'a> Decoder<'a> {
 
     pub(super) fn interface_component(&mut self, kind: ResourceKind, storage: u32, attr: u32) -> u32 {
         let var = self.interface_vec4(kind, storage);
-        let ptr = self.ir.emit_type_pointer(storage, self.type_f32[1]);
+        let ptr = self.ir.emit_type_pointer(storage, self.interface_type(kind, 1));
         let component = self.cached_const_u32(attr / 4 % 4);
         self.ir.emit_access_chain(ptr, var, &[component])
     }

@@ -27,4 +27,8 @@ bool renderHelmetDemo(float seconds);
 // Draws the post-effect demo at the given time into the display
 bool renderPostFrame(float seconds);
 
+// Plays the music demo and steps the bounce demo up to the given time
+bool renderMusicDemo(float seconds);
+bool renderBounceDemo(float seconds);
+
 }

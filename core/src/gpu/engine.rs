@@ -1,6 +1,6 @@
-//! A GPU channel over guest RAM: pushbuffers run through the pusher, and each draw translates the guest's shader
-//! programs, mirrors the vertex and constant buffers it reads, renders into colour target 0 and writes that back to
-//! guest memory, so guest-physical pages stay the only identity of every resource.
+//! A GPU channel over guest RAM: pushbuffers run through the pusher, and each draw or compute launch translates the
+//! guest's programs, mirrors the buffers and textures it reads and writes what it renders or stores back to guest
+//! memory, so guest-physical pages stay the only identity of every resource.
 use super::compute::{ComputePipeline, HostBuffer, HostImage};
 use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};

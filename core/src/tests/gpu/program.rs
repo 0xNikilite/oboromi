@@ -1,26 +1,32 @@
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use crate::tests::gpu::harness::run_grid;
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    fn arrays<'a>(json: &'a str, key: &str) -> Vec<Vec<&'a str>> {
+    pub(crate) fn arrays<'a>(json: &'a str, key: &str) -> Vec<Vec<&'a str>> {
         json.split(&format!("\"{key}\":")).skip(1).map(|value| {
             let items = value.split_once('[').unwrap().1.split_once(']').unwrap().0;
             items.split(',').map(|item| item.trim().trim_matches('"')).collect()
         }).collect()
     }
 
-    fn string<'a>(json: &'a str, key: &str) -> &'a str {
+    pub(crate) fn string<'a>(json: &'a str, key: &str) -> &'a str {
         json.split_once(&format!("\"{key}\":\"")).unwrap().1.split_once('"').unwrap().0
     }
 
-    fn u32s(items: &[&str]) -> Vec<u32> {
+    pub(crate) fn u32s(items: &[&str]) -> Vec<u32> {
         items.iter().map(|item| item.parse().unwrap()).collect()
     }
 
-    fn bytes(words: &[u32]) -> Vec<u8> {
+    pub(crate) fn bytes(words: &[u32]) -> Vec<u8> {
         words.iter().flat_map(|word| word.to_le_bytes()).collect()
+    }
+
+    pub(crate) fn sha256(bytes: &[u8]) -> String {
+        let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        sha256sum.stdin.take().unwrap().write_all(bytes).unwrap();
+        String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap()[..64].to_string()
     }
 
     fn launch(json: &str, cbuf0: &[u8], regions: &[(u64, &[u8])]) -> Option<Vec<Vec<u8>>> {
@@ -56,10 +62,7 @@ mod tests {
         let Some(regions) = launch(json, &[], &[(0x2_0000_1000, &vec![0; 1920 * 1080 * 4])]) else {
             return;
         };
-        let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-        sha256sum.stdin.take().unwrap().write_all(&regions[0]).unwrap();
-        let digest = String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap();
-        assert_eq!(&digest[..64], string(json, "sha256"));
+        assert_eq!(sha256(&regions[0]), string(json, "sha256"));
     }
 
     // c = 0.7885 * e^(2 pi i turns): at half a turn c sits in the period-two bulb, so z = 0 never escapes.

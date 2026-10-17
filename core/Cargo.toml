@@ -21,3 +21,4 @@ gilrs = "0.11.2"
 [features]
 default = []
 trace = []
+cuda = []

@@ -3,6 +3,8 @@ use super::*;
 const DIM_2D: u32 = 1;
 const LOD_OPERAND: u32 = 2;
 const GRAD_OPERAND: u32 = 4;
+const BIAS_OPERAND: u32 = 1;
+const MIN_LOD_OPERAND: u32 = 0x80;
 
 #[repr(u32)]
 pub enum TextureType {
@@ -244,7 +246,7 @@ fn bound_handle(inst: u128) -> (u32, u32) {
 
 impl<'a> Decoder<'a> {
     pub fn footprint(&mut self, inst: u128) {
-        todo!("FOOTPRINT reports the sparse tiles a sample would touch in NVIDIA's tile layout; only VK_NV_shader_image_footprint can express it, and neither Intel nor lavapipe has it: {inst:#034x}");
+        todo!("FOOTPRINT (class footprint_: Rd and Rd2, 64 bits each, and Pu) packs anchor, offset, mask, lod and granularity in a layout no PTX instruction, NAK or table documents, so OpImageSampleFootprintNV has nothing to map to; neither Intel nor lavapipe has VK_NV_shader_image_footprint either: {inst:#034x}");
     }
     pub fn suatom(&mut self, inst: u128) {
         let op = (opcode(inst) != 0x595).then_some((inst >> 87 & 0xf) as u32);
@@ -312,8 +314,11 @@ impl<'a> Decoder<'a> {
         }
         (var, ty, self.ir.emit_composite_construct(self.type_u32[2], &coords))
     }
+    // COMP_STATUS (bit 87 = 0, the only SUQUERY query in the table) asks whether the texel's memory is compressed; Vulkan
+    // never exposes compressed memory, so every texel reads as uncompressed: Rd zero, Pu clear.
     pub fn suquery(&mut self, inst: u128) {
-        todo!("SUQUERY on SM86 only has COMP_STATUS, the memory compression state of the texel at [Ra], which Vulkan does not expose; surface sizes come from TXQ: {inst:#034x}");
+        self.store_register((inst >> 16 & 0xff) as u32, self.const_u32_0);
+        self.store_pred_bit(false, (inst >> 81 & 7) as u32, self.const_u32_0);
     }
     pub fn sured(&mut self, inst: u128) {
         self.surface_atomic(inst, Some((inst >> 87 & 7) as u32));
@@ -375,7 +380,7 @@ impl<'a> Decoder<'a> {
     }
     pub fn tex(&mut self, inst: u128) {
         assert!(opcode(inst) == 0xb60 && inst >> 59 & 1 == 0, "TEX only in the bound cbuf form: {inst:#034x}");
-        for (bit, modifier) in [(76, "AOFFI"), (77, "NDV"), (78, "DC"), (79, "F16.RN"), (80, "F16.RZ")] {
+        for (bit, modifier) in [(76, "AOFFI"), (77, "NDV"), (79, "F16.RN"), (80, "F16.RZ")] {
             assert!(inst >> bit & 1 == 0, "TEX.{modifier}");
         }
         let dimension = (inst >> 61 & 7) as usize;
@@ -416,7 +421,7 @@ impl<'a> Decoder<'a> {
         let lod = match inst >> 87 & 7 {
             1 => self.const_u32_0,
             3 => self.load_register(rb),
-            mode => todo!("TLD lod mode {mode}"),
+            mode => panic!("TLD only defines LZ and LL, not lod mode {mode}"),
         };
         let coords = [ra, ra + 1].map(|r| self.load_register(r));
         let coord = self.ir.emit_composite_construct(self.type_u32[2], &coords);
@@ -455,7 +460,7 @@ impl<'a> Decoder<'a> {
     fn texture_2d(&mut self, inst: u128) -> u32 {
         if self.type_sampled_texture_2d == 0 {
             self.ir.emit_capability(spirv::capability::IMAGE_QUERY);
-            self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 0, 0, 0, 1, 0);
+            self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 2, 0, 0, 1, 0);
             self.type_sampled_texture_2d = self.ir.emit_type_sampled_image(self.type_texture_2d);
         }
         let (cbuf_bank, byte_offset) = bound_handle(inst);

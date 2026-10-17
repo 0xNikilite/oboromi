@@ -17,13 +17,14 @@ impl<'a> Decoder<'a> {
     // .SAT maps NaN to +0, which NClamp does and FClamp leaves undefined.
     fn fp_arith_result(&mut self, inst: u128, val: u32, ftz: bool) -> u32 {
         assert_round_to_nearest(inst);
+        self.ir.emit_decorate(val, spirv::decoration::NO_CONTRACTION, &[]);
         let val = if inst >> 77 & 1 != 0 {
             let [zero, one] = [0.0f32, 1.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
             self.glsl(spirv::glsl::N_CLAMP, self.type_f32[1], &[val, zero, one])
         } else {
             val
         };
-        let bits = self.canonical_nan_bits(val);
+        let bits = self.bitcast_u32(val);
         if ftz { self.flush_subnormal(bits) } else { bits }
     }
 
@@ -83,7 +84,7 @@ impl<'a> Decoder<'a> {
         let b = self.fp_alu_src(inst, ftz);
         let sum = self.ir.emit_fadd(self.type_f32[1], a, b);
         let bits = self.fp_arith_result(inst, sum, ftz);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fchk(&mut self, _inst: u128) {
         panic!("FCHK is not implemented: NAK, Ryujinx and Eden have no lowering for it, so it waits for silicon fixtures");
@@ -98,7 +99,7 @@ impl<'a> Decoder<'a> {
         let [a, b] = if fmz { self.fmz_operands(a, b) } else { [a, b] };
         let val = self.glsl(spirv::glsl::FMA, self.type_f32[1], &[a, b, c]);
         let bits = self.fp_arith_result(inst, val, ftz);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fmul(&mut self, inst: u128) {
         let fmz = inst >> 76 & 1 != 0;
@@ -150,8 +151,8 @@ impl<'a> Decoder<'a> {
             10 => {
                 let val = self.fp_alu_src(inst, ftz);
                 let val = self.glsl(ROUNDING[rnd], self.type_f32[1], &[val]);
-                let val = self.canonical_nan_bits(val);
-                self.store_register(rd, val);
+                let val = self.bitcast_u32(val);
+                self.store_fp_register(rd, val);
             }
             15 => {
                 let val = self.fp64_alu_src(inst);

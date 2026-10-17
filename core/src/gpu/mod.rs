@@ -77,6 +77,14 @@ pub struct VkState {
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
 
+/// Accuracy traded for speed in every translation from the next one on.
+#[derive(Clone, Copy, Default)]
+pub struct SpeedHacks {
+    pub fast_tensor: bool,
+}
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false });
+
 /// `device`, but created with every window surface extension the loader has if this is the first call.
 pub fn surface_device() -> Result<&'static VkState, VkError> {
     SURFACES.store(true, Relaxed);
@@ -130,8 +138,19 @@ impl VkState {
             Self::open_device(&instance, surfaces)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
-        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls);
+        let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut float_controls).push_next(&mut subgroup);
         unsafe { instance.get_physical_device_properties2(physical_device, &mut props) };
+        let cooperative_f16_tiles = if cooperative_matrix {
+            let extension = ash::khr::cooperative_matrix::Instance::new(&entry, &instance);
+            let properties = unsafe { extension.get_physical_device_cooperative_matrix_properties(physical_device)? };
+            use vk::ComponentTypeKHR as C;
+            properties.iter().filter(|p| p.scope == vk::ScopeKHR::SUBGROUP && p.saturating_accumulation == vk::FALSE && [p.a_type, p.b_type] == [C::FLOAT16; 2] && p.c_type == p.result_type && matches!(p.c_type, C::FLOAT16 | C::FLOAT32))
+                .map(|p| ([p.m_size, p.n_size, p.k_size], p.c_type == C::FLOAT32)).collect()
+        } else {
+            Vec::new()
+        };
+        let timestamp_period = props.properties.limits.timestamp_period;
         let mut state = Self {
             queue_family,
             queue: unsafe { device.get_device_queue(queue_family, 0) },
@@ -209,6 +228,7 @@ impl VkState {
             .queue_priorities(&priorities)];
         let mut float16_int8 = vk::PhysicalDeviceShaderFloat16Int8Features::default();
         let mut atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default();
+        let mut atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default();
         let mut derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
         let mut uint8_indices = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default();
         let mut library = vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT::default();
@@ -238,6 +258,8 @@ impl VkState {
         let shader_float16 = float16_int8.shader_float16 == vk::TRUE;
         let shader_buffer_int64_atomics = atomic_int64.shader_buffer_int64_atomics == vk::TRUE;
         let shader_shared_int64_atomics = atomic_int64.shader_shared_int64_atomics == vk::TRUE;
+        let shader_buffer_float32_atomic_add = atomic_float.shader_buffer_float32_atomic_add == vk::TRUE;
+        let shader_shared_float32_atomic_add = atomic_float.shader_shared_float32_atomic_add == vk::TRUE;
         // The KHR extension reuses the NV feature struct, and only it is exposed by lavapipe.
         let derivatives_extension = c"VK_KHR_compute_shader_derivatives";
         let extensions = unsafe { instance.enumerate_device_extension_properties(physical_device)? };
@@ -295,6 +317,9 @@ impl VkState {
         let mut enabled_atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()
             .shader_buffer_int64_atomics(shader_buffer_int64_atomics)
             .shader_shared_int64_atomics(shader_shared_int64_atomics);
+        let mut enabled_atomic_float = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
+            .shader_buffer_float32_atomic_add(shader_buffer_float32_atomic_add)
+            .shader_shared_float32_atomic_add(shader_shared_float32_atomic_add);
         let mut enabled_derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
             .compute_derivative_group_linear(linear_derivatives);
         let mut enabled_uint8_indices = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default().index_type_uint8(index_type_uint8);

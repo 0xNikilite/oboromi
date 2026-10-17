@@ -2,7 +2,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use ash::vk;
 use crate::gpu::VkState;
 use crate::gpu::threed::PrimitiveTopology;
@@ -10,6 +10,8 @@ use crate::gpu::spirv::{self, storage_class};
 
 mod access;
 mod atomics;
+mod cfg;
+pub use cfg::{plan, Translation};
 mod compare;
 mod control;
 mod convert;
@@ -20,7 +22,9 @@ mod operands;
 mod ray;
 mod shared;
 mod special;
+mod structured;
 mod tensor;
+pub use tensor::{cooperative_tile, f16_hmma_shape};
 mod texture;
 mod uniform;
 mod warp;
@@ -70,7 +74,7 @@ const UPLOP3: u32 = 0x89c;
 const P0_TO_P6: u32 = 0x7f;
 const S2UR: u32 = 0x1c3;
 const R2UR: u32 = 0x3c2;
-const SHARED_WORDS: u32 = 256;
+pub const SHARED_WORDS: u32 = 256;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
 
@@ -85,8 +89,11 @@ pub enum ResourceKind {
     Shared,
     Shared64,
     Warp,
+    Mma,
     Schedule,
     Global64,
+    GlobalVector(u32),
+    Hints,
     Texture2D { cbuf_bank: u32, byte_offset: u32 },
     Surface2D { cbuf_bank: u32, byte_offset: u32, format: vk::Format },
     VertexInput { location: u32 },
@@ -153,8 +160,6 @@ pub struct Decoder<'a> {
     const_u32_1: u32,
     type_ptr_ssbo: u32,
     type_ptr_ssbo_u32: u32,
-    type_ptr_ssbo64: u32,
-    type_ptr_ssbo_u64: u32,
     type_ptr_shared_u32: u32,
     type_ptr_shared_u64: u32,
     type_ptr_cbuf: u32,
@@ -165,6 +170,10 @@ pub struct Decoder<'a> {
     type_f16: u32,
     type_f16x2: u32,
     mma_vars: [u32; 9],
+    device: Option<&'a VkState>,
+    pub force_cooperative_hmma: Option<bool>,
+    tensor: TensorMode,
+    cooperative_types: HashMap<[u32; 4], u32>,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
@@ -177,6 +186,45 @@ pub struct Decoder<'a> {
     pub stores_global: bool,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
+    timing: Timing,
+    translation: Translation,
+    entry: usize,
+    type_ptr_local: u32,
+    locals: Option<Locals>,
+    pending_nan: BTreeMap<u32, u32>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Hints {
+    pub timing: bool,
+    pub translation: Translation,
+    pub tensor: TensorMode,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum TensorMode {
+    Exact,
+    Fast,
+}
+
+impl Default for TensorMode {
+    fn default() -> Self {
+        if crate::gpu::SPEED_HACKS.lock().unwrap().fast_tensor { Self::Fast } else { Self::Exact }
+    }
+}
+
+// Function variables standing in for the state slots a structured program touches, declared at the function's
+// `entry` and seeded from the aggregate at `start`.
+struct Locals {
+    vars: BTreeMap<u32, u32>,
+    entry: usize,
+    start: usize,
+}
+
+enum Timing {
+    Off,
+    Fallback,
+    Clock { period: f32, emitted: bool },
 }
 
 fn opcode(inst: u128) -> u32 {
@@ -210,6 +258,18 @@ fn access_words(sz: u32) -> u32 {
 fn assert_round_to_nearest(inst: u128) {
     let mode = (inst >> 78 & 3) as usize;
     assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
+}
+
+fn deferred_nan(inst: u128) -> bool {
+    match opcode(inst) & 0x1ff {
+        0x020 | 0x021 | 0x023 | 0x009 | 0x108 => true, // FMUL, FADD, FFMA, FMNMX, MUFU
+        0x107 => inst >> 84 & 3 == 2 && inst >> 75 & 3 == 2, // FRND.F32.F32
+        _ => false,
+    }
+}
+
+fn ignores_nan_payload(inst: u128) -> bool {
+    deferred_nan(inst) || matches!(opcode(inst) & 0x1ff, 0x00a | 0x00b) // FSET, FSETP
 }
 
 fn is_uniform(inst: u128) -> bool {
@@ -297,8 +357,6 @@ impl<'a> Decoder<'a> {
             const_u32_1: 0,
             type_ptr_ssbo: 0,
             type_ptr_ssbo_u32: 0,
-            type_ptr_ssbo64: 0,
-            type_ptr_ssbo_u64: 0,
             type_ptr_shared_u32: 0,
             type_ptr_shared_u64: 0,
             type_ptr_cbuf: 0,
@@ -309,6 +367,10 @@ impl<'a> Decoder<'a> {
             type_f16: 0,
             type_f16x2: 0,
             mma_vars: [0; 9],
+            device,
+            force_cooperative_hmma: None,
+            tensor: hints.tensor,
+            cooperative_types: HashMap::new(),
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],
@@ -320,6 +382,16 @@ impl<'a> Decoder<'a> {
             resources: Vec::new(),
             stores_global: false,
             const_cache: HashMap::new(),
+            translation: hints.translation,
+            entry: 0,
+            type_ptr_local: 0,
+            locals: None,
+            pending_nan: BTreeMap::new(),
+            timing: if !hints.timing { Timing::Off } else if let Some(device) = device.filter(|d| d.shader_device_clock) {
+                Timing::Clock { period: device.timestamp_period, emitted: false }
+            } else {
+                Timing::Fallback
+            },
         }
     }
 
@@ -431,6 +503,7 @@ impl<'a> Decoder<'a> {
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
             self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(storage_class::PRIVATE, type_regs_array);
         }
+        self.type_ptr_local = self.ir.emit_type_pointer(storage_class::FUNCTION, self.type_u32[1]);
 
         // Define generic pointers
         for i in 1..=4 {
@@ -467,8 +540,7 @@ impl<'a> Decoder<'a> {
         let output = self.resource(ResourceKind::Ssbo(1)).unwrap();
         let base = self.invocation_state_base();
         for slot in 0..STATE_WORDS as u32 {
-            let ptr = self.state_slot(slot);
-            let value = self.ir.emit_load(self.type_u32[1], ptr);
+            let value = if slot < MAX_REG_COUNT as u32 { self.load_register(slot) } else { self.load_slot(slot) };
             let word = self.ssbo_word(output, base, slot);
             self.ir.emit_store(word, value);
         }
@@ -697,10 +769,16 @@ impl<'a> Decoder<'a> {
         let Some(cond) = cond else { return self.translate(inst) };
         if exchanges(inst) {
             self.active = cond;
+            let flags: Vec<_> = self.pending_nan.values().map(|&var| (var, self.ir.emit_load(self.type_u32[1], var))).collect();
             let before = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
             self.translate(inst);
             let after = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
             let kept = self.ir.emit_select(self.type_abstract_state, cond, after, before);
+            for (var, before) in flags {
+                let after = self.ir.emit_load(self.type_u32[1], var);
+                let kept = self.ir.emit_select(self.type_u32[1], cond, after, before);
+                self.ir.emit_store(var, kept);
+            }
             return self.ir.emit_store(self.var_abstract_state, kept);
         }
         let [then, after] = [(); 2].map(|_| self.ir.alloc_id());
@@ -713,15 +791,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn guard(&mut self, inst: u128) -> Option<u32> {
-        let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
-        if pg == PT {
-            return None;
-        }
-        // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
-        let op = opcode(inst) & 0x1ff;
-        let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
-        let bit = self.pred_bit(uniform, pg, pg_not);
-        Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
+        guard_pred(inst).map(|pred| self.holds(&[pred]))
     }
 
     // A pixel program binds its constant buffers and textures apart from the vertex program's, in descriptor set 1.
@@ -739,6 +809,34 @@ impl<'a> Decoder<'a> {
     }
 
     fn state_slot(&mut self, slot: u32) -> u32 {
+        match self.locals {
+            Some(_) if slot < STATE_WORDS as u32 - 1 => self.local(slot),
+            _ => self.aggregate_slot(slot),
+        }
+    }
+
+    fn local(&mut self, slot: u32) -> u32 {
+        let locals = self.locals.as_ref().unwrap();
+        if let Some(&var) = locals.vars.get(&slot) {
+            return var;
+        }
+        // SPIR-V 2.4: a function's OpVariables are the first instructions of its first block.
+        let (entry, len) = (locals.entry, self.ir.function_len());
+        let var = self.ir.emit_variable(self.type_ptr_local, storage_class::FUNCTION);
+        self.ir.move_tail(len, entry);
+        let start = self.locals.as_ref().unwrap().start + self.ir.function_len() - len;
+        let len = self.ir.function_len();
+        let ptr = self.aggregate_slot(slot);
+        let value = self.ir.emit_load(self.type_u32[1], ptr);
+        self.ir.emit_store(var, value);
+        self.ir.move_tail(len, start);
+        let locals = self.locals.as_mut().unwrap();
+        locals.start = start;
+        locals.vars.insert(slot, var);
+        var
+    }
+
+    fn aggregate_slot(&mut self, slot: u32) -> u32 {
         let (regs, uregs) = (MAX_REG_COUNT as u32, MAX_UNIFORM_REG_COUNT as u32);
         match slot {
             s if s < regs => self.state_ptr(&[0, s]),
@@ -749,29 +847,35 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    fn load_slot(&mut self, slot: u32) -> u32 {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_slot(&mut self, slot: u32, val: u32) {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_store(ptr, val);
+    }
+
     fn load_ureg(&mut self, ur: u32) -> u32 {
         if ur == URZ {
             return self.const_u32_0;
         }
-        let ptr = self.state_ptr(&[2, ur]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32 + 1 + ur)
     }
 
     fn store_ureg(&mut self, ur: u32, val: u32) {
         if ur != URZ {
-            let ptr = self.state_ptr(&[2, ur]);
-            self.ir.emit_store(ptr, val);
+            self.store_slot(MAX_REG_COUNT as u32 + 1 + ur, val);
         }
     }
 
     fn load_upredicate(&mut self) -> u32 {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(STATE_WORDS as u32 - 2)
     }
 
     fn store_upredicate(&mut self, val: u32) {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_store(ptr, val);
+        self.store_slot(STATE_WORDS as u32 - 2, val);
     }
 
     fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
@@ -792,34 +896,55 @@ impl<'a> Decoder<'a> {
         id
     }
 
+    fn nan_flag(&mut self, reg: u32) -> u32 {
+        *self.pending_nan.entry(reg).or_insert_with(|| {
+            self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_0)
+        })
+    }
+
+    fn store_fp_register(&mut self, reg: u32, bits: u32) {
+        if reg == RZ { return; }
+        assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
+        let flag = self.nan_flag(reg);
+        self.store_slot(reg, bits);
+        self.ir.emit_store(flag, self.const_u32_1);
+    }
+
     fn load_register(&mut self, reg: u32) -> u32 {
+        let bits = self.load_float_register(reg);
+        let Some(&flag) = self.pending_nan.get(&reg) else { return bits };
+        let pending = self.ir.emit_load(self.type_u32[1], flag);
+        let pending = self.ir.emit_inot_equal(self.type_bool[1], pending, self.const_u32_0);
+        let val = self.bitcast_f32(bits);
+        let canonical = self.canonical_nan_bits(val);
+        let bits = self.ir.emit_select(self.type_u32[1], pending, canonical, bits);
+        self.store_register(reg, bits);
+        bits
+    }
+
+    fn load_float_register(&mut self, reg: u32) -> u32 {
         if reg == RZ {
             return self.const_u32_0;
         }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_load(self.type_u32[1], reg_ptr)
+        self.load_slot(reg)
     }
 
     fn store_register(&mut self, reg: u32, val: u32) {
         if reg == RZ { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_store(reg_ptr, val);
+        self.store_slot(reg, val);
+        if let Some(&flag) = self.pending_nan.get(&reg) {
+            self.ir.emit_store(flag, self.const_u32_0);
+        }
     }
 
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32)
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_store(ptr, val)
+        self.store_slot(MAX_REG_COUNT as u32, val)
     }
 
     pub fn finish(&mut self) {

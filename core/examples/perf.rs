@@ -2,7 +2,8 @@
 //! where the variable keeps Mesa's own shader cache from warming the cold pipeline rows.
 use ash::vk::DescriptorType;
 use oboromi_core::display::{attach_surface, present, present_buffer};
-use oboromi_core::ffi::oboromi_frame_read;
+use oboromi_core::ffi::{oboromi_frame_read, oboromi_set_tensor_mode};
+use oboromi_core::gpu::VkState;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::pipeline_cache::Disk;
 use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, Stage, emit_module};
@@ -14,16 +15,21 @@ use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
 use std::time::Instant;
 
-fn bench(name: &str, warmup: usize, iters: usize, mut f: impl FnMut()) {
+const KERNELS: &[u8] = include_bytes!("../tests/fixtures/kernels.cubin");
+const BENCH: &[u8] = include_bytes!("../tests/fixtures/bench/bench.cubin");
+
+/// Prints the row and returns its host and GPU p50 in microseconds.
+fn bench(name: &str, warmup: usize, iters: usize, gpu: Option<&VkState>, mut f: impl FnMut()) -> [f64; 2] {
     (0..warmup).for_each(|_| f());
-    let mut us: Vec<f64> = (0..iters)
+    let (mut us, mut gpu_us): (Vec<f64>, Vec<f64>) = (0..iters)
         .map(|_| {
             let t = Instant::now();
             f();
-            t.elapsed().as_secs_f64() * 1e6
+            (since(t), gpu.map_or(0.0, |state| state.last_gpu_time_ns() as f64 / 1e3))
         })
-        .collect();
+        .unzip();
     us.sort_by(f64::total_cmp);
+    gpu_us.sort_by(f64::total_cmp);
     let [p50, p95, p99, max] =
         [0.5, 0.95, 0.99, 1.0].map(|p| us[(p * iters as f64).ceil() as usize - 1]);
     println!("{name:<30}{iters:>6}{p50:>11.1}{p95:>11.1}{p99:>11.1}{max:>11.1}");
@@ -39,8 +45,11 @@ fn main() {
         inst::mov_reg(1, 2),
     ];
     let program: Vec<u128> = fixtures.iter().copied().cycle().take(1000).collect();
-    bench("translate 1000 inst", 20, 200, || {
-        black_box(translate_module(black_box(&program), true, None));
+    bench("translate 1000 inst", 20, 200, None, || {
+        black_box(translate_module(black_box(&program), true, None, false));
+    });
+    bench("translate hints on", 20, 200, None, || {
+        black_box(translate_module(black_box(&program), true, None, true));
     });
     let mut song = music();
     bench("audren music period", 20, 2000, || {
@@ -50,7 +59,7 @@ fn main() {
     let (w, h) = (1920, 1080);
     let pixels = vec![0x80u8; w * h * 4];
     let mut dst = vec![0u8; pixels.len()];
-    bench("present+frame_read 1080p", 10, 200, || {
+    bench("present+frame_read 1080p", 10, 200, None, || {
         present(w as u32, h as u32, &pixels);
         let (mut fw, mut fh) = (0, 0);
         unsafe { oboromi_frame_read(dst.as_mut_ptr(), dst.len(), &mut fw, &mut fh) };
@@ -76,11 +85,26 @@ fn main() {
             .get_physical_device_properties(state.physical_device)
     };
     println!("device: {:?}", props.device_name_as_c_str().unwrap());
+    let exact = exact_cooperative_hmma(state);
+    println!("hmma: cooperative matrices for (k, f32 accumulator) {exact:?} of f16 tiles {:?}, loops otherwise", state.cooperative_f16_tiles);
+    let (block, groups, chain) = ([128, 1, 1], [32, 1, 1], 16);
+    let sources = [8, 9, 12, 13].map(|reg| inst::s2r(reg, 33));
+    let hmmas = vec![inst::alu3(inst::HMMA | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 4); chain];
+    let store = [inst::mov_imm(2, GLOBAL_BASE as u32), inst::mov_imm(3, (GLOBAL_BASE >> 32) as u32), inst::stg(2, 0, 4), inst::stg(2, 4, 5), inst::stg(2, 8, 6), inst::stg(2, 12, 7), inst::exit()];
+    let hmma_program = [&sources[..], &hmmas, &store].concat();
+    let ops = f64::from(groups[0] * block[0] / 32) * chain as f64;
+    let [exact, fast] = [false, true].map(|fast| {
+        oboromi_set_tensor_mode(fast);
+        let mut grid = Grid::new(state, &hmma_program, block, &[], &[(GLOBAL_BASE, &[0; 16])]);
+        bench(if fast { "hmma fast" } else { "hmma exact" }, 2, 20, Some(state), || drop(black_box(grid.run(groups))))[1]
+    });
+    oboromi_set_tensor_mode(false);
+    println!("hmma 16816.F32 gpu ns per warp op: exact {:.0}, fast {:.0}", exact * 1e3 / ops, fast * 1e3 / ops);
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
-    let words = translate_module(&program, true, Some(state)).words();
+    let words = translate_module(&program, true, Some(state), false).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
     let bindings = [(10, ssbo), (11, ssbo)];
-    bench("pipeline create (cold)", 0, 1, || {
+    bench("pipeline create (cold)", 0, 1, None, || {
         drop(ComputePipeline::new(state, &words, &bindings).unwrap());
     });
     let julia = emit_module(Some(state), Stage::Compute { local_size: [16, 16, 1] }, |d| d.translate_program(&julia_program())).words();
@@ -116,13 +140,13 @@ fn main() {
     let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     pipeline.descriptors.bind(&[(10, &input), (11, &output)]);
     let mut out = [0u8; STATE_WORDS * 4];
-    bench("dispatch+fence+readback", 50, 1000, || {
+    bench("dispatch+fence+readback", 50, 1000, Some(state), || {
         input.write(&[0; STATE_WORDS * 4]).unwrap();
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         output.read(black_box(&mut out)).unwrap();
     });
     let frame = HostBuffer::new(state, pixels.len() as u64).unwrap();
-    bench("present_buffer 1080p", 10, 200, || {
+    bench("present_buffer 1080p", 10, 200, Some(state), || {
         present_buffer(&frame, w as u32, h as u32).unwrap()
     });
     let mut triangle = graphics::triangle(state).unwrap();
@@ -153,7 +177,7 @@ fn main() {
     let headless = ash::ext::headless_surface::Instance::new(&state.entry, &state.instance);
     let surface = unsafe { headless.create_headless_surface(&Default::default(), None) }.unwrap();
     attach_surface(surface, w as u32, h as u32).unwrap();
-    bench("render_test_frame+swapchain", 2, 20, || {
+    bench("render_test_frame+swapchain", 2, 20, Some(state), || {
         render_test_frame().unwrap()
     });
 }

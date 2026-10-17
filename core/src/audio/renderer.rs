@@ -41,7 +41,7 @@ pub struct AudioRendererParameter {
     pub revision: u32,
 }
 
-/// the revision number of a 'REV' magic, or 'REv' on Switch 2 (switchbrew "BehaviorInfo Revision").
+/// the revision number of a 'REV' magic, or of 'REv' on Switch 2.
 pub fn revision(magic: u32) -> Result<u32, Error> {
     let number = (magic >> 24).wrapping_sub(u32::from(b'0'));
     match magic & 0xFF_FFFF {

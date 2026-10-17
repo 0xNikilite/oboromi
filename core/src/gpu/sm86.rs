@@ -4036,7 +4036,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn mufu(&mut self, inst: u128) {
-        use spirv::glsl::{COS, EXP2, F_ABS, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
+        use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
         let ty = self.type_f32[1];
         let x = self.fp_alu_src(inst, false);
         let val = match inst >> 74 & 0xf {
@@ -4054,14 +4054,7 @@ impl<'a> Decoder<'a> {
             }
             5 => self.glsl(INVERSE_SQRT, ty, &[x]),
             8 => self.glsl(SQRT, ty, &[x]),
-            // tanh(x) rounds to x below 2^-12, where drivers lose denormals that silicon keeps.
-            9 => {
-                let tanh = self.glsl(TANH, ty, &[x]);
-                let magnitude = self.glsl(F_ABS, ty, &[x]);
-                let tiny = self.ir.emit_constant_typed(ty, 2f32.powi(-12));
-                let linear = self.ir.emit_ford_less_than(self.type_bool[1], magnitude, tiny);
-                self.ir.emit_select(ty, linear, x, tanh)
-            }
+            9 => self.glsl(TANH, ty, &[x]),
             op => panic!("MUFU op {op} (RCP64H, RSQ64H) is not implemented"),
         };
         let bits = self.canonical_nan_bits(val);

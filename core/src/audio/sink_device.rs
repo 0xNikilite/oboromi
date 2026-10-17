@@ -3,7 +3,7 @@
 //! run of i16 samples into a guest ring.
 
 use super::GuestMemory;
-use super::dsp::resampler::{Resampler, ResamplerParams, SrcQuality};
+use super::dsp::upsampler::{Upsampler, UpsamplerParams};
 use super::parcel::{f32s, put, u32_at, u64_at};
 use super::renderer::Pools;
 
@@ -23,7 +23,7 @@ pub enum Sink {
     Device {
         inputs: Vec<usize>,
         downmix: [f32; 4],
-        upsamplers: [(Resampler, Vec<f32>); 2],
+        upsamplers: [Upsampler; 2],
     },
     Circular {
         address: u64,
@@ -84,14 +84,9 @@ impl Sink {
             }
             (DEVICE, true, _) => {
                 let upsampler = || {
-                    (
-                        Resampler::new(ResamplerParams {
-                            sample_rate: 32_000,
-                            pitch: 1.0,
-                            quality: SrcQuality::Medium,
-                        }),
-                        Vec::new(),
-                    )
+                    Upsampler::new(UpsamplerParams {
+                        input_sample_rate: 32_000,
+                    })
                 };
                 *self = Sink::Device {
                     inputs: Vec::new(),
@@ -149,16 +144,9 @@ impl Sink {
                     (folded[0][f], folded[1][f]) = (left, right);
                 }
                 if rate != 48_000 {
-                    for ((resampler, pending), channel) in upsamplers.iter_mut().zip(&mut folded) {
-                        pending.extend_from_slice(&channel[..frames]);
-                        resampler.set(ResamplerParams {
-                            sample_rate: rate,
-                            pitch: 1.0,
-                            quality: SrcQuality::Medium,
-                        });
-                        *channel = [0.0; 240];
-                        let consumed = resampler.process(pending, channel);
-                        pending.drain(..consumed);
+                    for (upsampler, channel) in upsamplers.iter_mut().zip(&mut folded) {
+                        let input = std::mem::replace(channel, [0.0; 240]);
+                        upsampler.process(&input[..frames], channel);
                     }
                 }
                 for (frame, out) in device.chunks_exact_mut(2).enumerate() {

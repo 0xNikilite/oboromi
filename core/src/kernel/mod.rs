@@ -5,7 +5,7 @@
 use crate::cpu::UnicornCPU;
 use crate::cpu::cpu_manager::MEMORY_SIZE;
 use crate::nn::hipc::{self, Service};
-use crate::nn::{hid, sm::Sm};
+use crate::nn::{hid, sm::{Services, Sm}};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -112,14 +112,17 @@ pub struct Kernel {
     /// OutputDebugString texts, for the caller to drain.
     pub debug_output: Vec<String>,
     pub hid: Rc<RefCell<hid::State>>,
+    /// What sm:'s GetService hands out, by name.
+    pub services: Rc<RefCell<Services>>,
 }
 
 impl Default for Kernel {
     fn default() -> Self {
         let hid = Rc::new(RefCell::new(hid::State::default()));
-        let sm: Rc<RefCell<dyn Service>> = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
+        let services = Rc::new(RefCell::new(HashMap::from([("hid".into(), hid.clone() as _)])));
+        let sm: Rc<RefCell<dyn Service>> = Rc::new(RefCell::new(Sm(services.clone())));
         let ports = HashMap::from([("sm:".into(), sm)]);
-        Self { process: Process::default(), ports, debug_output: vec![], hid }
+        Self { process: Process::default(), ports, debug_output: vec![], hid, services }
     }
 }
 

@@ -9,7 +9,9 @@ use std::rc::Rc;
 /// sm result NotRegistered, module 21 description 7.
 const NOT_REGISTERED: u32 = 21 | 7 << 9;
 
-pub struct Sm(pub HashMap<String, Rc<RefCell<dyn Service>>>);
+pub type Services = HashMap<String, Rc<RefCell<dyn Service>>>;
+
+pub struct Sm(pub Rc<RefCell<Services>>);
 
 impl Service for Sm {
     fn dispatch(&mut self, cmd: u32, request: &mut Request) -> Response {
@@ -18,7 +20,7 @@ impl Service for Sm {
             1 => {
                 let name = request.args.get(..8).unwrap_or_default();
                 let name = String::from_utf8_lossy(name.split(|&b| b == 0).next().unwrap_or_default());
-                match self.0.get(name.as_ref()) {
+                match self.0.borrow().get(name.as_ref()) {
                     Some(service) => Response { move_handles: vec![Object::Session(service.clone())], ..Response::default() },
                     None => Response::error(NOT_REGISTERED),
                 }

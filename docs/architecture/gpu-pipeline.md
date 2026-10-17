@@ -84,6 +84,6 @@ flowchart LR
 
 Each level merges the one below whenever it moves, with merge commits and never a rebase. The gpu-graphics branch last merged gpu-instructions before the CUDA commits. So `cubin.rs` and `cuda.rs` are only on gpu-instructions for now.
 
-Verified by: the engine tests in `core/src/tests/gpu/engine.rs` on Intel and lavapipe (Mesa's CPU-based Vulkan driver), with the Vulkan validation layer reporting no errors. They cover the pushbuffer triangle with a vertex remap, a QMD compute launch, indexed, instanced, depth-tested, blended and textured draws, render to texture, clears, reports and acquires, and both y-flips.
+Verified by: the engine tests in `core/src/tests/gpu/engine.rs` on Intel and lavapipe (Mesa's CPU-based Vulkan driver), with the Vulkan validation layer reporting no errors. They cover the pushbuffer triangle with a vertex remap and a QMD compute launch. They also cover indexed, instanced, depth-tested, blended and textured draws, render to texture, clears, reports, acquires and both y-flips.
 
 Sources: core/src/gpu/{fifo,threed,engine,graphics}.rs, core/src/tests/gpu/engine.rs, PR #79 and #80 bodies, git history of the fork.

@@ -55,7 +55,7 @@ An instruction with a predicate, such as `@P0 FADD`, is wrapped in an if on that
 
 A warp is the team of threads the chip runs in lockstep. When teammates take different sides of a branch, that is called divergence. Most programs never need teammates to meet again, so each thread simply runs its own pc loop.
 
-Some instructions do need every teammate at the same place, because they swap values or wait for each other. Examples are VOTE, SHFL and BAR. A program that uses any of them runs in turns. In each turn, the thread furthest behind, the one at the lowest pc, runs one block. Threads at other pcs sit that turn out.
+Some instructions do need every teammate at the same place, because they swap values or wait for each other. Examples are VOTE, SHFL and BAR. A program that uses any of them runs in turns. In each turn, the threads furthest behind, those at the lowest pc, run one block. Threads at other pcs sit that turn out.
 
 ### An example
 

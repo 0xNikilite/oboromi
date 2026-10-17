@@ -1,4 +1,5 @@
-Silicon captures from an RTX 3090 driven by the sass-rig harness: ids prefixed s3, s4 and s5 come from rig sessions 3 to 5, the rest from the earlier runs.
-One fixture per line, id is <capture>#<index in that capture> and word_hex the instruction, so any case can be re-run on the rig.
-observed:true means the outputs were captured on silicon, false marks a case the rig could not run.
+Silicon captures from an RTX 3090 (GA102, SM86), taken by patching one instruction word into nvcc-compiled seed kernels and reading the registers back through the CUDA driver API.
+One fixture per line, id is <capture>#<index in that capture> and word_hex the instruction.
+observed:true means the outputs were captured on silicon, false marks a case that could not be run.
+The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
 mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.

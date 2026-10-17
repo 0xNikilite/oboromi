@@ -3,7 +3,7 @@ use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, ResourceKind
 use crate::gpu::spirv::Emitter;
 use crate::gpu::texture::TexturePool;
 use crate::gpu::{VkError, VkState};
-use ash::vk::DescriptorType;
+use ash::vk::{self, DescriptorType};
 
 pub fn translate_module(
     instructions: &[u128],
@@ -153,17 +153,18 @@ pub fn run_textured(
     let mut support = HostBuffer::new(&state, 16).unwrap();
     support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
-    let image = || {
+    let image = |format: Option<vk::Format>| {
         let header = textures.pool.texture(textures.handle).unwrap();
+        assert!(format.is_none_or(|f| f == header.format), "a {:?} header cannot back a {format:?} surface", header.format);
         let texels = textures.memory.iter().find(|(address, _)| *address == header.address).expect("no texels at the header address").1;
         HostImage::new(&state, &header, texels, &textures.pool.sampler(textures.handle).unwrap()).unwrap()
     };
     let image_types = resources.iter().filter_map(|r| match r.kind {
-        ResourceKind::Texture2D { .. } => Some(DescriptorType::COMBINED_IMAGE_SAMPLER),
-        ResourceKind::Surface2D { .. } => Some(DescriptorType::STORAGE_IMAGE),
+        ResourceKind::Texture2D { .. } => Some((DescriptorType::COMBINED_IMAGE_SAMPLER, None)),
+        ResourceKind::Surface2D { format, .. } => Some((DescriptorType::STORAGE_IMAGE, Some(format))),
         _ => None,
     });
-    let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, ty)| (b, ty, image())).collect();
+    let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
     let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
     let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).collect();
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();

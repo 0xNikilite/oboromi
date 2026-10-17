@@ -40,4 +40,7 @@ private:
     QElapsedTimer m_demoClock;
     QFuture<bool> m_demoFrame;
     bool (*m_demoRender)(float) = nullptr;
+
+    QTimer m_toneTimer;
+    QElapsedTimer m_toneClock;
 };

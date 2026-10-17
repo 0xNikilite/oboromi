@@ -7,7 +7,7 @@ use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
 use super::memory::{Mapping, MemoryError, MemoryTracker, PAGE, PaRange, PageMap, Writer};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, branch_target, emit_module};
-use super::threed::{ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
+use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::VkState;
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
@@ -75,6 +75,7 @@ struct PipelineKey {
     attributes: Vec<(u32, u32, vk::Format, u32)>,
     topology: vk::PrimitiveTopology,
     colour_write_mask: u8,
+    blend: Option<Blend>,
     depth: Option<vk::Format>,
 }
 
@@ -153,6 +154,54 @@ fn vertex_format(attribute: VertexAttribute) -> Result<vk::Format, String> {
     })
 }
 
+// SET_BLEND_COLOR_OP and the coefficient methods take OGL enums or D3D ones (clc797.h).
+fn blend_op(op: u32) -> Result<vk::BlendOp, String> {
+    use vk::BlendOp as B;
+    Ok(match op {
+        0x8006 | 1 => B::ADD,
+        0x800a | 2 => B::SUBTRACT,
+        0x800b | 3 => B::REVERSE_SUBTRACT,
+        0x8007 | 4 => B::MIN,
+        0x8008 | 5 => B::MAX,
+        op => return Err(format!("blend op {op:#x} is not implemented")),
+    })
+}
+
+fn blend_factor(coefficient: u32) -> Result<vk::BlendFactor, String> {
+    use vk::BlendFactor as F;
+    Ok(match coefficient {
+        0x4000 | 1 => F::ZERO,
+        0x4001 | 2 => F::ONE,
+        0x4300 | 3 => F::SRC_COLOR,
+        0x4301 | 4 => F::ONE_MINUS_SRC_COLOR,
+        0x4302 | 5 => F::SRC_ALPHA,
+        0x4303 | 6 => F::ONE_MINUS_SRC_ALPHA,
+        0x4304 | 7 => F::DST_ALPHA,
+        0x4305 | 8 => F::ONE_MINUS_DST_ALPHA,
+        0x4306 | 9 => F::DST_COLOR,
+        0x4307 | 0xa => F::ONE_MINUS_DST_COLOR,
+        0x4308 | 0xb => F::SRC_ALPHA_SATURATE,
+        0xc001 | 0xe => F::CONSTANT_COLOR,
+        0xc002 | 0xf => F::ONE_MINUS_CONSTANT_COLOR,
+        0xc003 => F::CONSTANT_ALPHA,
+        0xc004 => F::ONE_MINUS_CONSTANT_ALPHA,
+        coefficient => return Err(format!("blend coefficient {coefficient:#x} is not implemented")),
+    })
+}
+
+fn blend_state(blend: Option<Blend>, write_mask: u8) -> Result<vk::PipelineColorBlendAttachmentState, String> {
+    let state = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::from_raw(write_mask.into()));
+    let Some(Blend { colour: [colour_op, colour_source, colour_dest], alpha: [alpha_op, alpha_source, alpha_dest] }) = blend else { return Ok(state) };
+    Ok(state
+        .blend_enable(true)
+        .color_blend_op(blend_op(colour_op)?)
+        .src_color_blend_factor(blend_factor(colour_source)?)
+        .dst_color_blend_factor(blend_factor(colour_dest)?)
+        .alpha_blend_op(blend_op(alpha_op)?)
+        .src_alpha_blend_factor(blend_factor(alpha_source)?)
+        .dst_alpha_blend_factor(blend_factor(alpha_dest)?))
+}
+
 fn topology(topology: PrimitiveTopology) -> Result<vk::PrimitiveTopology, String> {
     use vk::PrimitiveTopology as T;
     Ok(match topology {
@@ -205,7 +254,7 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
         depth_test: draw.depth_test_enabled && draw.depth_target.is_some(),
         depth_write: draw.depth_write_enabled && draw.depth_target.is_some(),
         depth_func,
-        blend_const: [0.0; 4],
+        blend_const: draw.blend_constant,
     }
 }
 
@@ -446,9 +495,6 @@ impl<'a> Gpu<'a> {
         if let Some(i) = [0, 2, 3, 4].into_iter().find(|&i| draw.shader_programs[i].enabled) {
             return Err(format!("shader pipeline {i} is not implemented"));
         }
-        if draw.blend_enabled || draw.blend_per_target {
-            return Err("blending is not implemented".into());
-        }
         let shaders = [
             self.module(draw.shader_programs[VERTEX_PIPELINE], SHADER_TYPE_VERTEX)?,
             self.module(draw.shader_programs[PIXEL_PIPELINE], SHADER_TYPE_PIXEL)?,
@@ -508,6 +554,7 @@ impl<'a> Gpu<'a> {
             attributes,
             topology,
             colour_write_mask: draw.colour_write_mask,
+            blend: draw.blend,
             depth: pipeline_depth,
         };
 
@@ -547,11 +594,7 @@ impl<'a> Gpu<'a> {
                     .map(|&(location, binding, format, offset)| vk::VertexInputAttributeDescription { location, binding, format, offset })
                     .collect();
                 let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology: key.topology };
-                let colour_write_mask = vk::ColorComponentFlags::from_raw(key.colour_write_mask.into());
-                let target = TargetState {
-                    blend: vk::PipelineColorBlendAttachmentState::default().color_write_mask(colour_write_mask),
-                    depth: key.depth,
-                };
+                let target = TargetState { blend: blend_state(key.blend, key.colour_write_mask)?, depth: key.depth };
                 let ubo = vk::DescriptorType::UNIFORM_BUFFER;
                 let descriptor_bindings: Vec<_> = cbuf_ranges.iter().map(|&(binding, _)| (binding, ubo)).collect();
                 let [vs, fs] = key.shaders.map(|key| &self.modules[&key].words);

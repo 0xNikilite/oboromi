@@ -182,6 +182,8 @@ mod tests {
     const SET_DEPTH_TEST: u32 = 0x12cc;
     const SET_DEPTH_WRITE: u32 = 0x12e8;
     const SET_DEPTH_FUNC: u32 = 0x130c;
+    const SET_BLEND_COLOR_OP: u32 = 0x1340;
+    const SET_BLEND: u32 = 0x1360;
     const SET_ZT_SELECT: u32 = 0x1538;
     const INDICES: u64 = 0x1_0050_0000;
     const DEPTH: u64 = 0x1_0060_0000;
@@ -336,5 +338,26 @@ mod tests {
             run(&mut gpu, &words).unwrap();
             assert_eq!(pixel(&gpu, TARGET, 20, 20), RED, "{order:?}");
         }
+    }
+
+    #[test]
+    fn additive_blend_sums_two_translucent_triangles() {
+        const OGL_FUNC_ADD: u32 = 0x8006;
+        const OGL_ONE: u32 = 0x4001;
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let [first, second] = [[100, 0, 0, 128], [0, 100, 0, 128]].map(|colour| CORNERS.map(|corner| (corner, colour)));
+        gpu.write(VERTICES, &vertex_bytes(&[first, second].concat())).unwrap();
+        let mut words = Vec::new();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        inc(SET_COLOR_CLEAR_VALUE, &[0; 4], &mut words);
+        inc(CLEAR_SURFACE, &[0x3c], &mut words);
+        inc(SET_BLEND_COLOR_OP, &[OGL_FUNC_ADD, OGL_ONE, OGL_ONE], &mut words);
+        inc(SET_BLEND, &[1], &mut words);
+        for first in [0, 3] {
+            inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16 | first], &mut words);
+        }
+        run(&mut gpu, &words).unwrap();
+        assert_eq!(pixel(&gpu, TARGET, 20, 20), [100, 100, 0, 255]);
     }
 }

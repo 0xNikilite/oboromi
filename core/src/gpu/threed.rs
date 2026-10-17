@@ -37,7 +37,12 @@ const SET_DEPTH_TEST: usize = 0x12cc;
 const SET_BLEND_STATE_PER_TARGET: usize = 0x12e4;
 const SET_DEPTH_WRITE: usize = 0x12e8;
 const SET_DEPTH_FUNC: usize = 0x130c;
+const SET_BLEND_CONST_RED: usize = 0x131c;
+const SET_BLEND_SEPARATE_FOR_ALPHA: usize = 0x133c;
+const SET_BLEND_COLOR_OP: usize = 0x1340;
+const SET_BLEND_ALPHA_DEST_COEFF: usize = 0x1358;
 const SET_BLEND: usize = 0x1360;
+const SET_BLEND_PER_TARGET_SEPARATE_FOR_ALPHA: usize = 0x1e00;
 const SET_ZT_SELECT: usize = 0x1538;
 const SET_INDEX_BUFFER_A: usize = 0x17c8;
 const SET_INDEX_BUFFER_B: usize = 0x17cc;
@@ -148,6 +153,13 @@ pub struct Clear {
     pub depth_target: Option<DepthTarget>,
 }
 
+/// The colour and alpha equations, each as the guest's (op, source coefficient, destination coefficient).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Blend {
+    pub colour: [u32; 3],
+    pub alpha: [u32; 3],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Viewport {
     pub scale: [f32; 3],
@@ -245,8 +257,9 @@ pub struct DrawSnapshot {
     pub cull_enabled: bool,
     pub cull_face: u32,
     pub front_face: u32,
-    pub blend_per_target: bool,
-    pub blend_enabled: bool,
+    /// Target 0's blend equations when its blending is on.
+    pub blend: Option<Blend>,
+    pub blend_constant: [f32; 4],
     pub index_buffer: IndexBuffer,
     /// Per binding group, the buffer bound to each constant buffer slot.
     pub constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
@@ -511,8 +524,8 @@ impl ThreeD {
             cull_enabled: self.word(OGL_SET_CULL) & 1 != 0,
             cull_face: self.word(OGL_SET_CULL_FACE),
             front_face: self.word(OGL_SET_FRONT_FACE),
-            blend_per_target: self.word(SET_BLEND_STATE_PER_TARGET) & 1 != 0,
-            blend_enabled: self.word(SET_BLEND) & 1 != 0,
+            blend: (self.word(SET_BLEND) & 1 != 0).then(|| self.blend()),
+            blend_constant: [0, 4, 8, 12].map(|i| f32::from_bits(self.word(SET_BLEND_CONST_RED + i))),
             index_buffer: IndexBuffer {
                 address: self.address_pair(SET_INDEX_BUFFER_A, SET_INDEX_BUFFER_B),
                 element_size: index_size,
@@ -533,6 +546,17 @@ impl ThreeD {
                 MemoryLayout::BlockLinear
             },
         }
+    }
+
+    fn blend(&self) -> Blend {
+        let s = SET_BLEND_COLOR_OP;
+        // SET_GLOBAL_COLOR_KEY sits between the shared alpha source and destination coefficients (clc797.h).
+        let [separate, colour @ .., alpha_op, alpha_source, alpha_dest] = match self.word(SET_BLEND_STATE_PER_TARGET) & 1 {
+            0 => [SET_BLEND_SEPARATE_FOR_ALPHA, s, s + 4, s + 8, s + 12, s + 16, SET_BLEND_ALPHA_DEST_COEFF],
+            _ => [0, 4, 8, 12, 16, 20, 24].map(|i| SET_BLEND_PER_TARGET_SEPARATE_FOR_ALPHA + i),
+        }
+        .map(|method| self.word(method));
+        Blend { colour, alpha: if separate & 1 != 0 { [alpha_op, alpha_source, alpha_dest] } else { colour } }
     }
 
     fn depth_target(&self) -> Option<DepthTarget> {

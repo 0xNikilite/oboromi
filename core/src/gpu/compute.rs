@@ -1,7 +1,9 @@
 //! Host-visible buffers and compute pipelines dispatched synchronously on the `VkState` queue.
+use super::memory::ImportedRam;
 use super::texture::TextureHeader;
 use super::{VkError, VkState};
 use ash::vk;
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct Submit {
@@ -16,26 +18,32 @@ pub struct HostBuffer<'a> {
     pub size: u64,
     ptr: *mut u8,
     non_coherent_atom: u64,
+    /// The guest RAM this buffer reads and writes in place instead of owning memory.
+    pub imported: Option<Arc<ImportedRam<'a>>>,
+}
+
+pub(super) fn buffer_info(size: u64) -> vk::BufferCreateInfo<'static> {
+    vk::BufferCreateInfo::default().size(size).usage(
+        vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::UNIFORM_BUFFER
+            | vk::BufferUsageFlags::VERTEX_BUFFER
+            | vk::BufferUsageFlags::INDEX_BUFFER
+            | vk::BufferUsageFlags::TRANSFER_SRC
+            | vk::BufferUsageFlags::TRANSFER_DST,
+    )
 }
 
 impl<'a> HostBuffer<'a> {
     pub fn new(state: &'a VkState, size: u64) -> Result<Self, VkError> {
         let d = &state.device;
-        let info = vk::BufferCreateInfo::default().size(size).usage(
-            vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::UNIFORM_BUFFER
-                | vk::BufferUsageFlags::VERTEX_BUFFER
-                | vk::BufferUsageFlags::INDEX_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::TRANSFER_DST,
-        );
         let mut buf = Self {
             device: d,
-            buffer: unsafe { d.create_buffer(&info, None)? },
+            buffer: unsafe { d.create_buffer(&buffer_info(size), None)? },
             memory: vk::DeviceMemory::null(),
             size,
             ptr: std::ptr::null_mut(),
             non_coherent_atom: unsafe { state.instance.get_physical_device_properties(state.physical_device) }.limits.non_coherent_atom_size,
+            imported: None,
         };
         let req = unsafe { d.get_buffer_memory_requirements(buf.buffer) };
         let instance = &state.instance;
@@ -67,6 +75,36 @@ impl<'a> HostBuffer<'a> {
                 .cast();
         }
         Ok(buf)
+    }
+
+    /// A buffer over `size` bytes of `ram` from `offset`, or None where the buffer's alignment or memory types rule
+    /// that offset out.
+    pub fn imported(state: &'a VkState, ram: &Arc<ImportedRam<'a>>, offset: u64, size: u64) -> Result<Option<Self>, VkError> {
+        let d = &state.device;
+        let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        let buffer = match unsafe { d.create_buffer(&buffer_info(size).push_next(&mut external), None) } {
+            Ok(buffer) => buffer,
+            Err(vk::Result::ERROR_DEVICE_LOST) => return Err(vk::Result::ERROR_DEVICE_LOST.into()),
+            Err(_) => return Ok(None),
+        };
+        let buf = Self {
+            device: d,
+            buffer,
+            memory: ram.memory,
+            size,
+            ptr: std::ptr::null_mut(),
+            non_coherent_atom: 1,
+            imported: Some(Arc::clone(ram)),
+        };
+        let req = unsafe { d.get_buffer_memory_requirements(buf.buffer) };
+        if !offset.is_multiple_of(req.alignment) || req.memory_type_bits >> ram.memory_type & 1 == 0
+            || offset.checked_add(req.size).is_none_or(|end| end > ram.size) {
+            return Ok(None);
+        }
+        if let Err(e) = unsafe { d.bind_buffer_memory(buf.buffer, buf.memory, offset) } {
+            return if e == vk::Result::ERROR_DEVICE_LOST { Err(e.into()) } else { Ok(None) };
+        }
+        Ok(Some(buf))
     }
 
     /// Flushing or invalidating non-coherent memory costs per byte, so only the atoms holding `bytes`.
@@ -117,7 +155,9 @@ impl Drop for HostBuffer<'_> {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_buffer(self.buffer, None);
-            self.device.free_memory(self.memory, None);
+            if self.imported.is_none() {
+                self.device.free_memory(self.memory, None);
+            }
         }
     }
 }

@@ -69,7 +69,7 @@ pub fn triangle_pipeline(state: &VkState) -> Result<GraphicsPipeline<'_>, VkErro
 /// Draws the triangle over a white clear into a SIZE x SIZE target and reads it back, once per call.
 pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), VkError> + '_, VkError> {
     let pipeline = triangle_pipeline(state)?;
-    let target = RenderTarget::new(state, SIZE, SIZE, None)?;
+    let target = RenderTarget::new(state, SIZE, SIZE, None, None)?;
     let mut vertices = HostBuffer::new(state, 36)?;
     let data: Vec<u8> =
         VERTICES.iter().flat_map(|([x, y], rgba)| [&x.to_le_bytes()[..], &y.to_le_bytes(), rgba].concat()).collect();

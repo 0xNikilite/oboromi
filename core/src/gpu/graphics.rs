@@ -248,11 +248,11 @@ pub struct RenderTarget<'a> {
     pub extent: vk::Extent2D,
     color: Attachment<'a>,
     depth: Option<Attachment<'a>>,
-    staging: HostBuffer<'a>,
+    pub staging: HostBuffer<'a>,
 }
 
 impl<'a> RenderTarget<'a> {
-    pub fn new(state: &'a VkState, width: u32, height: u32, depth: Option<vk::Format>) -> Result<Self, VkError> {
+    pub fn new(state: &'a VkState, width: u32, height: u32, depth: Option<vk::Format>, staging: Option<HostBuffer<'a>>) -> Result<Self, VkError> {
         use vk::{ImageAspectFlags as Aspect, ImageUsageFlags as Usage};
         let (d, extent) = (&state.device, vk::Extent2D { width, height });
         Ok(Self {
@@ -264,7 +264,7 @@ impl<'a> RenderTarget<'a> {
                     Attachment::new(d, extent, format, Usage::DEPTH_STENCIL_ATTACHMENT, Aspect::DEPTH | stencil)
                 })
                 .transpose()?,
-            staging: HostBuffer::new(state, u64::from(width * height * 4))?,
+            staging: staging.map_or_else(|| HostBuffer::new(state, u64::from(width * height * 4)), Ok)?,
         })
     }
 

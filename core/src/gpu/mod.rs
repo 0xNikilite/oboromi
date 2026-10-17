@@ -68,6 +68,8 @@ pub struct VkState {
     pub index_type_uint8: bool,
     pub surface: Option<ash::khr::surface::Instance>,
     pub swapchain: Option<ash::khr::swapchain::Device>,
+    /// Present when host memory imports as buffer memory, with the alignment imported pointers and sizes need.
+    pub external_memory_host: Option<(ash::ext::external_memory_host::Device, u64)>,
 }
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
@@ -121,7 +123,7 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3]) =
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3], host_pointer_alignment) =
             Self::open_device(&instance, surfaces)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
@@ -133,6 +135,7 @@ impl VkState {
             surface: surfaces.then(|| ash::khr::surface::Instance::new(&entry, &instance)),
             swapchain: surfaces.then(|| ash::khr::swapchain::Device::new(&instance, &device)),
             extended_dynamic_state3: extended_dynamic_state3.then(|| ash::ext::extended_dynamic_state3::Device::new(&instance, &device)),
+            external_memory_host: host_pointer_alignment.map(|alignment| (ash::ext::external_memory_host::Device::new(&instance, &device), alignment)),
             entry,
             instance,
             physical_device,
@@ -182,7 +185,7 @@ impl VkState {
     fn open_device(
         instance: &ash::Instance,
         surfaces: bool,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, [bool; 2]), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, [bool; 2], Option<u64>), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -239,6 +242,19 @@ impl VkState {
             dynamic3.extended_dynamic_state3_color_write_mask,
         ] == [vk::TRUE; 3]
             && has(vk::EXT_EXTENDED_DYNAMIC_STATE3_NAME);
+        let mut host_allocation = vk::ExternalBufferProperties::default();
+        let buffer_info = vk::PhysicalDeviceExternalBufferInfo::default()
+            .usage(compute::buffer_info(0).usage)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        unsafe { instance.get_physical_device_external_buffer_properties(physical_device, &buffer_info, &mut host_allocation) };
+        let device_type = unsafe { instance.get_physical_device_properties(physical_device) }.device_type;
+        let external_memory_host = matches!(device_type, vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU)
+            && has(vk::EXT_EXTERNAL_MEMORY_HOST_NAME)
+            && host_allocation.external_memory_properties.external_memory_features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE);
+        let mut host_pointer = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
+        if external_memory_host {
+            unsafe { instance.get_physical_device_properties2(physical_device, &mut vk::PhysicalDeviceProperties2::default().push_next(&mut host_pointer)) };
+        }
         let enabled_extensions: Vec<_> = [
             (linear_derivatives, derivatives_extension),
             (index_type_uint8, vk::KHR_INDEX_TYPE_UINT8_NAME),
@@ -246,6 +262,7 @@ impl VkState {
             (graphics_pipeline_library, vk::EXT_GRAPHICS_PIPELINE_LIBRARY_NAME),
             (extended_dynamic_state3, vk::EXT_EXTENDED_DYNAMIC_STATE3_NAME),
             (surfaces, ash::khr::swapchain::NAME),
+            (external_memory_host, vk::EXT_EXTERNAL_MEMORY_HOST_NAME),
         ]
         .into_iter()
         .filter_map(|(enabled, name)| enabled.then_some(name.as_ptr()))
@@ -294,7 +311,7 @@ impl VkState {
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3])),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8, [graphics_pipeline_library, extended_dynamic_state3], external_memory_host.then_some(host_pointer.min_imported_host_pointer_alignment))),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

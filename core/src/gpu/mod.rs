@@ -199,6 +199,7 @@ impl VkState {
         let shader_float64 = features.features.shader_float64 == vk::TRUE;
         let shader_int64 = features.features.shader_int64 == vk::TRUE;
         let texture_compression_bc = features.features.texture_compression_bc == vk::TRUE;
+        let geometry_shader = features.features.geometry_shader == vk::TRUE;
         let vertex_stores = features.features.vertex_pipeline_stores_and_atomics == vk::TRUE;
         let fragment_stores = features.features.fragment_stores_and_atomics == vk::TRUE;
         let _ = features;
@@ -234,6 +235,7 @@ impl VkState {
             .shader_float64(shader_float64)
             .shader_int64(shader_int64)
             .texture_compression_bc(texture_compression_bc)
+            .geometry_shader(geometry_shader)
             .vertex_pipeline_stores_and_atomics(vertex_stores)
             .fragment_stores_and_atomics(fragment_stores);
         let mut enabled_float16 = vk::PhysicalDeviceShaderFloat16Int8Features::default()

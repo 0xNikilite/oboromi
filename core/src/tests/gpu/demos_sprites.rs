@@ -9,8 +9,8 @@ mod tests {
     const HEIGHT: u32 = 180;
     // Intel Arc and llvmpipe, which round blending into the unorm target and pick a few edge texels differently.
     const DIGESTS: [&str; 2] = [
-        "0831567c32572df6277f4934eaeeb9ee131191ac2d0f0f74d452a498796a9dd9",
-        "6d194d53c79fd1c5b0ed6fa544895b6d775b73e65123dbf80e4acde603b2163c",
+        "95ca1a7f7a475041fb9e0b9a76664f0bc3b76c48726a24b51f1939f48b25f978",
+        "bba65be7e8f6e29017ce2f04d72fc477192502bbccbb2684a635046901a136ff",
     ];
 
     // The sun is the first instance, alone in the sky at 0 s, so its centre is the disc texel tinted by the sunset over

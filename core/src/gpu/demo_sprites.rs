@@ -22,7 +22,7 @@ const TIC: u64 = BASE + 0x3_0000;
 const TSC: u64 = BASE + 0x3_8000;
 const INSTANCES: u64 = BASE + 0x4_0000;
 const ATLAS: u64 = BASE + 0x5_0000;
-pub const TARGET: u64 = BASE + 0x9_0000;
+pub const TARGET: u64 = BASE + 0x105_0000;
 
 const SET_BLEND_SEPARATE_FOR_ALPHA: u32 = 0x133c;
 const SET_BLEND_ALPHA_DEST_COEFF: u32 = 0x1358;
@@ -49,33 +49,39 @@ const SCROLL_PER_SECOND: f32 = 120.0;
 const PARALLAX: [f32; 3] = [0.15, 0.4, 0.8];
 const SPRITES_PER_LAYER: usize = 65;
 pub const INSTANCE_COUNT: usize = 1 + PARALLAX.len() * (1 + SPRITES_PER_LAYER);
-pub const ATLAS_SIZE: usize = 256;
+pub const ATLAS_SIZE: usize = 2048;
+const CELL: usize = ATLAS_SIZE / 4;
 const HILLS: [[u8; 3]; 3] = [[150, 182, 205], [92, 140, 112], [40, 82, 62]];
 pub const SHAPES: [[u8; 3]; 4] = [[255, 214, 92], [236, 92, 92], [255, 255, 255], [112, 200, 255]];
 const SUN: [f32; 4] = [1080.0, 90.0, 48.0, 48.0];
 
-// Rows 64k..64k+63 hold hill k, opaque below a sine with k + 1 periods across the row so it wraps seamlessly; the last
-// 64 rows hold a disc, a ring, a star and a diamond, each with an antialiased edge.
+// Rows CELL * k.. hold hill k, opaque below a two-harmonic ridge with k + 1 periods across the row so it wraps seamlessly,
+// shaded darker towards the bottom; the last CELL rows hold a disc, a ring, a star and a diamond. Edges are a few texels
+// wide so the linear filter stays smooth when the 2048 texels are minified.
 pub fn atlas() -> Vec<u8> {
+    let scale = CELL as f32 / 64.0;
     let texel = |x: usize, y: usize| {
-        let [cx, cy] = [x % 64, y % 64].map(|c| c as f32 + 0.5 - 32.0);
-        let (rgb, distance) = match y / 64 {
+        let [cx, cy] = [x % CELL, y % CELL].map(|c| c as f32 + 0.5 - CELL as f32 / 2.0);
+        let (rgb, distance, edge, shade) = match y / CELL {
             row @ 0..3 => {
                 let k = row as f32;
-                (HILLS[row], (10.0 + 6.0 * k) * (TAU * (k + 1.0) * (x as f32 + 0.5) / ATLAS_SIZE as f32).sin() - cy)
+                let phase = TAU * (k + 1.0) * (x as f32 + 0.5) / ATLAS_SIZE as f32;
+                let ridge = (10.0 + 6.0 * k) * scale * (phase.sin() + 0.3 * (3.0 * phase + k).sin());
+                (HILLS[row], ridge - cy, 3.0, 1.0 - (0.3 * (cy - ridge) / (CELL as f32 / 2.0)).clamp(0.0, 0.3))
             }
             _ => {
                 let r = cx.hypot(cy);
-                let distance = match x / 64 {
-                    0 => r - 28.0,
-                    1 => (r - 22.0).abs() - 6.0,
-                    2 => r - 18.0 - 9.0 * (5.0 * cy.atan2(cx)).cos(),
-                    _ => (cx.abs() + cy.abs() - 28.0) * FRAC_1_SQRT_2,
+                let distance = match x / CELL {
+                    0 => r - 28.0 * scale,
+                    1 => (r - 22.0 * scale).abs() - 6.0 * scale,
+                    2 => r - (18.0 + 9.0 * (5.0 * cy.atan2(cx)).cos()) * scale,
+                    _ => (cx.abs() + cy.abs() - 28.0 * scale) * FRAC_1_SQRT_2,
                 };
-                (SHAPES[x / 64], distance)
+                (SHAPES[x / CELL], distance, 10.0, 1.0)
             }
         };
-        [rgb[0], rgb[1], rgb[2], ((0.5 - distance).clamp(0.0, 1.0) * 255.0).round() as u8]
+        let [r, g, b] = rgb.map(|c| (f32::from(c) * shade).round() as u8);
+        [r, g, b, ((0.5 - distance / edge).clamp(0.0, 1.0) * 255.0).round() as u8]
     };
     (0..ATLAS_SIZE * ATLAS_SIZE).flat_map(|i| texel(i % ATLAS_SIZE, i / ATLAS_SIZE)).collect()
 }
@@ -160,9 +166,9 @@ pub fn sprites_guest(state: &VkState, width: u32, height: u32) -> Result<Gpu<'_>
     // A bindless cbuf handle: the address >> 4 in bits 0..45 and the size >> 4 above (NVK nvk_bindless_cbuf).
     let camera = [0, 0, (CAMERA >> 4) as u32, 1 << 13];
     let tint = [0, 0, (TINT >> 4) as u32, 1 << 13];
-    // A8B8G8R8 UNORM pitch-linear 256x256 at ATLAS with pitch 1024 (clc797tex.h), sampled with repeat wrap and nearest filters.
-    let tic = [0x58d2_4908, ATLAS as u32, 2 << 21, 1024 >> 5, 255 | 1 << 23, 255 | 1 << 31, 0, 0];
-    let tsc = [0, 0x51, 0, 0, 0, 0, 0, 0];
+    // A8B8G8R8 UNORM pitch-linear 2048x2048 at ATLAS with pitch 8192 (clc797tex.h), sampled with repeat wrap and linear filters.
+    let tic = [0x58d2_4908, ATLAS as u32, 2 << 21, 8192 >> 5, 2047 | 1 << 23, 2047 | 1 << 31, 0, 0];
+    let tsc = [0, 0x62, 0, 0, 0, 0, 0, 0];
     for (va, words) in [(VERTEX_TABLE, &camera[..]), (PIXEL_TABLE, &tint), (TIC, &tic), (TSC, &tsc)] {
         gpu.write(va, &bytes(words)).map_err(named)?;
     }

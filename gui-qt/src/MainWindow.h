@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+class QLabel;
 class QListWidget;
 class QPushButton;
 
@@ -15,6 +16,9 @@ class MainWindow : public QMainWindow {
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
     void onRunCpuTestsClicked();
@@ -32,6 +36,7 @@ private:
     QListWidget *m_logList = nullptr;
     QPushButton *m_cpuButton = nullptr;
     QPushButton *m_gpuButton = nullptr;
+    QLabel *m_gamepadLabel = nullptr;
 
     QFutureWatcher<std::vector<std::string>> m_cpuWatcher;
     QFutureWatcher<std::vector<std::string>> m_gpuWatcher;

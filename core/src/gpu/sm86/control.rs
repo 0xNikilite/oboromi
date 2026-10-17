@@ -289,7 +289,7 @@ impl<'a> Decoder<'a> {
     pub fn exit(&mut self, _inst: u128) {
         if let Stage::Fragment { depth, .. } = self.stage {
             // One render target, so the PS header's OMAP has its colour in R0-R3 at EXIT.
-            let target = self.interface_vec4(ResourceKind::FragmentOutput { location: 0 }, spirv::storage_class::OUTPUT);
+            let target = self.interface_var(ResourceKind::FragmentOutput { location: 0 }, spirv::storage_class::OUTPUT);
             let colour: Vec<u32> = (0..4).map(|reg| {
                 let bits = self.load_register(reg);
                 self.bitcast_f32(bits)

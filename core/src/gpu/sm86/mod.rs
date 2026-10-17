@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use ash::vk;
 use crate::gpu::VkState;
+use crate::gpu::threed::PrimitiveTopology;
 use crate::gpu::spirv::{self, storage_class};
 
 mod access;
@@ -89,6 +90,9 @@ pub enum ResourceKind {
     VertexInput { location: u32 },
     Varying { location: u32, flat: bool },
     FragmentOutput { location: u32 },
+    /// The vec4 at attribute `attr` of every vertex of the primitive or patch.
+    PerVertex { attr: u32, output: bool },
+    Patch { location: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -96,6 +100,12 @@ pub enum Stage {
     Compute { local_size: [u32; 3] },
     /// Bit n of `uint` and `sint` is set when generic attribute n is fetched as an unsigned or signed integer.
     Vertex { uint: u32, sint: u32 },
+    /// `input` is the draw's primitive. From the SPH: `output` is OUTPUT_TOPOLOGY (clc797sph.h:60), `max_vertices`
+    /// MAX_OUTPUT_VERTEX_COUNT (:64), `invocations` and `vertices` THREADS_PER_INPUT_PRIMITIVE (:58). `mode`, `spacing` and
+    /// `order` are DOMAIN_TYPE, SPACING and OUTPUT_PRIMITIVES of SET_TESSELLATION_PARAMETERS (clc797.h:691).
+    Geometry { input: PrimitiveTopology, output: u32, max_vertices: u32, invocations: u32 },
+    TessControl { vertices: u32 },
+    TessEval { mode: u32, spacing: u32, order: u32 },
     /// Bit n of `flat` and `screen_linear` is the interpolation of generic attribute n; `depth` writes FragDepth.
     Fragment { flat: u32, screen_linear: u32, depth: bool },
 }
@@ -203,6 +213,19 @@ fn partial_warpsync(inst: u128) -> bool {
     opcode(inst) & 0x1ff == 0x148 && !(opcode(inst) == 0x948 && (inst >> 32) as u32 == u32::MAX)
 }
 
+// The input execution mode of a geometry shader drawn with `input` and the vertices of each of its primitives.
+fn geometry_input(input: PrimitiveTopology) -> (u32, u32) {
+    use {PrimitiveTopology::*, spirv::execution_mode::*};
+    match input {
+        Points => (INPUT_POINTS, 1),
+        Lines | LineLoop | LineStrip => (INPUT_LINES, 2),
+        LineListAdjacency | LineStripAdjacency => (INPUT_LINES_ADJACENCY, 4),
+        Triangles | TriangleStrip | TriangleFan => (TRIANGLES, 3),
+        TriangleListAdjacency | TriangleStripAdjacency => (INPUT_TRIANGLES_ADJACENCY, 6),
+        _ => panic!("a geometry shader cannot draw {input:?}"),
+    }
+}
+
 fn guest_barriers(words: &[u128]) -> Vec<u32> {
     let bars = words.iter().filter(|&&inst| opcode(inst) & 0x1ff == 0x11d);
     if bars.clone().any(|&inst| opcode(inst) == 0x51d) {
@@ -298,18 +321,48 @@ impl<'a> Decoder<'a> {
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
             Stage::Vertex { .. } => model::VERTEX,
+            Stage::TessControl { .. } => model::TESSELLATION_CONTROL,
+            Stage::TessEval { .. } => model::TESSELLATION_EVALUATION,
+            Stage::Geometry { .. } => model::GEOMETRY,
             Stage::Fragment { .. } => model::FRAGMENT,
         };
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
             Stage::Vertex { .. } => {}
+            Stage::Geometry { input, output, max_vertices, invocations } => {
+                self.ir.emit_capability(cap::GEOMETRY);
+                let output = match output {
+                    1 => mode::OUTPUT_POINTS,
+                    6 => mode::OUTPUT_LINE_STRIP,
+                    7 => mode::OUTPUT_TRIANGLE_STRIP,
+                    _ => panic!("OUTPUT_TOPOLOGY {output} is not a geometry shader output"),
+                };
+                for (mode, literals) in [(geometry_input(input).0, &[][..]), (output, &[]), (mode::OUTPUT_VERTICES, &[max_vertices]), (mode::INVOCATIONS, &[invocations])] {
+                    self.ir.emit_execution_mode(func, mode, literals);
+                }
+            }
+            Stage::TessControl { vertices } => {
+                self.ir.emit_capability(cap::TESSELLATION);
+                self.ir.emit_execution_mode(func, mode::OUTPUT_VERTICES, &[vertices]);
+            }
+            Stage::TessEval { mode: domain, spacing, order } => {
+                self.ir.emit_capability(cap::TESSELLATION);
+                let order = [Some(mode::POINT_MODE), None, Some(mode::VERTEX_ORDER_CW), Some(mode::VERTEX_ORDER_CCW)][order as usize];
+                let modes = [[mode::ISOLINES, mode::TRIANGLES, mode::QUADS][domain as usize], [mode::SPACING_EQUAL, mode::SPACING_FRACTIONAL_ODD, mode::SPACING_FRACTIONAL_EVEN][spacing as usize]];
+                for mode in modes.into_iter().chain(order) {
+                    self.ir.emit_execution_mode(func, mode, &[]);
+                }
+            }
             Stage::Fragment { depth, .. } => {
                 self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]);
                 if depth {
                     self.ir.emit_execution_mode(func, mode::DEPTH_REPLACING, &[]);
                 }
             }
+        }
+        if self.resource(ResourceKind::BuiltIn(spirv::BuiltIn::SampleId as u32)).is_some() {
+            self.ir.emit_capability(cap::SAMPLE_RATE_SHADING);
         }
         let Some(device) = device else { return };
         for (capability, execution_mode, widths) in [

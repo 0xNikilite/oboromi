@@ -10,6 +10,7 @@ pub mod parcel;
 pub mod renderer;
 pub mod sink;
 pub mod sink_device;
+pub mod spatial;
 pub mod voice;
 
 pub use sink::{CHANNELS, PERIOD, RATE, generation, pull, push, queued, test_tone, underruns};

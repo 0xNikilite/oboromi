@@ -303,3 +303,8 @@ pub extern "C" fn oboromi_audio_test_tone(seconds: f32) -> usize {
 pub extern "C" fn oboromi_render_dungeon_frame(seconds: f32) -> bool {
     matches!(catch_unwind(|| crate::gpu::demo_dungeon::render_dungeon_frame(seconds)), Ok(Ok(())))
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_dungeon_speakers(speakers: bool) {
+    crate::gpu::demo_dungeon_sound::set_mode(if speakers { crate::audio::spatial::Mode::Speakers } else { crate::audio::spatial::Mode::Headphones });
+}

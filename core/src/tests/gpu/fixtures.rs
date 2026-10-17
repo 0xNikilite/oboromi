@@ -300,7 +300,6 @@ mod tests {
         "s3#102/memory/ldl-s16-r6-r0-0x4",
         "warp3#053/sts/bank-conflict",
     ];
-    const LIVE_MASK_SUPPORTED: bool = false;
     // MUFU.TANH is a hardware approximation that no exact tanh reproduces.
     const KNOWN_FAILURES: &[&str] = &["s3#026/fp32/mufu-tanh-r1-r3"];
     const LLVMPIPE_FAILURES: &[&str] = &[
@@ -497,7 +496,7 @@ mod tests {
         let known = |id: &str| KNOWN_FAILURES.contains(&id) || llvmpipe && LLVMPIPE_FAILURES.contains(&id);
         for fixture in warp_fixtures() {
             let score = scores.entry(fixture.family.clone()).or_default();
-            if !fixture.observed || fixture.lanes_active != u32::MAX && !LIVE_MASK_SUPPORTED {
+            if !fixture.observed {
                 score.skipped += 1;
                 continue;
             }

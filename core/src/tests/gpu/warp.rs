@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::tests::gpu::harness::{PRED, UPRED, UREG, run_lanes};
+    use crate::tests::gpu::harness::{PRED, UPRED, UREG, run_lanes, run_regs};
     use crate::tests::gpu_test::inst::*;
+
+    const VOTE_ANY_R4_PT_P0: u128 = 0x004fc800000e01000000000000040806;
 
     // The A6000 warp rig seeds lane i with R4..R7 = i, 4i, 0, 256 + i and P0 = bit i of the lane mask.
     fn rig_seeds(p0: u32) -> Vec<Vec<u32>> {
@@ -24,17 +26,12 @@ mod tests {
         lanes.iter().map(|regs| regs[slot]).collect()
     }
 
-    // Lanes outside the mask skip the guarded VOTE on silicon, so the guard is dropped here and only active lanes compared.
     #[test]
     fn vote_ballots_pp_by_lane_and_sets_mode_result() {
-        const VOTE_ANY_R4_PT_P0: u128 = 0x004fc800000e01000000000000040806;
-        for (mask, active_only) in [(u32::MAX, false), (0x5555_5555, true), (0x8000_0000, true)] {
-            let word = if active_only { guard(VOTE_ANY_R4_PT_P0, 7, false) } else { VOTE_ANY_R4_PT_P0 };
-            let Some(lanes) = run(&[word], &rig_seeds(mask)) else { return };
+        for mask in [u32::MAX, 0x5555_5555, 0x8000_0000] {
+            let Some(lanes) = run(&[VOTE_ANY_R4_PT_P0], &rig_seeds(mask)) else { return };
             for (lane, r4) in (0..32).zip(column(&lanes, 4)) {
-                if mask >> lane & 1 != 0 {
-                    assert_eq!(r4, mask, "lane {lane}");
-                }
+                assert_eq!(r4, if mask >> lane & 1 != 0 { mask } else { lane }, "lane {lane}");
             }
         }
         let program = [
@@ -48,6 +45,32 @@ mod tests {
                 assert_eq!(regs[8..11], [mask; 3]);
                 assert_eq!(regs[PRED] >> 1 & 7, all_any_eq, "{mask:#x}");
             }
+        }
+    }
+
+    #[test]
+    fn a_single_seeded_lane_votes_alone() {
+        let Some((regs, _)) = run_regs(&[VOTE_ANY_R4_PT_P0], &seeds_with(&[(PRED, 1)]), &[], &[]) else { return };
+        assert_eq!(regs[4], 1);
+    }
+
+    // The long path sits after the BSYNC, so running the lowest pc alone would take the short half past it first.
+    #[test]
+    fn bsync_holds_the_short_path_until_the_long_one_arrives() {
+        let program = [
+            bssy(0, 0x20),
+            guard(bra(0x40), 0, false),
+            mov_imm(8, 1),
+            bsync(0),
+            alu(VOTE | VOTE_ANY | preds(7, 0, 7, 0), 9, 0, 0),
+            exit(),
+            mov_imm(8, 2),
+            iadd_imm(8, 8, 3),
+            bra(-0x60),
+        ];
+        let Some(lanes) = run(&program, &rig_seeds(0xffff)) else { return };
+        for (lane, regs) in (0..32).zip(lanes) {
+            assert_eq!(regs[8..10], [if lane < 16 { 5 } else { 1 }, u32::MAX], "lane {lane}");
         }
     }
 
@@ -81,6 +104,22 @@ mod tests {
             let up = if lane % 8 == 0 { lane } else { lane - 1 };
             assert_eq!(regs[8..10], [4 * (lane & !7 | 3), 4 * up], "lane {lane}");
             assert_eq!(regs[PRED] >> 1 & 3, 1 | ((lane % 8 != 0) as u32) << 1, "lane {lane}");
+        }
+    }
+
+    #[test]
+    fn shfl_from_an_inactive_lane_reads_zero_out_of_range() {
+        let word = guard(alu(SHFL_II | SHFL_BFLY | shfl_lanes(16, 0x1f) | preds(1, 0, 0, 0), 7, 5, 0), 0, false);
+        let mask = 0xffff_00ff;
+        let Some(lanes) = run(&[word], &rig_seeds(mask)) else { return };
+        let active = |lane: u32| mask >> lane & 1 != 0;
+        for (lane, regs) in (0..32).zip(lanes) {
+            let expected = match (active(lane), active(lane ^ 16)) {
+                (false, _) => [256 + lane, 0],
+                (true, true) => [4 * (lane ^ 16), 1],
+                (true, false) => [0, 0],
+            };
+            assert_eq!([regs[7], regs[PRED] >> 1 & 1], expected, "lane {lane}");
         }
     }
 

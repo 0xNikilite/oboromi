@@ -178,6 +178,7 @@ pub fn run_textured(
             .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
             .collect()
     };
-    let lanes = read(&output, words.len()).chunks(STATE_WORDS).take(seeds.len()).map(<[u32]>::to_vec).collect();
+    let lanes: Vec<Vec<u32>> = read(&output, words.len()).chunks(STATE_WORDS).take(seeds.len()).map(<[u32]>::to_vec).collect();
+    assert!(lanes.iter().all(|lane| lane[LIVE] < 2), "a lane was left waiting on a BSYNC");
     Some((lanes, read(&memory, global.len())))
 }

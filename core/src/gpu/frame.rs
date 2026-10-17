@@ -1,4 +1,4 @@
-//! Test frame: a compute shader writes a gradient into a storage buffer that is presented as is.
+//! Test frame: a compute shader writes a gradient into a storage buffer that is presented on the device.
 use super::compute::{ComputePipeline, HostBuffer};
 use super::spirv::{BuiltIn, Emitter, decoration as deco, storage_class as sc, *};
 use super::{VkError, device};
@@ -79,8 +79,5 @@ pub fn render_test_frame() -> Result<(), VkError> {
     // Round up so 1080 rows get a partial last group; the shader guard drops the overhang.
     let groups = [WIDTH.div_ceil(GROUP), HEIGHT.div_ceil(GROUP), 1];
     state.dispatch(&pipeline, groups)?;
-    let mut pixels = vec![0; size as usize];
-    buffer.read(&mut pixels)?;
-    crate::display::present(WIDTH, HEIGHT, &pixels);
-    Ok(())
+    crate::display::present_buffer(&buffer, WIDTH, HEIGHT)
 }

@@ -19,9 +19,12 @@ pub struct HostBuffer<'a> {
 impl<'a> HostBuffer<'a> {
     pub fn new(state: &'a VkState, size: u64) -> Result<Self, VkError> {
         let d = &state.device;
-        let info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::UNIFORM_BUFFER);
+        let info = vk::BufferCreateInfo::default().size(size).usage(
+            vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::UNIFORM_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST,
+        );
         let mut buf = Self {
             device: d,
             buffer: unsafe { d.create_buffer(&info, None)? },
@@ -85,6 +88,9 @@ impl<'a> HostBuffer<'a> {
         Ok(())
     }
 }
+
+// The pointer is a host mapping of device memory, valid on any thread until Drop unmaps it.
+unsafe impl Send for HostBuffer<'_> {}
 
 impl Drop for HostBuffer<'_> {
     fn drop(&mut self) {
@@ -192,28 +198,35 @@ impl Drop for ComputePipeline<'_> {
 }
 
 impl VkState {
-    // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
     pub fn dispatch(&self, pipeline: &ComputePipeline, groups: [u32; 3]) -> Result<(), VkError> {
-        let submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
-        let (d, cmd, fence) = (&self.device, submit.command_buffer, submit.fence);
         let compute = vk::PipelineBindPoint::COMPUTE;
         let src = vk::PipelineStageFlags::COMPUTE_SHADER;
         let dst = vk::PipelineStageFlags::HOST;
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         // Shader writes are not visible to host reads after the fence wait without this barrier.
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::HOST_READ);
+        let d = &self.device;
+        self.submit_and_wait(|cmd| unsafe {
+            d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
+            d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.set], &[]);
+            d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
+            d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
+        })
+    }
+
+    // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
+    pub(crate) fn submit_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), VkError> {
+        let submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
+        let (d, cmd, fence) = (&self.device, submit.command_buffer, submit.fence);
+        let begin = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         let cmds = [cmd];
         let submit_info = [vk::SubmitInfo::default().command_buffers(&cmds)];
         unsafe {
             d.reset_fences(&[fence])?;
             d.begin_command_buffer(cmd, &begin)?;
-            d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
-            d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.set], &[]);
-            d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
-            d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
+            record(cmd);
             d.end_command_buffer(cmd)?;
             d.queue_submit(self.queue, &submit_info, fence)?;
             d.wait_for_fences(&[fence], true, u64::MAX)?;

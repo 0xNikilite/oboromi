@@ -1,10 +1,10 @@
 //! Latency of the hot paths in microseconds: `cargo run --release -p oboromi-core --example perf`.
 use ash::vk::DescriptorType;
-use oboromi_core::display::present;
+use oboromi_core::display::{attach_surface, present, present_buffer};
 use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::sm86::STATE_WORDS;
-use oboromi_core::gpu::{device, frame::render_test_frame};
+use oboromi_core::gpu::{frame::render_test_frame, surface_device};
 use oboromi_core::tests::gpu::harness::translate_module;
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
@@ -47,8 +47,8 @@ fn main() {
         unsafe { oboromi_frame_read(dst.as_mut_ptr(), dst.len(), &mut fw, &mut fh) };
         black_box(&dst);
     });
-    bench("vk device init (cold)", 0, 1, || drop(device()));
-    let state = match device() {
+    bench("vk device init (cold)", 0, 1, || drop(surface_device()));
+    let state = match surface_device() {
         Ok(state) => state,
         Err(e) => return println!("gpu paths skipped: {e:?}"),
     };
@@ -75,7 +75,17 @@ fn main() {
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         output.read(black_box(&mut out)).unwrap();
     });
+    let frame = HostBuffer::new(state, pixels.len() as u64).unwrap();
+    bench("present_buffer 1080p", 10, 200, || {
+        present_buffer(&frame, w as u32, h as u32).unwrap()
+    });
     bench("render_test_frame e2e", 2, 20, || {
+        render_test_frame().unwrap()
+    });
+    let headless = ash::ext::headless_surface::Instance::new(&state.entry, &state.instance);
+    let surface = unsafe { headless.create_headless_surface(&Default::default(), None) }.unwrap();
+    attach_surface(surface, w as u32, h as u32).unwrap();
+    bench("render_test_frame+swapchain", 2, 20, || {
         render_test_frame().unwrap()
     });
 }

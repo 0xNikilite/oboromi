@@ -71,7 +71,8 @@ fn program(header_bits: impl IntoIterator<Item = usize>, code: &[u128]) -> Vec<u
 }
 
 // The SPHV4 bits (clc797sph.h, version 4 at bit 7): type 1 vertex reading generics 0 and 1, writing position and generic 0; type 2 pixel
-// reading generic 0 perspective-correct and writing RGBA of target 0. Position is c[0][0x0..0x10] times (x, y).
+// reading generic 0 perspective-correct and writing RGBA of target 0. Position is c[0][0x0..0x10] times (x, y) at
+// depth c[0][0x10].
 fn programs() -> [Vec<u8>; 2] {
     let vertex = program([0, 7, 10].into_iter().chain(192..200).chain(428..436), &[
         ald(0, 0x80, 2),
@@ -84,7 +85,7 @@ fn programs() -> [Vec<u8>; 2] {
         ffma(12, 1, 9, 12),
         fmul(13, 0, 10),
         ffma(13, 1, 11, 13),
-        mov_imm(14, 0),
+        mov_cbuf(14, 0, 16),
         mov_imm(15, 1.0f32.to_bits()),
         ast(0x70, 12, 4),
         ast(0x80, 4, 4),
@@ -176,7 +177,14 @@ mod tests {
     const SET_INDEX_BUFFER_A: u32 = 0x17c8;
     const SET_INDEX_BUFFER_E: u32 = 0x17d8;
     const DRAW_INDEX_BUFFER: u32 = 0x17e0;
+    const SET_Z_CLEAR_VALUE: u32 = 0x0d90;
+    const SET_ZT_A: u32 = 0x0fe0;
+    const SET_DEPTH_TEST: u32 = 0x12cc;
+    const SET_DEPTH_WRITE: u32 = 0x12e8;
+    const SET_DEPTH_FUNC: u32 = 0x130c;
+    const SET_ZT_SELECT: u32 = 0x1538;
     const INDICES: u64 = 0x1_0050_0000;
+    const DEPTH: u64 = 0x1_0060_0000;
     const SIZE: u32 = 64;
     const IDENTITY: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
     const WHITE: [u8; 4] = [255; 4];
@@ -297,6 +305,36 @@ mod tests {
         run(&mut gpu, &words).unwrap();
         for (x, y, want) in [(20, 20, RED), (44, 20, RED), (20, 44, RED), (44, 44, RED), (8, 8, WHITE), (56, 56, WHITE)] {
             assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn depth_test_keeps_the_nearer_triangle_whichever_draws_first() {
+        const ZF32: u32 = 0x0a;
+        const OGL_LESS: u32 = 0x201;
+        const CLEAR_Z_AND_RGBA: u32 = 0x3d;
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let [near, far] = [RED, GREEN].map(|colour| CORNERS.map(|corner| (corner, colour)));
+        gpu.write(VERTICES, &vertex_bytes(&[near, far].concat())).unwrap();
+        for order in [[(0.25, 0), (0.75, 3)], [(0.75, 3), (0.25, 0)]] {
+            let mut words = Vec::new();
+            frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+            inc(SET_ZT_A, &[split(DEPTH)[0], split(DEPTH)[1], ZF32], &mut words);
+            inc(SET_ZT_SELECT, &[1], &mut words);
+            inc(SET_DEPTH_TEST, &[1], &mut words);
+            inc(SET_DEPTH_WRITE, &[1], &mut words);
+            inc(SET_DEPTH_FUNC, &[OGL_LESS], &mut words);
+            inc(SET_Z_CLEAR_VALUE, &[1.0f32.to_bits()], &mut words);
+            inc(SET_COLOR_CLEAR_VALUE, &[1.0f32.to_bits(); 4], &mut words);
+            inc(CLEAR_SURFACE, &[CLEAR_Z_AND_RGBA], &mut words);
+            for (depth, first) in order {
+                inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[32, split(CBUF)[0], split(CBUF)[1], 16], &mut words);
+                inc(LOAD_CONSTANT_BUFFER, &[f32::to_bits(depth)], &mut words);
+                inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16 | first], &mut words);
+            }
+            run(&mut gpu, &words).unwrap();
+            assert_eq!(pixel(&gpu, TARGET, 20, 20), RED, "{order:?}");
         }
     }
 }

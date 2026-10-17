@@ -21,10 +21,14 @@ const SET_VIEWPORT_CLIP_MIN_Z: usize = 0x0c08;
 const SET_VIEWPORT_CLIP_MAX_Z: usize = 0x0c0c;
 const SET_VERTEX_ARRAY_START: usize = 0x0d74;
 const SET_COLOR_CLEAR_VALUE: usize = 0x0d80;
+const SET_Z_CLEAR_VALUE: usize = 0x0d90;
 const DRAW_VERTEX_ARRAY: usize = 0x0d78;
 const SET_SCISSOR_ENABLE: usize = 0x0e00;
 const SET_SCISSOR_HORIZONTAL: usize = 0x0e04;
 const SET_SCISSOR_VERTICAL: usize = 0x0e08;
+const SET_ZT_A: usize = 0x0fe0;
+const SET_ZT_B: usize = 0x0fe4;
+const SET_ZT_FORMAT: usize = 0x0fe8;
 const SET_VERTEX_ATTRIBUTE_A: usize = 0x1160;
 const SET_VERTEX_ATTRIBUTE_B: usize = 0x11a0;
 const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST: usize = 0x1214;
@@ -34,6 +38,7 @@ const SET_BLEND_STATE_PER_TARGET: usize = 0x12e4;
 const SET_DEPTH_WRITE: usize = 0x12e8;
 const SET_DEPTH_FUNC: usize = 0x130c;
 const SET_BLEND: usize = 0x1360;
+const SET_ZT_SELECT: usize = 0x1538;
 const SET_INDEX_BUFFER_A: usize = 0x17c8;
 const SET_INDEX_BUFFER_B: usize = 0x17cc;
 const SET_INDEX_BUFFER_E: usize = 0x17d8;
@@ -128,6 +133,21 @@ pub struct ColourTarget {
     pub layout: MemoryLayout,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepthTarget {
+    pub address: u64,
+    pub format: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clear {
+    pub value: u32,
+    pub colour: [f32; 4],
+    pub target: ColourTarget,
+    pub depth: f32,
+    pub depth_target: Option<DepthTarget>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Viewport {
     pub scale: [f32; 3],
@@ -215,6 +235,7 @@ pub struct DrawSnapshot {
     pub vertex_attributes: [VertexAttribute; 32],
     pub shader_programs: [ShaderProgram; 6],
     pub colour_target: ColourTarget,
+    pub depth_target: Option<DepthTarget>,
     pub viewport: Viewport,
     pub scissor: Scissor,
     pub colour_write_mask: u8,
@@ -242,7 +263,7 @@ impl DrawSnapshot {
 pub(crate) enum ThreeDEvent {
     Draw(DrawSnapshot),
     Report { addr: u64, payload: u32 },
-    Clear { value: u32, colour: [f32; 4], target: ColourTarget },
+    Clear(Clear),
     LoadConstantBuffer { addr: u64, value: u32 },
 }
 
@@ -334,11 +355,13 @@ impl ThreeD {
                 addr: self.address_pair(SET_REPORT_SEMAPHORE_A, SET_REPORT_SEMAPHORE_B),
                 payload: self.word(SET_REPORT_SEMAPHORE_C),
             })),
-            CLEAR_SURFACE => Ok(Some(ThreeDEvent::Clear {
+            CLEAR_SURFACE => Ok(Some(ThreeDEvent::Clear(Clear {
                 value,
                 colour: [0, 4, 8, 12].map(|i| f32::from_bits(self.word(SET_COLOR_CLEAR_VALUE + i))),
                 target: self.colour_target(),
-            })),
+                depth: f32::from_bits(self.word(SET_Z_CLEAR_VALUE)),
+                depth_target: self.depth_target(),
+            }))),
             BIND_GROUP_CONSTANT_BUFFER..=BIND_GROUP_CONSTANT_BUFFER_LAST
                 if (byte - BIND_GROUP_CONSTANT_BUFFER) % 32 == 0 =>
             {
@@ -460,6 +483,7 @@ impl ThreeD {
             vertex_attributes: attributes,
             shader_programs: shaders,
             colour_target: self.colour_target(),
+            depth_target: self.depth_target(),
             viewport: Viewport {
                 scale: viewport_scale,
                 offset: viewport_offset,
@@ -509,6 +533,13 @@ impl ThreeD {
                 MemoryLayout::BlockLinear
             },
         }
+    }
+
+    fn depth_target(&self) -> Option<DepthTarget> {
+        (self.word(SET_ZT_SELECT) & 1 != 0).then(|| DepthTarget {
+            address: self.address_pair(SET_ZT_A, SET_ZT_B),
+            format: (self.word(SET_ZT_FORMAT) & 0x1f) as u8,
+        })
     }
 
     fn word(&self, byte: usize) -> u32 {

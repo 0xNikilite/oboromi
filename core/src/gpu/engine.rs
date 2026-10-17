@@ -7,7 +7,7 @@ use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
 use super::memory::{Mapping, MemoryError, MemoryTracker, PAGE, PaRange, PageMap, Writer};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, branch_target, emit_module};
-use super::threed::{ColourTarget, ConstantBuffer, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
+use super::threed::{ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::VkState;
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
@@ -21,6 +21,8 @@ const PIXEL_PIPELINE: usize = 5;
 const SHADER_TYPE_VERTEX: u32 = 1;
 const SHADER_TYPE_PIXEL: u32 = 5;
 const A8B8G8R8: u8 = 0xd5;
+// CLEAR_SURFACE bits (clc797.h): Z_ENABLE, and R, G, B and A of the target MRT_SELECT names.
+const CLEAR_Z: u32 = 0x01;
 const CLEAR_RGBA: u32 = 0x3c;
 
 /// The fields of a version 4 shader program header (clc797sph.h) the translation depends on.
@@ -73,7 +75,7 @@ struct PipelineKey {
     attributes: Vec<(u32, u32, vk::Format, u32)>,
     topology: vk::PrimitiveTopology,
     colour_write_mask: u8,
-    depth: bool,
+    depth: Option<vk::Format>,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -81,13 +83,15 @@ struct TargetKey {
     ranges: Vec<PaRange>,
     format: u8,
     extent: (u32, u32),
-    depth: bool,
+    depth: Option<(u64, vk::Format)>,
 }
 
+/// A colour target and the depth target drawn with it, which lives only on the host: nothing reads guest depth.
 struct Target<'a> {
     render_target: RenderTarget<'a>,
     /// The generation of the target's pages when its image last matched them.
     generation: u64,
+    depth_cleared: bool,
 }
 
 pub struct Gpu<'a> {
@@ -103,6 +107,7 @@ pub struct Gpu<'a> {
     targets: HashMap<TargetKey, Target<'a>>,
     mirrors: HashMap<Vec<PaRange>, (u64, Mapping<'a>)>,
     pending_clear: Option<(ColourTarget, [f32; 4])>,
+    pending_depth_clear: Option<(DepthTarget, f32)>,
     pixels: Vec<u8>,
 }
 
@@ -197,8 +202,8 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
         cull_face,
         front_face: if draw.front_face == 0x900 { vk::FrontFace::CLOCKWISE } else { vk::FrontFace::COUNTER_CLOCKWISE },
         topology,
-        depth_test: draw.depth_test_enabled,
-        depth_write: draw.depth_write_enabled,
+        depth_test: draw.depth_test_enabled && draw.depth_target.is_some(),
+        depth_write: draw.depth_write_enabled && draw.depth_target.is_some(),
         depth_func,
         blend_const: [0.0; 4],
     }
@@ -219,6 +224,7 @@ impl<'a> Gpu<'a> {
             targets: HashMap::new(),
             mirrors: HashMap::new(),
             pending_clear: None,
+            pending_depth_clear: None,
             pixels: Vec::new(),
         }
     }
@@ -256,8 +262,15 @@ impl<'a> Gpu<'a> {
                     self.store(addr, &payload.to_le_bytes(), Writer::Gpu).map_err(named)?
                 }
                 Event::LoadConstantBuffer { addr, value } => self.store(addr, &value.to_le_bytes(), Writer::Gpu).map_err(named)?,
-                Event::Clear { value: CLEAR_RGBA, colour, target } => self.pending_clear = Some((target, colour)),
-                Event::Clear { value, .. } => return Err(format!("CLEAR_SURFACE {value:#x} is not implemented, only RGBA of target 0")),
+                Event::Clear(clear) if clear.value & !(CLEAR_Z | CLEAR_RGBA) == 0 && matches!(clear.value & CLEAR_RGBA, 0 | CLEAR_RGBA) => {
+                    if clear.value & CLEAR_RGBA != 0 {
+                        self.pending_clear = Some((clear.target, clear.colour));
+                    }
+                    if let Some(depth_target) = clear.depth_target.filter(|_| clear.value & CLEAR_Z != 0) {
+                        self.pending_depth_clear = Some((depth_target, clear.depth));
+                    }
+                }
+                Event::Clear(clear) => return Err(format!("CLEAR_SURFACE {:#x} is not implemented, only Z and RGBA of target 0", clear.value)),
                 Event::SemaphoreAcquire { addr, .. } => return Err(format!("semaphore acquire at {addr:#x} is not implemented")),
             }
         }
@@ -397,6 +410,20 @@ impl<'a> Gpu<'a> {
         Ok(())
     }
 
+    fn depth_format(&self, target: DepthTarget) -> Result<vk::Format, String> {
+        // SET_ZT_FORMAT ZF32, Z24S8 and S8Z24 (clc797.h); the two 24-bit orders are the same Vulkan format.
+        let format = match target.format {
+            0x0a => vk::Format::D32_SFLOAT,
+            0x14 | 0x16 => vk::Format::D24_UNORM_S8_UINT,
+            format => return Err(format!("depth target format {format:#x} is not implemented, only ZF32, Z24S8 and S8Z24")),
+        };
+        let properties = unsafe { self.state.instance.get_physical_device_format_properties(self.state.physical_device, format) };
+        match properties.optimal_tiling_features.contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT) {
+            true => Ok(format),
+            false => Err(format!("depth target format {:#x} needs {format:?}, which the device cannot render to", target.format)),
+        }
+    }
+
     /// Mirrors guest memory at `va` into a host buffer, rewritten when any of its pages changed, keyed by its ranges.
     fn mirror(&mut self, va: u64, len: u64) -> Result<Vec<PaRange>, String> {
         let ranges: Vec<_> = self.space.resolve(va, len).map_err(named)?.collect();
@@ -474,13 +501,14 @@ impl<'a> Gpu<'a> {
         // A pitch-linear colour target's WIDTH holds its pitch in bytes (Ryujinx RtColorState.WidthOrStride).
         let extent = vk::Extent2D { width: ct.width / 4, height: ct.height };
         let topology = topology(draw.topology)?;
+        let pipeline_depth = draw.depth_target.map(|target| self.depth_format(target)).transpose()?;
         let key = PipelineKey {
             shaders,
             streams: streams.iter().enumerate().map(|(binding, &(_, stride))| (binding as u32, stride)).collect(),
             attributes,
             topology,
             colour_write_mask: draw.colour_write_mask,
-            depth: draw.depth_test_enabled,
+            depth: pipeline_depth,
         };
 
         let vertex_ranges = streams
@@ -536,16 +564,22 @@ impl<'a> Gpu<'a> {
         let ranges: Vec<_> = self.space.resolve(ct.address, u64::from(extent.width * extent.height * 4)).map_err(named)?.collect();
         let current = generation(&self.memory, &ranges);
         let clear = self.pending_clear.take_if(|(target, _)| *target == ct).map(|(_, colour)| colour);
-        let target_key = TargetKey { ranges: ranges.clone(), format: ct.format, extent: (extent.width, extent.height), depth: draw.depth_test_enabled };
+        let clear_depth = self.pending_depth_clear.take_if(|(target, _)| Some(*target) == draw.depth_target).map(|(_, depth)| depth);
+        let depth = draw.depth_target.map(|target| target.address).zip(pipeline_depth);
+        let target_key = TargetKey { ranges: ranges.clone(), format: ct.format, extent: (extent.width, extent.height), depth };
         let target = match self.targets.entry(target_key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let render_target = RenderTarget::new(self.state, extent.width, extent.height, draw.depth_test_enabled).map_err(named)?;
-                entry.insert(Target { render_target, generation: u64::MAX })
+                let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth).map_err(named)?;
+                entry.insert(Target { render_target, generation: u64::MAX, depth_cleared: false })
             }
         };
         if clear.is_none() && target.generation != current {
             return Err(format!("colour target at {:#x} changed outside its draws, and loading it is not implemented", ct.address));
+        }
+        target.depth_cleared |= clear_depth.is_some();
+        if let Some((address, _)) = depth.filter(|_| !target.depth_cleared) {
+            return Err(format!("depth target at {address:#x} is drawn before any clear, and its contents only live on the host"));
         }
         let vertex_buffers: Vec<&HostBuffer> = vertex_ranges.iter().map(|ranges| &self.mirrors[ranges].1.buffer).collect();
         let draw_state = DrawState {
@@ -556,6 +590,7 @@ impl<'a> Gpu<'a> {
             first_instance: draw.first_instance,
             instance_count: draw.instance_count,
             clear,
+            clear_depth,
             raster: raster_state(draw, extent, topology),
         };
         self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;

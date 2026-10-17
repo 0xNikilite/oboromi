@@ -61,8 +61,8 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
     let topology = vk::PrimitiveTopology::TRIANGLE_LIST;
     let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
     let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-    let pipeline = GraphicsPipeline::new(state, &vertex, &fragment, &[], &layout, &TargetState { blend, depth: false })?;
-    let target = RenderTarget::new(state, SIZE, SIZE, false)?;
+    let pipeline = GraphicsPipeline::new(state, &vertex, &fragment, &[], &layout, &TargetState { blend, depth: None })?;
+    let target = RenderTarget::new(state, SIZE, SIZE, None)?;
     let mut vertices = HostBuffer::new(state, 36)?;
     let data: Vec<u8> =
         VERTICES.iter().flat_map(|([x, y], rgba)| [&x.to_le_bytes()[..], &y.to_le_bytes(), rgba].concat()).collect();
@@ -88,6 +88,7 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
             first_instance: 0,
             instance_count: 1,
             clear: Some([1.0; 4]),
+            clear_depth: None,
             raster,
         };
         state.draw(&pipeline, &target, &draw)?;

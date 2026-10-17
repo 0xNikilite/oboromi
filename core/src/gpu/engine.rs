@@ -416,9 +416,6 @@ impl<'a> Gpu<'a> {
     }
 
     fn draw(&mut self, draw: &DrawSnapshot) -> Result<(), String> {
-        if draw.indexed {
-            return Err("indexed draws are not implemented".into());
-        }
         if let Some(i) = [0, 2, 3, 4].into_iter().find(|&i| draw.shader_programs[i].enabled) {
             return Err(format!("shader pipeline {i} is not implemented"));
         }
@@ -490,6 +487,18 @@ impl<'a> Gpu<'a> {
             .iter()
             .map(|&(stream, _)| self.mirror(draw.vertex_streams[stream as usize].address, draw.vertex_streams[stream as usize].size))
             .collect::<Result<Vec<_>, _>>()?;
+        let index_buffer = if draw.indexed {
+            let ib = draw.index_buffer;
+            let index_type = match ib.element_size {
+                1 if self.state.index_type_uint8 => vk::IndexType::UINT8_KHR,
+                1 => return Err("u8 index buffers need VK_KHR_index_type_uint8".into()),
+                2 => vk::IndexType::UINT16,
+                _ => vk::IndexType::UINT32,
+            };
+            Some((self.mirror(ib.address, u64::from(ib.element_size) * u64::from(draw.first_vertex + draw.vertex_count))?, index_type))
+        } else {
+            None
+        };
         let cbuf_ranges = cbufs
             .iter()
             .map(|&(slot, buffer)| Ok((CBUF_BINDING + slot, self.mirror(buffer.address, buffer.size.into())?)))
@@ -541,7 +550,7 @@ impl<'a> Gpu<'a> {
         let vertex_buffers: Vec<&HostBuffer> = vertex_ranges.iter().map(|ranges| &self.mirrors[ranges].1.buffer).collect();
         let draw_state = DrawState {
             vertex_buffers: &vertex_buffers,
-            index_buffer: None,
+            index_buffer: index_buffer.as_ref().map(|(ranges, index_type)| (&self.mirrors[ranges].1.buffer, *index_type)),
             vertex_count: draw.vertex_count,
             first_vertex: draw.first_vertex,
             first_instance: draw.first_instance,

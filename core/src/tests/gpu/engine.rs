@@ -115,39 +115,53 @@ pub fn triangle_guest<'a>(state: &'a VkState, width: u32, height: u32, vertices:
     Ok(gpu)
 }
 
-/// Clears the target to white, draws the triangle with `matrix` inline in the constant buffer, then releases `payload`.
-pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], payload: u32) -> Result<(), String> {
+fn split(va: u64) -> [u32; 2] {
+    [(va >> 32) as u32, va as u32]
+}
+
+/// The state every frame here starts from: both programs, one stream of `Vertex`, colour target 0 at `target`, a full
+/// viewport and scissor, and `matrix` inline in constant buffer 0 of the vertex stage.
+pub fn frame_state(width: u32, height: u32, target: u64, matrix: [f32; 4], words: &mut Vec<u32>) {
     const R32_G32_FLOAT: u32 = 0x04 << 21 | 7 << 27;
     const R8_G8_B8_A8_UNORM: u32 = 0x0a << 21 | 2 << 27;
     const A8B8G8R8: u32 = 0xd5;
     const PITCH: u32 = 0x1000;
-    const ONE_WORD: u32 = 1 << 28;
-    let split = |va: u64| [(va >> 32) as u32, va as u32];
-    let [vs, fs, vertices, cbuf, target, report] = [VERTEX_PROGRAM, PIXEL_PROGRAM, VERTICES, CBUF, TARGET, REPORT].map(split);
+    let [vs, fs, vertices, cbuf, target] = [VERTEX_PROGRAM, PIXEL_PROGRAM, VERTICES, CBUF, target].map(split);
     let (x, y) = (width as f32 / 2.0, height as f32 / 2.0);
+    inc(SET_OBJECT, &[0xc797], words);
+    inc(SET_VERTEX_STREAM_SIZE_A, &[0, 0x1000], words);
+    inc(SET_VERTEX_STREAM_A_FORMAT, &[0x1000 | 12, vertices[0], vertices[1]], words);
+    inc(SET_VERTEX_ATTRIBUTE_A, &[R32_G32_FLOAT, 8 << 7 | R8_G8_B8_A8_UNORM], words);
+    inc(SET_COLOR_TARGET_A, &[target[0], target[1], width * 4, height, A8B8G8R8, PITCH], words);
+    inc(SET_VIEWPORT_SCALE_X, &[x, y, 0.5, x, y, 0.5].map(f32::to_bits), words);
+    inc(SET_VIEWPORT_CLIP_HORIZONTAL, &[width << 16, height << 16, 0, 1.0f32.to_bits()], words);
+    inc(SET_SCISSOR_ENABLE, &[1, width << 16, height << 16], words);
+    inc(SET_PIPELINE_SHADER + 64, &[0x11], words);
+    inc(SET_PIPELINE_SHADER + 64 + 0x10, &[0, vs[0], vs[1]], words);
+    inc(SET_PIPELINE_SHADER + 5 * 64, &[0x51], words);
+    inc(SET_PIPELINE_SHADER + 5 * 64 + 0x10, &[4, fs[0], fs[1]], words);
+    inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[32, cbuf[0], cbuf[1], 0], words);
+    non_inc(LOAD_CONSTANT_BUFFER, &matrix.map(f32::to_bits), words);
+    inc(BIND_GROUP_CONSTANT_BUFFER, &[1], words);
+    inc(SET_CT_WRITE, &[0x1111], words);
+}
+
+pub fn run(gpu: &mut Gpu, words: &[u32]) -> Result<(), String> {
+    gpu.write(PUSHBUFFER, &bytes(words)).map_err(|e| format!("{e:?}"))?;
+    gpu.submit(&[entry(PUSHBUFFER, words.len())])
+}
+
+/// Clears the target to white, draws the triangle with `matrix` inline in the constant buffer, then releases `payload`.
+pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], payload: u32) -> Result<(), String> {
+    const ONE_WORD: u32 = 1 << 28;
+    let report = split(REPORT);
     let mut words = Vec::new();
-    inc(SET_OBJECT, &[0xc797], &mut words);
-    inc(SET_VERTEX_STREAM_SIZE_A, &[0, 36], &mut words);
-    inc(SET_VERTEX_STREAM_A_FORMAT, &[0x1000 | 12, vertices[0], vertices[1]], &mut words);
-    inc(SET_VERTEX_ATTRIBUTE_A, &[R32_G32_FLOAT, 8 << 7 | R8_G8_B8_A8_UNORM], &mut words);
-    inc(SET_COLOR_TARGET_A, &[target[0], target[1], width * 4, height, A8B8G8R8, PITCH], &mut words);
-    inc(SET_VIEWPORT_SCALE_X, &[x, y, 0.5, x, y, 0.5].map(f32::to_bits), &mut words);
-    inc(SET_VIEWPORT_CLIP_HORIZONTAL, &[width << 16, height << 16, 0, 1.0f32.to_bits()], &mut words);
-    inc(SET_SCISSOR_ENABLE, &[1, width << 16, height << 16], &mut words);
-    inc(SET_PIPELINE_SHADER + 64, &[0x11], &mut words);
-    inc(SET_PIPELINE_SHADER + 64 + 0x10, &[0, vs[0], vs[1]], &mut words);
-    inc(SET_PIPELINE_SHADER + 5 * 64, &[0x51], &mut words);
-    inc(SET_PIPELINE_SHADER + 5 * 64 + 0x10, &[4, fs[0], fs[1]], &mut words);
-    inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[16, cbuf[0], cbuf[1], 0], &mut words);
-    non_inc(LOAD_CONSTANT_BUFFER, &matrix.map(f32::to_bits), &mut words);
-    inc(BIND_GROUP_CONSTANT_BUFFER, &[1], &mut words);
-    inc(SET_CT_WRITE, &[0x1111], &mut words);
+    frame_state(width, height, TARGET, matrix, &mut words);
     inc(SET_COLOR_CLEAR_VALUE, &[1.0f32.to_bits(); 4], &mut words);
     inc(CLEAR_SURFACE, &[0x3c], &mut words);
     inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
     inc(SET_REPORT_SEMAPHORE_A, &[report[0], report[1], payload, ONE_WORD], &mut words);
-    gpu.write(PUSHBUFFER, &bytes(&words)).map_err(|e| format!("{e:?}"))?;
-    gpu.submit(&[entry(PUSHBUFFER, words.len())])
+    run(gpu, &words)
 }
 
 #[cfg(test)]
@@ -157,15 +171,39 @@ mod tests {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
+    const END: u32 = 0x1614;
+    const BEGIN: u32 = 0x1618;
+    const SET_INDEX_BUFFER_A: u32 = 0x17c8;
+    const SET_INDEX_BUFFER_E: u32 = 0x17d8;
+    const DRAW_INDEX_BUFFER: u32 = 0x17e0;
+    const INDICES: u64 = 0x1_0050_0000;
     const SIZE: u32 = 64;
+    const IDENTITY: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const WHITE: [u8; 4] = [255; 4];
     // Pixel corners (4, 4), (60, 4) and (4, 60) in normalized device coordinates.
     const CORNERS: [[f32; 2]; 3] = [[-0.875, -0.875], [0.875, -0.875], [-0.875, 0.875]];
     const RED: [u8; 4] = [255, 0, 0, 255];
     const GREEN: [u8; 4] = [0, 255, 0, 255];
     const BLUE: [u8; 4] = [0, 0, 255, 255];
 
+    fn map(gpu: &mut Gpu, va: u64, len: u64) {
+        gpu.space.map(va, gpu.ram.len() as u64, len);
+        gpu.ram.resize(gpu.ram.len() + len as usize, 0);
+    }
+
+    fn pixel(gpu: &Gpu, target: u64, x: u32, y: u32) -> [u8; 4] {
+        let mut rgba = [0; 4];
+        gpu.read(target + u64::from(y * SIZE + x) * 4, &mut rgba).unwrap();
+        rgba
+    }
+
+    fn clear_white(words: &mut Vec<u32>) {
+        inc(SET_COLOR_CLEAR_VALUE, &[1.0f32.to_bits(); 4], words);
+        inc(CLEAR_SURFACE, &[0x3c], words);
+    }
+
     fn draw_and_check(gpu: &mut Gpu, payload: u32, colours: [[u8; 4]; 3]) {
-        triangle_frame(gpu, SIZE, SIZE, [1.0, 0.0, 0.0, 1.0], payload).unwrap();
+        triangle_frame(gpu, SIZE, SIZE, IDENTITY, payload).unwrap();
         let mut report = [0; 4];
         gpu.read(REPORT, &mut report).unwrap();
         assert_eq!(u32::from_le_bytes(report), payload);
@@ -237,5 +275,28 @@ mod tests {
         gpu.space.map(VERTICES, 7 * PAGE, PAGE);
         gpu.write(VERTICES, &vertex_bytes(&[(CORNERS[0], GREEN), (CORNERS[1], BLUE), (CORNERS[2], RED)])).unwrap();
         draw_and_check(&mut gpu, 0x9abc_def0, [GREEN, BLUE, RED]);
+    }
+
+    #[test]
+    fn begin_end_indexed_draw_builds_a_quad_from_two_triangles() {
+        const TWO_BYTES: u32 = 1;
+        const TRIANGLES: u32 = 4;
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        gpu.write(VERTICES, &vertex_bytes(&[[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].map(|corner| (corner, RED)))).unwrap();
+        map(&mut gpu, INDICES, PAGE);
+        gpu.write(INDICES, &bytes(&[0 | 1 << 16, 2 | 2 << 16, 1 | 3 << 16])).unwrap();
+        let mut words = Vec::new();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        clear_white(&mut words);
+        inc(SET_INDEX_BUFFER_A, &split(INDICES), &mut words);
+        inc(SET_INDEX_BUFFER_E, &[TWO_BYTES, 0], &mut words);
+        inc(BEGIN, &[TRIANGLES], &mut words);
+        inc(DRAW_INDEX_BUFFER, &[6], &mut words);
+        inc(END, &[0], &mut words);
+        run(&mut gpu, &words).unwrap();
+        for (x, y, want) in [(20, 20, RED), (44, 20, RED), (20, 44, RED), (44, 44, RED), (8, 8, WHITE), (56, 56, WHITE)] {
+            assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
+        }
     }
 }

@@ -39,6 +39,7 @@ pub struct VkState {
     pub shader_float16: bool,
     pub shader_buffer_int64_atomics: bool,
     pub shader_shared_int64_atomics: bool,
+    pub index_type_uint8: bool,
 }
 
 pub fn device() -> Result<&'static VkState, VkError> {
@@ -65,7 +66,7 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics) =
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8) =
             Self::open_device(&instance)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
@@ -102,6 +103,7 @@ impl VkState {
             shader_float16,
             shader_buffer_int64_atomics,
             shader_shared_int64_atomics,
+            index_type_uint8,
         };
         let alloc = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
@@ -114,7 +116,7 @@ impl VkState {
 
     fn open_device(
         instance: &ash::Instance,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool), VkError> {
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
@@ -135,10 +137,12 @@ impl VkState {
         let mut float16_int8 = vk::PhysicalDeviceShaderFloat16Int8Features::default();
         let mut atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default();
         let mut derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
+        let mut uint8_indices = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut float16_int8)
             .push_next(&mut atomic_int64)
-            .push_next(&mut derivatives);
+            .push_next(&mut derivatives)
+            .push_next(&mut uint8_indices);
         unsafe { instance.get_physical_device_features2(physical_device, &mut features) };
         let shader_float64 = features.features.shader_float64 == vk::TRUE;
         let shader_int64 = features.features.shader_int64 == vk::TRUE;
@@ -151,7 +155,12 @@ impl VkState {
         let extensions = unsafe { instance.enumerate_device_extension_properties(physical_device)? };
         let linear_derivatives = derivatives.compute_derivative_group_linear == vk::TRUE
             && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(derivatives_extension));
-        let enabled_extensions: Vec<_> = linear_derivatives.then_some(derivatives_extension.as_ptr()).into_iter().collect();
+        let index_type_uint8 = uint8_indices.index_type_uint8 == vk::TRUE
+            && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::KHR_INDEX_TYPE_UINT8_NAME));
+        let enabled_extensions: Vec<_> = [(linear_derivatives, derivatives_extension), (index_type_uint8, vk::KHR_INDEX_TYPE_UINT8_NAME)]
+            .into_iter()
+            .filter_map(|(enabled, name)| enabled.then_some(name.as_ptr()))
+            .collect();
         let device_features = vk::PhysicalDeviceFeatures::default()
             .shader_float64(shader_float64)
             .shader_int64(shader_int64);
@@ -162,8 +171,9 @@ impl VkState {
             .shader_shared_int64_atomics(shader_shared_int64_atomics);
         let mut enabled_derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
             .compute_derivative_group_linear(linear_derivatives);
+        let mut enabled_uint8_indices = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default().index_type_uint8(index_type_uint8);
         let mut enabled_vulkan13 = vk::PhysicalDeviceVulkan13Features::default().dynamic_rendering(true);
-        let device_info = vk::DeviceCreateInfo::default()
+        let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&enabled_extensions)
             .enabled_features(&device_features)
@@ -171,12 +181,15 @@ impl VkState {
             .push_next(&mut enabled_atomic_int64)
             .push_next(&mut enabled_derivatives)
             .push_next(&mut enabled_vulkan13);
+        if index_type_uint8 {
+            device_info = device_info.push_next(&mut enabled_uint8_indices);
+        }
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics)),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, index_type_uint8)),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

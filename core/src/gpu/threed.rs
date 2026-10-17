@@ -152,7 +152,6 @@ pub struct Scissor {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IndexBuffer {
     pub address: u64,
-    pub first: u32,
     pub element_size: u8,
 }
 
@@ -492,7 +491,6 @@ impl ThreeD {
             blend_enabled: self.word(SET_BLEND) & 1 != 0,
             index_buffer: IndexBuffer {
                 address: self.address_pair(SET_INDEX_BUFFER_A, SET_INDEX_BUFFER_B),
-                first: self.word(SET_INDEX_BUFFER_F),
                 element_size: index_size,
             },
             constant_buffers: self.constant_buffers,

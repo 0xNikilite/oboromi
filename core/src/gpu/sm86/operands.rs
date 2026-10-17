@@ -450,7 +450,10 @@ impl<'a> Decoder<'a> {
                     _ => self.ir.emit_not(ty, lt),
                 }
             }
-            1 | 2 | 4..=31 | 36 | 40..=55 | 61..=133 | SRZ => self.const_u32_0,
+            // SR_WSCALEFACTOR_XY and _Z are f32 scales of W that a driver VS compares x, y and z against for the
+            // CSMTEST clip masks only; 1.0 tests against the view volume.
+            30 | 31 => self.cached_const_u32(1.0f32.to_bits()),
+            1 | 2 | 4..=29 | 36 | 40..=55 | 61..=133 | SRZ => self.const_u32_0,
             _ => panic!("unknown special register {index}"),
         }
     }

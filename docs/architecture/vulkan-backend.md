@@ -8,7 +8,7 @@ flowchart TB
     Q --> SUB["Submit<br/>One command list and one done-flag, locked"]
     SUB --> CP["ComputePipeline<br/>A compute shader, ready to run"]
     SUB --> GP["GraphicsPipeline<br/>Vertex and pixel shaders, ready to draw"]
-    CP --> D0["Descriptors<br/>The numbered data slots, set 0"]
+    CP --> D0["Descriptors<br/>The numbered data slots, sets 0 and 1"]
     GP --> D0
     D0 --> HB["HostBuffer<br/>Constants, guest memory window, vertices"]
     D0 --> HI["HostImage<br/>Textures and writable images"]
@@ -26,7 +26,7 @@ All work goes through one queue, the place work is handed to the card. Each subm
 | `VkState` | gpu/mod.rs | The Vulkan instance, the chosen card, its queue and command pool, and which optional features it has |
 | `HostBuffer` | gpu/compute.rs | A buffer the CPU can read and write; cached memory preferred, flushed and refreshed explicitly |
 | `HostImage` | gpu/compute.rs | A 2D image with all its mip levels (smaller copies), uploaded through a staging buffer |
-| `Descriptors` | gpu/compute.rs | The layout of numbered data slots, shared by compute and drawing |
+| `Descriptors` | gpu/compute.rs | The layout of numbered data slots: set 0 for compute and vertex shaders, set 1 for pixel shaders |
 | `ComputePipeline` | gpu/compute.rs | A compiled compute shader; `VkState::dispatch` records, submits and waits |
 | `GraphicsPipeline` | gpu/graphics.rs | Compiled vertex and pixel shaders for one colour format, with optional depth |
 | `RenderTarget` | gpu/graphics.rs | Offscreen colour and depth images, read back after each draw |
@@ -40,6 +40,7 @@ All work goes through one queue, the place work is handed to the card. Each subm
 | 64-bit atomics on buffers and shared memory, when present | For SASS's 64-bit ATOM and ATOMS; Intel lacks the shared-memory one |
 | Compute shader derivatives | TMML, which asks which mip level a texture read would use, needs them in compute |
 | Keep signed zeros, infinities, NaNs and denormals at every float width | Drivers fold `x + -x` to zero and Intel flushes tiny floats to zero; the Switch 2's GPU does neither |
+| Graphics pipeline libraries and extended dynamic state 3, when present | Pipelines link from prebuilt shader parts, and vertex stride, write mask and blending become per-draw settings |
 | No Vulkan driver found means `NoDevice` | Tests skip cleanly on machines without Vulkan |
 
 ## Which settings can change per draw?
@@ -49,13 +50,16 @@ A Vulkan pipeline is a compiled bundle of shaders and settings. Building one is 
 | Kind | Settings |
 |---|---|
 | Dynamic, changed per draw | Viewport, scissor, cull mode, front face, triangle or line type within its group, depth test, depth write, depth compare, blend constants |
-| Fixed, part of the pipeline key | Shader hashes, vertex layout, primitive group, colour write mask, depth image present |
+| Dynamic when the device has the extensions above | Vertex stride, colour write mask, blend enable and blend equation |
+| Fixed, part of the engine's pipeline key | Shader hashes, vertex layout, primitive group, colour write mask, blending, depth format |
 
 ## How does it stay fast?
 
 - Nothing is allocated per frame. The card connection is created once per process, the command buffer and fence are reused, and demo pipelines are built once.
 - Results are read from cached host memory, because reading uncached memory is slow.
 - The engine caches translated shaders by content, pipelines by key, and buffer copies by guest memory range. A copy refreshes only when its memory changed.
+- Pipelines can be built on worker threads. A draw whose pipeline is not ready either waits for it or is skipped, whichever the caller picks.
+- Translated SPIR-V and the driver's pipeline cache are saved to disk per game, so the next run starts warm.
 
 Measured on an Intel Arc (MTL), p50, `cargo run --release -p oboromi-core --example perf`:
 
@@ -74,4 +78,4 @@ Mesa's lavapipe is a Vulkan driver that runs on the CPU, so CI needs no graphics
 
 Verified by: the Vulkan validation layer, a debug layer that reports API misuse, clean on Intel and lavapipe for dispatch, draw and depth; and the suite skipping without a Vulkan driver.
 
-Sources: core/src/gpu/{mod,compute,graphics,engine}.rs, core/examples/perf.rs, .github/workflows/ci.yml, PR #79 body.
+Sources: core/src/gpu/{mod,compute,graphics,engine,pipeline_cache}.rs, core/examples/perf.rs, .github/workflows/ci.yml, PR #79 body.

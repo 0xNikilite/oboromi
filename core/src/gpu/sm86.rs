@@ -362,7 +362,7 @@ pub struct Decoder<'a> {
     type_f64: u32,
     type_f16: u32,
     type_f16x2: u32,
-    mma_group_sum: u32,
+    mma_vars: [u32; 9],
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
@@ -491,7 +491,7 @@ impl<'a> Decoder<'a> {
             type_f64: 0,
             type_f16: 0,
             type_f16x2: 0,
-            mma_group_sum: 0,
+            mma_vars: [0; 9],
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],
@@ -510,7 +510,7 @@ impl<'a> Decoder<'a> {
     pub fn emit_entry_point(&mut self, func: u32, device: Option<&VkState>, local_size: [u32; 3]) {
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).collect();
         self.ir
             .emit_entry_point(spirv::execution_model::GLCOMPUTE, func, "main", &interface);
         self.ir
@@ -2975,66 +2975,165 @@ impl<'a> Decoder<'a> {
             let neg = negate[is_b as usize];
             if format == 2 { vec![s.tf32_source(word, neg)] } else { s.mma_source_pair(word, format == 1, neg).to_vec() }
         });
-        let f16_ty = self.type_f16();
-        let group_sum = self.mma_group_sum_function();
-        let [min_exponent, zero] = [self.cached_const_u32(min_exponent as u32), self.ir.emit_constant_typed(self.type_f32[1], 0.0f32)];
-        for (half, row) in (0..).zip(&a) {
+        let (ty, f32_ty, ptr_ty, private) = (self.type_u32[1], self.type_f32[1], self.type_ptr_u32[1], spirv::storage_class::PRIVATE);
+        let [length, d_base] = [72, 68].map(|c| self.cached_const_u32(c));
+        if self.mma_vars[0] == 0 {
+            let staged_ty = self.ir.emit_type_array(ty, length);
+            let staged_ptr_ty = self.ir.emit_type_pointer(private, staged_ty);
+            self.mma_vars = [staged_ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty].map(|ptr| self.ir.emit_variable(ptr, private));
+        }
+        let [staged, output, group_index, term, acc, emax, special, ieee_sum, total] = self.mma_vars;
+        let values = a.iter().enumerate().flat_map(|(row, x)| x.iter().enumerate().map(move |(k, &x)| (16 * row + k, x)));
+        let values: Vec<_> = values.chain(b.iter().enumerate().flat_map(|(column, y)| y.iter().enumerate().map(move |(k, &y)| (32 + 16 * column + k, y)))).collect();
+        for (index, val) in values {
+            let slot = self.staged_slot(staged, index as u32);
+            let bits = self.bitcast_u32(val);
+            self.ir.emit_store(slot, bits);
+        }
+        for half in 0..2 {
             let c = if f32_acc {
-                [0, 1].map(|column| {
-                    let word = self.load_register(nth_reg(rc, RZ, 2 * half + column));
-                    self.bitcast_f32(word)
-                })
+                [0, 1].map(|column| self.load_register(nth_reg(rc, RZ, 2 * half + column)))
             } else {
                 let word = self.load_register(nth_reg(rc, RZ, half));
-                self.half2_lanes(word, 0, false, false, false)
+                self.half2_lanes(word, 0, false, false, false).map(|c| self.bitcast_u32(c))
             };
+            for (column, bits) in (0..).zip(c) {
+                let slot = self.staged_slot(staged, 64 + 2 * half + column);
+                self.ir.emit_store(slot, bits);
+            }
+        }
+        let f16_ty = self.type_f16();
+        let [one, four, sixteen, thirty_two, c_base, group_len, groups, f32_floor, floor] =
+            [1, 4, 16, 32, 64, group as u32, a[0].len() as u32 / group as u32, -126i32 as u32, min_exponent as u32].map(|c| self.cached_const_u32(c));
+        let zero = self.ir.emit_constant_typed(f32_ty, 0.0f32);
+        self.counted_loop(output, four, |s, output| {
+            let half = s.ir.emit_shift_right_logical(ty, output, one);
+            let column = s.ir.emit_bitwise_and(ty, output, one);
+            let a_base = s.ir.emit_imul(ty, half, sixteen);
+            let b_base = s.ir.emit_imul(ty, column, sixteen);
+            let b_base = s.ir.emit_iadd(ty, b_base, thirty_two);
+            let c_index = s.ir.emit_iadd(ty, output, c_base);
+            let c_slot = s.ir.emit_access_chain(ptr_ty, staged, &[c_index]);
+            let c = s.ir.emit_load(ty, c_slot);
+            s.ir.emit_store(acc, c);
+            s.counted_loop(group_index, groups, |s, group_index| {
+                let offset = s.ir.emit_imul(ty, group_index, group_len);
+                let [a_first, b_first] = [a_base, b_base].map(|base| s.ir.emit_iadd(ty, base, offset));
+                let acc_bits = s.ir.emit_load(ty, acc);
+                let acc_val = s.bitcast_f32(acc_bits);
+                let [_, c_bits, c_exponent, c_significand, c_special] = s.mma_term(acc_val, f32_floor, 23);
+                let c_special = s.bool_bit(c_special);
+                for (var, val) in [(emax, c_exponent), (special, c_special), (ieee_sum, acc_bits)] {
+                    s.ir.emit_store(var, val);
+                }
+                s.counted_loop(term, group_len, |s, term| {
+                    let ([x, y], [_, exponent, _], either) = s.mma_pair(staged, [a_first, b_first], term, floor);
+                    let largest = s.ir.emit_load(ty, emax);
+                    let largest = s.glsl(spirv::glsl::S_MAX, ty, &[largest, exponent]);
+                    s.ir.emit_store(emax, largest);
+                    let any = s.ir.emit_load(ty, special);
+                    let either_bit = s.bool_bit(either);
+                    let any = s.ir.emit_bitwise_or(ty, any, either_bit);
+                    s.ir.emit_store(special, any);
+                    let product = s.ir.emit_fmul(f32_ty, x, y);
+                    let product = s.ir.emit_select(f32_ty, either, product, zero);
+                    let sum = s.ir.emit_load(ty, ieee_sum);
+                    let sum = s.bitcast_f32(sum);
+                    let sum = s.ir.emit_fadd(f32_ty, sum, product);
+                    let sum = s.bitcast_u32(sum);
+                    s.ir.emit_store(ieee_sum, sum);
+                });
+                let largest = s.ir.emit_load(ty, emax);
+                let c_term = s.aligned_term(largest, [c_bits, c_exponent, c_significand], one);
+                s.ir.emit_store(total, c_term);
+                s.counted_loop(term, group_len, |s, term| {
+                    let (_, product, _) = s.mma_pair(staged, [a_first, b_first], term, floor);
+                    let aligned = s.aligned_term(largest, product, four);
+                    let sum = s.ir.emit_load(ty, total);
+                    let sum = s.ir.emit_iadd(ty, sum, aligned);
+                    s.ir.emit_store(total, sum);
+                });
+                let sum = s.ir.emit_load(ty, total);
+                let exact = s.truncated_f32(sum, largest);
+                let any = s.ir.emit_load(ty, special);
+                let any = s.ir.emit_inot_equal(s.type_bool[1], any, s.const_u32_0);
+                let ieee = s.ir.emit_load(ty, ieee_sum);
+                let sum = s.ir.emit_select(ty, any, ieee, exact);
+                let sum = if f32_acc {
+                    sum
+                } else {
+                    let val = s.bitcast_f32(sum);
+                    let rounded = s.ir.emit_f_convert(f16_ty, val);
+                    let val = s.ir.emit_f_convert(f32_ty, rounded);
+                    s.bitcast_u32(val)
+                };
+                s.ir.emit_store(acc, sum);
+            });
+            let d_index = s.ir.emit_iadd(ty, output, d_base);
+            let d_slot = s.ir.emit_access_chain(ptr_ty, staged, &[d_index]);
+            let d = s.ir.emit_load(ty, acc);
+            s.ir.emit_store(d_slot, d);
+        });
+        for half in 0..2 {
             let d = [0, 1].map(|column| {
-                row.chunks(group).zip(b[column].chunks(group)).fold(c[column], |acc, (x, y)| {
-                    let padding = vec![zero; 8 - group];
-                    let args: Vec<u32> = [acc, min_exponent].iter().chain(x).chain(&padding).chain(y).chain(&padding).copied().collect();
-                    let sum = self.ir.emit_function_call(self.type_f32[1], group_sum, &args);
-                    if f32_acc {
-                        return sum;
-                    }
-                    let rounded = self.ir.emit_f_convert(f16_ty, sum);
-                    self.ir.emit_f_convert(self.type_f32[1], rounded)
-                })
+                let slot = self.staged_slot(staged, 68 + 2 * half + column);
+                self.ir.emit_load(ty, slot)
             });
             if f32_acc {
-                for (column, val) in (0..).zip(d) {
-                    let bits = self.bitcast_u32(val);
+                for (column, bits) in (0..).zip(d) {
                     self.store_register(nth_reg(rd, RZ, 2 * half + column), bits);
                 }
             } else {
-                let packed = self.pack_half2(d);
+                let packed = d.map(|bits| self.bitcast_f32(bits));
+                let packed = self.pack_half2(packed);
                 self.store_register(nth_reg(rd, RZ, half), packed);
             }
         }
+    }
+    fn staged_slot(&mut self, staged: u32, index: u32) -> u32 {
+        let index = self.cached_const_u32(index);
+        self.ir.emit_access_chain(self.type_ptr_u32[1], staged, &[index])
+    }
+    fn counted_loop(&mut self, counter: u32, count: u32, body: impl FnOnce(&mut Self, u32)) {
+        const DONT_UNROLL: u32 = 2;
+        let [header, block, cont, merge] = [(); 4].map(|_| self.ir.alloc_id());
+        self.ir.emit_store(counter, self.const_u32_0);
+        self.ir.emit_branch(header);
+        self.ir.emit_label_id(header);
+        let index = self.ir.emit_load(self.type_u32[1], counter);
+        let more = self.ir.emit_uless_than(self.type_bool[1], index, count);
+        self.ir.emit_loop_merge(merge, cont, DONT_UNROLL);
+        self.ir.emit_branch_conditional(more, block, merge);
+        self.ir.emit_label_id(block);
+        body(self, index);
+        self.ir.emit_branch(cont);
+        self.ir.emit_label_id(cont);
+        let next = self.ir.emit_iadd(self.type_u32[1], index, self.const_u32_1);
+        self.ir.emit_store(counter, next);
+        self.ir.emit_branch(header);
+        self.ir.emit_label_id(merge);
+    }
+    fn mma_pair(&mut self, staged: u32, firsts: [u32; 2], term: u32, floor: u32) -> ([u32; 2], [u32; 3], u32) {
+        let ty = self.type_u32[1];
+        let [x, y] = firsts.map(|first| {
+            let index = self.ir.emit_iadd(ty, first, term);
+            let slot = self.ir.emit_access_chain(self.type_ptr_u32[1], staged, &[index]);
+            let bits = self.ir.emit_load(ty, slot);
+            let val = self.bitcast_f32(bits);
+            self.mma_term(val, floor, 10)
+        });
+        let sign = self.ir.emit_bitwise_xor(ty, x[1], y[1]);
+        // A product's exponent is ea + eb, not that of the normalized product.
+        let exponent = self.ir.emit_iadd(ty, x[2], y[2]);
+        let significand = self.ir.emit_imul(ty, x[3], y[3]);
+        let either = self.ir.emit_logical_or(self.type_bool[1], x[4], y[4]);
+        ([x[0], y[0]], [sign, exponent, significand], either)
     }
     fn tf32_source(&mut self, word: u32, neg: bool) -> u32 {
         let mask = self.cached_const_u32(0xffff_e000);
         let bits = self.ir.emit_bitwise_and(self.type_u32[1], word, mask);
         let val = self.bitcast_f32(bits);
         self.fp_src(self.type_f32[1], val, false, neg)
-    }
-    // Products of four TF32 pairs come padded with zeros, which add nothing and never set the largest exponent.
-    fn mma_group_sum_function(&mut self) -> u32 {
-        if self.mma_group_sum == 0 {
-            let (f32_ty, ty) = (self.type_f32[1], self.type_u32[1]);
-            let params: Vec<u32> = [f32_ty, ty].into_iter().chain([f32_ty; 16]).collect();
-            let function_ty = self.ir.emit_type_function(f32_ty, &params);
-            let current = self.ir.begin_function_after_current();
-            self.mma_group_sum = self.ir.emit_function(f32_ty, 0, function_ty);
-            let params: Vec<u32> = params.iter().map(|&ty| self.ir.emit_function_parameter(ty)).collect();
-            self.ir.emit_label();
-            let terms: Vec<[u32; 5]> = params[2..].iter().map(|&val| self.mma_term(val, params[1], 10)).collect();
-            let (x, y) = terms.split_at(8);
-            let sum = self.truncated_group_sum(params[0], &x.iter().zip(y).collect::<Vec<_>>());
-            self.ir.emit_return_value(sum);
-            self.ir.emit_function_end();
-            self.ir.end_function_after_current(current);
-        }
-        self.mma_group_sum
     }
     fn mma_term(&mut self, val: u32, floor: u32, fraction_bits: u32) -> [u32; 5] {
         let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
@@ -3058,38 +3157,21 @@ impl<'a> Decoder<'a> {
         let exponent = self.ir.emit_select(ty, zero, zero_exponent, clamped);
         [val, bits, exponent, significand, special]
     }
-    fn truncated_group_sum(&mut self, acc: u32, products: &[(&[u32; 5], &[u32; 5])]) -> u32 {
-        let (ty, bool_ty, f32_ty) = (self.type_u32[1], self.type_bool[1], self.type_f32[1]);
-        let f32_floor = self.cached_const_u32(-126i32 as u32);
-        let [_, c_bits, c_exponent, c_significand, mut special] = self.mma_term(acc, f32_floor, 23);
-        let [one, four, max_shift, twenty_three, below_hidden_bias, max_finite, infinity, sign_bit] =
-            [1, 4, 31, 23, 125, 253, 0x7f80_0000, 0x8000_0000].map(|c| self.cached_const_u32(c));
-        let mut terms = vec![(c_bits, c_exponent, c_significand, one)];
-        let mut ieee_sum = acc;
-        let zero = self.ir.emit_constant_typed(f32_ty, 0.0f32);
-        for &(&[x, x_bits, x_exponent, x_significand, x_special], &[y, y_bits, y_exponent, y_significand, y_special]) in products {
-            let sign = self.ir.emit_bitwise_xor(ty, x_bits, y_bits);
-            // A product's exponent is ea + eb, not that of the normalized product.
-            let exponent = self.ir.emit_iadd(ty, x_exponent, y_exponent);
-            let significand = self.ir.emit_imul(ty, x_significand, y_significand);
-            terms.push((sign, exponent, significand, four));
-            let either = self.ir.emit_logical_or(bool_ty, x_special, y_special);
-            special = self.ir.emit_logical_or(bool_ty, special, either);
-            let product = self.ir.emit_fmul(f32_ty, x, y);
-            let product = self.ir.emit_select(f32_ty, either, product, zero);
-            ieee_sum = self.ir.emit_fadd(f32_ty, ieee_sum, product);
-        }
-        let emax = terms[1..].iter().fold(c_exponent, |emax, term| self.glsl(spirv::glsl::S_MAX, ty, &[emax, term.1]));
-        let total = terms.iter().fold(self.const_u32_0, |total, &(sign, exponent, significand, unit_shift)| {
-            let widened = self.ir.emit_shift_left_logical(ty, significand, unit_shift);
-            let distance = self.ir.emit_isub(ty, emax, exponent);
-            let distance = self.glsl(spirv::glsl::U_MIN, ty, &[distance, max_shift]);
-            let aligned = self.ir.emit_shift_right_logical(ty, widened, distance);
-            let negative = self.ir.emit_sless_than(bool_ty, sign, self.const_u32_0);
-            let negated = self.ir.emit_snegate(ty, aligned);
-            let signed = self.ir.emit_select(ty, negative, negated, aligned);
-            self.ir.emit_iadd(ty, total, signed)
-        });
+    fn aligned_term(&mut self, emax: u32, [sign, exponent, significand]: [u32; 3], unit_shift: u32) -> u32 {
+        let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
+        let max_shift = self.cached_const_u32(31);
+        let widened = self.ir.emit_shift_left_logical(ty, significand, unit_shift);
+        let distance = self.ir.emit_isub(ty, emax, exponent);
+        let distance = self.glsl(spirv::glsl::U_MIN, ty, &[distance, max_shift]);
+        let aligned = self.ir.emit_shift_right_logical(ty, widened, distance);
+        let negative = self.ir.emit_sless_than(bool_ty, sign, self.const_u32_0);
+        let negated = self.ir.emit_snegate(ty, aligned);
+        self.ir.emit_select(ty, negative, negated, aligned)
+    }
+    fn truncated_f32(&mut self, total: u32, emax: u32) -> u32 {
+        let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
+        let [max_shift, twenty_three, below_hidden_bias, max_finite, infinity, sign_bit] =
+            [31, 23, 125, 253, 0x7f80_0000, 0x8000_0000].map(|c| self.cached_const_u32(c));
         let magnitude = self.glsl(spirv::glsl::S_ABS, ty, &[total]);
         let msb = self.glsl(spirv::glsl::FIND_U_MSB, ty, &[magnitude]);
         let excess = self.ir.emit_isub(ty, msb, twenty_three);
@@ -3112,9 +3194,7 @@ impl<'a> Decoder<'a> {
         let tiny = self.ir.emit_logical_or(bool_ty, tiny, zero);
         let bits = self.ir.emit_select(ty, tiny, subnormal, normal);
         let sign = self.ir.emit_bitwise_and(ty, total, sign_bit);
-        let bits = self.ir.emit_bitwise_or(ty, bits, sign);
-        let exact = self.bitcast_f32(bits);
-        self.ir.emit_select(f32_ty, special, ieee_sum, exact)
+        self.ir.emit_bitwise_or(ty, bits, sign)
     }
     pub fn hmnmx2(&mut self, inst: u128) {
         let ofmt = (inst >> 85 & 1) << 1 | inst >> 78 & 1;

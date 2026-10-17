@@ -232,7 +232,9 @@ impl Renderer {
                 voices
             ],
             voices: (0..voices).map(|_| Voice::default()).collect(),
-            effects: (0..params.effect_count).map(|_| Effect::default()).collect(),
+            effects: (0..params.effect_count)
+                .map(|_| Effect::default())
+                .collect(),
             graph: Graph::new(
                 params.sub_mix_count as usize + 1,
                 splitters,

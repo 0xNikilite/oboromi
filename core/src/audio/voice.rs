@@ -430,15 +430,18 @@ impl Voice {
             if !wave.valid || (self.format == ADPCM && self.coefficients.is_none()) {
                 break;
             }
-            if self.offset == 0 && wave.context != 0 {
-                let mut context = [0u8; 6];
-                memory.read(wave.context, &mut context);
-                let history = |at| u16_at(&context, at) as i16;
-                self.adpcm.restore(AdpcmContext {
-                    predictor_scale: context[0],
-                    history_sample_1: history(2),
-                    history_sample_2: history(4),
-                });
+            if self.offset == 0 {
+                let mut context = self.adpcm.context();
+                if wave.context != 0 {
+                    let mut raw = [0u8; 6];
+                    memory.read(wave.context, &mut raw);
+                    context = AdpcmContext {
+                        predictor_scale: raw[0],
+                        history_sample_1: u16_at(&raw, 2) as i16,
+                        history_sample_2: u16_at(&raw, 4) as i16,
+                    };
+                }
+                self.adpcm.restore(context);
             }
             let looped = self.loops > 0
                 && wave.loop_start != 0
@@ -512,7 +515,10 @@ impl Voice {
                 self.raw.resize((skip + count).div_ceil(ADPCM_FRAME) * 8, 0);
                 memory.read(address + (position / ADPCM_FRAME * 8) as u64, &mut self.raw);
                 let mut decoded = vec![0.0; skip + count];
-                let written = self.adpcm.process(&self.raw, &mut decoded, skip + count);
+                let written = self
+                    .adpcm
+                    .process(&self.raw, &mut decoded, skip + count)
+                    .samples;
                 self.channels[0]
                     .pending
                     .extend_from_slice(&decoded[skip..written]);

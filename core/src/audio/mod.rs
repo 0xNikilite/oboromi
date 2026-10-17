@@ -1,15 +1,17 @@
 //! the audio services a game drives: the renderer (audren) mixes voices through mixes, effects
 //! and sinks once per 5 ms period, audout plays queued pcm, and both end in the gui's sink ring.
 
-#[path = "dsp_stub.rs"]
-mod dsp;
 pub mod audout;
+pub mod dsp;
 pub mod effect;
 pub mod mix;
 pub mod parcel;
 pub mod renderer;
+pub mod sink;
 pub mod sink_device;
 pub mod voice;
+
+pub use sink::{CHANNELS, RATE, generation, pull, push, test_tone, underruns};
 
 /// guest memory as the renderer reads wave buffers and writes aux and circular-sink buffers.
 pub trait GuestMemory {
@@ -72,3 +74,4 @@ pub(crate) fn mix_into(buffers: &mut [Vec<f32>], from: usize, to: usize, volume:
         *output += sample * volume;
     }
 }
+

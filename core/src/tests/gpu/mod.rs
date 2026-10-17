@@ -9,6 +9,7 @@ pub mod graphics;
 pub mod fp;
 mod int_alu;
 mod memory;
+mod memory_map;
 mod program;
 mod shared;
 mod special;

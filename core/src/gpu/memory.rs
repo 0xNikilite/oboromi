@@ -1,0 +1,141 @@
+//! Guest GPU memory: each address space maps GPU VA pages onto guest-physical pages of guest RAM, and the
+//! `MemoryTracker` over those physical pages decides what host mirrors see, so mirrors key on PA and generation.
+use super::compute::HostBuffer;
+use super::{VkError, VkState};
+use std::collections::HashMap;
+use std::ops::Range;
+
+// The big page size nvhost-as-gpu maps with (Ryujinx NvHostAsGpuDeviceFile BigPageSize).
+pub const PAGE: u64 = 0x1_0000;
+
+pub type PaRange = Range<u64>;
+
+#[derive(Debug)]
+pub enum MemoryError {
+    Unmapped(u64),
+    Vk(VkError),
+}
+
+impl From<VkError> for MemoryError {
+    fn from(e: VkError) -> Self {
+        Self::Vk(e)
+    }
+}
+
+fn pages(start: u64, len: u64) -> Range<u64> {
+    start / PAGE..(start + len).div_ceil(PAGE)
+}
+
+#[derive(Default)]
+pub struct PageMap {
+    pa_by_va_page: HashMap<u64, u64>,
+}
+
+impl PageMap {
+    pub fn map(&mut self, va: u64, pa: u64, len: u64) {
+        assert!((va | pa | len).is_multiple_of(PAGE), "unaligned map {va:#x} -> {pa:#x} + {len:#x}");
+        for (page, pa) in pages(va, len).zip((pa..).step_by(PAGE as usize)) {
+            self.pa_by_va_page.insert(page, pa);
+        }
+    }
+
+    pub fn unmap(&mut self, va: u64, len: u64) {
+        for page in pages(va, len) {
+            self.pa_by_va_page.remove(&page);
+        }
+    }
+
+    pub fn resolve(&self, va: u64, len: u64) -> Result<impl Iterator<Item = PaRange> + '_, MemoryError> {
+        let end = va + len;
+        if let Some(page) = pages(va, len).find(|page| !self.pa_by_va_page.contains_key(page)) {
+            return Err(MemoryError::Unmapped((page * PAGE).max(va)));
+        }
+        let mut pieces = pages(va, len)
+            .map(move |page| {
+                let start = (page * PAGE).max(va);
+                let pa = self.pa_by_va_page[&page] + start % PAGE;
+                pa..pa + end.min((page + 1) * PAGE) - start
+            })
+            .peekable();
+        Ok(std::iter::from_fn(move || {
+            let mut range = pieces.next()?;
+            while let Some(next) = pieces.next_if(|next| next.start == range.end) {
+                range.end = next.end;
+            }
+            Some(range)
+        }))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Writer {
+    Cpu,
+    Gpu,
+}
+
+/// Guest-physical pages with the generation and writer of their last write; generations come from one counter, so
+/// the generation of a range rises whenever any of its pages is written.
+#[derive(Default)]
+pub struct MemoryTracker {
+    last_write: HashMap<u64, (u64, Writer)>,
+    generation: u64,
+}
+
+/// A host-visible copy of guest-physical ranges, gathered in order into one buffer.
+pub struct Mapping<'a> {
+    pub buffer: HostBuffer<'a>,
+    ranges: Vec<PaRange>,
+}
+
+impl MemoryTracker {
+    pub fn mark_cpu_written(&mut self, pa: u64, len: u64) {
+        self.mark(pa, len, Writer::Cpu);
+    }
+
+    pub fn mark_gpu_written(&mut self, pa: u64, len: u64) {
+        self.mark(pa, len, Writer::Gpu);
+    }
+
+    fn mark(&mut self, pa: u64, len: u64, writer: Writer) {
+        self.generation += 1;
+        for page in pages(pa, len) {
+            self.last_write.insert(page, (self.generation, writer));
+        }
+    }
+
+    pub fn generation(&self, pa: u64, len: u64) -> u64 {
+        pages(pa, len).filter_map(|page| self.last_write.get(&page)).map(|&(generation, _)| generation).max().unwrap_or(0)
+    }
+
+    pub fn writer(&self, pa: u64) -> Option<Writer> {
+        self.last_write.get(&(pa / PAGE)).map(|&(_, writer)| writer)
+    }
+
+    pub fn upload<'a>(&self, state: &'a VkState, ram: &[u8], ranges: impl IntoIterator<Item = PaRange>) -> Result<Mapping<'a>, VkError> {
+        let ranges: Vec<_> = ranges.into_iter().collect();
+        let bytes = ranges.iter().map(|range| &ram[range.start as usize..range.end as usize]).collect::<Vec<_>>().concat();
+        let mut buffer = HostBuffer::new(state, bytes.len().max(1) as u64)?;
+        buffer.write(&bytes)?;
+        Ok(Mapping { buffer, ranges })
+    }
+
+    pub fn download(&mut self, mapping: &Mapping, ram: &mut [u8]) -> Result<(), VkError> {
+        let mut bytes = vec![0; mapping.ranges.iter().map(|range| (range.end - range.start) as usize).sum()];
+        mapping.buffer.read(&mut bytes)?;
+        let mut rest = &bytes[..];
+        for range in &mapping.ranges {
+            let (head, tail) = rest.split_at((range.end - range.start) as usize);
+            ram[range.start as usize..range.end as usize].copy_from_slice(head);
+            self.mark_gpu_written(range.start, range.end - range.start);
+            rest = tail;
+        }
+        Ok(())
+    }
+
+    /// The global-memory SSBO window for `va..va + len` and the VA its first byte holds, aligned down for 128-bit
+    /// accesses; the whole window must be mapped.
+    pub fn window<'a>(&self, state: &'a VkState, ram: &[u8], space: &PageMap, va: u64, len: u64) -> Result<(Mapping<'a>, u64), MemoryError> {
+        let base = va & !0xf;
+        Ok((self.upload(state, ram, space.resolve(base, va + len - base)?)?, base))
+    }
+}

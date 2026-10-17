@@ -4,7 +4,7 @@
 use core::fmt::Write;
 use guest::nv::Nv;
 use guest::nvdrv::*;
-use guest::{hid, svc};
+use guest::{display, hid, svc};
 use scene::{Addresses, Scene, Vertex};
 
 core::arch::global_asm!(
@@ -39,8 +39,8 @@ fn guest_slice<T>(address: u64, len: usize) -> &'static mut [T] {
     unsafe { core::slice::from_raw_parts_mut(address as *mut T, len) }
 }
 
-/// Draws the scene crate's triangle through nvdrv and reads back the pixel at (20, 20).
-fn draw() -> svc::Result<[u8; 4]> {
+/// Draws the scene crate's triangle through nvdrv, then queues three software frames.
+fn draw() -> svc::Result<([u8; 4], [u32; 3])> {
     let heap = svc::set_heap_size(0x40_0000)?;
     let nv = Nv::initialize(heap, 0x10_0000)?;
     let mut fds = [0; 5];
@@ -76,7 +76,8 @@ fn draw() -> svc::Result<[u8; 4]> {
     nv.ioctl2(channel, CHANNEL_KICKOFF_PB, &mut submit, &scene::entry(scene_va, words))?;
     let (id, threshold) = (submit.fence.id, submit.fence.value);
     nv.ioctl(ctrl, CTRL_SYNCPT_WAIT_EVENT, &mut CtrlSyncptWaitEvent { id, threshold, timeout: u32::MAX, value: 0 })?;
-    Ok(guest_slice::<[u8; 4]>(target + u64::from(20 * SIZE + 20) * 4, 1)[0])
+    let pixel = guest_slice::<[u8; 4]>(target + u64::from(20 * SIZE + 20) * 4, 1)[0];
+    Ok((pixel, display::show(&nv, nvmap, heap + 0x30_0000)?))
 }
 
 struct Text {
@@ -107,7 +108,10 @@ extern "C" fn main() -> ! {
         Err(code) => print(format_args!("hid error {code:#x}")),
     }
     match draw() {
-        Ok(rgba) => print(format_args!("pixel {:08x}", u32::from_be_bytes(rgba))),
+        Ok((rgba, slots)) => {
+            print(format_args!("pixel {:08x}", u32::from_be_bytes(rgba)));
+            print(format_args!("slots {} {} {}", slots[0], slots[1], slots[2]));
+        }
         Err(code) => print(format_args!("nvdrv error {code:#x}")),
     }
     svc::exit_process()

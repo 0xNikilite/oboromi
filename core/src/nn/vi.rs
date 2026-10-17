@@ -37,8 +37,8 @@ pub fn services(nvmap: Rc<dyn NvmapResolve>) -> impl Iterator<Item = (String, Rc
 
 impl Display {
     fn session(&self, interface: Interface) -> Response {
-        let display = Display { interface, binder: self.binder.clone() };
-        Response { move_handles: vec![Object::Session(Rc::new(RefCell::new(display)))], ..Response::default() }
+        let display: Rc<RefCell<dyn Service>> = Rc::new(RefCell::new(Display { interface, binder: self.binder.clone() }));
+        Response { objects: vec![display], ..Response::default() }
     }
 
     /// Writes the native window parcel to the request's out buffer and returns `prefix` and the parcel's size.
@@ -60,7 +60,7 @@ impl Service for Display {
         match (self.interface, cmd) {
             (Root(id), _) if cmd == id => self.session(Application),
             (Application, 100 | 103) => {
-                Response { move_handles: vec![Object::Session(self.binder.clone())], ..Response::default() }
+                Response { objects: vec![self.binder.clone()], ..Response::default() }
             }
             (Application, 101) => self.session(System),
             (Application, 102) => self.session(Manager),

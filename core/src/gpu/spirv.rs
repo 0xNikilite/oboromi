@@ -66,6 +66,7 @@ pub mod capability {
     pub const INT64: u32 = 11;
     pub const INT16: u32 = 22;
     pub const INT8: u32 = 39;
+    pub const MIN_LOD: u32 = 42;
     pub const IMAGE_QUERY: u32 = 50;
     pub const STORAGE_BUFFER_16BIT: u32 = 4433;
     pub const STORAGE_BUFFER_8BIT: u32 = 4448;
@@ -74,6 +75,7 @@ pub mod capability {
     pub const VARIABLE_POINTERS: u32 = 4442;
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
+    pub const ATOMIC_FLOAT32_ADD: u32 = 6033;
 }
 
 pub mod storage_class {
@@ -750,6 +752,22 @@ impl Emitter {
         r
     }
 
+    pub fn emit_image_sample_dref_implicit_lod(&mut self, ty: u32, sampled_image: u32, coord: u32, dref: u32, operands: &[u32]) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![ty, r, sampled_image, coord, dref];
+        data.extend_from_slice(operands);
+        self.inst(89, &data);
+        r
+    }
+
+    pub fn emit_image_sample_dref_explicit_lod(&mut self, ty: u32, sampled_image: u32, coord: u32, dref: u32, image_ops: u32, operands: &[u32]) -> u32 {
+        let r = self.alloc_id();
+        let mut data = vec![ty, r, sampled_image, coord, dref, image_ops];
+        data.extend_from_slice(operands);
+        self.inst(90, &data);
+        r
+    }
+
     pub fn emit_image_fetch(&mut self, ty: u32, image: u32, coord: u32, operands: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r, image, coord];
@@ -825,6 +843,12 @@ impl Emitter {
     pub fn emit_atomic_iadd(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(234, &[ty, r, pointer, scope, semantics, value]);
+        r
+    }
+
+    pub fn emit_atomic_fadd(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32, value: u32) -> u32 {
+        let r = self.alloc_id();
+        self.inst(6035, &[ty, r, pointer, scope, semantics, value]);
         r
     }
 

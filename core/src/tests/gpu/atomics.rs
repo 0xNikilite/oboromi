@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::tests::gpu::harness::{GLOBAL_BASE, UREG, run_lanes};
-    use crate::tests::gpu_test::inst::{ATOM, ATOM_DEC, ATOM_INC, ATOM_MAX, ATOM_MIN, ATOMG, ATOMG_CAS, RED, RED_UR_64, S32, SZ_32, W2J_ATOMG_U64_ADD, alu, alu3, stg};
+    use crate::tests::gpu_test::inst::{ATOM, ATOM_DEC, ATOM_INC, ATOM_MAX, ATOM_MIN, ATOMG, ATOMG_CAS, ATOM_ADD_F16X2, ATOM_ADD_F32, ATOM_CAST, ATOM_CAST_64, ATOM_MAX_F16X2, ATOM_MIN_F16X2, RED, RED_UR_64, S32, SZ_32, W2J_ATOMG_U64_ADD, alu, alu3, stg};
 
     fn run(program: &[u128], r5: impl Fn(u32) -> u32, r6: impl Fn(u32) -> u32, global: &[u32]) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
         let next = GLOBAL_BASE + 4;
@@ -50,6 +50,46 @@ mod tests {
         let winners: Vec<usize> = (0..32).filter(|&lane| lanes[lane][4] == 0).collect();
         assert_eq!(winners, [global[0] as usize - 1]);
         assert!(lanes.iter().all(|regs| regs[4] == 0 || regs[4] == global[0]));
+    }
+
+    #[test]
+    fn atom_cast_compares_and_exchanges_32_and_64_bits() {
+        let Some((lanes, global)) = run(&[alu3(ATOM_CAST, 4, 2, 5, 6)], |_| 0, |lane| lane + 1, &[0]) else { return };
+        assert_eq!(lanes.iter().filter(|r| r[4] == 0).count(), 1);
+        assert!((1..=32).contains(&global[0]));
+        if !crate::gpu::device().is_ok_and(|d| d.shader_buffer_int64_atomics) {
+            eprintln!("skipping 64-bit CAST: no shaderBufferInt64Atomics");
+            return;
+        }
+        let seeds = (0..32).map(|lane| {
+            let mut seed = vec![0; 10];
+            (seed[2], seed[3], seed[8]) = (GLOBAL_BASE as u32, (GLOBAL_BASE >> 32) as u32, lane + 1);
+            seed
+        }).collect::<Vec<_>>();
+        let Some((lanes, global)) = run_lanes(&[alu3(ATOM_CAST_64, 4, 2, 6, 8)], &seeds, &[], &[0, 0]) else { return };
+        assert_eq!(lanes.iter().filter(|r| [r[4], r[5]] == [0, 0]).count(), 1);
+        assert!((1..=32).contains(&global[0]) && global[1] == 0);
+    }
+
+    #[test]
+    fn atom_float_add_and_half2_operations_are_atomic() {
+        if !crate::gpu::device().is_ok_and(|d| d.shader_buffer_float32_atomic_add) {
+            eprintln!("skipping: no shaderBufferFloat32AtomicAdd");
+            return;
+        }
+        let Some((_, global)) = run(&[alu(ATOM_ADD_F32, 4, 2, 5)], |_| 1.0f32.to_bits(), |_| 0, &[0]) else { return };
+        assert_eq!(global[0], 32.0f32.to_bits());
+        if !crate::gpu::device().is_ok_and(|d| d.shader_float16) {
+            eprintln!("skipping half2 atomics: no shaderFloat16");
+            return;
+        }
+        let program = [
+            alu(ATOM_MIN_F16X2, 4, 2, 5),
+            alu(ATOM_MAX_F16X2 | 4 << 40, 12, 2, 5),
+            alu(ATOM_ADD_F16X2 | 8 << 40, 8, 2, 6),
+        ];
+        let Some((_, global)) = run(&program, |_| 0xc500_4500, |_| 0x3c00_3c00, &[0xc900_4900, 0xc900_4900, 0]) else { return };
+        assert_eq!(global, [0xc900_4500, 0xc500_4900, 0x5000_5000]);
     }
 
     #[test]

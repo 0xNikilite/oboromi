@@ -96,7 +96,7 @@ pub fn instances(seconds: f32) -> Vec<[f32; 12]> {
             // The host wraps each sprite back across the screen; the vertex program subtracts the parallax scroll.
             let period = SCENE[0] + 128.0;
             let x = ((n * 0.618_034).fract() * period - scroll * parallax).rem_euclid(period) - 64.0 + scroll * parallax;
-            let y = 180.0 + (n * 0.754_878).fract() * 280.0 + 10.0 * (1.3 * seconds + n).sin();
+            let y = 160.0 + (n * 0.414_214).fract() * 300.0 + 10.0 * (1.3 * seconds + n).sin();
             let spin = if i % 2 == 0 { 1.0 } else { -1.0 } * (0.5 + (n * 0.43).fract());
             let layer = [parallax, 0.0, 0.37 * n + spin * seconds, 0.6 + 0.175 * depth];
             instances.push([[x, y, half, half], cell(i % 4), layer].concat().try_into().unwrap());

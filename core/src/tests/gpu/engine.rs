@@ -3,7 +3,7 @@
 use crate::gpu::VkState;
 use crate::gpu::engine::Gpu;
 use crate::gpu::memory::{MemoryError, PAGE};
-use crate::tests::gpu_test::inst::{ald, ast, bra, exit, ffma, fmul, ipa, mov_cbuf, mov_imm};
+use crate::tests::gpu_test::inst::{self, ald, ast, bra, exit, ffma, fmul, ipa, mov_cbuf, mov_imm, texture};
 
 pub const SET_OBJECT: u32 = 0x0000;
 pub const SET_VERTEX_STREAM_SIZE_A: u32 = 0x0600;
@@ -22,14 +22,19 @@ pub const SET_PIPELINE_SHADER: u32 = 0x2000;
 const SET_CONSTANT_BUFFER_SELECTOR_A: u32 = 0x2380;
 const LOAD_CONSTANT_BUFFER: u32 = 0x2390;
 const BIND_GROUP_CONSTANT_BUFFER: u32 = 0x2410;
+const SET_TEX_SAMPLER_POOL_A: u32 = 0x155c;
+const SET_TEX_HEADER_POOL_A: u32 = 0x1574;
 
 const PUSHBUFFER: u64 = 0x1_0000_0000;
 const VERTEX_PROGRAM: u64 = 0x1_0010_0000;
 const PIXEL_PROGRAM: u64 = 0x1_0010_1000;
+const TEXTURED_PROGRAM: u64 = 0x1_0010_2000;
 pub const VERTICES: u64 = 0x1_0020_0000;
 const CBUF: u64 = 0x1_0030_0000;
 pub const REPORT: u64 = 0x1_0040_0000;
 pub const TARGET: u64 = 0x1_0100_0000;
+/// The TIC entry at +0, the TSC entry at +0x100, the handle word at +0x200 and room for texels from +0x1000.
+pub const TEXTURES: u64 = 0x1_0070_0000;
 
 pub type Vertex = ([f32; 2], [u8; 4]);
 
@@ -103,15 +108,22 @@ fn programs() -> [Vec<u8>; 2] {
     [vertex, pixel]
 }
 
+// A type 2 pixel program reading generic 0 x and y perspective-correct and writing the texel there from the texture
+// whose handle is c[2][0x0].
+fn textured_program() -> Vec<u8> {
+    program([1, 7, 10, 12, 193, 195, 576, 577, 578, 579], &[ipa(0, 0x80, 0), ipa(1, 0x84, 0), texture(inst::TEX_LZ_2D, 0, 2, 0, 2, 0, 0xf), exit(), bra(-16)])
+}
+
 pub fn triangle_guest<'a>(state: &'a VkState, width: u32, height: u32, vertices: &[Vertex; 3]) -> Result<Gpu<'a>, MemoryError> {
     let target_pages = (u64::from(width * height) * 4).div_ceil(PAGE);
     let mut gpu = Gpu::new(state, ((8 + target_pages) * PAGE) as usize);
-    for (va, page, pages) in [(PUSHBUFFER, 3, 1), (VERTEX_PROGRAM, 1, 1), (VERTICES, 5, 1), (CBUF, 2, 1), (REPORT, 6, 1), (TARGET, 8, target_pages)] {
+    for (va, page, pages) in [(TEXTURES, 0, 1), (PUSHBUFFER, 3, 1), (VERTEX_PROGRAM, 1, 1), (VERTICES, 5, 1), (CBUF, 2, 1), (REPORT, 6, 1), (TARGET, 8, target_pages)] {
         gpu.space.map(va, page * PAGE, pages * PAGE);
     }
     let [vertex, pixel] = programs();
     gpu.write(VERTEX_PROGRAM, &vertex)?;
     gpu.write(PIXEL_PROGRAM, &pixel)?;
+    gpu.write(TEXTURED_PROGRAM, &textured_program())?;
     gpu.write(VERTICES, &vertex_bytes(vertices))?;
     Ok(gpu)
 }
@@ -152,6 +164,37 @@ pub fn run(gpu: &mut Gpu, words: &[u32]) -> Result<(), String> {
     gpu.submit(&[entry(PUSHBUFFER, words.len())])
 }
 
+/// Points texture 0 at a pitch-linear RGBA8 image and sampler 0 at nearest clamp-to-edge filtering (clc697tex.h).
+pub fn texture_header(gpu: &mut Gpu, address: u64, width: u32, height: u32, pitch: u32) -> Result<(), MemoryError> {
+    const A8B8G8R8_UNORM: u32 = 8 | 0b010_010_010_010 << 7;
+    const IDENTITY_SWIZZLE: u32 = 0o5432 << 19;
+    const PITCH: u32 = 2 << 21;
+    const TWO_D: u32 = 1 << 23;
+    const NORMALIZED: u32 = 1 << 31;
+    let [hi, lo] = split(address);
+    gpu.write(TEXTURES, &bytes(&[A8B8G8R8_UNORM | IDENTITY_SWIZZLE, lo, hi | PITCH, pitch >> 5, (width - 1) | TWO_D, (height - 1) | NORMALIZED]))?;
+    const CLAMP_TO_EDGE: u32 = 2 | 2 << 3;
+    const NEAREST: u32 = 1 | 1 << 4;
+    gpu.write(TEXTURES + 0x100, &bytes(&[CLAMP_TO_EDGE, NEAREST]))?;
+    gpu.write(TEXTURES + 0x200, &0u32.to_le_bytes())
+}
+
+/// Clears `target` to white and draws the vertices from `first` as a four-vertex strip textured with texture 0.
+pub fn textured_quad_frame(gpu: &mut Gpu, width: u32, height: u32, target: u64, first: u32) -> Result<(), String> {
+    let [textures, program] = [TEXTURES, TEXTURED_PROGRAM].map(split);
+    let mut words = Vec::new();
+    frame_state(width, height, target, [1.0, 0.0, 0.0, 1.0], &mut words);
+    inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &program, &mut words);
+    inc(SET_TEX_HEADER_POOL_A, &[textures[0], textures[1], 0], &mut words);
+    inc(SET_TEX_SAMPLER_POOL_A, &[textures[0], textures[1] + 0x100, 0], &mut words);
+    inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[16, textures[0], textures[1] + 0x200], &mut words);
+    inc(BIND_GROUP_CONSTANT_BUFFER + 4 * 32, &[2 << 4 | 1], &mut words);
+    inc(SET_COLOR_CLEAR_VALUE, &[1.0f32.to_bits(); 4], &mut words);
+    inc(CLEAR_SURFACE, &[0x3c], &mut words);
+    inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[5 << 28 | 4 << 16 | first], &mut words);
+    run(gpu, &words)
+}
+
 /// Clears the target to white, draws the triangle with `matrix` inline in the constant buffer, then releases `payload`.
 pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], payload: u32) -> Result<(), String> {
     const ONE_WORD: u32 = 1 << 28;
@@ -187,6 +230,11 @@ mod tests {
     const SET_ZT_SELECT: u32 = 0x1538;
     const INDICES: u64 = 0x1_0050_0000;
     const DEPTH: u64 = 0x1_0060_0000;
+    const TARGET_B: u64 = 0x1_0200_0000;
+    // A four-vertex strip with uv in the colour attribute's red and green.
+    fn quad(half: f32) -> [Vertex; 4] {
+        [([-half, -half], [0, 0, 0, 0]), ([half, -half], [255, 0, 0, 0]), ([-half, half], [0, 255, 0, 0]), ([half, half], [255, 255, 0, 0])]
+    }
     const SIZE: u32 = 64;
     const IDENTITY: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
     const WHITE: [u8; 4] = [255; 4];
@@ -359,5 +407,41 @@ mod tests {
         }
         run(&mut gpu, &words).unwrap();
         assert_eq!(pixel(&gpu, TARGET, 20, 20), [100, 100, 0, 255]);
+    }
+
+    #[test]
+    fn textured_quad_shows_each_texel_of_a_two_by_two_texture_with_nearest_sampling() {
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        gpu.write(VERTICES, &vertex_bytes(&quad(0.5))).unwrap();
+        let texels = [[RED, GREEN], [BLUE, WHITE]];
+        for (row, texels) in (0..).zip(texels) {
+            gpu.write(TEXTURES + 0x1000 + 32 * row, &texels.concat()).unwrap();
+        }
+        texture_header(&mut gpu, TEXTURES + 0x1000, 2, 2, 32).unwrap();
+        textured_quad_frame(&mut gpu, SIZE, SIZE, TARGET, 0).unwrap();
+        for (x, y, want) in [(20, 20, RED), (44, 20, GREEN), (20, 44, BLUE), (44, 44, WHITE), (8, 8, WHITE)] {
+            assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn a_target_sampled_as_a_texture_shows_its_latest_draw() {
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        map(&mut gpu, TARGET_B, PAGE);
+        texture_header(&mut gpu, TARGET, SIZE, SIZE, SIZE * 4).unwrap();
+        let mut previous = Vec::new();
+        for colours in [[RED, GREEN, BLUE], [GREEN, BLUE, RED]] {
+            let triangle = CORNERS.into_iter().zip(colours).collect::<Vec<_>>();
+            gpu.write(VERTICES, &vertex_bytes(&[&triangle[..], &quad(1.0)].concat())).unwrap();
+            triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
+            textured_quad_frame(&mut gpu, SIZE, SIZE, TARGET_B, 3).unwrap();
+            let [mut a, mut b] = [(); 2].map(|_| vec![0; (SIZE * SIZE * 4) as usize]);
+            gpu.read(TARGET, &mut a).unwrap();
+            gpu.read(TARGET_B, &mut b).unwrap();
+            assert!(a == b && a != previous, "{colours:?}");
+            previous = a;
+        }
     }
 }

@@ -491,7 +491,7 @@ impl<'a> Decoder<'a> {
             self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
         }
         let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
-        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         self.resources.push(Resource { kind, var });
         var
@@ -626,6 +626,11 @@ impl<'a> Decoder<'a> {
         let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
         let bit = self.pred_bit(uniform, pg, pg_not);
         Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
+    }
+
+    // A pixel program binds its constant buffers and textures apart from the vertex program's, in descriptor set 1.
+    fn descriptor_set(&self) -> u32 {
+        u32::from(matches!(self.stage, Stage::Fragment { .. }))
     }
 
     fn resource(&self, kind: ResourceKind) -> Option<u32> {

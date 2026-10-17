@@ -47,7 +47,8 @@ pub struct DrawState<'a> {
 
 pub struct GraphicsPipeline<'a> {
     device: &'a ash::Device,
-    pub descriptors: Descriptors<'a>,
+    /// The vertex stage's resources in set 0, the fragment stage's in set 1.
+    pub descriptors: [Descriptors<'a>; 2],
     shaders: [vk::ShaderModule; 2],
     pub layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
@@ -58,7 +59,7 @@ impl<'a> GraphicsPipeline<'a> {
         state: &'a VkState,
         vertex_spirv: &[u32],
         fragment_spirv: &[u32],
-        bindings: &[(u32, vk::DescriptorType)],
+        bindings: [&[(u32, vk::DescriptorType)]; 2],
         vertex_layout: &VertexLayout,
         target: &TargetState,
     ) -> Result<Self, VkError> {
@@ -66,7 +67,7 @@ impl<'a> GraphicsPipeline<'a> {
         let d = &state.device;
         let mut p = Self {
             device: d,
-            descriptors: Descriptors::new(d, bindings, Stage::VERTEX | Stage::FRAGMENT)?,
+            descriptors: [Descriptors::new(d, bindings[0], Stage::VERTEX)?, Descriptors::new(d, bindings[1], Stage::FRAGMENT)?],
             shaders: Default::default(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
@@ -74,7 +75,7 @@ impl<'a> GraphicsPipeline<'a> {
         for (shader, code) in p.shaders.iter_mut().zip([vertex_spirv, fragment_spirv]) {
             *shader = unsafe { d.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(code), None)? };
         }
-        let set_layouts = [p.descriptors.set_layout];
+        let set_layouts = p.descriptors.each_ref().map(|descriptors| descriptors.set_layout);
         let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
         p.layout = unsafe { d.create_pipeline_layout(&layout_info, None)? };
         let stages = [(Stage::VERTEX, p.shaders[0]), (Stage::FRAGMENT, p.shaders[1])]
@@ -294,7 +295,7 @@ impl VkState {
             );
             d.cmd_begin_rendering(cmd, &rendering);
             d.cmd_bind_pipeline(cmd, graphics, pipeline.pipeline);
-            d.cmd_bind_descriptor_sets(cmd, graphics, pipeline.layout, 0, &[pipeline.descriptors.set], &[]);
+            d.cmd_bind_descriptor_sets(cmd, graphics, pipeline.layout, 0, &pipeline.descriptors.each_ref().map(|descriptors| descriptors.set), &[]);
             d.cmd_set_viewport(cmd, 0, &[r.viewport]);
             d.cmd_set_scissor(cmd, 0, &[r.scissor]);
             d.cmd_set_cull_mode(cmd, r.cull_face);

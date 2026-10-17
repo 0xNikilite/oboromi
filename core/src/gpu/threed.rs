@@ -1,3 +1,5 @@
+use super::compute_class::DescriptorPool;
+
 pub const CLASS_ID: u16 = 0xc797;
 
 const REGISTER_BYTES: usize = 0x3c00;
@@ -43,7 +45,14 @@ const SET_BLEND_COLOR_OP: usize = 0x1340;
 const SET_BLEND_ALPHA_DEST_COEFF: usize = 0x1358;
 const SET_BLEND: usize = 0x1360;
 const SET_BLEND_PER_TARGET_SEPARATE_FOR_ALPHA: usize = 0x1e00;
+const SET_SAMPLER_BINDING: usize = 0x1234;
 const SET_ZT_SELECT: usize = 0x1538;
+const SET_TEX_SAMPLER_POOL_A: usize = 0x155c;
+const SET_TEX_SAMPLER_POOL_B: usize = 0x1560;
+const SET_TEX_SAMPLER_POOL_C: usize = 0x1564;
+const SET_TEX_HEADER_POOL_A: usize = 0x1574;
+const SET_TEX_HEADER_POOL_B: usize = 0x1578;
+const SET_TEX_HEADER_POOL_C: usize = 0x157c;
 const SET_INDEX_BUFFER_A: usize = 0x17c8;
 const SET_INDEX_BUFFER_B: usize = 0x17cc;
 const SET_INDEX_BUFFER_E: usize = 0x17d8;
@@ -263,6 +272,10 @@ pub struct DrawSnapshot {
     pub index_buffer: IndexBuffer,
     /// Per binding group, the buffer bound to each constant buffer slot.
     pub constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
+    pub texture_pool: DescriptorPool,
+    pub sampler_pool: DescriptorPool,
+    /// A texture's sampler is the TSC entry at its TIC index rather than the one its handle names.
+    pub sampler_via_header: bool,
 }
 
 impl DrawSnapshot {
@@ -531,6 +544,15 @@ impl ThreeD {
                 element_size: index_size,
             },
             constant_buffers: self.constant_buffers,
+            texture_pool: DescriptorPool {
+                address: self.address_pair(SET_TEX_HEADER_POOL_A, SET_TEX_HEADER_POOL_B),
+                maximum_index: self.word(SET_TEX_HEADER_POOL_C) & 0x3f_ffff,
+            },
+            sampler_pool: DescriptorPool {
+                address: self.address_pair(SET_TEX_SAMPLER_POOL_A, SET_TEX_SAMPLER_POOL_B),
+                maximum_index: self.word(SET_TEX_SAMPLER_POOL_C) & 0xf_ffff,
+            },
+            sampler_via_header: self.word(SET_SAMPLER_BINDING) & 1 != 0,
         })
     }
 

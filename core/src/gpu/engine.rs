@@ -1,12 +1,13 @@
 //! A GPU channel over guest RAM: pushbuffers run through the pusher, and each draw translates the guest's shader
 //! programs, mirrors the vertex and constant buffers it reads, renders into colour target 0 and writes that back to
 //! guest memory, so guest-physical pages stay the only identity of every resource.
-use super::compute::{ComputePipeline, HostBuffer};
-use super::compute_class::DispatchSnapshot;
+use super::compute::{ComputePipeline, HostBuffer, HostImage};
+use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
 use super::memory::{Mapping, MemoryError, MemoryTracker, PAGE, PaRange, PageMap, Writer};
-use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, branch_target, emit_module};
+use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
+use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::VkState;
 use ash::vk;
@@ -87,6 +88,9 @@ struct TargetKey {
     depth: Option<(u64, vk::Format)>,
 }
 
+/// A texture's guest pages and the TIC and TSC entries it was decoded from.
+type TextureKey = (Vec<PaRange>, [u8; 32], [u8; 32]);
+
 /// A colour target and the depth target drawn with it, which lives only on the host: nothing reads guest depth.
 struct Target<'a> {
     render_target: RenderTarget<'a>,
@@ -107,6 +111,7 @@ pub struct Gpu<'a> {
     support: Option<HostBuffer<'a>>,
     targets: HashMap<TargetKey, Target<'a>>,
     mirrors: HashMap<Vec<PaRange>, (u64, Mapping<'a>)>,
+    textures: HashMap<TextureKey, (u64, HostImage<'a>)>,
     pending_clear: Option<(ColourTarget, [f32; 4])>,
     pending_depth_clear: Option<(DepthTarget, f32)>,
     pixels: Vec<u8>,
@@ -272,6 +277,7 @@ impl<'a> Gpu<'a> {
             support: None,
             targets: HashMap::new(),
             mirrors: HashMap::new(),
+            textures: HashMap::new(),
             pending_clear: None,
             pending_depth_clear: None,
             pixels: Vec::new(),
@@ -473,6 +479,32 @@ impl<'a> Gpu<'a> {
         }
     }
 
+    /// The image for texture `handle` in the draw's pools, uploaded again whenever its guest pages change.
+    fn texture(&mut self, draw: &DrawSnapshot, handle: u32) -> Result<TextureKey, String> {
+        let entry = |pool: DescriptorPool, index: u32, name: &str| -> Result<[u8; 32], String> {
+            if index > pool.maximum_index {
+                return Err(format!("{name} {index} is past its pool's maximum index {}", pool.maximum_index));
+            }
+            let mut entry = [0; 32];
+            gather(&self.space, &self.ram, pool.address + 32 * u64::from(index), &mut entry).map_err(named)?;
+            Ok(entry)
+        };
+        let sampler_index = if draw.sampler_via_header { handle & 0xf_ffff } else { handle >> 20 };
+        let (tic, tsc) = (entry(draw.texture_pool, handle & 0xf_ffff, "texture header")?, entry(draw.sampler_pool, sampler_index, "sampler")?);
+        let pool = TexturePool { tic: &tic, tsc: &tsc };
+        let (header, sampler) = (pool.texture(0)?, pool.sampler(0)?);
+        let len = u64::from(header.pitch * header.height);
+        let key = (self.space.resolve(header.address, len).map_err(named)?.collect::<Vec<_>>(), tic, tsc);
+        let current = generation(&self.memory, &key.0);
+        if self.textures.get(&key).is_none_or(|(seen, _)| *seen != current) {
+            let mut texels = vec![0; len as usize];
+            gather(&self.space, &self.ram, header.address, &mut texels).map_err(named)?;
+            let image = HostImage::new(self.state, &header, &texels, &sampler).map_err(named)?;
+            self.textures.insert(key.clone(), (current, image));
+        }
+        Ok(key)
+    }
+
     /// Mirrors guest memory at `va` into a host buffer, rewritten when any of its pages changed, keyed by its ranges.
     fn mirror(&mut self, va: u64, len: u64) -> Result<Vec<PaRange>, String> {
         let ranges: Vec<_> = self.space.resolve(va, len).map_err(named)?.collect();
@@ -520,22 +552,22 @@ impl<'a> Gpu<'a> {
             };
             attributes.push((location, binding as u32, vertex_format(attribute)?, attribute.offset.into()));
         }
-        let mut cbufs: Vec<(u32, ConstantBuffer)> = Vec::new();
-        for (module, pipeline) in [(vs, VERTEX_PIPELINE), (fs, PIXEL_PIPELINE)] {
+        let mut cbufs: [Vec<(u32, ConstantBuffer)>; 2] = Default::default();
+        let mut textures = Vec::new();
+        for (stage, (module, pipeline)) in [(vs, VERTEX_PIPELINE), (fs, PIXEL_PIPELINE)].into_iter().enumerate() {
             let group = draw.shader_programs[pipeline].binding_group as usize;
+            let bound = |slot: u32| draw.constant_buffers[group][slot as usize].ok_or_else(|| format!("constant buffer slot {slot} of binding group {group} is not bound"));
+            let mut images = TEXTURE_BINDING..;
             for &kind in &module.resources {
                 match kind {
-                    ResourceKind::Cbuf(slot) => {
-                        let buffer = draw.constant_buffers[group][slot as usize]
-                            .ok_or_else(|| format!("constant buffer slot {slot} of binding group {group} is not bound"))?;
-                        match cbufs.iter().find(|&&(bound, _)| bound == slot) {
-                            Some(&(_, other)) if other != buffer => return Err(format!("both stages read constant buffer slot {slot} from different buffers")),
-                            Some(_) => {}
-                            None => cbufs.push((slot, buffer)),
-                        }
+                    ResourceKind::Cbuf(slot) => cbufs[stage].push((CBUF_BINDING + slot, bound(slot)?)),
+                    ResourceKind::Texture2D { cbuf_bank, byte_offset } if pipeline == PIXEL_PIPELINE => {
+                        let mut handle = [0; 4];
+                        gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut handle).map_err(named)?;
+                        textures.push((images.next().unwrap(), u32::from_le_bytes(handle)));
                     }
                     ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
-                    kind => return Err(format!("{kind:?} in a graphics stage is not implemented")),
+                    kind => return Err(format!("{kind:?} in shader pipeline {pipeline} is not implemented")),
                 }
             }
         }
@@ -574,10 +606,13 @@ impl<'a> Gpu<'a> {
         } else {
             None
         };
-        let cbuf_ranges = cbufs
-            .iter()
-            .map(|&(slot, buffer)| Ok((CBUF_BINDING + slot, self.mirror(buffer.address, buffer.size.into())?)))
-            .collect::<Result<Vec<_>, String>>()?;
+        let mut cbuf_ranges: [Vec<(u32, Vec<PaRange>)>; 2] = Default::default();
+        for (ranges, buffers) in cbuf_ranges.iter_mut().zip(&cbufs) {
+            for &(binding, buffer) in buffers {
+                ranges.push((binding, self.mirror(buffer.address, buffer.size.into())?));
+            }
+        }
+        let textures = textures.into_iter().map(|(binding, handle)| Ok((binding, self.texture(draw, handle)?))).collect::<Result<Vec<_>, String>>()?;
 
         let pipeline = match self.pipelines.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -596,13 +631,16 @@ impl<'a> Gpu<'a> {
                 let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology: key.topology };
                 let target = TargetState { blend: blend_state(key.blend, key.colour_write_mask)?, depth: key.depth };
                 let ubo = vk::DescriptorType::UNIFORM_BUFFER;
-                let descriptor_bindings: Vec<_> = cbuf_ranges.iter().map(|&(binding, _)| (binding, ubo)).collect();
+                let [vs_bindings, mut fs_bindings] = cbuf_ranges.each_ref().map(|stage| stage.iter().map(|&(binding, _)| (binding, ubo)).collect::<Vec<_>>());
+                fs_bindings.extend(textures.iter().map(|&(binding, _)| (binding, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)));
                 let [vs, fs] = key.shaders.map(|key| &self.modules[&key].words);
-                entry.insert(GraphicsPipeline::new(self.state, vs, fs, &descriptor_bindings, &layout, &target).map_err(named)?)
+                entry.insert(GraphicsPipeline::new(self.state, vs, fs, [&vs_bindings, &fs_bindings], &layout, &target).map_err(named)?)
             }
         };
-        let buffers: Vec<_> = cbuf_ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();
-        pipeline.descriptors.bind(&buffers);
+        for (descriptors, ranges) in pipeline.descriptors.iter_mut().zip(&cbuf_ranges) {
+            descriptors.bind(&ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect::<Vec<_>>());
+        }
+        pipeline.descriptors[1].bind_images(&textures.iter().map(|(binding, key)| (*binding, &self.textures[key].1)).collect::<Vec<_>>());
 
         let ranges: Vec<_> = self.space.resolve(ct.address, u64::from(extent.width * extent.height * 4)).map_err(named)?.collect();
         let current = generation(&self.memory, &ranges);

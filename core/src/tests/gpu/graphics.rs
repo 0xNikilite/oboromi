@@ -61,7 +61,7 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
     let topology = vk::PrimitiveTopology::TRIANGLE_LIST;
     let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
     let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-    let pipeline = GraphicsPipeline::new(state, &vertex, &fragment, &[], &layout, &TargetState { blend, depth: None })?;
+    let pipeline = GraphicsPipeline::new(state, &vertex, &fragment, [&[], &[]], &layout, &TargetState { blend, depth: None })?;
     let target = RenderTarget::new(state, SIZE, SIZE, None)?;
     let mut vertices = HostBuffer::new(state, 36)?;
     let data: Vec<u8> =

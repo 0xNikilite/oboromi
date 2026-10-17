@@ -158,7 +158,6 @@ pub struct Services {
     pub tspm: Option<nn::tspm::State>,
     pub uart: Option<nn::uart::State>,
     pub usb: Option<nn::usb::State>,
-    pub vi: Option<nn::vi::State>,
     pub vi2: Option<nn::vi2::State>,
     pub vic: Option<nn::vic::State>,
     pub wlan: Option<nn::wlan::State>,

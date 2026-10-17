@@ -1,9 +1,11 @@
 use crate::nn;
 use crate::sys;
 
+pub mod binder;
 pub mod hid;
 pub mod hipc;
 pub mod sm;
+pub mod vi;
 
 macro_rules! define_service {
     ($($name:ident),* $(,)?) => {
@@ -48,7 +50,7 @@ define_service!(
     pgl, pinmux, pl, pm, prepo, psc, psm, pwm, rgltr, ro,
     rtc, sasbus, set, sf_uds, sfdnsres, spbg, spi, spl,
     sprof, spsm, srepo, ssl, syncpt, tc, tcap, time,
-    tma_log, tmagent, ts, tspm, uart, usb, vi, vi2, vic,
+    tma_log, tmagent, ts, tspm, uart, usb, vi2, vic,
     wlan, xcd,
 );
 
@@ -59,7 +61,7 @@ pub trait ServiceTrait {
 }
 
 pub fn start_host_services(state: &mut sys::State) {
-    let entries: [(&str, fn(&mut sys::State)); 160] = [
+    let entries: [(&str, fn(&mut sys::State)); 159] = [
         ("acc", nn::acc::State::run),
         ("adraw", nn::adraw::State::run),
         ("ahid", nn::ahid::State::run),
@@ -215,7 +217,6 @@ pub fn start_host_services(state: &mut sys::State) {
         ("tspm", nn::tspm::State::run),
         ("uart", nn::uart::State::run),
         ("usb", nn::usb::State::run),
-        ("vi", nn::vi::State::run),
         ("vi2", nn::vi2::State::run),
         ("vic", nn::vic::State::run),
         ("wlan", nn::wlan::State::run),

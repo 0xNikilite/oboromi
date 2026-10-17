@@ -3,6 +3,8 @@
 #include <QDesktopServices>
 #include <QFontDatabase>
 #include <QFrame>
+#include <QComboBox>
+#include <QCheckBox>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -110,6 +112,18 @@ void MainWindow::buildUi() {
         });
         buttons->addWidget(demoButton);
     }
+    auto *quality = new QComboBox(central);
+    quality->addItems({"Dungeon: showcase", "Dungeon: realtime"});
+    auto *rays = new QCheckBox("Ray tracing", central);
+    rays->setEnabled(oboromi_dungeon_ray_queries());
+    rays->setChecked(rays->isEnabled());
+    connect(quality, &QComboBox::currentIndexChanged, this, [quality, rays](int index) {
+        rays->setChecked(index == 0 && rays->isEnabled());
+        oboromi_dungeon_settings(index == 0, rays->isChecked());
+    });
+    connect(rays, &QCheckBox::toggled, this, [quality](bool enabled) { oboromi_dungeon_settings(quality->currentIndex() == 0, enabled); });
+    buttons->addWidget(quality);
+    buttons->addWidget(rays);
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
         if (m_demoFrame.isFinished())
             m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);

@@ -75,6 +75,20 @@ fn main() {
             .position(|arg| arg == name)
             .map(|i| args[i + 1].clone())
     };
+    if args[0] == "dungeon" {
+        demo_dungeon::render::PROFILE.store(args.iter().any(|a|a=="--profile"), std::sync::atomic::Ordering::Relaxed);
+        if let Some(disabled) = flag("--disable") {
+            let mask=disabled.split(',').map(|effect|match effect {"fire"=>1,"water"=>2,"bloom"=>4,"fog"=>8,_=>panic!("unknown effect {effect}")}).fold(0,|a,b|a|b);
+            demo_dungeon::render::DISABLED.store(mask, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(quality) = flag("--quality") {
+            assert!(quality == "realtime" || quality == "showcase", "--quality realtime|showcase");
+            demo_dungeon::render::SHOWCASE.store(quality == "showcase", std::sync::atomic::Ordering::Relaxed);
+            demo_dungeon::render::RAYS.store(quality == "showcase", std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(rays) = flag("--raytracing") { demo_dungeon::render::RAYS.store(rays == "on", std::sync::atomic::Ordering::Relaxed); }
+        if let Some(view) = flag("--view") { demo_dungeon::VIEW.store(view.parse().unwrap(), std::sync::atomic::Ordering::Relaxed); }
+    }
     let seconds: f32 = flag("--seconds").map_or(8.0, |s| s.parse().unwrap());
     let fps: f32 = flag("--fps").map_or(60.0, |s| s.parse().unwrap());
     let out = std::path::PathBuf::from(flag("--out").expect("--out <dir>"));

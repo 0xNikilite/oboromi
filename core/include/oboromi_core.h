@@ -236,6 +236,8 @@ bool oboromi_render_post_frame(float seconds);
 /// missing or the draw fails. blocks, so call it from a worker thread.
 bool oboromi_render_sprites_frame(float seconds);
 bool oboromi_render_dungeon_frame(float seconds);
+bool oboromi_dungeon_ray_queries(void);
+void oboromi_dungeon_settings(bool showcase, bool raytracing);
 
 /// plays the music demo up to `seconds` through the audio renderer, false if it panicked.
 bool oboromi_render_music_demo(float seconds);

@@ -25,10 +25,12 @@ void main() {
         vec2 offset = vec2(p) - impacts[j].xy;
         velocity += impacts[j].z * exp(-dot(offset, offset) / impacts[j].w);
     }
+    velocity += (sin(float(p.x)*.17-extent.w*2.)*cos(float(p.y)*.31+extent.w)*.7
+        + sin(float(p.x)*.37+float(p.y)*.23-extent.w*3.)*.3)*grid.z;
     float bank = smoothstep(0.0, 3.0, float(min(p.y, int(grid.y) - 1 - p.y)));
     float h = (current.x + velocity * grid.z) * mix(0.75, 1.0, bank);
     next_state[i] = vec2(h, velocity);
     vec2 slope = vec2(cell(p + ivec2(1, 0)).x - cell(p - ivec2(1, 0)).x,
                       cell(p + ivec2(0, 1)).x - cell(p - ivec2(0, 1)).x) * grid.xy / (2.0 * extent.xy);
-    surface[i] = vec4(h, slope, smoothstep(0.05, 0.25, length(slope)));
+    surface[i] = vec4(h, slope, smoothstep(0.025, 0.12, length(slope)+abs(velocity)*.15));
 }

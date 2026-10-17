@@ -303,3 +303,16 @@ pub extern "C" fn oboromi_audio_test_tone(seconds: f32) -> usize {
 pub extern "C" fn oboromi_render_dungeon_frame(seconds: f32) -> bool {
     matches!(catch_unwind(|| crate::gpu::demo_dungeon::render_dungeon_frame(seconds)), Ok(Ok(())))
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_dungeon_ray_queries() -> bool {
+    matches!(catch_unwind(|| crate::gpu::device().is_ok_and(|d| d.acceleration_structure.is_some())), Ok(true))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_dungeon_settings(showcase: bool, raytracing: bool) {
+    use crate::gpu::demo_dungeon::render::{SHOWCASE, RAYS};
+    use std::sync::atomic::Ordering::Relaxed;
+    SHOWCASE.store(showcase, Relaxed);
+    RAYS.store(raytracing, Relaxed);
+}

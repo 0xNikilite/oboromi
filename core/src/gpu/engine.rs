@@ -568,7 +568,7 @@ impl<'a> Gpu<'a> {
         let (tic, tsc) = (entry(draw.texture_pool, handle & 0xf_ffff, "texture header")?, entry(draw.sampler_pool, sampler_index, "sampler")?);
         let pool = TexturePool { tic: &tic, tsc: &tsc };
         let (header, sampler) = (pool.texture(0)?, pool.sampler(0)?);
-        let len = u64::from(header.pitch * header.height);
+        let len = header.guest_bytes() as u64;
         let key = (self.space.resolve(header.address, len).map_err(named)?.collect::<Vec<_>>(), tic, tsc);
         let current = generation(&self.memory, &key.0);
         if self.textures.get(&key).is_none_or(|(seen, _)| *seen != current) {

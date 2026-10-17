@@ -4,4 +4,6 @@
 pub mod cmif;
 pub mod nvdrv;
 #[cfg(target_arch = "aarch64")]
+pub mod nv;
+#[cfg(target_arch = "aarch64")]
 pub mod svc;

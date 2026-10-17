@@ -106,6 +106,17 @@ pub struct CtrlSyncptWait {
 }
 
 #[repr(C)]
+pub struct CtrlSyncptWaitEvent {
+    pub id: u32,
+    pub threshold: u32,
+    pub timeout: u32,
+    pub value: u32,
+}
+
+/// Ioctl3's first buffer for `CTRL_GPU_GET_CHARACTERISTICS`: the characteristics size the second output buffer takes.
+pub type CtrlGpuGetCharacteristics = [u64; 28];
+
+#[repr(C)]
 pub struct ChannelFd {
     pub fd: u32,
 }
@@ -167,6 +178,8 @@ pub const AS_INITIALIZE_EX: u32 = write::<AsInitializeEx>(0x41, 0x09);
 pub const CTRL_GPU_ZCULL_GET_CTX_SIZE: u32 = read::<CtrlGpuZcullGetCtxSize>(0x47, 0x01);
 pub const CTRL_SYNCPT_READ: u32 = read_write::<CtrlSyncptRead>(0x00, 0x14);
 pub const CTRL_SYNCPT_WAIT: u32 = read_write::<CtrlSyncptWait>(0x00, 0x16);
+pub const CTRL_SYNCPT_WAIT_EVENT: u32 = read_write::<CtrlSyncptWaitEvent>(0x00, 0x1d);
+pub const CTRL_GPU_GET_CHARACTERISTICS: u32 = read_write::<CtrlGpuGetCharacteristics>(0x47, 0x05);
 pub const CHANNEL_SET_NVMAP_FD: u32 = write::<ChannelFd>(0x48, 0x01);
 pub const CHANNEL_ALLOC_OBJ_CTX: u32 = read_write::<ChannelAllocObjCtx>(0x48, 0x09);
 pub const CHANNEL_ZCULL_BIND: u32 = read_write::<ChannelZcullBind>(0x48, 0x0b);

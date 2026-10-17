@@ -6,6 +6,8 @@ use ash::vk;
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
+const GROUP: u32 = 16;
+const PIXELS: u32 = 9;
 
 fn gradient_shader() -> Vec<u32> {
     let mut e = Emitter::new();
@@ -55,14 +57,14 @@ fn gradient_shader() -> Vec<u32> {
     e.emit_return();
     e.emit_function_end();
     e.emit_entry_point(execution_model::GLCOMPUTE, main, "main", &[gid, pixels]);
-    e.emit_execution_mode(main, execution_mode::LOCAL_SIZE, &[16, 16, 1]);
+    e.emit_execution_mode(main, execution_mode::LOCAL_SIZE, &[GROUP, GROUP, 1]);
     // GlobalInvocationId is WorkgroupId * LocalSize + LocalInvocationId, i.e. the pixel coordinate.
     e.emit_decorate(gid, deco::BUILTIN, &[BuiltIn::GlobalInvocationId as u32]);
     e.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
     e.emit_decorate(block, deco::BLOCK, &[]);
     e.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
     e.emit_decorate(pixels, deco::DESCRIPTOR_SET, &[0]);
-    e.emit_decorate(pixels, deco::BINDING, &[9]);
+    e.emit_decorate(pixels, deco::BINDING, &[PIXELS]);
     e.finalize();
     e.words()
 }
@@ -71,11 +73,12 @@ pub fn render_test_frame() -> Result<(), VkError> {
     let state = device()?;
     let size = u64::from(WIDTH * HEIGHT * 4);
     let buffer = HostBuffer::new(state, size)?;
-    let bindings = [(9, vk::DescriptorType::STORAGE_BUFFER)];
+    let bindings = [(PIXELS, vk::DescriptorType::STORAGE_BUFFER)];
     let mut pipeline = ComputePipeline::new(state, &gradient_shader(), &bindings)?;
-    pipeline.bind(&[(9, &buffer)]);
+    pipeline.bind(&[(PIXELS, &buffer)]);
     // Round up so 1080 rows get a partial last group; the shader guard drops the overhang.
-    state.dispatch(&pipeline, [WIDTH.div_ceil(16), HEIGHT.div_ceil(16), 1])?;
+    let groups = [WIDTH.div_ceil(GROUP), HEIGHT.div_ceil(GROUP), 1];
+    state.dispatch(&pipeline, groups)?;
     let mut pixels = vec![0; size as usize];
     buffer.read(&mut pixels)?;
     crate::display::present(WIDTH, HEIGHT, &pixels);

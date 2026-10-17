@@ -1445,11 +1445,12 @@ impl<'a> Decoder<'a> {
             ResourceKind::Shared => spirv::scope::WORKGROUP,
             _ => spirv::scope::DEVICE,
         };
-        // Lanes storing other bytes of the same word race, so the bytes are cleared and set atomically.
-        let scope = self.cached_const_u32(scope);
-        let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
-        self.ir.emit_atomic_and(ty, ptr, scope, relaxed, keep);
-        self.ir.emit_atomic_or(ty, ptr, scope, relaxed, value);
+        // Lanes storing into one word race, so the bytes merge in a compare-exchange loop where the last writer of a byte wins.
+        let [scope, relaxed] = [scope, spirv::memory_semantics::RELAXED].map(|c| self.cached_const_u32(c));
+        self.atomic_update(ptr, scope, relaxed, |s, old| {
+            let kept = s.ir.emit_bitwise_and(ty, old, keep);
+            s.ir.emit_bitwise_or(ty, kept, value)
+        });
     }
 
     fn memory_word_at(&mut self, kind: ResourceKind, address: u32) -> u32 {

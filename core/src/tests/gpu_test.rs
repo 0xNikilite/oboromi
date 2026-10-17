@@ -913,6 +913,7 @@ fn fixtures_match_nvdisasm() {
         (inst::uldc64(4, 0, 0x10), "ULDC.64 UR4, c[0x0][0x10];"),
         (inst::sts(15, 4), "STS [R15], R4 ;"),
         (inst::sts(255, 255), "STS [RZ], RZ ;"),
+        (inst::sts(255, 4) & !inst::SZ_32, "STS.U8 [RZ], R4 ;"),
         (inst::lds(13, 16), "LDS R13, [R16] ;"),
         (inst::lds(6, 255), "LDS R6, [RZ] ;"),
         (inst::atoms_add(4, 255, 5), "ATOMS.ADD R4, [RZ], R5 ;"),

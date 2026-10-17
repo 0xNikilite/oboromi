@@ -16,6 +16,7 @@ mod fp;
 mod int_alu;
 mod memory;
 mod operands;
+mod ray;
 mod shared;
 mod special;
 mod tensor;
@@ -89,6 +90,14 @@ pub enum ResourceKind {
     VertexInput { location: u32 },
     Varying { location: u32, flat: bool },
     FragmentOutput { location: u32 },
+    Ttu,
+    RayQuery,
+    AccelerationStructure { cbuf_bank: u32, byte_offset: u32 },
+}
+
+/// A module binds its acceleration structure after its textures and surfaces.
+pub fn acceleration_structure_binding(kinds: &[ResourceKind]) -> u32 {
+    TEXTURE_BINDING + kinds.iter().filter(|kind| matches!(kind, ResourceKind::Texture2D { .. } | ResourceKind::Surface2D { .. })).count() as u32
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,6 +157,8 @@ pub struct Decoder<'a> {
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
+    type_acceleration_structure: u32,
+    acceleration_structure_address: Option<(u32, u32)>,
     derivatives: bool,
     invocations: u32,
     glsl_ext: u32,
@@ -276,6 +287,8 @@ impl<'a> Decoder<'a> {
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],
+            type_acceleration_structure: 0,
+            acceleration_structure_address: None,
             derivatives: false,
             invocations: 0,
             glsl_ext: 0,
@@ -298,6 +311,7 @@ impl<'a> Decoder<'a> {
             Stage::Vertex { .. } => model::VERTEX,
             Stage::Fragment { .. } => model::FRAGMENT,
         };
+        self.bind_acceleration_structure();
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
@@ -503,6 +517,7 @@ impl<'a> Decoder<'a> {
     // Warp collectives and BAR meet at workgroup barriers, so a program with them steps every invocation through the same
     // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
+        self.acceleration_structure_address = ray::acceleration_structure_address(words);
         let len = words.len() as u32;
         // BRX, JMX and CALL Ra only know their target at run time, so such a program dispatches on every pc; RET lands after a CALL.
         let indirect = words.iter().any(|inst| matches!(opcode(*inst), CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));

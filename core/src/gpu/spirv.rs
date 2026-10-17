@@ -74,6 +74,7 @@ pub mod capability {
     pub const VARIABLE_POINTERS: u32 = 4442;
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
+    pub const RAY_QUERY: u32 = 4472;
 }
 
 pub mod storage_class {
@@ -174,7 +175,7 @@ fn section(opcode: u32, operands: &[u32]) -> usize {
         16 | 331 => 6,                                     // OpExecutionMode(Id)
         2..=7 | 330 => 7,                                  // OpSource* to OpString, OpModuleProcessed
         71..=75 | 332 => 8,                                // OpDecorate* and OpGroup*Decorate
-        19..=39 | 41..=52 => 9,                            // OpType*, OpConstant*, OpSpecConstant*
+        19..=39 | 41..=52 | 4472 | 5341 => 9,              // OpType*, OpConstant*, OpSpecConstant*
         59 if operands[2] != storage_class::FUNCTION => 9, // global OpVariable
         _ => 10,                                           // function bodies
     }
@@ -402,6 +403,18 @@ impl Emitter {
     pub fn emit_type_sampled_image(&mut self, image_type: u32) -> u32 {
         let r = self.alloc_id();
         self.inst(27, &[r, image_type]);
+        r
+    }
+
+    pub fn emit_type_acceleration_structure(&mut self) -> u32 {
+        let r = self.alloc_id();
+        self.inst(5341, &[r]);
+        r
+    }
+
+    pub fn emit_type_ray_query(&mut self) -> u32 {
+        let r = self.alloc_id();
+        self.inst(4472, &[r]);
         r
     }
 
@@ -730,6 +743,18 @@ impl Emitter {
         self.inst(12, &data);
         r
     }
+
+    pub fn emit_ray_query_initialize(&mut self, query: u32, accel: u32, flags: u32, cull_mask: u32, origin: u32, tmin: u32, direction: u32, tmax: u32) {
+        self.inst(4473, &[query, accel, flags, cull_mask, origin, tmin, direction, tmax]);
+    }
+
+    pub fn emit_ray_query_confirm_intersection(&mut self, query: u32) {
+        self.inst(4476, &[query]);
+    }
+
+    pub fn emit_ray_query_proceed(&mut self, ty: u32, query: u32) -> u32 { self.typed_un(4477, ty, query) }
+
+    pub fn emit_ray_query_get_intersection(&mut self, op: u32, ty: u32, query: u32, committed: u32) -> u32 { self.typed_bin(op, ty, query, committed) }
 
     pub fn emit_sampled_image(&mut self, ty: u32, image: u32, sampler: u32) -> u32 {
         self.typed_bin(86, ty, image, sampler)

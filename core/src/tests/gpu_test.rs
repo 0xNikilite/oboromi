@@ -41,6 +41,7 @@ pub mod inst {
     const FFMA_RIR: u128 = 0x823;
     const FMNMX_RR: u128 = 0x209;
     const MUFU_R: u128 = 0x308;
+    pub const FSETP_GT: u128 = 0x20b | 4 << 76 | 7 << 84 | PP_PT;
     pub const FP_ABS_B: u128 = 1 << 62;
     pub const FP_NEG_B: u128 = 1 << 63;
     pub const FP_NEG_A: u128 = 1 << 72;
@@ -816,6 +817,10 @@ fn fixtures_match_nvdisasm() {
         (inst::fmnmx(1, 2, 3, 0, true) | inst::FP_NEG_A | inst::FP_ABS_B, "FMNMX R1, -R2, |R3|, !P0;"),
         (inst::mufu(1, inst::MUFU_RCP, 3), "MUFU.RCP R1, R3 ;"),
         (inst::mufu(1, inst::MUFU_TANH, 3), "MUFU.TANH R1, R3 ;"),
+        (inst::mufu(8, inst::MUFU_COS, 11), "MUFU.COS R8, R11 ;"),
+        (inst::mufu(9, inst::MUFU_SIN, 11), "MUFU.SIN R9, R11 ;"),
+        (inst::mufu(13, inst::MUFU_LG2, 13), "MUFU.LG2 R13, R13 ;"),
+        (inst::alu(inst::FSETP_GT ^ inst::IMM_B, 0, 13, 256.0f32.to_bits()), "FSETP.GT.AND P0, PT, R13, 256, PT;"),
         (0x004fc800078e02090000000700077224, "IMAD R7, R0, R7, R9 ;"),
         (0x004fc800078e18ff0000000302017211, "LEA R1, R2, R3, 0x3 ;"),
         (0x004fc80003906270000000030200720c, "ISETP.GE.AND P0, P1, R2, R3, PT ;"),

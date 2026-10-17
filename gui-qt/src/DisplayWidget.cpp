@@ -1,9 +1,11 @@
 #include "DisplayWidget.h"
 
+#include <QLayout>
 #include <QPainter>
 #include <QPlatformSurfaceEvent>
 #include <QVulkanInstance>
 #include <QWindow>
+#include <functional>
 
 #include "oboromi_core.h"
 
@@ -21,6 +23,8 @@ public:
         setVulkanInstance(instance);
     }
 
+    std::function<void()> cannotPresent;
+
 protected:
     void exposeEvent(QExposeEvent *) override { attach(); }
     void resizeEvent(QResizeEvent *) override { attach(); }
@@ -35,11 +39,13 @@ protected:
 
 private:
     void attach() {
-        if (!isExposed()) return;
+        if (!isExposed() || !cannotPresent) return;
         const QSize pixels = size() * devicePixelRatio();
         const auto surface = uint64_t(QVulkanInstance::surfaceForWindow(this));
-        if (!oboromi_display_surface(surface, pixels.width(), pixels.height()))
-            qWarning("cannot present into the vulkan surface");
+        if (oboromi_display_surface(surface, pixels.width(), pixels.height())) return;
+        qWarning("the vulkan surface cannot present, falling back to DisplayWidget");
+        oboromi_display_surface(0, 0, 0);
+        std::exchange(cannotPresent, nullptr)();
     }
 };
 
@@ -57,11 +63,20 @@ QWidget *createDisplay(QWidget *parent) {
         return nullptr;
     }();
     if (!instance) return new DisplayWidget(parent);
-    return QWidget::createWindowContainer(new VulkanDisplay(instance), parent);
+    auto *window = new VulkanDisplay(instance);
+    auto *container = QWidget::createWindowContainer(window, parent);
+    window->cannotPresent = [container] {
+        auto *widget = new DisplayWidget(container->parentWidget());
+        delete container->parentWidget()->layout()->replaceWidget(container, widget);
+        widget->show();
+        container->deleteLater();
+    };
+    return container;
 }
 
 DisplayWidget::DisplayWidget(QWidget *parent) : QWidget(parent) {
     oboromi_frame_set_callback(&postFrameReady, this);
+    frameReady();
 }
 
 DisplayWidget::~DisplayWidget() {

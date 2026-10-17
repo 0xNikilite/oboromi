@@ -92,7 +92,6 @@ impl TexturePool<'_> {
     pub fn sampler(&self, handle: u32) -> Result<vk::SamplerCreateInfo<'static>, String> {
         let e = entry(self.tsc, handle >> 20)?;
         check("depth compare", field(e, 9, 9), 0)?;
-        check("max anisotropy", field(e, 20, 22), 0)?;
         check("reduction filter", field(e, 42, 43), 0)?;
         check("unnormalized coords", field(e, 57, 57), 0)?;
         const MIP_NONE: u32 = 1;
@@ -107,6 +106,8 @@ impl TexturePool<'_> {
             .mag_filter(filter(field(e, 32, 34))?)
             .min_filter(filter(field(e, 36, 37))?)
             .mipmap_mode(if mip_filter == MIP_LINEAR { vk::SamplerMipmapMode::LINEAR } else { vk::SamplerMipmapMode::NEAREST })
+            .anisotropy_enable(field(e, 20, 22) > 0)
+            .max_anisotropy([1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0][field(e, 20, 22) as usize])
             .min_lod(min_lod)
             .max_lod(max_lod))
     }

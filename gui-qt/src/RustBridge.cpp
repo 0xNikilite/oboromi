@@ -32,4 +32,8 @@ bool renderTestFrame() {
     return oboromi_render_test_frame();
 }
 
+bool renderDemoFrame(float seconds) {
+    return oboromi_render_demo_frame(seconds);
+}
+
 }

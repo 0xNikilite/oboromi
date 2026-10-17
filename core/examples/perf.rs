@@ -4,7 +4,7 @@ use oboromi_core::display::present;
 use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::sm86::STATE_WORDS;
-use oboromi_core::gpu::{device, frame::render_test_frame};
+use oboromi_core::gpu::{device, frame::{render_demo_frame, render_test_frame}};
 use oboromi_core::tests::gpu::{graphics, harness::translate_module};
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
@@ -80,5 +80,8 @@ fn main() {
     bench("draw+readback 64x64 triangle", 50, 1000, || triangle(black_box(&mut pixels)).unwrap());
     bench("render_test_frame e2e", 2, 20, || {
         render_test_frame().unwrap()
+    });
+    bench("render_demo_frame e2e", 2, 100, || {
+        render_demo_frame(0.25).unwrap()
     });
 }

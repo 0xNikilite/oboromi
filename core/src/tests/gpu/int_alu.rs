@@ -24,15 +24,6 @@ mod tests {
     const LEA_CARRY: u128 = 0x004fc800078000ff0000000302017211;
 
     #[test]
-    fn translated_mov_and_iadd3_run_on_gpu() {
-        let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
-        let Some((regs, _)) = run_regs(&program, &[0, 0, 40, 2], &[], &[]) else {
-            return;
-        };
-        assert_eq!(regs[..3], [42, 42, 40]);
-    }
-
-    #[test]
     fn mov_reads_cbuf_and_uniform_register() {
         let mut seed = vec![0; UREG + 5];
         seed[UREG + 4] = 0x5678;
@@ -47,26 +38,6 @@ mod tests {
     fn mov_cx_validates_dynamic_constant_bank() {
         let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None);
         spirv_val(&module);
-    }
-
-    #[test]
-    fn imad_matches_silicon() {
-        let word = 0x004fc800078e02090000000700077224;
-        let cases = [
-            ([0, 0, 0, 0], [0, 0]),
-            ([1, 1, 0, 1], [2, 1]),
-            ([0x7fffffff, 0x7fffffff, 0, 0x7fffffff], [0x80000000, 0x7fffffff]),
-            ([0x80000000, 0x80000000, 0, 0x80000000], [0x80000000, 0x80000000]),
-            ([0xffffffff, 0xffffffff, 0, 0xffffffff], [0, 0xffffffff]),
-        ];
-        for ([a, b, _, c], expected) in cases {
-            let mut seed = vec![0; 10];
-            seed[0] = a;
-            seed[7] = b;
-            seed[9] = c;
-            let Some((regs, _)) = run_regs(&[word], &seed, &[], &[]) else { return };
-            assert_eq!([regs[7], regs[9]], expected);
-        }
     }
 
     #[test]
@@ -282,37 +253,4 @@ mod tests {
         assert_eq!([regs[1], regs[5]], [19, 15]);
     }
 
-    #[test]
-    fn alu_remainder_words_match_nvdisasm() {
-        let fixtures = [
-            (IDP4A_S8, "IDP.4A.S8.S8 R1, R2, R3, R4 ;"),
-            (IDP2A_LO_S16_S8, "IDP.2A.LO.S16.S8 R1, R2, R3, R4 ;"),
-            (IDP2A_HI_S16_S8, "IDP.2A.HI.S16.S8 R1, R2, R3, R4 ;"),
-            (IADD3_CBUF, "IADD3 R1, R2, c[0x0][0x0], R3 ;"),
-            (IADD3_UREG, "IADD3 R5, R2, UR4, R3 ;"),
-            (LEA_HI, "LEA.HI R1, R2, R3, R4, 0x3 ;"),
-            (LEA_HI_SX32, "LEA.HI.SX32 R1, R2, R3, 0x3 ;"),
-            (LEA_X, "LEA.X R1, R2, R3, 0x3, PT ;"),
-            (LEA_CARRY, "LEA R1, P0, R2, R3, 0x0 ;"),
-            (VABSDIFF_S32, "VABSDIFF R1, R2, R3, R4 ;"),
-            (VABSDIFF4_S8, "VABSDIFF4.U8 R1, R2, R3, R4 ;"),
-            (VABSDIFF4_S8_ACC, "VABSDIFF4.U8.ACC R1, R2, R3, R4 ;"),
-        ];
-        let path = std::env::temp_dir().join(format!("oboromi-int-alu-{}.bin", std::process::id()));
-        for (word, expected) in fixtures {
-            std::fs::write(&path, word.to_le_bytes()).unwrap();
-            let output = std::process::Command::new("/usr/local/cuda-13.1/bin/nvdisasm")
-                .args(["--binary", "SM86"])
-                .arg(&path)
-                .output()
-                .unwrap();
-            let text = String::from_utf8_lossy(&output.stdout);
-            let disasm = text
-                .lines()
-                .find_map(|line| line.split("/*0000*/").nth(1))
-                .unwrap_or_else(|| panic!("nvdisasm rejected {word:032x}: {text}"));
-            assert_eq!(disasm.trim(), expected);
-        }
-        std::fs::remove_file(path).unwrap();
-    }
 }

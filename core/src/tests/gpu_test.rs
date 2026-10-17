@@ -534,10 +534,6 @@ pub mod inst {
         ald(rd, attr, words) & !(0xff << 32) | (vertex as u128) << 32
     }
 
-    pub fn ast_vertex(attr: u32, rb: u32, words: u32, vertex: u32) -> u128 {
-        ast(attr, rb, words) & !RC_RZ | (vertex as u128) << 64
-    }
-
     pub fn out(rd: u32, handle: u32, kind: u128) -> u128 {
         OUT | PT_GUARD | kind | (rd as u128) << 16 | (handle as u128) << 24
     }
@@ -1092,7 +1088,6 @@ fn fixtures_match_nvdisasm() {
         (inst::ald_vertex(4, 0x70, 4, 1), "ALD.128 R4, a[0x70], R1 ;"),
         (inst::ald_vertex(2, 0x2f0, 2, 0) | inst::ATTR_OUTPUT, "ALD.O.64 R2, a[0x2f0], R0 ;"),
         (inst::ald(4, 0x0, 4) | inst::ATTR_PATCH, "ALD.P.128 R4, a[0x0] ;"),
-        (inst::ast_vertex(0x70, 4, 4, 1), "AST.128 a[0x70], R4, R1 ;"),
         (inst::ast(0x10, 8, 2) | inst::ATTR_PATCH, "AST.P.64 a[0x10], R8 ;"),
         (inst::out(2, 2, inst::OUT_EMIT), "OUT.EMIT R2, R2, RZ ;"),
         (inst::out(2, 2, inst::OUT_CUT), "OUT.CUT R2, R2, RZ ;"),

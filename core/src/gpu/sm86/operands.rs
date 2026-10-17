@@ -453,15 +453,19 @@ impl<'a> Decoder<'a> {
         use spirv::BuiltIn;
         // SR_VIRTID holds the warp id at bit 8, SR_TID packs x, y and z at bits 0, 16 and 26. TCS SASS indexes per-vertex outputs by
         // lane and TES SASS reads TessCoord at a[SR_LANEID] (NAK nak_nir_lower_vtg_io.c, from_nir.rs), so a patch's invocations take
-        // lanes from 0; SR_PRIM_TYPE holds the patch size at bit 8 (NAK nak_nir.c).
+        // lanes from 0; SR_PRIM_TYPE holds the patch size at bit 8 (NAK nak_nir.c). ISBERD takes vertex v of primitive i in the warp at
+        // i * n + v from SR_INVOCATION_INFO, n at bit 16 and i at bit 0 (driver GS, TCS and TES SASS), and here i is 0.
         match index {
             0 | 17 if matches!(self.stage, Stage::TessControl { .. }) => self.builtin(BuiltIn::InvocationId),
             17 if matches!(self.stage, Stage::Geometry { .. }) => self.builtin(BuiltIn::InvocationId),
             0 if matches!(self.stage, Stage::TessEval { .. }) => self.const_u32_0,
-            16 if matches!(self.stage, Stage::TessControl { .. } | Stage::TessEval { .. }) => {
-                let vertices = self.builtin(BuiltIn::PatchVertices);
-                let eight = self.cached_const_u32(8);
-                self.ir.emit_shift_left_logical(self.type_u32[1], vertices, eight)
+            16 | 29 if matches!(self.stage, Stage::TessControl { .. } | Stage::TessEval { .. }) || index == 29 && matches!(self.stage, Stage::Geometry { .. }) => {
+                let vertices = match self.stage {
+                    Stage::Geometry { input, .. } => self.cached_const_u32(geometry_input(input).1),
+                    _ => self.builtin(BuiltIn::PatchVertices),
+                };
+                let shift = self.cached_const_u32(if index == 16 { 8 } else { 16 });
+                self.ir.emit_shift_left_logical(self.type_u32[1], vertices, shift)
             }
             0 => {
                 let invocation = self.builtin(BuiltIn::LocalInvocationIndex);

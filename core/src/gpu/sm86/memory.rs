@@ -66,11 +66,11 @@ impl<'a> Decoder<'a> {
         use spirv::{BuiltIn, storage_class::OUTPUT};
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
-        let rc = (((inst >> 64) & 0xff) << 0) as u32;
         let words = (((inst >> 74) & 0x3) << 0) as u32 + 1;
         let patch = inst >> 76 & 1 != 0;
         assert!(opcode(inst) == 0x322 && inst >> 24 & 0xff == RZ as u128 && inst >> 77 & 1 == 0, "only AST at an immediate attribute address is implemented");
-        let vertex = self.load_register(rc);
+        // A TCS writes only its own vertex, which driver SASS leaves Rc at RZ for.
+        let vertex = if matches!(self.stage, Stage::TessControl { .. }) { self.builtin(BuiltIn::InvocationId) } else { self.const_u32_0 };
         for i in 0..words {
             let attr = ra_offset + 4 * i;
             let val = self.load_register(nth_reg(rb, RZ, i));

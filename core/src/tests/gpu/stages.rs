@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn tess_control_program_copies_its_vertex_and_writes_the_patch() {
         use ResourceKind::*;
-        let program = [s2r(1, 17), isberd(2, 1, 0), ald_vertex(4, 0x70, 4, 2), ast_vertex(0x70, 4, 4, 1), ast(0x0, 4, 4) | ATTR_PATCH, ast(0x10, 4, 2) | ATTR_PATCH, ast(0x20, 4, 1) | ATTR_PATCH, exit()];
+        let program = [s2r(1, 17), isberd(2, 1, 0), ald_vertex(4, 0x70, 4, 2), ast(0x70, 4, 4), ast(0x0, 4, 4) | ATTR_PATCH, ast(0x10, 4, 2) | ATTR_PATCH, ast(0x20, 4, 1) | ATTR_PATCH, exit()];
         let builtin = |b: B| BuiltIn(b as u32);
         let expected = [builtin(B::InvocationId), PerVertex { attr: 0x70, output: false }, PerVertex { attr: 0x70, output: true }, builtin(B::TessLevelOuter), builtin(B::TessLevelInner), Patch { location: 0 }];
         assert_eq!(stage_interface(Stage::TessControl { vertices: 3 }, &program), expected);

@@ -17,4 +17,7 @@ bool renderTestFrame();
 // Renders the Julia set demo at the given time into the display
 bool renderDemoFrame(float seconds);
 
+// Draws the pushbuffer triangle demo at the given time into the display
+bool renderTriangleDemo(float seconds);
+
 }

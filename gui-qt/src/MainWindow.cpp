@@ -81,18 +81,21 @@ void MainWindow::buildUi() {
     auto *frameButton = new QPushButton("Render Test Frame", central);
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
-    auto *demoButton = new QPushButton("Demo", central);
-    demoButton->setCheckable(true);
-    connect(demoButton, &QPushButton::toggled, this, [this](bool on) {
-        if (!on) return m_demoTimer.stop();
-        m_demoClock.start();
-        m_demoTimer.start(16);
-    });
+    for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}}) {
+        auto *demoButton = new QPushButton(name, central);
+        demoButton->setCheckable(true);
+        connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
+            if (!on) return m_demoTimer.stop();
+            m_demoRender = render;
+            m_demoClock.start();
+            m_demoTimer.start(16);
+        });
+        buttons->addWidget(demoButton);
+    }
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
         if (m_demoFrame.isFinished())
-            m_demoFrame = QtConcurrent::run(RustBridge::renderDemoFrame, m_demoClock.elapsed() / 1000.0f);
+            m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);
     });
-    buttons->addWidget(demoButton);
     buttons->addStretch();
     layout->addLayout(buttons);
 

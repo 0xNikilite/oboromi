@@ -36,4 +36,8 @@ bool renderDemoFrame(float seconds) {
     return oboromi_render_demo_frame(seconds);
 }
 
+bool renderTriangleDemo(float seconds) {
+    return oboromi_render_triangle_demo(seconds);
+}
+
 }

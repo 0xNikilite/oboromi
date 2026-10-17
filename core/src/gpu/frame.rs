@@ -1,7 +1,9 @@
 //! Frames drawn by translated SASS programs that write RGBA8 pixels into global memory, presented as is.
 use super::compute::{ComputePipeline, HostBuffer};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, SUPPORT_BINDING, Stage, emit_module};
+use super::engine::Gpu;
 use super::{VkError, device};
+use crate::tests::gpu::engine::{TARGET, triangle_frame, triangle_guest};
 use crate::tests::gpu_test::inst::{cvt, *};
 use ash::vk::DescriptorType;
 use std::sync::Mutex;
@@ -156,4 +158,21 @@ pub fn render_demo_frame(seconds: f32) -> Result<(), VkError> {
     };
     demo.cbuf0.write(&(seconds / SECONDS_PER_TURN).to_le_bytes())?;
     demo.render()
+}
+
+/// Draws a triangle from a pushbuffer in guest memory, turning once per `SECONDS_PER_TURN`, and presents it.
+pub fn render_triangle_demo(seconds: f32) -> Result<(), String> {
+    static DEMO: Mutex<Option<Gpu<'static>>> = Mutex::new(None);
+    let mut slot = DEMO.lock().unwrap();
+    let gpu = match &mut *slot {
+        Some(gpu) => gpu,
+        empty => {
+            let vertices = [([0.0, -0.8], [255, 0, 0, 255]), ([0.7, 0.4], [0, 255, 0, 255]), ([-0.7, 0.4], [0, 0, 255, 255])];
+            empty.insert(triangle_guest(device().map_err(|e| format!("{e:?}"))?, WIDTH, HEIGHT, &vertices).map_err(|e| format!("{e:?}"))?)
+        }
+    };
+    let (sin, cos) = (seconds / SECONDS_PER_TURN * std::f32::consts::TAU).sin_cos();
+    let aspect = HEIGHT as f32 / WIDTH as f32;
+    triangle_frame(gpu, WIDTH, HEIGHT, [cos * aspect, -sin * aspect, sin, cos], 0)?;
+    gpu.present(TARGET, WIDTH, HEIGHT).map_err(|e| format!("{e:?}"))
 }

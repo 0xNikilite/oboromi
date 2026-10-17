@@ -39,4 +39,5 @@ private:
     QTimer m_demoTimer;
     QElapsedTimer m_demoClock;
     QFuture<bool> m_demoFrame;
+    bool (*m_demoRender)(float) = nullptr;
 };

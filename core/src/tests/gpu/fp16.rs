@@ -122,6 +122,15 @@ pub mod tests {
         assert_halves(&regs[10..27], &want);
     }
 
+    // -74 * 3.9375 is the midpoint -291.375 between two halves, so the subnormal addend decides the rounding and an f32 fma drops it.
+    #[test]
+    fn hfma2_rounds_the_exact_result_once() {
+        let Some(regs) = run(&[(inst::alu3(HFMA2, 3, 0, 1, 2), "")], &[h(-74.0), h(3.9375), 0x20]) else {
+            return;
+        };
+        assert_eq!(regs[3], h(-291.25));
+    }
+
     #[test]
     fn half2_compares_test_each_lane() {
         let seed = [h2(-2.0, 1.5), h2(0.25, 64.0), 0, h2(f32::NAN, 3.0), 0, h2(0.75, 0.5)];

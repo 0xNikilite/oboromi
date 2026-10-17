@@ -2914,6 +2914,29 @@ impl<'a> Decoder<'a> {
         let sum = [0, 1].map(|i| self.ir.emit_fadd(self.type_f32[1], a[i], b[i]));
         self.store_half2(inst, sum, inst >> 78 & 1 != 0, inst >> 77 & 1 != 0, ftz);
     }
+    // Two halves multiply exactly in f32, so Fast2Sum recovers what rounding a * b + c to val dropped, and marking that in
+    // the last bit lets the f16 conversion round the exact sum once.
+    fn round_to_odd(&mut self, val: u32, a: u32, b: u32, c: u32) -> u32 {
+        let (ty, uty, bool_ty) = (self.type_f32[1], self.type_u32[1], self.type_bool[1]);
+        let product = self.ir.emit_fmul(ty, a, b);
+        let [abs_product, abs_c] = [product, c].map(|x| self.glsl(spirv::glsl::F_ABS, ty, &[x]));
+        let product_larger = self.ir.emit_ford_greater_than_equal(bool_ty, abs_product, abs_c);
+        let [larger, smaller] = [[product, c], [c, product]].map(|[x, y]| self.ir.emit_select(ty, product_larger, x, y));
+        let kept = self.ir.emit_fsub(ty, val, larger);
+        let lost = self.ir.emit_fsub(ty, smaller, kept);
+        let zero = self.ir.emit_constant_typed(ty, 0.0f32);
+        let inexact = self.ir.emit_ford_not_equal(bool_ty, lost, zero);
+        let [bits, lost_bits] = [val, lost].map(|x| self.bitcast_u32(x));
+        let odd = self.ir.emit_bitwise_and(uty, bits, self.const_u32_1);
+        let even = self.ir.emit_iequal(bool_ty, odd, self.const_u32_0);
+        let sticky = self.ir.emit_logical_and(bool_ty, inexact, even);
+        let signs = self.ir.emit_bitwise_xor(uty, bits, lost_bits);
+        let toward_zero = self.ir.emit_sless_than(bool_ty, signs, self.const_u32_0);
+        let [down, up] = [self.ir.emit_isub(uty, bits, self.const_u32_1), self.ir.emit_iadd(uty, bits, self.const_u32_1)];
+        let nudged = self.ir.emit_select(uty, toward_zero, down, up);
+        let bits = self.ir.emit_select(uty, sticky, nudged, bits);
+        self.bitcast_f32(bits)
+    }
     pub fn hfma2(&mut self, inst: u128) {
         let ofmt = (inst >> 85 & 1) << 1 | inst >> 78 & 1;
         assert!(ofmt < 2, "HFMA2.BF16_V2 needs a bfloat16 type");
@@ -2928,6 +2951,7 @@ impl<'a> Decoder<'a> {
         let val = [0, 1].map(|i| {
             let [a, b] = if fmz { self.fmz_operands(a[i], b[i]) } else { [a[i], b[i]] };
             let val = self.glsl(spirv::glsl::FMA, self.type_f32[1], &[a, b, c[i]]);
+            let val = if ofmt == 1 { val } else { self.round_to_odd(val, a, b, c[i]) };
             if inst >> 79 & 1 == 0 {
                 return val;
             }

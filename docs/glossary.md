@@ -182,7 +182,11 @@ flowchart LR
 
 | Term | What it is | Example |
 |---|---|---|
-| Unicorn | The CPU emulator library oboromi's ARM cores run on. | It executes AArch64 instructions. |
+| Unicorn | The CPU emulator library oboromi's ARM cores run on, built on QEMU's CPU core. | It executes AArch64 instructions. |
+| QEMU | The open-source machine emulator whose CPU core Unicorn reuses. | It also runs whole ARM Linux systems. |
+| Cortex-A78C | The Arm CPU core in the Switch 2's chip. | Eight of them in the T239. |
+| switchbrew | The community wiki that documents the Switch's system calls, services and hardware. | Its NV services page. |
+| libnx | The homebrew library for writing Switch programs. | Its request layout is what the guest's encoder follows. |
 | AArch64 | The 64-bit ARM instruction set the Switch 2's CPU runs. | The game's main code. |
 | FFI | Foreign function interface: the Rust functions the C++ Qt window calls. | `ffi.rs`. |
 | HLE | High-level emulation: writing a firmware service's behaviour instead of running its code. | Answering a "get time" call directly. |
@@ -192,7 +196,18 @@ flowchart LR
 | Ioctl | A control call into a driver. | An `nvdrv` call that allocates GPU memory. |
 | nvmap, host1x | The Switch's GPU memory allocator and its sync and DMA unit. | `nvmap` hands out buffer handles. |
 | NSO, NRO | Switch executable file formats. | A game's main program is an NSO. |
-| Loader | The code that places a game's executable in memory and starts it. | Missing in oboromi today. |
+| Loader | The code that places a game's executable in memory and starts it. | The flat-image loader for our own guest program. |
+| Session | An open connection from a game to one service. | A session with `nvdrv`. |
+| Handle | A number the kernel gives a program to name something it opened. | The session handle `SendSyncRequest` takes. |
+| Port | A named address a program connects to in order to open a session. | The port named `nvdrv`. |
+| IPC | Inter-process communication: one program sending a message to another. | A game asking the display service for a layer. |
+| IPC buffer | A small per-thread memory area that holds the request and then the reply. | The request bytes for `SendSyncRequest`. |
+| CMIF | The command layer on top of HIPC: a magic word, a command id and arguments. | `SFCI`, then command 1, then the ioctl number. |
+| Transfer memory | Guest memory a program lends to a service. | The audio renderer's work buffer. |
+| Driver fence | A sync counter value a program waits on to know its GPU work finished. | The fence `SubmitGpfifo` returns. |
+| Binder | The display's messaging layer, inherited from Android, for handing over frames. | `QueueBuffer` through `IHOSBinderDriver`. |
+| Turn lock | The lock that lets either the CPU or the GPU use guest RAM, never both. | The GPU takes it before a draw. |
+| Write hook | A Unicorn callback that runs on every guest store to a chosen range. | Marking pages the GPU must refresh. |
 
 ## Tools, tests and references
 
@@ -214,6 +229,11 @@ flowchart LR
 | Mesa | The open-source graphics driver stack on Linux. | It ships lavapipe. |
 | glTF | A standard 3D model file format. | The BoomBox sample model. |
 | PBR | Physically based rendering: lighting that follows real material behaviour. | Metal and rough surfaces lit by one light. |
+| Voice | One playing sound in the audio renderer. | A footstep sample with its volume and pitch. |
+| Mix | A bus that voices or other mixes add into. | All sound effects together. |
+| Sink | Where the audio renderer's final sound goes. | The device sink, the speakers. |
+| ADPCM | A compressed sample format the Switch's audio uses. | Music stored at a quarter of its PCM size. |
+| Biquad | A small audio filter that cuts or boosts some frequencies. | A low-pass to muffle a sound behind a wall. |
 | Ray query | A shader asking "what does this ray hit first?" against the scene. | A shadow ray from a pixel towards the light. |
 | Acceleration structure | A search tree over a scene's triangles that makes ray queries fast. | Built once per model, then queried per pixel. |
 

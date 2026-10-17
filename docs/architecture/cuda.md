@@ -53,8 +53,8 @@ When it applies: a host with an NVIDIA card and driver that load sm_86 cubins, r
 
 | Kernel | Source | Result |
 |---|---|---|
-| Mul-add `c[i] = a[i] * b[i] + i` | Core/tests/fixtures/kernels.cu | Bit for bit equal to the RTX 3090 recording |
-| Gradient | Core/tests/fixtures/kernels.cu | Same hash as on the real card |
+| Mul-add `c[i] = a[i] * b[i] + i` | core/tests/fixtures/kernels.cu | Bit for bit equal to the RTX 3090 recording |
+| Gradient | core/tests/fixtures/kernels.cu | Same hash as on the real card |
 | Mandelbrot0, float | NVIDIA cuda-samples, BSD-3 | Correct image, see below |
 
 Measured, p50 per launch:

@@ -84,7 +84,7 @@ Why compile GLSL on a desktop card: it yields real SM86 code for each stage. But
 
 ```mermaid
 flowchart LR
-    GLB["glTF-Binary model<br/>Khronos sample assets"] --> PY["Scripts/gltf_to_raw.py<br/>Converter"]
+    GLB["glTF-Binary model<br/>Khronos sample assets"] --> PY["scripts/gltf_to_raw.py<br/>Converter"]
     PY --> V["vertices.bin<br/>Position, normal, tangent, uv"]
     PY --> I["indices.bin<br/>Which vertices form each triangle"]
     PY --> T["slot.rgba8<br/>Textures, NVIDIA-tiled, with mip levels"]

@@ -31,6 +31,15 @@ fn pieces(ranges: &[PaRange]) -> impl Iterator<Item = PaRange> + '_ {
     ranges.iter().flat_map(|range| pages(range.start, range.end - range.start).map(|page| (page * PAGE).max(range.start)..((page + 1) * PAGE).min(range.end)))
 }
 
+/// The bytes `bytes` of `ranges` laid end to end, as pieces of guest-physical memory and where each starts in `bytes`.
+pub fn within(ranges: &[PaRange], bytes: Range<u64>) -> impl Iterator<Item = (u64, PaRange)> + '_ {
+    let starts = ranges.iter().scan(0, |at, range| Some(std::mem::replace(at, *at + range.end - range.start)));
+    starts.zip(ranges).filter_map(move |(start, range)| {
+        let (lo, hi) = (bytes.start.max(start), bytes.end.min(start + range.end - range.start));
+        (lo < hi).then(|| (lo, range.start + lo - start..range.start + hi - start))
+    })
+}
+
 #[derive(Default)]
 pub struct PageMap {
     pa_by_va_page: HashMap<u64, u64>,

@@ -254,7 +254,7 @@ mod tests {
         gpu.ram.resize(gpu.ram.len() + len as usize, 0);
     }
 
-    fn pixel(gpu: &Gpu, target: u64, x: u32, y: u32) -> [u8; 4] {
+    fn pixel(gpu: &mut Gpu, target: u64, x: u32, y: u32) -> [u8; 4] {
         let mut rgba = [0; 4];
         gpu.read(target + u64::from(y * SIZE + x) * 4, &mut rgba).unwrap();
         rgba
@@ -369,7 +369,7 @@ mod tests {
         inc(END, &[0], &mut words);
         run(&mut gpu, &words).unwrap();
         for (x, y, want) in [(20, 20, RED), (44, 20, RED), (20, 44, RED), (44, 44, RED), (8, 8, WHITE), (56, 56, WHITE)] {
-            assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
+            assert_eq!(pixel(&mut gpu, TARGET, x, y), want, "({x}, {y})");
         }
     }
 
@@ -399,7 +399,7 @@ mod tests {
                 inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16 | first], &mut words);
             }
             run(&mut gpu, &words).unwrap();
-            assert_eq!(pixel(&gpu, TARGET, 20, 20), RED, "{order:?}");
+            assert_eq!(pixel(&mut gpu, TARGET, 20, 20), RED, "{order:?}");
         }
     }
 
@@ -421,7 +421,7 @@ mod tests {
             inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16 | first], &mut words);
         }
         run(&mut gpu, &words).unwrap();
-        assert_eq!(pixel(&gpu, TARGET, 20, 20), [100, 100, 0, 255]);
+        assert_eq!(pixel(&mut gpu, TARGET, 20, 20), [100, 100, 0, 255]);
     }
 
     #[test]
@@ -436,7 +436,7 @@ mod tests {
         texture_header(&mut gpu, TEXTURES + 0x1000, 2, 2, 32).unwrap();
         textured_quad_frame(&mut gpu, SIZE, SIZE, TARGET, 0).unwrap();
         for (x, y, want) in [(20, 20, RED), (44, 20, GREEN), (20, 44, BLUE), (44, 44, WHITE), (8, 8, WHITE)] {
-            assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
+            assert_eq!(pixel(&mut gpu, TARGET, x, y), want, "({x}, {y})");
         }
     }
 
@@ -500,7 +500,7 @@ mod tests {
         inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT, &[5 << 28 | 4 << 16], &mut words);
         run(&mut gpu, &words).unwrap();
         for (x, y, want) in [(16, 32, RED), (48, 32, GREEN), (32, 32, WHITE), (16, 16, WHITE)] {
-            assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
+            assert_eq!(pixel(&mut gpu, TARGET, x, y), want, "({x}, {y})");
         }
     }
 
@@ -513,12 +513,12 @@ mod tests {
         inc(SET_COLOR_CLEAR_VALUE, &[0.0, 0.0, 1.0, 1.0].map(f32::to_bits), &mut words);
         inc(CLEAR_SURFACE, &[0x3c], &mut words);
         run(&mut gpu, &words).unwrap();
-        assert_eq!([pixel(&gpu, TARGET, 20, 20), pixel(&gpu, TARGET, 40, 40)], [BLUE; 2]);
+        assert_eq!([pixel(&mut gpu, TARGET, 20, 20), pixel(&mut gpu, TARGET, 40, 40)], [BLUE; 2]);
         words.clear();
         frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
         inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
         run(&mut gpu, &words).unwrap();
-        assert_eq!([pixel(&gpu, TARGET, 20, 20), pixel(&gpu, TARGET, 40, 40)], [GREEN, BLUE]);
+        assert_eq!([pixel(&mut gpu, TARGET, 20, 20), pixel(&mut gpu, TARGET, 40, 40)], [GREEN, BLUE]);
     }
 
     #[test]
@@ -565,7 +565,7 @@ mod tests {
             inc(OGL_SET_CULL, &[1, OGL_CCW, OGL_BACK], &mut words);
             inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
             run(&mut gpu, &words).unwrap();
-            assert_eq!([pixel(&gpu, TARGET, 8, 50), pixel(&gpu, TARGET, 50, 8)], [GREEN, WHITE], "scale {scale_y} origin {origin}");
+            assert_eq!([pixel(&mut gpu, TARGET, 8, 50), pixel(&mut gpu, TARGET, 50, 8)], [GREEN, WHITE], "scale {scale_y} origin {origin}");
         }
     }
 }

@@ -93,8 +93,43 @@ impl<'a> Decoder<'a> {
 
     pub fn atom(&mut self, inst: u128) {
         match opcode(inst) {
-            0x1f8a => todo!("ATOM.ARRIVE and ATOM.POPC.INC have no published memory-word state transition in the SM86 table, Eden, Ryujinx, or NAK"),
+            0x1f8a => {
+                use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY};
+                let address = self.global_address(inst, 64, 40);
+                let [scope, sem] = [spirv::scope::DEVICE, ACQUIRE_RELEASE | UNIFORM_MEMORY].map(|c| self.cached_const_u32(c));
+                self.mbarrier(inst, address, Self::global_word_at, scope, sem);
+            }
             _ => self.atomg(inst),
+        }
+    }
+    // ptxas lowers mbarrier.init(n) to a store of 0x40000000 - n and 0x80000000 - n, mbarrier.test_wait.parity to bit 31
+    // of the high word, and arrive_drop to POPC.INC on the low word before an ARRIVE. So an arrive adds one to the
+    // high word, and the one that clears its bits 0..30 completes the phase and reloads them with the low word + 0x40000000.
+    pub(super) fn mbarrier(&mut self, inst: u128, address: u32, word_at: fn(&mut Self, u32) -> u32, scope: u32, sem: u32) {
+        let (ty, rd) = (self.type_u32[1], (inst >> 16 & 0xff) as u32);
+        let four = self.cached_const_u32(4);
+        let hi_address = self.ir.emit_iadd(ty, address, four);
+        let [lo, hi] = [address, hi_address].map(|address| word_at(self, address));
+        match inst >> 87 & 0xf {
+            9 => {
+                let old_lo = self.ir.emit_atomic_load(ty, lo, scope, self.const_u32_0);
+                let [pending, phase_offset] = [0x7fff_ffff, 0x4000_0000].map(|c| self.cached_const_u32(c));
+                let reload = self.ir.emit_iadd(ty, old_lo, phase_offset);
+                let old_hi = self.atomic_update(hi, scope, sem, |s, old| {
+                    let new = s.ir.emit_iadd(ty, old, s.const_u32_1);
+                    let left = s.ir.emit_bitwise_and(ty, new, pending);
+                    let completes = s.ir.emit_iequal(s.type_bool[1], left, s.const_u32_0);
+                    let reloaded = s.ir.emit_bitwise_or(ty, new, reload);
+                    s.ir.emit_select(ty, completes, reloaded, new)
+                });
+                self.store_register(rd, old_lo);
+                self.store_register(nth_reg(rd, RZ, 1), old_hi);
+            }
+            10 => {
+                let old = self.ir.emit_atomic_iadd(ty, lo, scope, sem, self.const_u32_1);
+                self.store_register(rd, old);
+            }
+            op => panic!("ATOM arrive-class operation {op}"),
         }
     }
     pub fn atomg(&mut self, inst: u128) {

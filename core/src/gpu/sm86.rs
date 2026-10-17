@@ -45,7 +45,10 @@ const SYNC_WORDS: u32 = 34;
 // and the arrivals' thread count OR-ed with bit 12 for a running lane yet to arrive.
 const SCHEDULE_STRIDE: u32 = 1 + 2 * 16;
 const VOTEU: u32 = 0x086;
+const UPLOP3: u32 = 0x89c;
+const P0_TO_P6: u32 = 0x7f;
 const S2UR: u32 = 0x1c3;
+const SHARED_WORDS: u32 = 256;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
 static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
@@ -387,14 +390,17 @@ fn nth_reg(reg: u32, zero: u32, i: u32) -> u32 {
     if reg == zero { reg } else { reg + i }
 }
 
+// Sizes 0 to 4 are U8, S8, U16, S16 and 32 bits in one word; 5 and 6 are 64 and 128 bits.
 fn access_words(sz: u32) -> u32 {
-    match sz {
-        4..=6 => 1 << (sz - 4),
-        _ => todo!("access size {sz}"),
-    }
+    if sz <= 4 { 1 } else { 1 << (sz - 4) }
 }
 
 // Uniform datapath ops set bit 91 with forms 1 (URb) and 2, 4 (imm32); vector ops with bit 91 read a UR through forms 5 to 7.
+fn assert_round_to_nearest(inst: u128) {
+    let mode = (inst >> 78 & 3) as usize;
+    assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
+}
+
 fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
@@ -600,10 +606,6 @@ impl<'a> Decoder<'a> {
         self.ir.emit_imul(self.type_u32[1], invocation, stride)
     }
 
-    fn shared_mem(&mut self, word: u32) -> u32 {
-        self.workgroup_word(ResourceKind::Shared, 256, word)
-    }
-
     fn workgroup_word(&mut self, kind: ResourceKind, len: u32, word: u32) -> u32 {
         use spirv::storage_class::WORKGROUP;
         let var = match self.resource(kind) {
@@ -685,7 +687,7 @@ impl<'a> Decoder<'a> {
     fn shared_word_at(&mut self, address: u32) -> u32 {
         let two = self.cached_const_u32(2);
         let index = self.ir.emit_shift_right_logical(self.type_u32[1], address, two);
-        self.shared_mem(index)
+        self.workgroup_word(ResourceKind::Shared, SHARED_WORDS, index)
     }
 
     fn shared_u64_at(&mut self, address: u32) -> u32 {
@@ -1039,13 +1041,8 @@ impl<'a> Decoder<'a> {
         // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
         let op = opcode(inst) & 0x1ff;
         let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
-        let predicates = if uniform { self.load_upredicate() } else { self.load_predicate() };
-        let bit = self.predicate_bit(predicates, pg);
-        Some(if pg_not {
-            self.ir.emit_iequal(self.type_bool[1], bit, self.const_u32_0)
-        } else {
-            self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0)
-        })
+        let bit = self.pred_bit(uniform, pg, pg_not);
+        Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
     }
 
     // Ra holds a byte address and the pc counts 16-byte instructions.
@@ -1161,14 +1158,7 @@ impl<'a> Decoder<'a> {
 
     fn alu_pair(&mut self, inst: u128, bit: u32) -> u32 {
         let index = (inst >> bit) as u32;
-        if !is_uniform(inst) {
-            return self.load_pair(index & 0xff);
-        }
-        let ur = index & 0x3f;
-        let words = [self.load_ureg(ur), self.load_ureg(nth_reg(ur, URZ, 1))];
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-        let ty = self.type_u64();
-        self.ir.emit_bitcast(ty, pair)
+        if is_uniform(inst) { self.load_ureg_pair(index & 0x3f) } else { self.load_pair(index & 0xff) }
     }
 
     fn store_alu_pair(&mut self, inst: u128, val: u32) {
@@ -1188,9 +1178,19 @@ impl<'a> Decoder<'a> {
             self.const_u32_1
         } else {
             let preds = if uniform { self.load_upredicate() } else { self.load_predicate() };
-            self.predicate_bit(preds, pred)
+            let offset = self.cached_const_u32(pred);
+            self.ir.emit_bit_field_u_extract(self.type_u32[1], preds, offset, self.const_u32_1)
         };
         if invert { self.ir.emit_bitwise_xor(self.type_u32[1], bit, self.const_u32_1) } else { bit }
+    }
+
+    fn pp_bit(&mut self, inst: u128) -> u32 {
+        self.pred_bit(is_uniform(inst), (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0)
+    }
+
+    fn pp_set(&mut self, inst: u128) -> u32 {
+        let bit = self.pp_bit(inst);
+        self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0)
     }
 
     fn store_pred_bit(&mut self, uniform: bool, pred: u32, bit: u32) {
@@ -1206,7 +1206,7 @@ impl<'a> Decoder<'a> {
     // UP2UR and UR2UP move UP0..UP6 only, masked by imm32 (form 4) or URb.
     fn up_mask(&mut self, inst: u128) -> u32 {
         let mask = if inst >> 9 & 7 == 4 { self.cached_const_u32((inst >> 32) as u32) } else { self.load_ureg((inst >> 32 & 0x3f) as u32) };
-        let predicates = self.cached_const_u32(0x7f);
+        let predicates = self.cached_const_u32(P0_TO_P6);
         self.ir.emit_bitwise_and(self.type_u32[1], mask, predicates)
     }
 
@@ -1233,15 +1233,10 @@ impl<'a> Decoder<'a> {
                 let hi_offset = self.cached_const_u32(offset + 4);
                 [self.load_cbuf(bank, lo_offset), self.load_cbuf(bank, hi_offset)]
             }
-            (6 | 7, 1) => {
-                let ur = field & 0x3f;
-                [self.load_ureg(ur), self.load_ureg((ur + 1).min(63))]
-            }
+            (6 | 7, 1) => return self.load_ureg_pair(field & 0x3f),
             form => todo!("64-bit ALU source form {form:?}"),
         };
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-        let ty = self.type_u64();
-        self.ir.emit_bitcast(ty, pair)
+        self.join_u64(words[0], words[1])
     }
 
     // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
@@ -1341,63 +1336,43 @@ impl<'a> Decoder<'a> {
 
     fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
         use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY};
+        let wide = matches!(sz, 2 | 5);
+        if sz >= 2 && !wide {
+            todo!("floating-point global atomics require VK_EXT_shader_atomic_float");
+        }
         let address = self.global_address(inst, 64, 40);
         let scope = self.cached_const_u32(spirv::scope::DEVICE);
         let sem = self.cached_const_u32(ACQUIRE_RELEASE | UNIFORM_MEMORY);
-        if matches!(sz, 2 | 5) {
+        let ptr = if wide {
             assert!(crate::gpu::device().is_ok_and(|d| d.shader_buffer_int64_atomics), "64-bit global atomics require shaderBufferInt64Atomics");
-            let ptr = self.global_u64_at(address);
-            let value = self.load_pair(rb);
-            if inst & 1 != 0 {
-                let swap = self.load_pair((inst >> 64 & 0xff) as u32);
-                let ty = self.type_u64();
-                return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, self.const_u32_0, swap, value);
-            }
-            return self.atomic_op64(ptr, scope, sem, op, sz == 5, value);
-        }
-        if sz >= 2 {
-            todo!("floating-point global atomics require VK_EXT_shader_atomic_float");
-        }
-        let ptr = self.global_word_at(address);
-        let value = self.load_register(rb);
+            self.global_u64_at(address)
+        } else {
+            self.global_word_at(address)
+        };
+        let load = |this: &mut Self, reg| if wide { this.load_pair(reg) } else { this.load_register(reg) };
+        let value = load(self, rb);
         if inst & 1 != 0 {
-            let swap = self.load_register((inst >> 64 & 0xff) as u32);
-            return self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value);
+            let swap = load(self, (inst >> 64 & 0xff) as u32);
+            let ty = if wide { self.type_u64() } else { self.type_u32[1] };
+            return self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, self.const_u32_0, swap, value);
         }
-        self.atomic_op(ptr, scope, sem, op, sz == 1, value)
+        self.atomic_op(wide, ptr, scope, sem, op, matches!(sz, 1 | 5), value)
     }
 
-    fn atomic_op64(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
-        let ty = self.type_u64();
+    fn atomic_op(&mut self, wide: bool, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
+        let ty = if wide { self.type_u64() } else { self.type_u32[1] };
         match op {
             0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, b),
             1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, b),
             1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, b),
             2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, b),
             2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, b),
-            5 => self.ir.emit_atomic_and(ty, ptr, scope, sem, b),
-            6 => self.ir.emit_atomic_or(ty, ptr, scope, sem, b),
-            7 => self.ir.emit_atomic_xor(ty, ptr, scope, sem, b),
-            8 => self.ir.emit_atomic_exchange(ty, ptr, scope, sem, b),
-            9 => todo!("ATOMG.SAFEADD has no public semantics; Eden also leaves it TODO"),
-            _ => todo!("64-bit atomic op {op}"),
-        }
-    }
-
-    fn atomic_op(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, signed: bool, b: u32) -> u32 {
-        let ty = self.type_u32[1];
-        match op {
-            0 => self.ir.emit_atomic_iadd(ty, ptr, scope, sem, b),
-            1 if signed => self.ir.emit_atomic_smin(ty, ptr, scope, sem, b),
-            1 => self.ir.emit_atomic_umin(ty, ptr, scope, sem, b),
-            2 if signed => self.ir.emit_atomic_smax(ty, ptr, scope, sem, b),
-            2 => self.ir.emit_atomic_umax(ty, ptr, scope, sem, b),
-            3 => self.atomic_update(ptr, scope, sem, |d, old| {
+            3 if !wide => self.atomic_update(ptr, scope, sem, |d, old| {
                 let wraps = d.ir.emit_ugreater_than_equal(d.type_bool[1], old, b);
                 let next = d.ir.emit_iadd(ty, old, d.const_u32_1);
                 d.ir.emit_select(ty, wraps, d.const_u32_0, next)
             }),
-            4 => self.atomic_update(ptr, scope, sem, |d, old| {
+            4 if !wide => self.atomic_update(ptr, scope, sem, |d, old| {
                 let zero = d.ir.emit_iequal(d.type_bool[1], old, d.const_u32_0);
                 let above = d.ir.emit_ugreater_than(d.type_bool[1], old, b);
                 let wraps = d.ir.emit_logical_or(d.type_bool[1], zero, above);
@@ -1487,24 +1462,22 @@ impl<'a> Decoder<'a> {
     }
 
     fn load_memory(&mut self, kind: ResourceKind, address: u32, size: u32, dst: u32) {
-        let words = if size <= 4 { 1 } else { 1 << (size - 4) };
-        for i in 0..words {
+        for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);
             let ptr = self.memory_word_at(kind, word_address);
             let word = self.ir.emit_load(self.type_u32[1], ptr);
             let value = if size <= 4 { self.load_narrow(word, address, size) } else { word };
-            self.store_register(if dst == 255 { dst } else { dst + i }, value);
+            self.store_register(nth_reg(dst, RZ, i), value);
         }
     }
 
     fn store_memory(&mut self, kind: ResourceKind, address: u32, size: u32, src: u32) {
-        let words = if size <= 4 { 1 } else { 1 << (size - 4) };
-        for i in 0..words {
+        for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);
             let ptr = self.memory_word_at(kind, word_address);
-            let value = self.load_register(if src == 255 { src } else { src + i });
+            let value = self.load_register(nth_reg(src, RZ, i));
             self.store_narrow(kind, ptr, address, size, value);
         }
     }
@@ -1683,7 +1656,7 @@ impl<'a> Decoder<'a> {
     fn store_half2(&mut self, inst: u128, lanes: [u32; 2], f32_out: bool, sat: bool, ftz: bool) {
         let lanes = if sat {
             let [zero, one] = [0.0f32, 1.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
-            lanes.map(|lane| self.glsl(81, self.type_f32[1], &[lane, zero, one]))
+            lanes.map(|lane| self.glsl(spirv::glsl::N_CLAMP, self.type_f32[1], &[lane, zero, one]))
         } else {
             lanes
         };
@@ -1707,14 +1680,28 @@ impl<'a> Decoder<'a> {
             let both = self.ir.emit_bitwise_and(self.type_u32[1], lanes[0], lanes[1]);
             lanes = [both, self.ir.emit_bitwise_xor(self.type_u32[1], both, self.const_u32_1)];
         }
-        let p = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let p = self.ir.emit_bitwise_and(self.type_u32[1], p, self.const_u32_1);
-        lanes.map(|lane| match inst >> 69 & 3 {
-            0 => self.ir.emit_bitwise_and(self.type_u32[1], lane, p),
-            1 => self.ir.emit_bitwise_or(self.type_u32[1], lane, p),
-            2 => self.ir.emit_bitwise_xor(self.type_u32[1], lane, p),
-            _ => panic!("invalid half compare combine op"),
-        })
+        let p = self.pp_bit(inst);
+        lanes.map(|lane| self.bool_op(inst >> 69 & 3, lane, p))
+    }
+
+    // Pu (83:81) takes the result and Pv (86:84) its inverse, each combined with Pp by the op at 75:74.
+    fn store_setp(&mut self, inst: u128, result: u32) {
+        let p = self.pp_bit(inst);
+        let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], result, self.const_u32_1);
+        for (value, lsb) in [(result, 81), (inverse, 84)] {
+            let value = self.bool_op(inst >> 74 & 3, value, p);
+            self.store_pred_bit(is_uniform(inst), (inst >> lsb & 7) as u32, value);
+        }
+    }
+
+    fn bool_op(&mut self, op: u128, a: u32, b: u32) -> u32 {
+        let ty = self.type_u32[1];
+        match op {
+            0 => self.ir.emit_bitwise_and(ty, a, b),
+            1 => self.ir.emit_bitwise_or(ty, a, b),
+            2 => self.ir.emit_bitwise_xor(ty, a, b),
+            _ => panic!("boolean op {op} is invalid"),
+        }
     }
 
     // B fills the low `bits`, A the next `bits` and the low bits of C the rest, as PTX cvt.pack.
@@ -1740,11 +1727,20 @@ impl<'a> Decoder<'a> {
     }
 
     // OpBitcast puts vector component 0 in the low bits, so (Rn, Rn+1) is (lo, hi).
-    fn load_pair(&mut self, reg: u32) -> u32 {
-        let words = [self.load_register(reg), self.load_register(nth_reg(reg, RZ, 1))];
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
+    fn join_u64(&mut self, lo: u32, hi: u32) -> u32 {
+        let pair = self.ir.emit_composite_construct(self.type_u32[2], &[lo, hi]);
         let ty = self.type_u64();
         self.ir.emit_bitcast(ty, pair)
+    }
+
+    fn load_pair(&mut self, reg: u32) -> u32 {
+        let [lo, hi] = [0, 1].map(|i| self.load_register(nth_reg(reg, RZ, i)));
+        self.join_u64(lo, hi)
+    }
+
+    fn load_ureg_pair(&mut self, ur: u32) -> u32 {
+        let [lo, hi] = [0, 1].map(|i| self.load_ureg(nth_reg(ur, URZ, i)));
+        self.join_u64(lo, hi)
     }
 
     fn store_pair(&mut self, reg: u32, val: u32) {
@@ -1864,17 +1860,14 @@ impl<'a> Decoder<'a> {
         let bits = self.alu_src_pair(inst);
         let val = self.ir.emit_bitcast(ty, bits);
         let imm = matches!(inst >> 9 & 7, 2 | 4);
-        self.fp64_src(val, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0)
+        self.fp_src(ty, val, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0)
     }
 
-    fn fp64_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
+    fn fp64_reg(&mut self, inst: u128, reg_lsb: u32, abs_bit: u32, neg_bit: u32) -> u32 {
+        let bits = self.load_pair((inst >> reg_lsb & 0xff) as u32);
+        let val = self.bitcast_f64(bits);
         let ty = self.type_f64();
-        self.fp_src(ty, val, abs, neg)
-    }
-
-    fn fp64_rounding(inst: u128) {
-        let mode = (inst >> 78 & 3) as usize;
-        assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
+        self.fp_src(ty, val, inst >> abs_bit & 1 != 0, inst >> neg_bit & 1 != 0)
     }
 
     fn fp_compare(&mut self, op: u32, a: u32, b: u32) -> u32 {
@@ -1902,7 +1895,7 @@ impl<'a> Decoder<'a> {
             15 => self.ir.emit_iequal(bool_ty, self.const_u32_0, self.const_u32_0),
             _ => unreachable!(),
         };
-        self.ir.emit_select(self.type_u32[1], cmp, self.const_u32_1, self.const_u32_0)
+        self.bool_bit(cmp)
     }
 
     fn int_src(&mut self, val: u32, neg: bool) -> u32 {
@@ -1984,8 +1977,7 @@ impl<'a> Decoder<'a> {
 
     // .SAT maps NaN to +0, which NClamp does and FClamp leaves undefined.
     fn fp_arith_result(&mut self, inst: u128, val: u32, ftz: bool) -> u32 {
-        let rnd = (inst >> 78 & 3) as usize;
-        assert!(rnd == 0, ".{} needs directed rounding, only RN is implemented", ["RN", "RM", "RP", "RZ"][rnd]);
+        assert_round_to_nearest(inst);
         let val = if inst >> 77 & 1 != 0 {
             let [zero, one] = [0.0f32, 1.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
             self.glsl(spirv::glsl::N_CLAMP, self.type_f32[1], &[val, zero, one])
@@ -2065,140 +2057,17 @@ impl<'a> Decoder<'a> {
         self.ir.emit_store(reg_ptr, val);
     }
 
-    /// there are 8 predicates per invocation, the plan to modify them is as follows:
-    /// %pred = load
-    /// %mask = 0 - ((%pred >> N) & 1)    -> 0x00000000 or 0xFFFFFFFF
-    /// <do some things>
     fn load_predicate(&mut self) -> u32 {
         let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
         self.ir.emit_load(self.type_u32[1], ptr)
     }
 
-    /// produces a full bitmask from a single predicate bit:
-    ///   bit = (%pred >> N) & 1    -> 0 or 1
-    ///   mask = 0 - bit            -> 0x00000000 or 0xFFFFFFFF
-    /// used to avoid non-uniform control flow (branchless predication).
-    fn load_predicate_mask(&mut self, pred: u32, invert: bool) -> u32 {
-        if pred == PT {
-            let all_ones = self.cached_const_u32(0xffff_ffff);
-            if invert {
-                self.ir.emit_not(self.type_u32[1], all_ones)
-            } else {
-                all_ones
-            }
-        } else {
-            let base = self.load_predicate();
-            let and_res = self.predicate_bit(base, pred);
-            // broadcast to full mask: 0 - bit → 0x00000000 or 0xFFFFFFFF
-            let res = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, and_res);
-            if invert {
-                self.ir.emit_not(self.type_u32[1], res)
-            } else {
-                res
-            }
-        }
-    }
-
-    fn predicate_bit(&mut self, predicates: u32, pred: u32) -> u32 {
-        let shift = self.cached_const_u32(pred);
-        let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], predicates, shift);
-        self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1)
-    }
 
     fn store_predicate(&mut self, val: u32) {
         let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
         self.ir.emit_store(ptr, val)
     }
 
-    fn select_masked(&mut self, mask: u32, if_true: u32, if_false: u32) -> u32 {
-        let not_mask = self.ir.emit_not(self.type_u32[1], mask);
-        let v_true = self.ir.emit_bitwise_and(self.type_u32[1], if_true, mask);
-        let v_false = self.ir.emit_bitwise_and(self.type_u32[1], if_false, not_mask);
-        self.ir.emit_bitwise_or(self.type_u32[1], v_true, v_false)
-    }
-
-    fn store_register_predicated(&mut self, reg: u32, pred: u32, invert: bool, value: u32) {
-        if reg == RZ { return; }
-        let mask = self.load_predicate_mask(pred, invert);
-        let v_orig = self.load_register(reg);
-        let v_store = self.select_masked(mask, value, v_orig);
-        self.store_register(reg, v_store);
-    }
-
-    fn emit_cmp_against_zero(&mut self, cop: u32, value: u32) -> u32 {
-        // returns a SPIR-V u32 id containing 0 or 1
-        // cop encoding: 0=F, 1=LT, 2=EQ, 3=LE, 4=GT, 5=NE, 6=GE, 7=T
-        match cop {
-            0 => self.const_u32_0,
-            7 => self.const_u32_1,
-            _ => {
-                let shift31 = self.cached_const_u32(31);
-                // sign bit: 1 if value is negative (signed), 0 otherwise
-                let sign_bit = self.ir.emit_shift_right_logical(self.type_u32[1], value, shift31);
-
-                match cop {
-                    1 => sign_bit, // LT
-                    6 => self.ir.emit_isub(self.type_u32[1], self.const_u32_1, sign_bit), // GE
-                    _ => {
-                        // need is_nonzero for EQ, LE, GT, NE
-                        // is_nonzero = (value | (0 - value)) >>u 31
-                        let neg_val = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, value);
-                        let val_or_neg = self.ir.emit_bitwise_or(self.type_u32[1], value, neg_val);
-                        let is_nonzero = self.ir.emit_shift_right_logical(self.type_u32[1], val_or_neg, shift31);
-
-                        match cop {
-                            2 => self.ir.emit_isub(self.type_u32[1], self.const_u32_1, is_nonzero), // EQ
-                            5 => is_nonzero, // NE
-                            3 => { // LE = LT | EQ
-                                let is_zero = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, is_nonzero);
-                                self.ir.emit_bitwise_or(self.type_u32[1], sign_bit, is_zero)
-                            }
-                            4 => { // GT = !LE
-                                let is_zero = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, is_nonzero);
-                                let le = self.ir.emit_bitwise_or(self.type_u32[1], sign_bit, is_zero);
-                                self.ir.emit_isub(self.type_u32[1], self.const_u32_1, le)
-                            }
-                            _ => panic!("emit_cmp_against_zero: unknown cop {}", cop),
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn combine_and_set_predicate_bit(&mut self, pred_idx: u32, pp: u32, val: u32) {
-        // val is a SPIR-V u32 id containing 0 or 1 (the comparison result)
-        // pp: 0=SET, 1=AND, 2=OR, 3=XOR with existing predicate bit
-        if pred_idx == PT {
-            return;
-        }
-
-        let combined = if pp == 0 {
-            val
-        } else {
-            // read existing predicate bit
-            let base = self.load_predicate();
-            let bit_pos = self.cached_const_u32(pred_idx);
-            let shifted = self.ir.emit_shift_right_logical(self.type_u32[1], base, bit_pos);
-            let old_bit = self.ir.emit_bitwise_and(self.type_u32[1], shifted, self.const_u32_1);
-            match pp {
-                1 => self.ir.emit_bitwise_and(self.type_u32[1], old_bit, val),
-                2 => self.ir.emit_bitwise_or(self.type_u32[1], old_bit, val),
-                3 => self.ir.emit_bitwise_xor(self.type_u32[1], old_bit, val),
-                _ => panic!("combine_and_set_predicate_bit: unknown pp {}", pp),
-            }
-        };
-
-        // write combined bit into predicate
-        let base = self.load_predicate();
-        let bit_pos = self.cached_const_u32(pred_idx);
-        let mask = self.ir.emit_shift_left_logical(self.type_u32[1], self.const_u32_1, bit_pos);
-        let not_mask = self.ir.emit_not(self.type_u32[1], mask);
-        let cleared = self.ir.emit_bitwise_and(self.type_u32[1], base, not_mask);
-        let shifted_val = self.ir.emit_shift_left_logical(self.type_u32[1], combined, bit_pos);
-        let new_pred = self.ir.emit_bitwise_or(self.type_u32[1], cleared, shifted_val);
-        self.store_predicate(new_pred);
-    }
 
     pub fn finish(&mut self) {
 
@@ -2206,23 +2075,15 @@ impl<'a> Decoder<'a> {
 
     // %rd := %ra + $ra_offset
     pub fn al2p(&mut self, inst: u128) {
-        let pg = (((inst >> 12) & 0x7) << 0) as u32;
-        let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
         let ra_offset = (((inst >> 40) & 0x7ff) << 0) as u32;
         let bop = (((inst >> 74) & 0x3) << 0) as u32;
-        let _op = (((inst >> 79) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         assert!(bop == BitSize::B32 as u32);
         let base = self.load_register(ra);
         let offset = self.ir.emit_constant_typed(self.type_u32[1], ra_offset as u32);
         let dst_val = self.ir.emit_iadd(self.type_u32[1], base, offset);
-        self.store_register_predicated(rd, pg, pg_not != 0, dst_val);
+        self.store_register(rd, dst_val);
     }
     pub fn ald(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2278,23 +2139,10 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn atomg(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra = (((inst >> 24) & 0xff) << 0);
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
         let sz = (((inst >> 73) & 0xf) << 0) as u32;
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
         let op = (((inst >> 87) & 0xf) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let old = self.global_atomic(inst, op, sz, rb);
         if matches!(sz, 2 | 5) {
             self.store_pair(rd, old);
@@ -2303,20 +2151,10 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn atoms(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra = (((inst >> 24) & 0xff) << 0);
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let sz = (((inst >> 73) & 0x3) << 0) as u32;
-        let _stride = (((inst >> 78) & 0x3) << 0);
         let op = (((inst >> 87) & 0xf) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let cas = opcode(inst) == 0x38d;
         match opcode(inst) {
             0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC expose encodings but not state-transition semantics"),
@@ -2345,7 +2183,7 @@ impl<'a> Decoder<'a> {
                 let relaxed = self.cached_const_u32(spirv::memory_semantics::RELAXED);
                 self.ir.emit_atomic_compare_exchange(ty, ptr, scope, sem, relaxed, c, b)
             } else {
-                self.atomic_op64(ptr, scope, sem, op, sz == 5, b)
+                self.atomic_op(true, ptr, scope, sem, op, sz == 5, b)
             };
             self.ir.emit_control_barrier(scope, scope, sem);
             let final_value = self.ir.emit_load(ty, ptr);
@@ -2370,13 +2208,11 @@ impl<'a> Decoder<'a> {
             let c = self.load_register((inst >> 64) as u32 & 0xff);
             self.ir.emit_atomic_compare_exchange(ty, ptr, scope, relaxed, relaxed, c, b)
         } else {
-            self.atomic_op(ptr, scope, relaxed, op, signed, b)
+            self.atomic_op(false, ptr, scope, relaxed, op, signed, b)
         };
         self.store_register(rd, old);
     }
     pub fn b2r(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let _barname = (((inst >> 54) & 0xf) << 0);
         let _stride = (((inst >> 78) & 0x3) << 0);
@@ -2496,46 +2332,21 @@ impl<'a> Decoder<'a> {
         self.store_alu(inst, res);
     }
     pub fn bpt(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _sb = (((inst >> 34) & 0x7) << 0);
         let cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         panic!("BPT mode {cop} breaks into a debugger, which a compute shader has none of");
     }
     pub fn bra(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let cond = (((inst >> 32) & 0x3) << 0);
         let upq = (((inst >> 24) & 0x7) << 0) as u32;
         let upq_not = (((inst >> 27) & 0x1) << 0) as u32;
-        let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
-        let _depth = (((inst >> 85) & 0x3) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pp_not = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        // .DIV and .CONV test the warp for divergence, and one invocation per register file is always converged.
+        // .DIV and .CONV branch on warp divergence, which is not tracked, so the warp counts as converged.
         if cond == 2 {
             return;
         }
         let mut target = self.cached_const_u32(branch_target(self.pc, inst).unwrap());
         if opcode(inst) == BRA_UPRED {
-            let bit = if upq == PT {
-                self.const_u32_1
-            } else {
-                let upred = self.load_upredicate();
-                self.predicate_bit(upred, upq)
-            };
-            let invert = self.cached_const_u32(upq_not);
-            let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, invert);
+            let bit = self.pred_bit(true, upq, upq_not != 0);
+            let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
             let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
             target = self.ir.emit_select(self.type_u32[1], taken, target, next);
         }
@@ -2550,18 +2361,6 @@ impl<'a> Decoder<'a> {
         self.store_alu(inst, res);
     }
     pub fn brx(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
-        let _depth = (((inst >> 85) & 0x3) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pp_not = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         self.jump_to_register(inst, true);
     }
     pub fn brxu(&mut self, inst: u128) {
@@ -2589,18 +2388,6 @@ impl<'a> Decoder<'a> {
         self.store_barrier_token(inst, self.const_u32_0);
     }
     pub fn call(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _depth = (((inst >> 86) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pp_not = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         match opcode(inst) {
             CALL_ABS_R | CALL_REL_R => self.jump_to_register(inst, opcode(inst) == CALL_REL_R),
             0x1943 | 0x1944 => self.jump_to_uregister(inst, opcode(inst) == 0x1944),
@@ -2618,33 +2405,11 @@ impl<'a> Decoder<'a> {
             }
         }
     }
-    pub fn cctl(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _mode = (((inst >> 78) & 0x7) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        // Cache control has no observable effect in the single-invocation model.
+    pub fn cctl(&mut self, _inst: u128) {
+        // Vulkan buffers are coherent without guest cache control.
     }
     pub fn cctll(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _op = (((inst >> 87) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        // Cache control has no observable effect in the single-invocation model.
+        self.cctl(inst)
     }
     pub fn cctlt(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2694,16 +2459,9 @@ impl<'a> Decoder<'a> {
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn cs2r(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let sr = (((inst >> 72) & 0xff) << 0) as u32;
         let wide = (((inst >> 80) & 0x1) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         for i in 0..=wide {
             let val = self.special_register(nth_reg(sr, SRZ, i));
             self.store_register(nth_reg(rd, RZ, i), val);
@@ -2728,17 +2486,11 @@ impl<'a> Decoder<'a> {
         return;
     }
     pub fn dadd(&mut self, inst: u128) {
-        Self::fp64_rounding(inst);
+        assert_round_to_nearest(inst);
         let ty = self.type_f64();
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let form = inst >> 9 & 7;
-        let b = if form == 1 { self.load_pair((inst >> 64 & 0xff) as u32) } else { self.alu_src_pair(inst) };
-        let b = self.bitcast_f64(b);
-        let imm = matches!(form, 2 | 4);
-        let (abs, neg) = if form == 1 { (inst >> 74 & 1 != 0, inst >> 75 & 1 != 0) } else { (inst >> 62 & 1 != 0, inst >> 63 & 1 != 0) };
-        let b = self.fp64_src(b, !imm && abs, !imm && neg);
+        let a = self.fp64_reg(inst, 24, 73, 72);
+        // DADD's second operand sits in the C slot, so a register comes from Rc.
+        let b = if inst >> 9 & 7 == 1 { self.fp64_reg(inst, 64, 74, 75) } else { self.fp64_alu_src(inst) };
         let result = self.ir.emit_fadd(ty, a, b);
         let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
@@ -2758,74 +2510,54 @@ impl<'a> Decoder<'a> {
         return;
     }
     pub fn dfma(&mut self, inst: u128) {
-        Self::fp64_rounding(inst);
+        assert_round_to_nearest(inst);
         let ty = self.type_f64();
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let a = self.fp64_reg(inst, 24, 73, 72);
         let src = self.fp64_alu_src(inst);
-        let c = self.load_pair((inst >> 64 & 0xff) as u32);
-        let c = self.bitcast_f64(c);
-        let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
+        let c = self.fp64_reg(inst, 64, 74, 75);
         let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [c, src] } else { [src, c] };
         let result = self.glsl(spirv::glsl::FMA, ty, &[a, b, c]);
         let result = self.propagated_nan_bits(result, &[a, b, c]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dmma(&mut self, inst: u128) {
-        Self::fp64_rounding(inst);
+        assert_round_to_nearest(inst);
         assert_eq!(inst >> 87 & 0xf, 0, "DMMA with a UPp condition");
         let ty = self.type_f64();
         let [a, b] = self.mma_operands(inst, 1, 2, |_, word, _| vec![word]);
         let f64s = |s: &mut Self, words: &[u32], abs: u32, neg: u32| -> Vec<u32> {
             let (lo, hi) = words.split_at(4);
             lo.iter().zip(hi).map(|(&lo, &hi)| {
-                let pair = s.ir.emit_composite_construct(s.type_u32[2], &[lo, hi]);
-                let val = s.ir.emit_bitcast(ty, pair);
-                s.fp64_src(val, inst >> abs & 1 != 0, inst >> neg & 1 != 0)
+                let pair = s.join_u64(lo, hi);
+                let val = s.bitcast_f64(pair);
+                s.fp_src(ty, val, inst >> abs & 1 != 0, inst >> neg & 1 != 0)
             }).collect()
         };
         let a = f64s(self, &a[0], 73, 72);
         let [rd, rc] = [16, 64].map(|lsb| (inst >> lsb & 0xff) as u32);
         for (column, words) in (0..).zip(&b) {
             let b = f64s(self, words, 62, 63);
-            let c = self.load_pair(nth_reg(rc, RZ, 2 * column));
-            let c = self.bitcast_f64(c);
-            let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
+            let bits = self.load_pair(nth_reg(rc, RZ, 2 * column));
+            let c = self.bitcast_f64(bits);
+            let c = self.fp_src(ty, c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
             let d = a.iter().zip(&b).fold(c, |sum, (&x, &y)| self.glsl(spirv::glsl::FMA, ty, &[x, y, sum]));
             self.store_pair(nth_reg(rd, RZ, 2 * column), d);
         }
     }
     pub fn dmul(&mut self, inst: u128) {
-        Self::fp64_rounding(inst);
+        assert_round_to_nearest(inst);
         let ty = self.type_f64();
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let a = self.fp64_reg(inst, 24, 73, 72);
         let b = self.fp64_alu_src(inst);
         let result = self.ir.emit_fmul(ty, a, b);
         let result = self.propagated_nan_bits(result, &[a, b]);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dsetp(&mut self, inst: u128) {
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let a = self.fp64_reg(inst, 24, 73, 72);
         let b = self.fp64_alu_src(inst);
         let value = self.fp_compare((inst >> 76 & 15) as u32, a, b);
-        let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], value, self.const_u32_1);
-        let pred = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let pred = self.ir.emit_bitwise_and(self.type_u32[1], pred, self.const_u32_1);
-        let combine = |this: &mut Self, value| match inst >> 74 & 3 {
-            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, pred),
-            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, pred),
-            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, pred),
-            mode => panic!("DSETP boolean mode {mode} is invalid"),
-        };
-        let value = combine(self, value);
-        let inverse = combine(self, inverse);
-        self.combine_and_set_predicate_bit((inst >> 81 & 7) as u32, 0, value);
-        self.combine_and_set_predicate_bit((inst >> 84 & 7) as u32, 0, inverse);
+        self.store_setp(inst, value);
     }
     pub fn errbar(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -2837,35 +2569,15 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         return;
     }
-    pub fn exit(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _mode = (((inst >> 84) & 0x3) << 0);
-        let _depth = (((inst >> 86) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pp_not = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
+    pub fn exit(&mut self, _inst: u128) {
         let exit = self.cached_const_u32(u32::MAX);
         self.ir.emit_store(self.var_pc, exit);
     }
     pub fn f2f(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let rnd = ((inst >> 78) & 3) as u32;
         let ftz = ((inst >> 80) & 1) != 0;
         let fmt = (((inst >> 84) & 0x7) << 3) | (((inst >> 75) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let f64_ty = self.type_f64();
         let val = match fmt {
             19 => {
@@ -2939,22 +2651,11 @@ impl<'a> Decoder<'a> {
         self.store_register((inst >> 16 & 0xff) as u32, word);
     }
     pub fn f2i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra_urb = (((inst >> 32) & 0x3f) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
         let dstfmt = ((((inst >> 75) & 0x3) << 1) | (((inst >> 72) & 0x1) << 0)) as u32;
-        let _satfinite = (((inst >> 77) & 0x1) << 0);
         let rnd = ((inst >> 78) & 3) as usize;
         let ftz = ((inst >> 80) & 1) != 0;
         let srcfmt = ((inst >> 84) & 3) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let width = 8 << (dstfmt >> 1);
         let (min, max) = match dstfmt & 1 {
             0 => (0.0, 2f64.powi(width)),
@@ -2986,7 +2687,7 @@ impl<'a> Decoder<'a> {
             let x = self.bitcast_f32(x);
             let nan = self.ir.emit_f_is_nan(self.type_bool[1], x);
             let x = self.glsl(round, self.type_f32[1], &[x]);
-            let x = self.glsl(81, self.type_f32[1], &[x, lo, hi]);
+            let x = self.glsl(spirv::glsl::N_CLAMP, self.type_f32[1], &[x, lo, hi]);
             let x = self.ir.emit_convert_f_to_s(self.type_s32[1], x);
             let x = self.bitcast_u32(x);
             self.ir.emit_select(self.type_u32[1], nan, nan_byte, x)
@@ -3021,7 +2722,8 @@ impl<'a> Decoder<'a> {
     pub fn flo(&mut self, inst: u128) {
         let ty = self.type_u32[1];
         let b = self.src_b_maybe_inverted(inst);
-        let nonzero = self.emit_cmp_against_zero(5, b);
+        let nonzero = self.ir.emit_inot_equal(self.type_bool[1], b, self.const_u32_0);
+        let nonzero = self.bool_bit(nonzero);
         self.store_pred_bit(is_uniform(inst), (inst >> 81 & 7) as u32, nonzero);
         let msb = self.glsl(if inst >> 73 & 1 != 0 { spirv::glsl::FIND_S_MSB } else { spirv::glsl::FIND_U_MSB }, ty, &[b]);
         let res = if inst >> 74 & 1 != 0 {
@@ -3040,8 +2742,7 @@ impl<'a> Decoder<'a> {
         let ftz = inst >> 80 & 1 != 0;
         let a = self.fp_reg(inst, 24, 73, 72, ftz);
         let b = self.fp_alu_src(inst, ftz);
-        let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let take_min = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+        let take_min = self.pp_set(inst);
         // NMin and NMax return the other operand when one is NaN, like the hardware.
         let [min, max] = [spirv::glsl::N_MIN, spirv::glsl::N_MAX].map(|op| self.glsl(op, self.type_f32[1], &[a, b]));
         let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
@@ -3067,20 +2768,10 @@ impl<'a> Decoder<'a> {
         todo!("FOOTPRINT reports the sparse tiles a sample would touch in NVIDIA's tile layout; only VK_NV_shader_image_footprint can express it, and neither Intel nor lavapipe has it: {inst:#034x}");
     }
     pub fn frnd(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _extract = (((inst >> 60) & 0x3) << 0);
         let rnd = ((inst >> 78) & 3) as usize;
         let ftz = ((inst >> 80) & 1) != 0;
         let fmt = (((inst >> 84) & 0x3) << 2) | (((inst >> 75) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         match fmt {
             10 => {
                 let val = self.fp_alu_src(inst, ftz);
@@ -3103,10 +2794,9 @@ impl<'a> Decoder<'a> {
         let ftz = inst >> 80 & 1 != 0;
         let a = self.fp_reg(inst, 24, 73, 72, ftz);
         let b = self.fp_alu_src(inst, ftz);
-        let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let a = self.bitcast_u32(a);
-        let b = self.bitcast_u32(b);
-        let result = self.select_masked(mask, a, b);
+        let p = self.pp_set(inst);
+        let result = self.ir.emit_select(self.type_f32[1], p, a, b);
+        let result = self.bitcast_u32(result);
         self.store_register(rd, result);
     }
     pub fn fset(&mut self, inst: u128) {
@@ -3115,14 +2805,8 @@ impl<'a> Decoder<'a> {
         let a = self.fp_reg(inst, 24, 73, 72, ftz);
         let b = self.fp_alu_src(inst, ftz);
         let comparison = self.fp_compare((inst >> 76 & 0xf) as u32, a, b);
-        let p = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let p = self.ir.emit_bitwise_and(self.type_u32[1], p, self.const_u32_1);
-        let result = match inst >> 74 & 3 {
-            0 => self.ir.emit_bitwise_and(self.type_u32[1], comparison, p),
-            1 => self.ir.emit_bitwise_or(self.type_u32[1], comparison, p),
-            2 => self.ir.emit_bitwise_xor(self.type_u32[1], comparison, p),
-            _ => unreachable!(),
-        };
+        let p = self.pp_bit(inst);
+        let result = self.bool_op(inst >> 74 & 3, comparison, p);
         let mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, result);
         self.store_register(rd, mask);
     }
@@ -3131,24 +2815,11 @@ impl<'a> Decoder<'a> {
         let a = self.fp_reg(inst, 24, 73, 72, ftz);
         let b = self.fp_alu_src(inst, ftz);
         let comparison = self.fp_compare((inst >> 76 & 0xf) as u32, a, b);
-        let inverse = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, comparison);
-        let p = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let p = self.ir.emit_bitwise_and(self.type_u32[1], p, self.const_u32_1);
-        let combine = |this: &mut Self, value| match inst >> 74 & 3 {
-            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, p),
-            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, p),
-            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, p),
-            _ => unreachable!(),
-        };
-        let result = combine(self, comparison);
-        let inverse = combine(self, inverse);
-        self.combine_and_set_predicate_bit((inst >> 81 & 7) as u32, 0, result);
-        self.combine_and_set_predicate_bit((inst >> 84 & 7) as u32, 0, inverse);
+        self.store_setp(inst, comparison);
     }
     pub fn fswzadd(&mut self, inst: u128) {
         let (ty, f32_ty, bool_ty) = (self.type_u32[1], self.type_f32[1], self.type_bool[1]);
-        let rnd = inst >> 78 & 3;
-        assert!(rnd == 0, "FSWZADD rounding mode {rnd} needs directed rounding, only RN is implemented");
+        assert_round_to_nearest(inst);
         let ftz = inst >> 80 & 1 != 0;
         let [a, c] = [24, 64].map(|bit| {
             let bits = self.load_register((inst >> bit & 0xff) as u32);
@@ -3374,11 +3045,10 @@ impl<'a> Decoder<'a> {
         let ftz = inst >> 80 & 1 != 0;
         let a = self.half2_reg(inst, 24, 74, 73, 72, ftz);
         let b = self.half2_alu_src(inst, ftz);
-        let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let take_min = self.ir.emit_inot_equal(self.type_bool[1], mask, self.const_u32_0);
+        let take_min = self.pp_set(inst);
         let nan = self.ir.emit_constant_typed(self.type_f32[1], f32::NAN);
         let val = [0, 1].map(|i| {
-            let [min, max] = [79, 80].map(|op| self.glsl(op, self.type_f32[1], &[a[i], b[i]]));
+            let [min, max] = [spirv::glsl::N_MIN, spirv::glsl::N_MAX].map(|op| self.glsl(op, self.type_f32[1], &[a[i], b[i]]));
             let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
             if inst >> 81 & 1 == 0 {
                 return val;
@@ -3410,24 +3080,15 @@ impl<'a> Decoder<'a> {
     }
     pub fn hsetp2(&mut self, inst: u128) {
         let [pu, pv] = self.half2_compare(inst, inst >> 71 & 1 != 0);
-        self.combine_and_set_predicate_bit((inst >> 81 & 7) as u32, 0, pu);
-        self.combine_and_set_predicate_bit((inst >> 84 & 7) as u32, 0, pv);
+        self.store_pred_bit(false, (inst >> 81 & 7) as u32, pu);
+        self.store_pred_bit(false, (inst >> 84 & 7) as u32, pv);
     }
     pub fn i2f(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra_urb = (((inst >> 32) & 0x3f) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
         let extract = ((inst >> 60) & 3) as u32;
         let size = ((inst >> 75) & 3) as u32;
-        let rnd = ((inst >> 78) & 3) as u32;
+        assert_round_to_nearest(inst);
         let srcfmt = ((((inst >> 84) & 0x3) << 1) | (((inst >> 74) & 0x1) << 0)) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let signed = srcfmt & 1 != 0;
         let mut val = if srcfmt >= 6 {
             self.alu_src_pair(inst)
@@ -3461,7 +3122,6 @@ impl<'a> Decoder<'a> {
             }
             _ => todo!("I2F destination format {size} requires f16 support"),
         };
-        assert!(rnd == 0, "directed I2F rounding is not implemented");
         if size == 3 {
             let u64_ty = self.type_u64();
             let result = self.ir.emit_bitcast(u64_ty, result);
@@ -3507,17 +3167,8 @@ impl<'a> Decoder<'a> {
         self.store_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn i2i(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
         let dstfmt = ((inst >> 76) & 3) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let val = self.alu_src(inst);
         let (lo, hi) = match dstfmt {
             0 => (0, u8::MAX as u32),
@@ -3565,9 +3216,7 @@ impl<'a> Decoder<'a> {
         let value = self.ir.emit_isub(self.type_u32[1], value, sign);
         self.store_register((inst >> 16 & 0xff) as u32, value);
     }
-    pub fn iadd3(&mut self, inst: u128) {
-        self.add3(inst, false)
-    }
+
     pub fn ide(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
         let _pg_not = (((inst >> 15) & 0x1) << 0);
@@ -3612,15 +3261,7 @@ impl<'a> Decoder<'a> {
     pub fn imad(&mut self, inst: u128) {
         let signed = inst >> 73 & 1 != 0;
         let x = inst >> 74 & 1 != 0;
-        let pp = ((inst >> 87) & 7) as u32;
-        let pp_not = inst >> 90 & 1 != 0;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let form = (inst >> 9) & 7;
-        let swapped = matches!(form, 2 | 3 | 7);
         let a = self.alu_reg(inst, 24);
         let (b, c32) = self.srcs_bc(inst);
         let modify_c = match form {
@@ -3633,33 +3274,24 @@ impl<'a> Decoder<'a> {
         } else {
             self.int_src(c32, modify_c)
         };
-        let carry = if x { self.pred_bit(is_uniform(inst), pp, pp_not) } else { self.const_u32_0 };
+        let carry = if x { self.pp_bit(inst) } else { self.const_u32_0 };
         let mode = inst as u32 & 7;
-        if mode == 5 {
+        if mode == 5 || mode == 7 {
             let ty = self.type_u64();
-            let a = if signed { self.ir.emit_s_convert(ty, a) } else { self.ir.emit_u_convert(ty, a) };
-            let b = if signed { self.ir.emit_s_convert(ty, b) } else { self.ir.emit_u_convert(ty, b) };
-            let c = if swapped {
-                match form {
-                    2 => self.ir.emit_s_convert(ty, c32),
-                    3 => {
-                        let bank = (inst >> 54 & 0x1f) as u32;
-                        let offset = ((inst >> 40 & 0x3fff) << 2) as u32;
-                        let offsets = [offset, offset + 4].map(|v| self.cached_const_u32(v));
-                        let words = offsets.map(|v| self.load_cbuf(ResourceKind::Cbuf(bank), v));
-                        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-                        self.ir.emit_bitcast(ty, pair)
-                    }
-                    7 => {
-                        let ur = (inst >> 32 & 0x3f) as u32;
-                        let words = [self.load_ureg(ur), self.load_ureg((ur + 1).min(63))];
-                        let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-                        self.ir.emit_bitcast(ty, pair)
-                    }
-                    _ => unreachable!(),
-                }
-            } else {
-                self.alu_pair(inst, 64)
+            let [a, b] = [a, b].map(|x| if signed { self.ir.emit_s_convert(ty, x) } else { self.ir.emit_u_convert(ty, x) });
+            let product = self.ir.emit_imul(ty, a, b);
+            if mode == 7 {
+                let shift = self.ir.emit_constant_typed(ty, 32u64);
+                let hi = self.ir.emit_shift_right_logical(ty, product, shift);
+                let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
+                let result = self.ir.emit_iadd(self.type_u32[1], hi, c32);
+                let result = self.ir.emit_iadd(self.type_u32[1], result, carry);
+                return self.store_alu(inst, result);
+            }
+            let c = match form {
+                2 => self.ir.emit_s_convert(ty, c32),
+                3 | 7 => self.alu_src_pair(inst),
+                _ => self.alu_pair(inst, 64),
             };
             let c = if x && modify_c {
                 self.ir.emit_not(ty, c)
@@ -3670,21 +3302,9 @@ impl<'a> Decoder<'a> {
                 c
             };
             let carry = self.ir.emit_u_convert(ty, carry);
-            let product = self.ir.emit_imul(ty, a, b);
             let result = self.ir.emit_iadd(ty, product, c);
             let result = self.ir.emit_iadd(ty, result, carry);
             self.store_alu_pair(inst, result);
-        } else if mode == 7 {
-            let ty = self.type_u64();
-            let a = if signed { self.ir.emit_s_convert(ty, a) } else { self.ir.emit_u_convert(ty, a) };
-            let b = if signed { self.ir.emit_s_convert(ty, b) } else { self.ir.emit_u_convert(ty, b) };
-            let product = self.ir.emit_imul(ty, a, b);
-            let shift = self.ir.emit_constant_typed(ty, 32u64);
-            let hi = self.ir.emit_shift_right_logical(ty, product, shift);
-            let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
-            let result = self.ir.emit_iadd(self.type_u32[1], hi, c32);
-            let result = self.ir.emit_iadd(self.type_u32[1], result, carry);
-            self.store_alu(inst, result);
         } else {
             let product = self.ir.emit_imul(self.type_u32[1], a, b);
             let result = self.ir.emit_iadd(self.type_u32[1], product, c32);
@@ -3740,8 +3360,8 @@ impl<'a> Decoder<'a> {
         };
         let min = self.ir.emit_select(self.type_u32[1], less, a, b);
         let max = self.ir.emit_select(self.type_u32[1], less, b, a);
-        let mask = self.load_predicate_mask((inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let result = self.select_masked(mask, min, max);
+        let take_min = self.pp_set(inst);
+        let result = self.ir.emit_select(self.type_u32[1], take_min, min, max);
         self.store_register((inst >> 16 & 0xff) as u32, result);
     }
     pub fn ipa(&mut self, inst: u128) {
@@ -3795,81 +3415,38 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn isetp(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let ex = inst >> 72 & 1 != 0;
         let signed = inst >> 73 & 1 != 0;
-        let bop = ((inst >> 74) & 3) as u32;
-        let cmp = ((inst >> 76) & 7) as u32;
-        let pu = ((inst >> 81) & 7) as u32;
-        let pv = ((inst >> 84) & 7) as u32;
-        let pp = ((inst >> 87) & 7) as u32;
-        let pp_not = inst >> 90 & 1 != 0;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        let uniform = is_uniform(inst);
+        let cmp = (inst >> 76 & 7) as u32;
         let (a, b) = (self.alu_reg(inst, 24), self.src_b(inst));
-        let mut result = match (cmp, signed) {
-            (0, _) => self.const_u32_0,
-            (7, _) => self.const_u32_1,
-            (2, _) => {
-                let v = self.ir.emit_iequal(self.type_bool[1], a, b);
-                self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0)
-            }
-            (5, _) => {
-                let v = self.ir.emit_inot_equal(self.type_bool[1], a, b);
-                self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0)
-            }
-            (1, false) => { let v = self.ir.emit_uless_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (1, true) => { let v = self.ir.emit_sless_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (3, false) => { let v = self.ir.emit_uless_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (3, true) => { let v = self.ir.emit_sless_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (4, false) => { let v = self.ir.emit_ugreater_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (4, true) => { let v = self.ir.emit_sgreater_than(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (6, false) => { let v = self.ir.emit_ugreater_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            (6, true) => { let v = self.ir.emit_sgreater_than_equal(self.type_bool[1], a, b); self.ir.emit_select(self.type_u32[1], v, self.const_u32_1, self.const_u32_0) }
-            _ => unreachable!(),
-        };
-        if ex && !matches!(cmp, 0 | 7) {
-            let pr = ((inst >> 68) & 7) as u32;
-            let pr_not = inst >> 71 & 1 != 0;
-            let pr = self.pred_bit(uniform, pr, pr_not);
-            let equal = self.ir.emit_iequal(self.type_bool[1], a, b);
-            let equal = self.ir.emit_select(self.type_u32[1], equal, self.const_u32_1, self.const_u32_0);
-            result = match cmp {
-                2 => self.ir.emit_bitwise_and(self.type_u32[1], equal, pr),
-                5 => self.ir.emit_bitwise_or(self.type_u32[1], result, pr),
-                _ => {
-                    let strict = match (cmp, signed) {
-                        (1 | 3, false) => self.ir.emit_uless_than(self.type_bool[1], a, b),
-                        (1 | 3, true) => self.ir.emit_sless_than(self.type_bool[1], a, b),
-                        (4 | 6, false) => self.ir.emit_ugreater_than(self.type_bool[1], a, b),
-                        (4 | 6, true) => self.ir.emit_sgreater_than(self.type_bool[1], a, b),
-                        _ => unreachable!(),
-                    };
-                    let strict = self.ir.emit_select(self.type_u32[1], strict, self.const_u32_1, self.const_u32_0);
-                    let tied = self.ir.emit_bitwise_and(self.type_u32[1], equal, pr);
-                    self.ir.emit_bitwise_or(self.type_u32[1], strict, tied)
-                }
+        // The compare field is a mask of LT (1), EQ (2) and GT (4).
+        let compare = |this: &mut Self, cmp| {
+            let ty = this.type_bool[1];
+            let cond = match (cmp, signed) {
+                (0, _) => return this.const_u32_0,
+                (7, _) => return this.const_u32_1,
+                (1, false) => this.ir.emit_uless_than(ty, a, b),
+                (1, true) => this.ir.emit_sless_than(ty, a, b),
+                (2, _) => this.ir.emit_iequal(ty, a, b),
+                (3, false) => this.ir.emit_uless_than_equal(ty, a, b),
+                (3, true) => this.ir.emit_sless_than_equal(ty, a, b),
+                (4, false) => this.ir.emit_ugreater_than(ty, a, b),
+                (4, true) => this.ir.emit_sgreater_than(ty, a, b),
+                (5, _) => this.ir.emit_inot_equal(ty, a, b),
+                (6, false) => this.ir.emit_ugreater_than_equal(ty, a, b),
+                _ => this.ir.emit_sgreater_than_equal(ty, a, b),
             };
-        }
-        let p = self.pred_bit(uniform, pp, pp_not);
-        let not_result = self.ir.emit_isub(self.type_u32[1], self.const_u32_1, result);
-        let combine = |this: &mut Self, value| match bop {
-            0 => this.ir.emit_bitwise_and(this.type_u32[1], value, p),
-            1 => this.ir.emit_bitwise_or(this.type_u32[1], value, p),
-            2 => this.ir.emit_bitwise_xor(this.type_u32[1], value, p),
-            _ => unreachable!(),
+            this.bool_bit(cond)
         };
-        let u = combine(self, result);
-        let v = combine(self, not_result);
-        self.store_pred_bit(uniform, pu, u);
-        self.store_pred_bit(uniform, pv, v);
+        let mut result = compare(self, cmp);
+        // .EX compares the high words of a wider value, so a tie takes Pr, the low words' result.
+        if inst >> 72 & 1 != 0 && !matches!(cmp, 0 | 7) {
+            let pr = self.pred_bit(is_uniform(inst), (inst >> 68 & 7) as u32, inst >> 71 & 1 != 0);
+            let strict = compare(self, cmp & 5);
+            let equal = compare(self, 2);
+            let tied = self.ir.emit_bitwise_and(self.type_u32[1], equal, pr);
+            result = self.ir.emit_bitwise_or(self.type_u32[1], strict, tied);
+        }
+        self.store_setp(inst, result);
     }
     pub fn jmp(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);
@@ -3911,18 +3488,6 @@ impl<'a> Decoder<'a> {
         self.ir.emit_store(self.var_pc, target);
     }
     pub fn jmx(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
-        let _depth = (((inst >> 85) & 0x3) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pp_not = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         self.jump_to_register(inst, false);
     }
     pub fn jmxu(&mut self, inst: u128) {
@@ -3946,41 +3511,20 @@ impl<'a> Decoder<'a> {
         self.exit(inst);
     }
     pub fn ld(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
-        let _pnz = (((inst >> 64) & 0xf) << 0);
-        let _sp2 = (((inst >> 68) & 0x3) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.global_address(inst, 32, 32);
         self.load_memory(ResourceKind::Global, address, sz, rd);
     }
     pub fn ldc(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
         let ra_offset = (((inst >> 38) & 0xffff) << 0) as u16 as i16 as u32;
         let sc_bank = (((inst >> 54) & 0x1f) << 0) as u32;
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
         let stride = (((inst >> 78) & 0x3) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        let bindless = opcode(inst) == 0x1582;
+        const LDC_UR_BANK: u32 = 0x1582;
+        let bindless = opcode(inst) == LDC_UR_BANK;
         let base = self.load_register(if bindless { (inst >> 64) as u32 & 0xff } else { ra });
         let mut bank = if bindless { self.load_ureg(ra & 0x3f) } else { self.cached_const_u32(sc_bank) };
         let base = if stride >= 2 {
@@ -3992,8 +3536,7 @@ impl<'a> Decoder<'a> {
         } else {
             base
         };
-        let words = if sz <= 4 { 1 } else { 1 << (sz - 4) };
-        for i in 0..words {
+        for i in 0..access_words(sz) {
             let offset = self.cached_const_u32(ra_offset.wrapping_add(4 * i));
             let addr = self.ir.emit_iadd(self.type_u32[1], base, offset);
             let word = if bindless || stride >= 2 {
@@ -4002,123 +3545,56 @@ impl<'a> Decoder<'a> {
                 self.load_cbuf(ResourceKind::Cbuf(sc_bank), addr)
             };
             let value = if sz <= 4 { self.load_narrow(word, addr, sz) } else { word };
-            self.store_register(if rd == 255 { rd } else { rd + i }, value);
+            self.store_register(nth_reg(rd, RZ, i), value);
         }
     }
     pub fn ldg(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _pnz = (((inst >> 64) & 0xf) << 0);
-        let _sp2 = (((inst >> 68) & 0x3) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.global_address(inst, 32, 40);
         self.load_memory(ResourceKind::Global, address, sz, rd);
     }
-    pub fn ldgdepbar(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
+    pub fn ldgdepbar(&mut self, _inst: u128) {
         // LDGSTS completes synchronously in this model.
     }
     pub fn ldgsts(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let ra = (((inst >> 24) & 0xff) << 0) as u32;
         let ra_offset = (((inst >> 32) as i32) << 20 >> 20) as u32;
         let rb_offset = (((inst >> 44) as i32) << 12 >> 12) as u32;
         let ra_urc = (((inst >> 64) & 0x3f) << 0) as u32;
-        let _input_reg_sz_32_dist = (((inst >> 70) & 0x1) << 0);
-        let _sp2 = (((inst >> 71) & 0x3) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _nan = (((inst >> 81) & 0x1) << 0);
-        let _rndsrc = (((inst >> 82) & 0x1) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0);
-        let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let [ra_offset, rb_offset] = [ra_offset, rb_offset].map(|v| self.cached_const_u32(v));
         let mut global = self.load_register(ra);
         let mut shared = self.load_register(rd);
-        match opcode(inst) {
-            0x1fae => {
-                let ur = self.load_ureg(ra_urc);
-                global = self.ir.emit_iadd(self.type_u32[1], global, ur);
-            }
-            0x1dae => {
-                let ur = self.load_ureg(ra_urc);
-                shared = self.ir.emit_iadd(self.type_u32[1], shared, ur);
-            }
-            _ => unreachable!(),
+        const LDGSTS_UR_GLOBAL: u32 = 0x1fae;
+        let ur = self.load_ureg(ra_urc);
+        if opcode(inst) == LDGSTS_UR_GLOBAL {
+            global = self.ir.emit_iadd(self.type_u32[1], global, ur);
+        } else {
+            shared = self.ir.emit_iadd(self.type_u32[1], shared, ur);
         }
         global = self.ir.emit_iadd(self.type_u32[1], global, ra_offset);
         shared = self.ir.emit_iadd(self.type_u32[1], shared, rb_offset);
-        let two = self.cached_const_u32(2);
-        let words = 1 << (sz - 4);
-        for i in 0..words {
+        for i in 0..access_words(sz) {
             let offset = self.cached_const_u32(4 * i);
             let global = self.ir.emit_iadd(self.type_u32[1], global, offset);
             let shared = self.ir.emit_iadd(self.type_u32[1], shared, offset);
             let src = self.global_word_at(global);
             let value = self.ir.emit_load(self.type_u32[1], src);
-            let word = self.ir.emit_shift_right_logical(self.type_u32[1], shared, two);
-            let dst = self.shared_mem(word);
+            let dst = self.shared_word_at(shared);
             self.ir.emit_store(dst, value);
         }
     }
     pub fn ldl(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.global_address(inst, 32, 40);
         self.load_memory(ResourceKind::Local, address, sz, rd);
     }
     pub fn lds(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.shared_address(inst, 32);
         self.load_memory(ResourceKind::Shared, address, sz, rd);
     }
@@ -4174,22 +3650,11 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn lea(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
         let negate = inst >> 72 & 1 != 0;
         let sx32 = inst >> 73 & 1 != 0;
         let x = inst >> 74 & 1 != 0;
         let scale = (((inst >> 75) & 0x1f) << 0) as u32;
         let high = inst >> 80 & 1 != 0;
-        let pu = ((inst >> 81) & 0x7) as u32;
-        let pp = ((inst >> 87) & 0x7) as u32;
-        let pp_not = inst >> 90 & 1 != 0;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let ty = self.type_u32[1];
         let shift = self.cached_const_u32(scale);
         let a = self.alu_reg(inst, 24);
@@ -4198,9 +3663,8 @@ impl<'a> Decoder<'a> {
             let a = if sx32 {
                 self.ir.emit_s_convert(ty64, a)
             } else {
-                let words = [a, self.alu_reg(inst, 64)];
-                let pair = self.ir.emit_composite_construct(self.type_u32[2], &words);
-                self.ir.emit_bitcast(ty64, pair)
+                let hi = self.alu_reg(inst, 64);
+                self.join_u64(a, hi)
             };
             let shift = self.ir.emit_constant_typed(ty64, (32 - scale) as u64);
             let a = self.ir.emit_shift_right_logical(ty64, a, shift);
@@ -4223,7 +3687,7 @@ impl<'a> Decoder<'a> {
             carry = self.ir.emit_logical_or(self.type_bool[1], carry, overflow);
         }
         let result = if x {
-            let cin = self.pred_bit(is_uniform(inst), pp, pp_not);
+            let cin = self.pp_bit(inst);
             let result = self.ir.emit_iadd(ty, ab, cin);
             let cin_carry = self.ir.emit_uless_than(self.type_bool[1], result, ab);
             carry = self.ir.emit_logical_or(self.type_bool[1], carry, cin_carry);
@@ -4231,8 +3695,8 @@ impl<'a> Decoder<'a> {
         } else {
             ab
         };
-        let carry = self.ir.emit_select(ty, carry, self.const_u32_1, self.const_u32_0);
-        self.store_pred_bit(is_uniform(inst), pu, carry);
+        let carry = self.bool_bit(carry);
+        self.store_pred_bit(is_uniform(inst), (inst >> 81 & 7) as u32, carry);
         self.store_alu(inst, result);
     }
     pub fn lepc(&mut self, inst: u128) {
@@ -4264,28 +3728,11 @@ impl<'a> Decoder<'a> {
             res = self.ir.emit_bitwise_or(ty, res, xyz);
         }
         self.store_alu(inst, res);
-        let (pu, pp) = ((inst >> 81 & 7) as u32, (inst >> 87 & 7) as u32);
-        if pu == 7 {
-            return;
-        }
-        let uniform = is_uniform(inst);
-        let preds = if uniform { self.load_upredicate() } else { self.load_predicate() };
-        let pp_bit = if pp == 7 {
-            self.const_u32_1
-        } else {
-            let offset = self.cached_const_u32(pp);
-            self.ir.emit_bit_field_u_extract(ty, preds, offset, self.const_u32_1)
-        };
-        let pp_bit = if inst >> 90 & 1 != 0 { self.ir.emit_bitwise_xor(ty, pp_bit, self.const_u32_1) } else { pp_bit };
-        let nonzero = self.emit_cmp_against_zero(5, res);
-        let bit = if inst >> 80 & 1 != 0 {
-            self.ir.emit_bitwise_and(ty, nonzero, pp_bit)
-        } else {
-            self.ir.emit_bitwise_or(ty, nonzero, pp_bit)
-        };
-        let offset = self.cached_const_u32(pu);
-        let preds = self.ir.emit_bit_field_insert(ty, preds, bit, offset, self.const_u32_1);
-        if uniform { self.store_upredicate(preds) } else { self.store_predicate(preds) }
+        let p = self.pp_bit(inst);
+        let nonzero = self.ir.emit_inot_equal(self.type_bool[1], res, self.const_u32_0);
+        let nonzero = self.bool_bit(nonzero);
+        let bit = if inst >> 80 & 1 != 0 { self.ir.emit_bitwise_and(ty, nonzero, p) } else { self.ir.emit_bitwise_or(ty, nonzero, p) };
+        self.store_pred_bit(is_uniform(inst), (inst >> 81 & 7) as u32, bit);
     }
     pub fn match_(&mut self, inst: u128) {
         let ra = (inst >> 24 & 0xff) as u32;
@@ -4314,16 +3761,7 @@ impl<'a> Decoder<'a> {
         self.store_pred_bit(false, (inst >> 81 & 7) as u32, bit);
     }
     pub fn membar(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
         let dstfmt = (((inst >> 76) & 0x7) << 0) as u32;
-        let _sem = (((inst >> 79) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         use spirv::memory_semantics::{ACQUIRE_RELEASE, UNIFORM_MEMORY, WORKGROUP_MEMORY};
         let (scope, semantics) = match dstfmt {
             0 | 1 => (spirv::scope::WORKGROUP, ACQUIRE_RELEASE | WORKGROUP_MEMORY),
@@ -4334,43 +3772,21 @@ impl<'a> Decoder<'a> {
         self.ir.emit_memory_barrier(scope, semantics);
     }
     pub fn mov(&mut self, inst: u128) {
-        let rd = (((inst >> 16) & 0xff) << 0) as u32;
         const MOV_RR: u32 = 0x202;
         const MOV_RI: u32 = 0x802;
         const MOV_RC: u32 = 0xa02;
         const MOV_RCX: u32 = 0x1a02;
         const MOV_RU: u32 = 0x1c02;
-
-        // MOV shares one primary opcode across several addressing-mode
-        // variants (register, constant-bank, indexed constant-bank, immediate)
-        // that real hardware disambiguates using bits inside the operand
-        // field itself, not the opcode. Re-derive the same 13-bit selector
-        // the dispatcher used to route here; every form but cx[UR] is the
-        // ALU source selector.
-        let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
-        if matches!(variant_key, MOV_RR | MOV_RI | MOV_RC | MOV_RU) {
-            let val = self.alu_src(inst);
-            self.store_register(rd, val);
-            return;
-        }
-
-        if variant_key == MOV_RCX {
-            let bank = self.load_ureg((inst >> 32 & 0x3f) as u32);
-            let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) << 2) as u32);
-            let val = self.load_dynamic_cbuf(bank, offset);
-            self.store_register(rd, val);
-            return;
-        }
-
-        let _sc_addr = (((inst >> 40) & 0x3fff) << 0);
-        let _sc_bank = (((inst >> 54) & 0x1f) << 0);
-        let _pixmasku04 = (((inst >> 72) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("MOV indexed register-file forms are not constant-buffer moves");
+        let val = match opcode(inst) {
+            MOV_RR | MOV_RI | MOV_RC | MOV_RU => self.alu_src(inst),
+            MOV_RCX => {
+                let bank = self.load_ureg((inst >> 32 & 0x3f) as u32);
+                let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) << 2) as u32);
+                self.load_dynamic_cbuf(bank, offset)
+            }
+            _ => todo!("MOV indexed register-file forms are not constant-buffer moves"),
+        };
+        self.store_register((inst >> 16 & 0xff) as u32, val);
     }
     pub fn movm(&mut self, inst: u128) {
         assert_eq!(inst >> 75 & 7, 0, "MOVM with a 4-bit or 2-bit source");
@@ -4453,14 +3869,7 @@ impl<'a> Decoder<'a> {
         let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         self.exit(inst);
     }
-    pub fn nop(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
+    pub fn nop(&mut self, _inst: u128) {
         self.ir.emit_nop();
     }
     pub fn out(&mut self, inst: u128) {
@@ -4481,7 +3890,7 @@ impl<'a> Decoder<'a> {
         let byte = (inst >> 76 & 3) as u32 * 8;
         let shift = self.cached_const_u32(byte);
         let mask = self.alu_src(inst);
-        let predicate_mask = self.cached_const_u32(0x7f);
+        let predicate_mask = self.cached_const_u32(P0_TO_P6);
         let mask = self.ir.emit_bitwise_and(self.type_u32[1], mask, predicate_mask);
         let predicate = self.load_predicate();
         let selected = self.ir.emit_bitwise_and(self.type_u32[1], predicate, mask);
@@ -4507,7 +3916,7 @@ impl<'a> Decoder<'a> {
         todo!();
     }
     pub fn plop3(&mut self, inst: u128) {
-        let uniform = inst & 0xfff == 0x89c;
+        let uniform = inst as u32 & 0xfff == UPLOP3;
         let p = self.pred_bit(uniform, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
         let q = self.pred_bit(uniform, (inst >> 77 & 7) as u32, inst >> 80 & 1 != 0);
         let r = self.pred_bit(uniform || inst >> 67 & 1 != 0, (inst >> 68 & 7) as u32, inst >> 71 & 1 != 0);
@@ -4550,8 +3959,7 @@ impl<'a> Decoder<'a> {
         let a = self.alu_reg(inst, 24);
         let (sel, b) = self.srcs_bc(inst);
         let u64_ty = self.type_u64();
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &[a, b]);
-        let bytes = self.ir.emit_bitcast(u64_ty, pair);
+        let bytes = self.join_u64(a, b);
         let mode = inst >> 72 & 7;
         let [c1, c3, c7, c8] = [1, 3, 7, 8].map(|v| self.cached_const_u32(v));
         let n = self.ir.emit_bitwise_and(ty, sel, c3);
@@ -4627,7 +4035,7 @@ impl<'a> Decoder<'a> {
         let shift = self.cached_const_u32(byte);
         let value = self.ir.emit_shift_right_logical(self.type_u32[1], value, shift);
         let mask = self.alu_src(inst);
-        let predicate_mask = self.cached_const_u32(0x7f);
+        let predicate_mask = self.cached_const_u32(P0_TO_P6);
         let mask = self.ir.emit_bitwise_and(self.type_u32[1], mask, predicate_mask);
         let old = self.load_predicate();
         let inverse = self.ir.emit_not(self.type_u32[1], mask);
@@ -4638,27 +4046,14 @@ impl<'a> Decoder<'a> {
     }
     pub fn r2ur(&mut self, inst: u128) {
         assert!(inst >> 81 & 7 == 7, "R2UR with a predicate destination");
-        // One invocation is the whole warp, so the value is uniform as is and .OR has nothing to combine.
+        // Compilers only emit R2UR on warp-uniform values, so each lane holds the uniform value.
         let value = self.load_register((inst >> 24 & 0xff) as u32);
         self.store_ureg((inst >> 16 & 0x3f) as u32, value);
     }
     pub fn red(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _memdesc = (((inst >> 71) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
         let sz = (((inst >> 73) & 0xf) << 0) as u32;
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
         let pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         self.global_atomic(inst, pp, sz, rb);
     }
     pub fn redux(&mut self, inst: u128) {
@@ -4679,9 +4074,7 @@ impl<'a> Decoder<'a> {
         let mut acc = lanes[0];
         for &v in &lanes[1..] {
             acc = match inst >> 78 & 7 {
-                0 => self.ir.emit_bitwise_and(ty, acc, v),
-                1 => self.ir.emit_bitwise_or(ty, acc, v),
-                2 => self.ir.emit_bitwise_xor(ty, acc, v),
+                op @ 0..=2 => self.bool_op(op, acc, v),
                 3 => self.ir.emit_iadd(ty, acc, v),
                 4 => self.glsl(if signed { spirv::glsl::S_MIN } else { spirv::glsl::U_MIN }, ty, &[acc, v]),
                 5 => self.glsl(if signed { spirv::glsl::S_MAX } else { spirv::glsl::U_MAX }, ty, &[acc, v]),
@@ -4691,19 +4084,6 @@ impl<'a> Decoder<'a> {
         self.store_ureg((inst >> 16 & 0x3f) as u32, acc);
     }
     pub fn ret(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _simm = (((inst >> 34) & 0xffffffffffff) << 0);
-        let _warp = (((inst >> 85) & 0x1) << 0);
-        let _depth = (((inst >> 86) & 0x1) << 0);
-        let _pp = (((inst >> 87) & 0x7) << 0) as u32;
-        let _pp_not = (((inst >> 90) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         if opcode(inst) == 0x1950 {
             self.jump_to_uregister(inst, inst >> 85 & 1 == 0);
         } else {
@@ -4775,28 +4155,14 @@ impl<'a> Decoder<'a> {
         return;
     }
     pub fn s2r(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let sr = (((inst >> 72) & 0xff) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let val = self.special_register(sr);
         self.store_register(rd, val);
     }
     pub fn s2ur(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let urd = (((inst >> 16) & 0x3f) << 0) as u32;
         let sr = (((inst >> 72) & 0xff) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let val = self.special_register(sr);
         self.store_ureg(urd, val);
     }
@@ -4821,8 +4187,7 @@ impl<'a> Decoder<'a> {
         todo!("SCATTER");
     }
     pub fn sel(&mut self, inst: u128) {
-        let p = self.pred_bit(is_uniform(inst), (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-        let p = self.ir.emit_inot_equal(self.type_bool[1], p, self.const_u32_0);
+        let p = self.pp_set(inst);
         let (a, b) = (self.alu_reg(inst, 24), self.src_b(inst));
         let result = self.ir.emit_select(self.type_u32[1], p, a, b);
         self.store_alu(inst, result);
@@ -4869,8 +4234,7 @@ impl<'a> Decoder<'a> {
         let (fmt, right) = (inst >> 73 & 3, inst >> 76 & 1 != 0);
         let shift = self.shift_amount(inst, shift, if fmt < 2 { 64 } else { 32 });
         let u64_ty = self.type_u64();
-        let pair = self.ir.emit_composite_construct(self.type_u32[2], &[low, high]);
-        let mut x = self.ir.emit_bitcast(u64_ty, pair);
+        let mut x = self.join_u64(low, high);
         // A clamped 64 is a full-width shift, which SPIR-V leaves undefined, so it goes in two halves.
         let half = self.ir.emit_shift_right_logical(ty, shift, self.const_u32_1);
         let rest = self.ir.emit_isub(ty, shift, half);
@@ -4942,73 +4306,26 @@ impl<'a> Decoder<'a> {
         todo!("SPMETADATA");
     }
     pub fn st(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _ra_offset = (((inst >> 32) & 0xffffffff) << 0);
         let rc = (((inst >> 64) & 0xff) << 0) as u32;
-        let _e = (((inst >> 72) & 0x1) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.global_address(inst, 64, 32);
         self.store_memory(ResourceKind::Global, address, sz, rc);
     }
     pub fn stg(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _mem = (((inst >> 77) & 0xf) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.global_address(inst, 64, 40);
         self.store_memory(ResourceKind::Global, address, sz, rb);
     }
     pub fn stl(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _memdesc = (((inst >> 76) & 0x1) << 0);
-        let _cop = (((inst >> 84) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.global_address(inst, 64, 40);
         self.store_memory(ResourceKind::Local, address, sz, rb);
     }
     pub fn sts(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
-        let _ra_offset = (((inst >> 40) & 0xffffff) << 0);
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
         let address = self.shared_address(inst, 64);
         self.store_memory(ResourceKind::Shared, address, sz, rb);
     }
@@ -5101,7 +4418,7 @@ impl<'a> Decoder<'a> {
         let rb = (inst >> 32 & 0xff) as u32;
         let value = self.load_register(rb);
         match op {
-            Some(op) => self.atomic_op(ptr, scope, sem, op, size == 1, value),
+            Some(op) => self.atomic_op(false, ptr, scope, sem, op, size == 1, value),
             None => {
                 let swap = self.load_register(nth_reg(rb, RZ, 1));
                 self.ir.emit_atomic_compare_exchange(self.type_u32[1], ptr, scope, sem, self.const_u32_0, swap, value)
@@ -5432,9 +4749,9 @@ impl<'a> Decoder<'a> {
         self.flo(inst)
     }
     pub fn uiadd3(&mut self, inst: u128) {
-        self.add3(inst, true)
+        self.iadd3(inst)
     }
-    fn add3(&mut self, inst: u128, uniform_preds: bool) {
+    pub fn iadd3(&mut self, inst: u128) {
         let wide = inst & 7 == 7;
         let ty = if wide { self.type_u64() } else { self.type_u32[1] };
         let srcs = if wide {
@@ -5453,8 +4770,8 @@ impl<'a> Decoder<'a> {
         let [a, b, c] = [0, 1, 2].map(|i| if negated[i] { self.ir.emit_not(ty, srcs[i]) } else { srcs[i] });
         // -x is ~x + 1, so without .X every negated operand adds one; .X adds the carry predicates instead.
         let carry_in = if inst >> 74 & 1 != 0 {
-            let p = self.pred_bit(uniform_preds, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
-            let q = self.pred_bit(uniform_preds, (inst >> 77 & 7) as u32, inst >> 80 & 1 != 0);
+            let p = self.pp_bit(inst);
+            let q = self.pred_bit(is_uniform(inst), (inst >> 77 & 7) as u32, inst >> 80 & 1 != 0);
             self.ir.emit_iadd(self.type_u32[1], p, q)
         } else {
             self.cached_const_u32(negated.iter().filter(|&&n| n).count() as u32)
@@ -5464,7 +4781,7 @@ impl<'a> Decoder<'a> {
         for addend in [b, c, carry_in] {
             let next = self.ir.emit_iadd(ty, sum, addend);
             let wrapped = self.ir.emit_uless_than(self.type_bool[1], next, sum);
-            let wrapped = self.ir.emit_select(self.type_u32[1], wrapped, self.const_u32_1, self.const_u32_0);
+            let wrapped = self.bool_bit(wrapped);
             carries = self.ir.emit_iadd(self.type_u32[1], carries, wrapped);
             sum = next;
         }
@@ -5472,8 +4789,8 @@ impl<'a> Decoder<'a> {
         for (pred, carried) in [(inst >> 81 & 7, 0), (inst >> 84 & 7, 1)] {
             let carried = self.cached_const_u32(carried);
             let set = self.ir.emit_ugreater_than(self.type_bool[1], carries, carried);
-            let set = self.ir.emit_select(self.type_u32[1], set, self.const_u32_1, self.const_u32_0);
-            self.store_pred_bit(uniform_preds, pred as u32, set);
+            let set = self.bool_bit(set);
+            self.store_pred_bit(is_uniform(inst), pred as u32, set);
         }
     }
     pub fn uiadd3_64(&mut self, inst: u128) {
@@ -5486,45 +4803,35 @@ impl<'a> Decoder<'a> {
         self.isetp(inst)
     }
     pub fn uldc(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
         let urd = (((inst >> 16) & 0x3f) << 0) as u32;
         let ra_offset = (((inst >> 38) & 0xffff) << 0) as u32;
         let sc_bank = (((inst >> 54) & 0x1f) << 0) as u32;
         let sz = (((inst >> 73) & 0x7) << 0) as u32;
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
+        const ULDC: u32 = 0xab9;
+        const ULDC_UR_BANK: u32 = 0x1ab9;
+        const ULDC_UR_OFFSET: u32 = 0x1abb;
+        const ULD: u32 = 0x18b8;
         let op = opcode(inst);
         let ura = (inst >> 24 & 0x3f) as u32;
-        let words = if sz <= 4 { 1 } else { 1 << (sz - 4) };
-        for i in 0..words {
-            let offset = match op {
-                0x18b8 => (inst >> 38) as u32,
-                _ => ra_offset,
-            };
+        let offset = if op == ULD { (inst >> 38) as u32 } else { ra_offset };
+        for i in 0..access_words(sz) {
             let offset = self.cached_const_u32(offset.wrapping_add(4 * i));
-            let base = match op {
-                0x18b8 | 0x1abb => self.load_ureg(ura),
-                _ => self.const_u32_0,
-            };
+            let base = if matches!(op, ULD | ULDC_UR_OFFSET) { self.load_ureg(ura) } else { self.const_u32_0 };
             let address = self.ir.emit_iadd(self.type_u32[1], base, offset);
             let word = match op {
-                0xab9 | 0x1abb => self.load_cbuf(ResourceKind::Cbuf(sc_bank), address),
-                0x1ab9 => {
+                ULDC | ULDC_UR_OFFSET => self.load_cbuf(ResourceKind::Cbuf(sc_bank), address),
+                ULDC_UR_BANK => {
                     let bank = self.load_ureg(ura);
                     self.load_dynamic_cbuf(bank, address)
                 }
-                0x18b8 => {
+                ULD => {
                     let ptr = self.global_word_at(address);
                     self.ir.emit_load(self.type_u32[1], ptr)
                 }
                 _ => unreachable!(),
             };
             let value = if sz <= 4 { self.load_narrow(word, address, sz) } else { word };
-            self.store_ureg(if urd == 63 { urd } else { urd + i }, value);
+            self.store_ureg(nth_reg(urd, URZ, i), value);
         }
     }
     pub fn ulea(&mut self, inst: u128) {
@@ -5556,7 +4863,7 @@ impl<'a> Decoder<'a> {
         self.store_ureg((inst >> 16 & 0x3f) as u32, result);
     }
     pub fn uplop3(&mut self, inst: u128) {
-        assert!(inst & 0xfff == 0x89c, "UPLOP3 with register sources");
+        assert!(inst as u32 & 0xfff == UPLOP3, "UPLOP3 with register sources");
         self.plop3(inst)
     }
     pub fn upopc(&mut self, inst: u128) {
@@ -5644,7 +4951,7 @@ impl<'a> Decoder<'a> {
         self.store_pred_bit(true, (inst >> 81 & 7) as u32, result);
     }
     fn vote_ballot(&mut self, inst: u128) -> (u32, u32) {
-        let p = self.pred_bit(false, (inst >> 87 & 7) as u32, inst >> 90 & 1 != 0);
+        let p = self.pp_bit(inst);
         let (bits, active) = self.warp_values(p).into_iter().map(|[bit, active]| (bit, active)).unzip();
         let ballot = self.pack_lanes(bits);
         let active = self.pack_lanes(active);

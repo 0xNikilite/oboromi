@@ -1,6 +1,7 @@
 pub mod harness;
 
 mod atomics;
+mod bnsh;
 mod compare;
 mod control;
 pub mod demos;

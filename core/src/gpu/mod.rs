@@ -1,6 +1,7 @@
 use ash::vk;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
+pub mod bnsh;
 pub mod compute;
 pub mod compute_class;
 pub mod demo;

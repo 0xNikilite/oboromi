@@ -1,4 +1,5 @@
 //! Host-visible buffers and compute pipelines dispatched synchronously on the `VkState` queue.
+use super::texture::TextureHeader;
 use super::{VkError, VkState};
 use ash::vk;
 
@@ -102,36 +103,38 @@ pub struct HostImage<'a> {
     pub image: vk::Image,
     pub memory: vk::DeviceMemory,
     pub view: vk::ImageView,
+    pub sampler: vk::Sampler,
 }
 
 impl<'a> HostImage<'a> {
-    /// A 2D RGBA8_UNORM image with one mip, uploaded from `texels` and left in SHADER_READ_ONLY_OPTIMAL.
+    /// A one-mip 2D image uploaded from the pitch-linear rows at the start of `memory`, left in GENERAL so the one
+    /// view serves both as a sampled texture and as a storage image.
     pub fn new(
         state: &'a VkState,
-        width: u32,
-        height: u32,
-        texels: &[u8],
+        header: &TextureHeader,
+        memory: &[u8],
+        sampler: &vk::SamplerCreateInfo,
     ) -> Result<Self, VkError> {
         let d = &state.device;
-        let format = vk::Format::R8G8B8A8_UNORM;
         let extent = vk::Extent3D {
-            width,
-            height,
+            width: header.width,
+            height: header.height,
             depth: 1,
         };
         let info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
+            .format(header.format)
             .extent(extent)
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
-            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST);
+            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST);
         let mut img = Self {
             device: d,
             image: unsafe { d.create_image(&info, None)? },
             memory: vk::DeviceMemory::null(),
             view: vk::ImageView::null(),
+            sampler: vk::Sampler::null(),
         };
         let req = unsafe { d.get_image_memory_requirements(img.image) };
         let alloc = vk::MemoryAllocateInfo::default()
@@ -141,12 +144,13 @@ impl<'a> HostImage<'a> {
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .level_count(1)
             .layer_count(1);
-        let mut staging = HostBuffer::new(state, texels.len() as u64)?;
-        staging.write(texels)?;
+        let mut staging = HostBuffer::new(state, memory.len() as u64)?;
+        staging.write(memory)?;
         let layers = vk::ImageSubresourceLayers::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .layer_count(1);
         let copy = [vk::BufferImageCopy::default()
+            .buffer_row_length(header.pitch / 4)
             .image_subresource(layers)
             .image_extent(extent)];
         let to_transfer = vk::ImageMemoryBarrier::default()
@@ -156,9 +160,9 @@ impl<'a> HostImage<'a> {
             .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
         let to_shader = to_transfer
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .new_layout(vk::ImageLayout::GENERAL)
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
         use vk::PipelineStageFlags as Stage;
         let none = vk::DependencyFlags::empty();
         unsafe {
@@ -194,9 +198,10 @@ impl<'a> HostImage<'a> {
             let view = vk::ImageViewCreateInfo::default()
                 .image(img.image)
                 .view_type(vk::ImageViewType::TYPE_2D)
-                .format(format)
+                .format(header.format)
                 .subresource_range(range);
             img.view = d.create_image_view(&view, None)?;
+            img.sampler = d.create_sampler(&sampler.unnormalized_coordinates(!header.normalized), None)?;
         }
         Ok(img)
     }
@@ -205,6 +210,7 @@ impl<'a> HostImage<'a> {
 impl Drop for HostImage<'_> {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_sampler(self.sampler, None);
             self.device.destroy_image_view(self.view, None);
             self.device.destroy_image(self.image, None);
             self.device.free_memory(self.memory, None);
@@ -221,11 +227,10 @@ pub struct ComputePipeline<'a> {
     pub pipeline: vk::Pipeline,
     pub pool: vk::DescriptorPool,
     pub set: vk::DescriptorSet,
-    sampler: vk::Sampler,
 }
 
 impl<'a> ComputePipeline<'a> {
-    // All bindings live in set 0: 0 host support UBO, 1-8 guest cbufs, storage buffers 9-11, textures from 12.
+    // All bindings live in set 0: 0 host support UBO, 1-8 guest cbufs, storage buffers 9-11, textures and surfaces from 12.
     pub fn new(
         state: &'a VkState,
         spirv: &[u32],
@@ -254,7 +259,6 @@ impl<'a> ComputePipeline<'a> {
             pipeline: vk::Pipeline::null(),
             pool: vk::DescriptorPool::null(),
             set: vk::DescriptorSet::null(),
-            sampler: vk::Sampler::null(),
         };
         let set_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&layout_bindings);
         p.set_layout = unsafe { d.create_descriptor_set_layout(&set_info, None)? };
@@ -274,10 +278,6 @@ impl<'a> ComputePipeline<'a> {
             .max_sets(1)
             .pool_sizes(&sizes);
         p.pool = unsafe { d.create_descriptor_pool(&pool_info, None)? };
-        let nearest = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::NEAREST)
-            .min_filter(vk::Filter::NEAREST);
-        p.sampler = unsafe { d.create_sampler(&nearest, None)? };
         let alloc = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(p.pool)
             .set_layouts(&set_layouts);
@@ -302,14 +302,15 @@ impl<'a> ComputePipeline<'a> {
 
     pub fn bind_images(&mut self, images: &[(u32, &HostImage)]) {
         for &(binding, img) in images {
+            let ty = self.types.iter().find(|t| t.0 == binding);
             let info = [vk::DescriptorImageInfo::default()
-                .sampler(self.sampler)
+                .sampler(img.sampler)
                 .image_view(img.view)
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                .image_layout(vk::ImageLayout::GENERAL)];
             let write = vk::WriteDescriptorSet::default()
                 .dst_set(self.set)
                 .dst_binding(binding)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_type(ty.expect("unknown binding").1)
                 .image_info(&info);
             unsafe { self.device.update_descriptor_sets(&[write], &[]) };
         }
@@ -320,7 +321,6 @@ impl Drop for ComputePipeline<'_> {
     fn drop(&mut self) {
         let d = self.device;
         unsafe {
-            d.destroy_sampler(self.sampler, None);
             d.destroy_pipeline(self.pipeline, None);
             d.destroy_pipeline_layout(self.layout, None);
             d.destroy_descriptor_pool(self.pool, None);

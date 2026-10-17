@@ -242,8 +242,25 @@ pub fn play_music(seconds: f32) {
     static MUSIC: Mutex<Option<Sound>> = Mutex::new(None);
     let mut slot = MUSIC.lock().unwrap();
     let sound = slot.get_or_insert_with(music);
+    let mut peak = [0u16; 2];
     for _ in 0..sound.due(seconds) {
         sequence(sound);
-        play(&[sound.period()]);
+        let samples = sound.period();
+        for frame in samples.chunks_exact(2) {
+            for channel in 0..2 { peak[channel] = peak[channel].max(frame[channel].unsigned_abs()); }
+        }
+        play(&[samples]);
     }
+    let (width, height) = (960, 540);
+    let mut pixels = [12, 16, 24, 255].repeat(width * height);
+    for channel in 0..2 {
+        let top = height - 40 - usize::from(peak[channel]) * (height - 80) / 32768;
+        for y in 40..height - 40 {
+            let colour = if y >= top { [48, 210, 160, 255] } else { [28, 36, 48, 255] };
+            for x in width / 3 * (channel + 1) - 36..width / 3 * (channel + 1) + 36 {
+                pixels[(y * width + x) * 4..][..4].copy_from_slice(&colour);
+            }
+        }
+    }
+    crate::display::present(width as u32, height as u32, &pixels);
 }

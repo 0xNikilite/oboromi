@@ -1,0 +1,212 @@
+[
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R5",
+      "input1": "R7",
+      "input2": "R10",
+      "input3": "R11",
+      "output0": "R9",
+      "output1": "R13",
+      "local_addr": "R14"
+    },
+    "family": "local",
+    "case": "stl-ldl-32-roundtrip",
+    "word_hex": "004bde0000100800000008070e007387",
+    "template_word_hex": "004fc800001008000000080100007387",
+    "nvdisasm_text": "/*01d0*/                   STL [R14+0x8], R7 ;",
+    "touches": {},
+    "notes": "STL at the sentinel; LDL observer feeds the following STG",
+    "observer_word_hex": "004f5e0000100800000008000e097983",
+    "observer_nvdisasm_text": "/*0200*/                   LDL R9, [R14+0x8] ;",
+    "inputs": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "outputs": [
+      2,
+      5
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R5",
+      "input1": "R7",
+      "input2": "R10",
+      "input3": "R11",
+      "output0": "R9",
+      "output1": "R13",
+      "local_addr": "R14"
+    },
+    "family": "local",
+    "case": "stl-ldl-32-roundtrip",
+    "word_hex": "004bde0000100800000008070e007387",
+    "template_word_hex": "004fc800001008000000080100007387",
+    "nvdisasm_text": "/*01d0*/                   STL [R14+0x8], R7 ;",
+    "touches": {},
+    "notes": "STL at the sentinel; LDL observer feeds the following STG",
+    "observer_word_hex": "004f5e0000100800000008000e097983",
+    "observer_nvdisasm_text": "/*0200*/                   LDL R9, [R14+0x8] ;",
+    "inputs": [
+      2147483648,
+      2147483647,
+      2164227841,
+      4294901244
+    ],
+    "outputs": [
+      2147483647,
+      16678146
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R5",
+      "input1": "R7",
+      "input2": "R10",
+      "input3": "R11",
+      "output0": "R9",
+      "output1": "R13",
+      "local_addr": "R14"
+    },
+    "family": "local",
+    "case": "stl-ldl-8-roundtrip",
+    "word_hex": "004bde0000100000000000070e007387",
+    "template_word_hex": "004fc800001000000000000100007387",
+    "nvdisasm_text": "/*01d0*/                   STL.U8 [R14], R7 ;",
+    "touches": {},
+    "notes": "STL at the sentinel; LDL observer feeds the following STG",
+    "observer_word_hex": "004f5e0000100200000000000e097983",
+    "observer_nvdisasm_text": "/*0200*/                   LDL.S8 R9, [R14] ;",
+    "inputs": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "outputs": [
+      2,
+      5
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R5",
+      "input1": "R7",
+      "input2": "R10",
+      "input3": "R11",
+      "output0": "R9",
+      "output1": "R13",
+      "local_addr": "R14"
+    },
+    "family": "local",
+    "case": "stl-ldl-8-roundtrip",
+    "word_hex": "004bde0000100000000000070e007387",
+    "template_word_hex": "004fc800001000000000000100007387",
+    "nvdisasm_text": "/*01d0*/                   STL.U8 [R14], R7 ;",
+    "touches": {},
+    "notes": "STL at the sentinel; LDL observer feeds the following STG",
+    "observer_word_hex": "004f5e0000100200000000000e097983",
+    "observer_nvdisasm_text": "/*0200*/                   LDL.S8 R9, [R14] ;",
+    "inputs": [
+      2147483648,
+      2147483647,
+      2164227841,
+      4294901244
+    ],
+    "outputs": [
+      4294967295,
+      16678146
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R5",
+      "input1": "R7",
+      "input2": "R10",
+      "input3": "R11",
+      "output0": "R9",
+      "output1": "R13",
+      "local_addr": "R14"
+    },
+    "family": "local",
+    "case": "stl-ldl-16-roundtrip",
+    "word_hex": "004bde0000100400000004070e007387",
+    "template_word_hex": "004fc800001004000000040100007387",
+    "nvdisasm_text": "/*01d0*/                   STL.U16 [R14+0x4], R7 ;",
+    "touches": {},
+    "notes": "STL at the sentinel; LDL observer feeds the following STG",
+    "observer_word_hex": "004f5e0000100600000004000e097983",
+    "observer_nvdisasm_text": "/*0200*/                   LDL.S16 R9, [R14+0x4] ;",
+    "inputs": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "outputs": [
+      2,
+      5
+    ],
+    "observed": true
+  },
+  {
+    "sm": 86,
+    "device": "NVIDIA GeForce RTX 3090",
+    "cuda_version": "13.0",
+    "nvdisasm_version": "12.8.90",
+    "seed_regs": {
+      "input0": "R5",
+      "input1": "R7",
+      "input2": "R10",
+      "input3": "R11",
+      "output0": "R9",
+      "output1": "R13",
+      "local_addr": "R14"
+    },
+    "family": "local",
+    "case": "stl-ldl-16-roundtrip",
+    "word_hex": "004bde0000100400000004070e007387",
+    "template_word_hex": "004fc800001004000000040100007387",
+    "nvdisasm_text": "/*01d0*/                   STL.U16 [R14+0x4], R7 ;",
+    "touches": {},
+    "notes": "STL at the sentinel; LDL observer feeds the following STG",
+    "observer_word_hex": "004f5e0000100600000004000e097983",
+    "observer_nvdisasm_text": "/*0200*/                   LDL.S16 R9, [R14+0x4] ;",
+    "inputs": [
+      2147483648,
+      2147483647,
+      2164227841,
+      4294901244
+    ],
+    "outputs": [
+      4294967295,
+      16678146
+    ],
+    "observed": true
+  }
+]

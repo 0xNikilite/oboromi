@@ -192,6 +192,13 @@ impl<'a> Decoder<'a> {
         self.half2_lanes(word, (inst >> 60 & 3) as u32, inst >> 62 & 1 != 0, inst >> 63 & 1 != 0, ftz)
     }
 
+    pub(super) fn f16_alu_src(&mut self, inst: u128, ftz: bool) -> u32 {
+        let word = self.alu_src(inst);
+        let imm = matches!(inst >> 9 & 7, 2 | 4);
+        let word = self.high_half_if(word, !imm && inst >> 60 & 1 != 0);
+        self.half2_lanes(word, 0, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0, ftz)[0]
+    }
+
     pub(super) fn pack_half2(&mut self, lanes: [u32; 2]) -> u32 {
         self.pack_half2_round(lanes, false)
     }
@@ -220,6 +227,50 @@ impl<'a> Decoder<'a> {
             packed = self.ir.emit_select(self.type_u32[1], nan, canonical, packed);
         }
         packed
+    }
+
+    pub(super) fn pack_f16_round(&mut self, val: u32, src_f64: bool, rnd: u32, ftz: bool) -> u32 {
+        let half = self.type_f16();
+        let nearest = self.ir.emit_f_convert(half, val);
+        let zero_half = self.ir.emit_constant_typed(half, 0.0f32);
+        let half2_ty = self.type_f16x2();
+        let half2 = self.ir.emit_composite_construct(half2_ty, &[nearest, zero_half]);
+        let mut bits = self.bitcast_u32(half2);
+        if rnd != 0 {
+            let src_ty = if src_f64 { self.type_f64() } else { self.type_f32[1] };
+            let back = self.ir.emit_f_convert(src_ty, nearest);
+            let less = self.ir.emit_ford_less_than(self.type_bool[1], back, val);
+            let greater = self.ir.emit_ford_greater_than(self.type_bool[1], back, val);
+            let zero = if src_f64 { self.ir.emit_constant_typed(src_ty, 0.0f64) } else { self.ir.emit_constant_typed(src_ty, 0.0f32) };
+            let negative = self.ir.emit_ford_less_than(self.type_bool[1], val, zero);
+            let plus = self.ir.emit_iadd(self.type_u32[1], bits, self.const_u32_1);
+            let minus = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
+            let up = self.ir.emit_select(self.type_u32[1], negative, minus, plus);
+            let down = self.ir.emit_select(self.type_u32[1], negative, plus, minus);
+            let (use_up, use_down) = match rnd {
+                1 => (None, Some(greater)),
+                2 => (Some(less), None),
+                _ => {
+                    let positive = self.ir.emit_logical_not(self.type_bool[1], negative);
+                    let use_up = self.ir.emit_logical_and(self.type_bool[1], negative, less);
+                    let use_down = self.ir.emit_logical_and(self.type_bool[1], positive, greater);
+                    (Some(use_up), Some(use_down))
+                }
+            };
+            if let Some(cond) = use_up { bits = self.ir.emit_select(self.type_u32[1], cond, up, bits); }
+            if let Some(cond) = use_down { bits = self.ir.emit_select(self.type_u32[1], cond, down, bits); }
+        }
+        let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+        let canonical = self.cached_const_u32(0x7fff);
+        bits = self.ir.emit_select(self.type_u32[1], nan, canonical, bits);
+        if ftz {
+            let [exponent, sign] = [0x7c00, 0x8000].map(|c| self.cached_const_u32(c));
+            let exp = self.ir.emit_bitwise_and(self.type_u32[1], bits, exponent);
+            let subnormal = self.ir.emit_iequal(self.type_bool[1], exp, self.const_u32_0);
+            let zero = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign);
+            bits = self.ir.emit_select(self.type_u32[1], subnormal, zero, bits);
+        }
+        bits
     }
 
     // .F32 writes lane 0 as one f32 instead of packing both lanes; .SAT maps NaN to +0 as in fp_arith_result.

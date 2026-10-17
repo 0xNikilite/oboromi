@@ -20,6 +20,10 @@ pub mod inst {
     const MOV_RC: u128 = 0xa02;
     const MOV_RCX: u128 = 0xa02 | 1 << 91;
     const MOV_RU: u128 = 0xc02 | 1 << 91;
+    const MOV_IRF_R: u128 = 0x478 | 1 << 91;
+    const MOV_IRF_I: u128 = 0x878 | 1 << 91;
+    const MOV_IRF_C: u128 = 0xa78 | 1 << 91;
+    const MOV_R_IRF: u128 = 0xc78 | 1 << 91;
     const KILL: u128 = 0x95b;
     const GUARD: u128 = 0xf << 12;
     const S2R: u128 = 0x919;
@@ -175,7 +179,8 @@ pub mod inst {
     const COND_CONV: u128 = 3 << 32;
     const URB_INVERT: u128 = 1 << 30;
     const URZ: u32 = 63;
-    const F2F: u128 = 0x310;
+    const F2F: u128 = 0x304;
+    const F2F_64: u128 = 0x310;
     const F2I: u128 = 0x305;
     const F2I_64: u128 = 0x311;
     const FRND: u128 = 0x307;
@@ -212,6 +217,21 @@ pub mod inst {
     pub const W2J_BAR_ARV: u128 = 0x0001c000000020000000000000007b1d;
     pub const W2J_ATOMG_U64_ADD: u128 = 0x0001c000001ee50000000006020473a8;
     pub const W2J_ATOMS_U64_ADD: u128 = 0x000000000000040000000006ff04738c;
+    pub const W6_MOV_IRF_R: u128 = MOV_IRF_R | PT_GUARD | PIXMASK_ALL | 4 << 16 | 2 << 32;
+    pub const W6_MOV_IRF_I: u128 = MOV_IRF_I | PT_GUARD | PIXMASK_ALL | 4 << 16 | 0x1234 << 32;
+    pub const W6_MOV_IRF_C: u128 = MOV_IRF_C | PT_GUARD | PIXMASK_ALL | 4 << 16 | 1 << 54 | 4 << 40;
+    pub const W6_MOV_R_IRF: u128 = MOV_R_IRF | PT_GUARD | PIXMASK_ALL | 5 << 16 | 4 << 32;
+    pub const W6_F2F_F32_F16_H1: u128 = 0x00000000001010001000000200017304;
+    pub const W6_F2F_F16_F32_RP: u128 = 0x00000000002088000000000400037304;
+    pub const W6_F2F_F16_F64_RZ: u128 = 0x000000000030c8000000000600057310;
+    pub const W6_F2F_F64_F16_H1: u128 = 0x00000000001018001000000a00087310;
+    pub const W6_F2F_F16_F16_FLOOR: u128 = 0x00000000001048000000000d000c7304;
+    pub const W6_F2F_F16_F16_SAT: u128 = 0x00000000001028000000000f000e7304;
+    pub const W6_F2I_F16_H1: u128 = 0x000000000010d1001000001100107305;
+    pub const W6_I2F_F16_RP: u128 = 0x00000000002088000000001300127306;
+    pub const W6_FRND_F16_H1: u128 = 0x00000000001048001000001500147307;
+    pub const CVT_H1: u128 = 1 << 60;
+    pub const CVT_SAT: u128 = 1 << 77;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -482,6 +502,7 @@ pub mod inst {
     }
 
     pub mod cvt {
+        pub const F16: u32 = 1;
         pub const F32: u32 = 2;
         pub const F64: u32 = 3;
         pub const U8: u32 = 0;
@@ -497,7 +518,8 @@ pub mod inst {
     }
 
     pub fn f2f(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32, ftz: bool) -> u128 {
-        alu(F2F, rd, 0, rb) | (dst as u128) << 75 | (src as u128) << 84 | (rnd as u128) << 78 | (ftz as u128) << 80
+        let op = if dst == cvt::F64 || src == cvt::F64 { F2F_64 } else { F2F };
+        alu(op, rd, 0, rb) | (dst as u128) << 75 | (src as u128) << 84 | (rnd as u128) << 78 | (ftz as u128) << 80
     }
 
     pub fn f2i(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32) -> u128 {
@@ -507,6 +529,10 @@ pub mod inst {
 
     pub fn frnd(rd: u32, rb: u32, rnd: u32) -> u128 {
         alu(FRND, rd, 0, rb) | (cvt::F32 as u128) << 75 | (cvt::F32 as u128) << 84 | (rnd as u128) << 78
+    }
+
+    pub fn frnd_f16(rd: u32, rb: u32, rnd: u32, h1: bool) -> u128 {
+        alu(FRND, rd, 0, rb) | (cvt::F16 as u128) << 75 | (cvt::F16 as u128) << 84 | (rnd as u128) << 78 | (h1 as u128) << 60
     }
 
     pub fn i2f(rd: u32, rb: u32, dst: u32, src: u32) -> u128 {
@@ -757,6 +783,10 @@ fn fixtures_match_nvdisasm() {
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
         (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::W2J_MOV_CX, "MOV R5, cx[UR4][0x10];"),
+        (inst::W6_MOV_IRF_R, ""),
+        (inst::W6_MOV_IRF_I, ""),
+        (inst::W6_MOV_IRF_C, ""),
+        (inst::W6_MOV_R_IRF, ""),
         (inst::kill(7, false), "KILL;"),
         (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
@@ -924,6 +954,15 @@ fn fixtures_match_nvdisasm() {
         (inst::frnd(4, 5, inst::cvt::RN), "FRND R4, R5 ;"),
         (inst::i2f(6, 7, inst::cvt::F32, inst::cvt::S32), "I2F R6, R7 ;"),
         (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
+        (inst::W6_F2F_F32_F16_H1, "F2F.F32.F16 R1, R2.H1 ;"),
+        (inst::W6_F2F_F16_F32_RP, "F2F.F16.F32.RP R3, R4 ;"),
+        (inst::W6_F2F_F16_F64_RZ, "F2F.F16.F64.RZ R5, R6 ;"),
+        (inst::W6_F2F_F64_F16_H1, "F2F.F64.F16 R8, R10.H1 ;"),
+        (inst::W6_F2F_F16_F16_FLOOR, ""),
+        (inst::W6_F2F_F16_F16_SAT, ""),
+        (inst::W6_F2I_F16_H1, "F2I.F16.TRUNC R16, R17.H1 ;"),
+        (inst::W6_I2F_F16_RP, "I2F.F16.U32.RP R18, R19 ;"),
+        (inst::W6_FRND_F16_H1, "FRND.F16.FLOOR R20, R21.H1 ;"),
         (inst::i2i(8, 9, inst::cvt::U8), "I2I.U8.S32.SAT R8, R9;"),
         (inst::alu(inst::ATOM, 4, 2, 5), "ATOM.E.ADD.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::stg(10, 0, 6) ^ inst::SZ_32, "STG.E.U8 [R10], R6 ;"),

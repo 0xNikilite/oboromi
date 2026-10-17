@@ -43,6 +43,20 @@ mod tests {
     }
 
     #[test]
+    fn mov_indexes_register_file_with_uniform_register() {
+        let mut seed = vec![0; UREG + 5];
+        seed[2] = 0x1234_5678;
+        seed[UREG + 4] = 7;
+        let program = [inst::W6_MOV_IRF_R, inst::W6_MOV_R_IRF];
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
+        assert_eq!([regs[5], regs[7]], [0x1234_5678; 2]);
+
+        seed[UREG + 4] = u32::MAX;
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
+        assert_eq!(regs[5], 0);
+    }
+
+    #[test]
     fn lea_shifts_then_adds() {
         let word = 0x004fc800078e18ff0000000302017211;
         let Some((regs, _)) = run_regs(&[word], &[0, 0, 3, 5], &[], &[]) else { return };

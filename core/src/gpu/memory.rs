@@ -23,7 +23,7 @@ impl From<VkError> for MemoryError {
     }
 }
 
-fn pages(start: u64, len: u64) -> Range<u64> {
+pub(crate) fn pages(start: u64, len: u64) -> Range<u64> {
     start / PAGE..(start + len).div_ceil(PAGE)
 }
 
@@ -140,14 +140,19 @@ impl MemoryTracker {
         Ok(())
     }
 
-    /// Scatters `bytes` over `ranges` in order.
+    /// Scatters `bytes` over `ranges` in order, marking only the pages whose bytes change.
     pub fn store(&mut self, ram: &GuestRam, ranges: &[PaRange], bytes: &[u8], writer: Writer) {
         let mut rest = bytes;
         for range in ranges {
-            let (head, tail) = rest.split_at((range.end - range.start) as usize);
-            unsafe { ram.slice_mut(range.start, head.len()) }.copy_from_slice(head);
-            self.mark(range.start, range.end - range.start, writer);
-            rest = tail;
+            for start in (range.start..range.end).step_by(PAGE as usize) {
+                let (head, tail) = rest.split_at((range.end.min(start + PAGE) - start) as usize);
+                let page = unsafe { ram.slice_mut(start, head.len()) };
+                if page != head {
+                    page.copy_from_slice(head);
+                    self.mark(start, head.len() as u64, writer);
+                }
+                rest = tail;
+            }
         }
     }
 

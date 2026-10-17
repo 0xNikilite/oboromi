@@ -1,11 +1,13 @@
 use super::GuestRam;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use unicorn_engine::{Arch, Mode, Prot, RegisterARM64, Unicorn};
+use unicorn_engine::{Arch, HookType, Mode, Prot, RegisterARM64, Unicorn};
 
 /// Safe wrapper for Unicorn CPU emulator
 pub struct UnicornCPU {
     emu: Arc<Mutex<Unicorn<'static, ()>>>,
     ram: Arc<GuestRam>,
+    hooked: AtomicUsize,
     pub core_id: u32,
 }
 
@@ -42,12 +44,26 @@ impl UnicornCPU {
         Some(Self {
             emu: Arc::new(Mutex::new(emu)),
             ram,
+            hooked: AtomicUsize::new(0),
             core_id,
         })
     }
 
+    /// Locks the core and takes the RAM turn, first hooking writes to the ranges the GPU mapped since the last lock.
     fn lock(&self) -> (MutexGuard<'_, Unicorn<'static, ()>>, MutexGuard<'_, ()>) {
-        (self.emu.lock().unwrap(), self.ram.turn())
+        let mut emu = self.emu.lock().unwrap();
+        let watched = self.ram.watched();
+        // One hook per GPU mapping: Unicorn tests every guest store against each hook's range, and a hit only sets page bits.
+        for range in &watched[self.hooked.swap(watched.len(), Ordering::Relaxed)..] {
+            let ram = Arc::clone(&self.ram);
+            let mark = move |_: &mut Unicorn<()>, _, pa, len: usize, _| {
+                ram.mark_cpu_written(pa, len as u64);
+                true
+            };
+            emu.add_mem_hook(HookType::MEM_WRITE, range.start, range.end - 1, mark).expect("write hook");
+        }
+        drop(watched);
+        (emu, self.ram.turn())
     }
 
     /// Run the core until halt or breakpoint
@@ -206,6 +222,7 @@ impl UnicornCPU {
         let (mut emu, _turn) = self.lock();
         let bytes = value.to_le_bytes();
         let _ = emu.mem_write(vaddr, &bytes);
+        self.ram.mark_cpu_written(vaddr, 4);
     }
 
     /// Read a 32-bit value from emulated memory
@@ -224,6 +241,7 @@ impl UnicornCPU {
         let (mut emu, _turn) = self.lock();
         let bytes = value.to_le_bytes();
         let _ = emu.mem_write(vaddr, &bytes);
+        self.ram.mark_cpu_written(vaddr, 8);
     }
 
     /// Read a 64-bit value from emulated memory

@@ -119,7 +119,7 @@ pub fn triangle_guest<'a>(state: &'a VkState, width: u32, height: u32, vertices:
     let target_pages = (u64::from(width * height) * 4).div_ceil(PAGE);
     let mut gpu = Gpu::new(state, GuestRam::new(((8 + target_pages) * PAGE) as usize));
     for (va, page, pages) in [(TEXTURES, 0, 1), (PUSHBUFFER, 3, 1), (VERTEX_PROGRAM, 1, 1), (VERTICES, 5, 1), (CBUF, 2, 1), (REPORT, 6, 1), (TARGET, 8, target_pages)] {
-        gpu.space.map(va, page * PAGE, pages * PAGE);
+        gpu.map(va, page * PAGE, pages * PAGE);
     }
     let [vertex, pixel] = programs();
     gpu.write(VERTEX_PROGRAM, &vertex)?;
@@ -300,7 +300,7 @@ mod tests {
             .flat_map(u128::to_le_bytes)
             .collect();
         let mut gpu = Gpu::new(&state, GuestRam::new((128 * PAGE) as usize));
-        gpu.space.map(0x2_0000_0000, 0, 128 * PAGE);
+        gpu.map(0x2_0000_0000, 0, 128 * PAGE);
         let mut qmd = [0; 64];
         [qmd[12], qmd[13], qmd[14]] = [120, 68, 1];
         [qmd[18], qmd[19]] = [16 << 16 | 3 << 4, 1 << 16 | 16];
@@ -331,7 +331,7 @@ mod tests {
         let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
         draw_and_check(&mut gpu, 0x1234_5678, [RED, GREEN, BLUE]);
         gpu.space.unmap(VERTICES, PAGE);
-        gpu.space.map(VERTICES, 7 * PAGE, PAGE);
+        gpu.map(VERTICES, 7 * PAGE, PAGE);
         gpu.write(VERTICES, &vertex_bytes(&[(CORNERS[0], GREEN), (CORNERS[1], BLUE), (CORNERS[2], RED)])).unwrap();
         draw_and_check(&mut gpu, 0x9abc_def0, [GREEN, BLUE, RED]);
     }
@@ -343,7 +343,7 @@ mod tests {
         let Some(state) = vk_state() else { return };
         let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         gpu.write(VERTICES, &vertex_bytes(&[[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].map(|corner| (corner, RED)))).unwrap();
-        gpu.space.map(INDICES, 4 * PAGE, PAGE);
+        gpu.map(INDICES, 4 * PAGE, PAGE);
         gpu.write(INDICES, &bytes(&[0 | 1 << 16, 2 | 2 << 16, 1 | 3 << 16])).unwrap();
         let mut words = Vec::new();
         frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
@@ -430,7 +430,7 @@ mod tests {
     fn a_target_sampled_as_a_texture_shows_its_latest_draw() {
         let Some(state) = vk_state() else { return };
         let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
-        gpu.space.map(TARGET_B, 4 * PAGE, PAGE);
+        gpu.map(TARGET_B, 4 * PAGE, PAGE);
         texture_header(&mut gpu, TARGET, SIZE, SIZE, SIZE * 4).unwrap();
         let mut previous = Vec::new();
         for colours in [[RED, GREEN, BLUE], [GREEN, BLUE, RED]] {

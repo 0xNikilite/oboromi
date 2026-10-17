@@ -338,6 +338,13 @@ impl<'a> Gpu<'a> {
         }
     }
 
+    /// Maps `va` onto guest-physical `pa`; the pages start CPU-written, and every core hooks its writes to them.
+    pub fn map(&mut self, va: u64, pa: u64, len: u64) {
+        self.space.map(va, pa, len);
+        self.memory.mark_cpu_written(pa, len);
+        self.ram.watch(pa..pa + len);
+    }
+
     /// A CPU write of guest memory at `va`.
     pub fn write(&mut self, va: u64, bytes: &[u8]) -> Result<(), MemoryError> {
         let ram = Arc::clone(&self.ram);
@@ -356,10 +363,13 @@ impl<'a> Gpu<'a> {
         Ok(())
     }
 
-    /// Runs GPFIFO entries to completion: every draw has landed in guest memory when this returns.
+    /// Runs GPFIFO entries to completion under the RAM turn: every page the GPU wrote is in guest RAM when this returns.
     pub fn submit(&mut self, entries: &[[u8; 8]]) -> Result<(), String> {
         let ram = Arc::clone(&self.ram);
         let _turn = ram.turn();
+        for pa in ram.take_cpu_written() {
+            self.memory.mark_cpu_written(pa, PAGE);
+        }
         let space = &self.space;
         let events = self.pusher.submit(entries.iter().copied(), |va, len| {
             let mut pieces = space.resolve(va, len as u64).map_err(named)?;
@@ -530,17 +540,7 @@ impl<'a> Gpu<'a> {
             let (seen, mapping) = self.mirrors.get_mut(window).unwrap();
             self.pixels.resize((span.end - span.start) as usize, 0);
             mapping.buffer.read(&mut self.pixels).map_err(named)?;
-            let mut bytes = &self.pixels[..];
-            for range in window {
-                for start in (range.start..range.end).step_by(PAGE as usize) {
-                    let page = start..range.end.min(start + PAGE);
-                    let (written, rest) = bytes.split_at((page.end - page.start) as usize);
-                    if unsafe { self.ram.slice(page.start, written.len()) } != written {
-                        self.memory.store(&self.ram, &[page], written, Writer::Gpu);
-                    }
-                    bytes = rest;
-                }
-            }
+            self.memory.store(&self.ram, window, &self.pixels, Writer::Gpu);
             *seen = generation(&self.memory, window);
         }
         for release in dispatch.release_semaphores.iter().flatten() {

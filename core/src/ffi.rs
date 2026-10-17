@@ -94,14 +94,15 @@ pub unsafe extern "C" fn oboromi_frame_read(
     width: *mut u32,
     height: *mut u32,
 ) -> usize {
-    let frame = DISPLAY.lock().unwrap();
-    let len = frame.pixels.len();
+    let mut frame = DISPLAY.lock().unwrap();
     unsafe {
-        if !dst.is_null() && len <= cap {
-            std::ptr::copy_nonoverlapping(frame.pixels.as_ptr(), dst, len);
-        }
         *width = frame.width;
         *height = frame.height;
+    }
+    let pixels = frame.pixels();
+    let len = pixels.len();
+    if !dst.is_null() && len <= cap {
+        unsafe { std::ptr::copy_nonoverlapping(pixels.as_ptr(), dst, len) };
     }
     len
 }

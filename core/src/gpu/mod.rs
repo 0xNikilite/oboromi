@@ -2,6 +2,7 @@ use ash::vk;
 
 pub mod compute;
 pub mod frame;
+pub mod present;
 pub mod sm86;
 pub mod spirv;
 

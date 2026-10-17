@@ -1,6 +1,6 @@
 //! Latency of the hot paths in microseconds: `cargo run --release -p oboromi-core --example perf`.
 use ash::vk::DescriptorType;
-use oboromi_core::display::present;
+use oboromi_core::display::{present, present_buffer};
 use oboromi_core::ffi::oboromi_frame_read;
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::sm86::STATE_WORDS;
@@ -74,6 +74,10 @@ fn main() {
         input.write(&[0; STATE_WORDS * 4]).unwrap();
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         output.read(black_box(&mut out)).unwrap();
+    });
+    let frame = HostBuffer::new(state, pixels.len() as u64).unwrap();
+    bench("present_buffer 1080p", 10, 200, || {
+        present_buffer(&frame, w as u32, h as u32).unwrap()
     });
     bench("render_test_frame e2e", 2, 20, || {
         render_test_frame().unwrap()

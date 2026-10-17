@@ -1,7 +1,7 @@
 //! Readers for the RTX 3090 fixture files, and the tensor replay that decides whether a device's cooperative matrices
 //! reproduce the silicon.
 use crate::gpu::VkState;
-use crate::gpu::sm86::{cooperative_tile, f16_hmma_shape};
+use crate::gpu::sm86::{Hints, TensorMode, cooperative_tile, f16_hmma_shape};
 use crate::tests::gpu::harness::{run_on, PRED};
 use crate::tests::gpu_test::inst;
 
@@ -105,7 +105,8 @@ pub fn tensor_program(fixture: &TensorFixture) -> Vec<u128> {
 pub fn tensor_seeds(fixture: &TensorFixture) -> Vec<Vec<u32>> {
     let mut seeds = vec![vec![0; PRED + 1]; 32];
     for (lane, seed) in seeds.iter_mut().enumerate() {
-        let before = &fixture.before[lane * 12..][..12];
+        let width = fixture.before.len() / 32;
+        let before = &fixture.before[lane * width..][..width];
         match fixture.case.as_str() {
             "m16n8k8-f32" => {
                 seed[6..8].copy_from_slice(&before[..2]);
@@ -120,6 +121,16 @@ pub fn tensor_seeds(fixture: &TensorFixture) -> Vec<Vec<u32>> {
                     seed[20 + word] = slot + 4 * word as u32;
                 }
                 seed[PRED] = (case == "ldmatrix-x4-trans") as u32;
+            }
+            // Sparse lanes hold A, B, C and the metadata word, A and B the same register count.
+            case if case.starts_with("sp-") => {
+                let [ra, rb, rc, re] = [24, 32, 64, 40].map(|bit| (fixture.words[0] >> bit & 0xff) as usize);
+                let c = if fixture.modifier == "dst-f16" { 2 } else { 4 };
+                let a = (width - c - 1) / 2;
+                seed[ra..ra + a].copy_from_slice(&before[..a]);
+                seed[rb..rb + a].copy_from_slice(&before[a..2 * a]);
+                seed[rc..rc + c].copy_from_slice(&before[2 * a..2 * a + c]);
+                seed[re] = before[width - 1];
             }
             case if case.starts_with("m8n8") || case.starts_with("m16n8k4") || case.starts_with("m16n8k32") || case.starts_with("m16n8k64") => {
                 let [ra, rb, rc] = [24, 32, 64].map(|bit| (fixture.words[0] >> bit & 0xff) as usize);
@@ -146,12 +157,12 @@ pub fn tensor_seeds(fixture: &TensorFixture) -> Vec<Vec<u32>> {
     seeds
 }
 
+pub fn tensor_d_words(fixture: &TensorFixture) -> usize {
+    if fixture.case == "m16n8k16-f16" || fixture.modifier == "dst-f16" || fixture.case.starts_with("m8n8") { 2 } else { 4 }
+}
+
 pub fn tensor_mismatch(fixture: &TensorFixture, lanes: &[Vec<u32>]) -> Option<(usize, Vec<u32>, Vec<u32>)> {
-    let width = if fixture.case == "m16n8k16-f16" || fixture.modifier == "dst-f16" || fixture.case.starts_with("m8n8") {
-        2
-    } else {
-        4
-    };
+    let width = tensor_d_words(fixture);
     let rd = (fixture.words[0] >> 16 & 0xff) as usize;
     lanes.iter().enumerate().find_map(|(lane, regs)| {
         let expected = &fixture.after[lane * 4..][..width];
@@ -161,13 +172,13 @@ pub fn tensor_mismatch(fixture: &TensorFixture, lanes: &[Vec<u32>]) -> Option<(u
 }
 
 /// Runs `fixture` on `state`, through cooperative matrices when `cooperative` is true and the device has a fitting tile.
-pub fn replay_tensor(state: &VkState, fixture: &TensorFixture, cooperative: Option<bool>) -> Option<Vec<Vec<u32>>> {
+pub fn replay_tensor(state: &VkState, fixture: &TensorFixture, cooperative: Option<bool>, tensor: TensorMode) -> Option<Vec<Vec<u32>>> {
     let program = tensor_program(fixture);
     let body = |decoder: &mut crate::gpu::sm86::Decoder| {
         decoder.force_cooperative_hmma = cooperative;
         decoder.translate_program(&program);
     };
-    run_on(state, body, &tensor_seeds(fixture), &[], &[], &Default::default(), false).map(|(lanes, ..)| lanes)
+    run_on(state, body, &tensor_seeds(fixture), &[], &[], &Default::default(), Hints { tensor, ..Default::default() }).map(|(lanes, ..)| lanes)
 }
 
 /// The f16 HMMA shapes for which the device reproduces every observed fixture bit for bit through cooperative matrices.
@@ -178,7 +189,7 @@ pub fn exact_cooperative_hmma(state: &VkState) -> Vec<(u32, bool)> {
     shapes.sort_unstable();
     shapes.dedup();
     shapes.retain(|&shape| cooperative_tile(state, shape).is_some() && fixtures.iter().filter(|&&(of, _)| of == shape).all(|(_, fixture)| {
-        replay_tensor(state, fixture, Some(true)).is_some_and(|lanes| tensor_mismatch(fixture, &lanes).is_none())
+        replay_tensor(state, fixture, Some(true), TensorMode::Exact).is_some_and(|lanes| tensor_mismatch(fixture, &lanes).is_none())
     }));
     shapes
 }

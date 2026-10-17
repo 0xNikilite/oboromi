@@ -53,6 +53,14 @@ pub struct VkState {
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
 
+/// Accuracy traded for speed in every translation from the next one on.
+#[derive(Clone, Copy, Default)]
+pub struct SpeedHacks {
+    pub fast_tensor: bool,
+}
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false });
+
 /// `device`, but created with every window surface extension the loader has if this is the first call.
 pub fn surface_device() -> Result<&'static VkState, VkError> {
     SURFACES.store(true, Relaxed);
@@ -167,6 +175,8 @@ impl VkState {
         let submit = state.submit.get_mut().unwrap();
         submit.command_buffer = unsafe { state.device.allocate_command_buffers(&alloc)? }[0];
         submit.fence = unsafe { state.device.create_fence(&Default::default(), None)? };
+        let queries = vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(2);
+        submit.queries = unsafe { state.device.create_query_pool(&queries, None)? };
         Ok(state)
     }
 
@@ -287,6 +297,7 @@ impl Drop for VkState {
             let _ = self.device.device_wait_idle();
             let submit = self.submit.get_mut().unwrap_or_else(|e| e.into_inner());
             self.device.destroy_fence(submit.fence, None);
+            self.device.destroy_query_pool(submit.queries, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

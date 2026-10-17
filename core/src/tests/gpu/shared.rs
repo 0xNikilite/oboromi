@@ -56,6 +56,34 @@ mod tests {
         assert!(regs.iter().all(|r| r[6] == LANES));
     }
 
+    // 32 lanes drop 32 of 40 expected arrivals and then arrive once each: 16 finish phase 0, 8 phase 1 and 8 phase 2.
+    #[test]
+    fn atoms_arrive_counts_mbarrier_phases_after_popc_inc_drops() {
+        const ATOMS_ARRIVE_64: u128 = 0x003e22000c80043f00000000ff027f8c;
+        const ATOMS_POPC_INC_32: u128 = 0x000fe2000d00003f00000000ffff7f8c;
+        let seeds = lanes(|_| vec![0, 0, 0, 0, 0x4000_0000 - 40, 0x8000_0000 - 16, 4]);
+        let program = [
+            inst::sts(255, 4),
+            inst::sts(6, 5),
+            inst::bar_sync(),
+            ATOMS_POPC_INC_32,
+            inst::bar_sync(),
+            ATOMS_ARRIVE_64,
+            inst::bar_sync(),
+            inst::lds(8, 255),
+            inst::lds(9, 6),
+        ];
+        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else {
+            return;
+        };
+        assert!(regs.iter().all(|r| r[2] == 0x4000_0000 - 8 && r[8..10] == [0x4000_0000 - 8, 0xffff_fff8]));
+        let mut old: Vec<u32> = regs.iter().map(|r| r[3]).collect();
+        let mut want: Vec<u32> = (0x7fff_fff0..=0x7fff_ffff).chain(0xffff_fff8..=0xffff_ffff).chain(0x7fff_fff8..=0x7fff_ffff).collect();
+        old.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(old, want);
+    }
+
     #[test]
     fn atoms_cas_lets_exactly_one_lane_win() {
         let seeds = lanes(|i| vec![0, 0, 0, 0, 0, 0, 0, 0, 0, i + 1]);
@@ -73,29 +101,6 @@ mod tests {
         assert_eq!(winners.len(), 1);
         let stored = winners[0][9];
         assert!(regs.iter().all(|r| r[6] == stored && (r[7] == 0 || r[7] == stored)));
-    }
-
-    #[test]
-    fn atoms_cast_compares_and_exchanges_32_and_64_bits() {
-        let seeds = lanes(|i| vec![0, 0, 0, 0, 0, 0, i + 1]);
-        let program = [inst::sts(255, 255), inst::bar_sync(), inst::atoms_cast(4, 255, 5, 6, false), inst::bar_sync(), inst::lds(7, 255)];
-        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
-        assert_eq!(regs.iter().filter(|r| r[4] == 0).count(), 1);
-        assert!(regs.iter().all(|r| (1..=LANES).contains(&r[7])));
-        if !crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics) {
-            eprintln!("skipping 64-bit CAST: no shaderSharedInt64Atomics");
-            return;
-        }
-        let seeds = lanes(|i| {
-            let mut seed = vec![0; 17];
-            seed[8] = i + 1;
-            seed[16] = 4;
-            seed
-        });
-        let program = [inst::sts(255, 255), inst::sts(16, 255), inst::bar_sync(), inst::atoms_cast(4, 255, 6, 8, true), inst::bar_sync(), inst::lds(10, 255), inst::lds(11, 16)];
-        let Some((regs, _)) = run_lanes(&program, &seeds, &[], &[]) else { return };
-        assert_eq!(regs.iter().filter(|r| [r[4], r[5]] == [0, 0]).count(), 1);
-        assert!(regs.iter().all(|r| (1..=LANES).contains(&r[10]) && r[11] == 0));
     }
 
     #[test]

@@ -144,3 +144,10 @@ pub extern "C" fn oboromi_display_surface(surface: vk::SurfaceKHR, width: u32, h
         Ok(Ok(()))
     )
 }
+
+/// `fast` trades exact HMMA accumulation for speed in every translation from now on. pipelines
+/// already compiled keep the mode they were translated with.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_tensor_mode(fast: bool) {
+    crate::gpu::SPEED_HACKS.lock().unwrap().fast_tensor = fast;
+}

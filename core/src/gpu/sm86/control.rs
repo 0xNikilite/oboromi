@@ -202,7 +202,7 @@ impl<'a> Decoder<'a> {
             0 | 4 => (0, true),
             1 => (0, false),
             2 => (inst >> 74 & 3, true),
-            3 => todo!("BAR.SCAN has no published scan result or per-lane ordering in the SM86 table, Eden, Ryujinx, or NAK"),
+            3 => todo!("BAR.SCAN (class bar__SCAN_RR_RR: Rb, Rc, Pp with IDEST_SIZE = 0) writes no register, PTX has no bar.scan and ptxas never emits it, so the scan it leaves for B2R.RESULT is undocumented"),
             mode => panic!("BAR mode {mode} is invalid"),
         };
         assert!(op != 3, "BAR.RED operation 3 is invalid");
@@ -244,8 +244,8 @@ impl<'a> Decoder<'a> {
             return;
         }
         let mut target = self.cached_const_u32(branch_target(self.pc, inst).unwrap());
-        if opcode(inst) == BRA_UPRED {
-            let bit = self.pred_bit(true, upq, upq_not != 0);
+        if opcode(inst) == BRA_UPRED || inst >> 87 & 0xf != PT as u128 {
+            let bit = if opcode(inst) == BRA_UPRED { self.pred_bit(true, upq, upq_not != 0) } else { self.pp_bit(inst) };
             let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
             let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
             target = self.ir.emit_select(self.type_u32[1], taken, target, next);

@@ -4,6 +4,7 @@ pub mod compute;
 pub mod frame;
 pub mod sm86;
 pub mod spirv;
+pub mod texture;
 
 #[derive(Debug)]
 pub enum VkError {

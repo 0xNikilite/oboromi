@@ -435,6 +435,10 @@ pub mod inst {
         control(BRA, 0, offset)
     }
 
+    pub fn bra_pp(pp: u32, offset: i64) -> u128 {
+        bra(offset) & !PP_PT | (pp as u128) << 87
+    }
+
     pub fn bra_upred(upq: u32, invert: bool, offset: i64) -> u128 {
         control(BRA_UPRED | COND_U, upq | (invert as u32) << 3, offset)
     }
@@ -819,6 +823,7 @@ fn fixtures_match_nvdisasm() {
         (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
         (inst::bra(-80), "BRA -0x40;"),
+        (inst::guard(inst::bra_pp(1, 16), 0, false), "@P0 BRA P1, 0x20;"),
         (inst::exit(), "EXIT;"),
         (inst::bssy(0, 0x40), "BSSY B0, 0x50;"),
         (inst::bsync(0), "BSYNC B0;"),

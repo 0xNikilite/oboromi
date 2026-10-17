@@ -12,7 +12,7 @@ pub struct Nv(u32);
 impl Nv {
     /// Connects and initializes the driver with `size` bytes of transfer memory at `address`.
     pub fn initialize(address: u64, size: u64) -> svc::Result<Self> {
-        let nv = Self(svc::connect_to_named_port(c"nvdrv")?);
+        let nv = Self(crate::hid::service(*b"nvdrv\0\0\0")?);
         let memory = svc::create_transfer_memory(address, size, 0)?;
         nv.call(&Request { command: 3, copy_handles: &[CURRENT_PROCESS, memory], data: &[size as u32], ..Default::default() }, 0)?;
         nv.call(&Request { command: 8, send_pid: true, data: &[0, 0], ..Default::default() }, 0)?;

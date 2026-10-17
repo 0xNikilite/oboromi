@@ -1,9 +1,10 @@
 #![no_std]
 #![no_main]
 
+use core::fmt::Write;
 use guest::nv::Nv;
 use guest::nvdrv::*;
-use guest::svc;
+use guest::{hid, svc};
 use scene::{Addresses, Scene, Vertex};
 
 core::arch::global_asm!(
@@ -78,21 +79,37 @@ fn draw() -> svc::Result<[u8; 4]> {
     Ok(guest_slice::<[u8; 4]>(target + u64::from(20 * SIZE + 20) * 4, 1)[0])
 }
 
-/// Prints "pixel RRGGBBAA" at (20, 20), or "error" and the result code of the step that failed.
+struct Text {
+    bytes: [u8; 64],
+    len: usize,
+}
+
+impl Write for Text {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let end = self.len + s.len();
+        self.bytes.get_mut(self.len..end).ok_or(core::fmt::Error)?.copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+fn print(line: core::fmt::Arguments) {
+    let mut text = Text { bytes: [0; 64], len: 0 };
+    let _ = text.write_fmt(line);
+    let _ = svc::output_debug_string(core::str::from_utf8(&text.bytes[..text.len]).unwrap_or_default());
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn main() -> ! {
-    let mut line = *b"pixel 00000000";
-    let value = match draw() {
-        Ok(rgba) => u32::from_be_bytes(rgba),
-        Err(code) => {
-            line[..6].copy_from_slice(b"error ");
-            code
-        }
-    };
-    for (i, digit) in line[6..].iter_mut().enumerate() {
-        *digit = b"0123456789abcdef"[(value >> (28 - 4 * i) & 0xf) as usize];
+    print(format_args!("hello from guest"));
+    match hid::read_full_key() {
+        Ok(pad) => print(format_args!("buttons {:#x} left {} {}", pad.buttons, pad.left[0], pad.left[1])),
+        Err(code) => print(format_args!("hid error {code:#x}")),
     }
-    let _ = svc::output_debug_string(core::str::from_utf8(&line).unwrap());
+    match draw() {
+        Ok(rgba) => print(format_args!("pixel {:08x}", u32::from_be_bytes(rgba))),
+        Err(code) => print(format_args!("nvdrv error {code:#x}")),
+    }
     svc::exit_process()
 }
 

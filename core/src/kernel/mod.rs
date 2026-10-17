@@ -5,6 +5,7 @@
 use crate::cpu::UnicornCPU;
 use crate::cpu::cpu_manager::MEMORY_SIZE;
 use crate::nn::hipc::{self, Service};
+use crate::nn::{hid, sm::Sm};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -63,6 +64,8 @@ pub enum Object {
     Session(Rc<RefCell<dyn Service>>),
     TransferMemory { addr: u64, size: u64, perm: u32 },
     Event(Rc<Cell<bool>>),
+    /// Without an MMU a mapping only records the guest address its owner writes to.
+    SharedMemory { size: u64, mapped: Rc<Cell<Option<u64>>> },
 }
 
 pub struct HandleTable<T> {
@@ -107,12 +110,21 @@ pub struct Process {
     aliases: Vec<(u64, u64, u64)>,
 }
 
-#[derive(Default)]
 pub struct Kernel {
     pub process: Process,
     pub ports: HashMap<String, Rc<RefCell<dyn Service>>>,
     /// OutputDebugString texts, for the caller to drain.
     pub debug_output: Vec<String>,
+    pub hid: Rc<RefCell<hid::State>>,
+}
+
+impl Default for Kernel {
+    fn default() -> Self {
+        let hid = Rc::new(RefCell::new(hid::State::default()));
+        let sm: Rc<RefCell<dyn Service>> = Rc::new(RefCell::new(Sm(HashMap::from([("hid".into(), hid.clone() as _)]))));
+        let ports = HashMap::from([("sm:".into(), sm)]);
+        Self { process: Process::default(), ports, debug_output: vec![], hid }
+    }
 }
 
 fn overlap(ranges: &[(u64, u64)], start: u64, end: u64) -> u64 {
@@ -207,6 +219,32 @@ impl Process {
         Ok(())
     }
 
+    fn shared_memory(&self, handle: u32, size: u64) -> Result<&Rc<Cell<Option<u64>>>, Error> {
+        match self.handles.get(handle) {
+            Some(Object::SharedMemory { size: object_size, mapped }) if size == *object_size => Ok(mapped),
+            Some(Object::SharedMemory { .. }) => Err(Error::InvalidSize),
+            _ => Err(Error::InvalidHandle),
+        }
+    }
+
+    fn map_shared_memory(&self, handle: u32, addr: u64, size: u64, perm: u64) -> Result<(), Error> {
+        check_pages(addr, size)?;
+        if perm != 1 {
+            return Err(Error::InvalidNewMemoryPermission);
+        }
+        self.shared_memory(handle, size)?.set(Some(addr));
+        Ok(())
+    }
+
+    fn unmap_shared_memory(&self, handle: u32, addr: u64, size: u64) -> Result<(), Error> {
+        let mapped = self.shared_memory(handle, size)?;
+        if mapped.get() != Some(addr) {
+            return Err(Error::InvalidMemoryRegion);
+        }
+        mapped.set(None);
+        Ok(())
+    }
+
     fn create_transfer_memory(&mut self, addr: u64, size: u64, perm: u32) -> Result<u32, Error> {
         check_pages(addr, size)?;
         if !matches!(perm, 0 | 1 | 3) {
@@ -256,6 +294,8 @@ impl Kernel {
     /// Runs the thread until ExitProcess (true) or until the core stops for any other reason.
     pub fn run(&mut self, cpu: &UnicornCPU) -> bool {
         loop {
+            // No vsync drives the guest yet, so the pad is sampled each time it enters the kernel.
+            self.hid.borrow_mut().tick(cpu);
             cpu.run();
             let Some(nr) = cpu.svc_pending() else { return false };
             let Some(x) = self.svc(cpu, nr, std::array::from_fn(|i| cpu.get_x(i as u32))) else { return true };
@@ -274,6 +314,8 @@ impl Kernel {
             0x04 => process.map_memory(cpu, x[0], x[1], x[2]),
             0x05 => process.unmap_memory(cpu, x[0], x[1], x[2]),
             0x07 => return None,
+            0x13 => process.map_shared_memory(x[0] as u32, x[1], x[2], x[3]),
+            0x14 => process.unmap_shared_memory(x[0] as u32, x[1], x[2]),
             0x15 => process.create_transfer_memory(x[1], x[2], x[3] as u32).map(|h| x[1] = h.into()),
             0x16 => process.handles.remove(x[0] as u32).map(drop).ok_or(Error::InvalidHandle),
             0x1f => self.connect_to_named_port(cpu, x[1]).map(|h| x[1] = h.into()),

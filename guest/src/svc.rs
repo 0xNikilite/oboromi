@@ -22,6 +22,10 @@ pub fn exit_process() -> ! {
     unsafe { asm!("svc 0x07", options(noreturn, nostack)) }
 }
 
+pub fn map_shared_memory(handle: u32, address: u64, size: u64, permission: u32) -> Result<()> {
+    unsafe { call::<0x13>(u64::from(handle), address, size, u64::from(permission)) }.map(drop)
+}
+
 pub fn create_transfer_memory(address: u64, size: u64, permission: u32) -> Result<u32> {
     unsafe { call::<0x15>(0, address, size, u64::from(permission)) }.map(|handle| handle as u32)
 }

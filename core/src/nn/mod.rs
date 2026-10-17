@@ -1,8 +1,10 @@
 use crate::nn;
 use crate::sys;
 
+pub mod hid;
 pub mod hipc;
 pub mod nvdrv;
+pub mod sm;
 
 macro_rules! define_service {
     ($($name:ident),* $(,)?) => {
@@ -38,7 +40,7 @@ define_service!(
     dauth, disp, dispdrv, dmnt, dns, dt, ectx, erpt, es,
     eth, ethc, eupld, fan, fatal, fgm, file_io, friend, fs,
     fsp_ldr, fsp_pr, fsp_srv, gds, gpio, gpuk, grc, gsv,
-    hdcp, hid, hidbus, host1x, hshl, htc, htcs, hwopus, i2c,
+    hdcp, hidbus, host1x, hshl, htc, htcs, hwopus, i2c,
     idle, ifcfg, imf, ins, irs, jit, lbl, ldn, ldr, led, lm,
     lp2p, lr, manu, mig, mii, miiimg, mm, mnpp, ncm, nd, ndd,
     ndrm, news, nfc, nfp, ngc, ngct, nifm, nim, notif, npns,

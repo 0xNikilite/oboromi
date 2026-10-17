@@ -66,9 +66,11 @@ pub mod capability {
     pub const INT64: u32 = 11;
     pub const INT16: u32 = 22;
     pub const INT8: u32 = 39;
+    pub const IMAGE_QUERY: u32 = 50;
     pub const STORAGE_BUFFER_16BIT: u32 = 4433;
     pub const STORAGE_BUFFER_8BIT: u32 = 4448;
     pub const PHYSICAL_STORAGE_BUFFER_ADDRESSES: u32 = 5348;
+    pub const COMPUTE_DERIVATIVE_GROUP_LINEAR: u32 = 5350;
     pub const VARIABLE_POINTERS: u32 = 4442;
     pub const DENORM_PRESERVE: u32 = 4464;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4466;
@@ -84,6 +86,7 @@ pub mod storage_class {
     pub const PRIVATE: u32 = 6;
     pub const FUNCTION: u32 = 7;
     pub const PUSH_CONSTANT: u32 = 9;
+    pub const IMAGE: u32 = 11;
     pub const STORAGE_BUFFER: u32 = 12;
     pub const PHYSICAL_STORAGE_BUFFER: u32 = 5349;
 }
@@ -98,6 +101,7 @@ pub mod memory_semantics {
     pub const ACQUIRE_RELEASE: u32 = 0x8;
     pub const UNIFORM_MEMORY: u32 = 0x40;
     pub const WORKGROUP_MEMORY: u32 = 0x100;
+    pub const IMAGE_MEMORY: u32 = 0x800;
 }
 
 pub mod execution_model {
@@ -111,6 +115,7 @@ pub mod execution_mode {
     pub const ORIGIN_UPPER_LEFT: u32 = 7;
     pub const DENORM_PRESERVE: u32 = 4459;
     pub const SIGNED_ZERO_INF_NAN_PRESERVE: u32 = 4461;
+    pub const DERIVATIVE_GROUP_LINEAR: u32 = 5290;
 }
 
 pub mod decoration {
@@ -753,6 +758,18 @@ impl Emitter {
         r
     }
 
+    pub fn emit_image_gather(&mut self, ty: u32, sampled_image: u32, coord: u32, component: u32) -> u32 {
+        self.typed_tri(96, ty, sampled_image, coord, component)
+    }
+
+    pub fn emit_image_texel_pointer(&mut self, ty: u32, image: u32, coord: u32, sample: u32) -> u32 {
+        self.typed_tri(60, ty, image, coord, sample)
+    }
+
+    pub fn emit_image_query_lod(&mut self, ty: u32, sampled_image: u32, coord: u32) -> u32 {
+        self.typed_bin(105, ty, sampled_image, coord)
+    }
+
     pub fn emit_image_read(&mut self, ty: u32, image: u32, coord: u32, operands: &[u32]) -> u32 {
         let r = self.alloc_id();
         let mut data = vec![ty, r, image, coord];
@@ -777,6 +794,10 @@ impl Emitter {
 
     pub fn emit_image_query_size(&mut self, ty: u32, image: u32) -> u32 {
         self.typed_un(104, ty, image)
+    }
+
+    pub fn emit_image_query_levels(&mut self, ty: u32, image: u32) -> u32 {
+        self.typed_un(106, ty, image)
     }
 
     pub fn emit_atomic_load(&mut self, ty: u32, pointer: u32, scope: u32, semantics: u32) -> u32 {
@@ -1044,6 +1065,8 @@ pub mod glsl {
     pub const S_CLAMP: u32 = 45;
     pub const F_MIX: u32 = 46;
     pub const FMA: u32 = 50;
+    pub const PACK_UNORM_4X8: u32 = 55;
+    pub const UNPACK_UNORM_4X8: u32 = 64;
     pub const FIND_I_LSB: u32 = 73;
     pub const FIND_S_MSB: u32 = 74;
     pub const FIND_U_MSB: u32 = 75;

@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub mod tests {
-    use crate::tests::gpu::harness::run_regs;
+    use crate::tests::gpu::harness::{UREG, run_regs};
     use crate::tests::gpu_test::inst::{self, *};
 
     // Exact for the zeros, infinities, NaN and normal halves used here.
@@ -168,5 +168,20 @@ pub mod tests {
             0x34ab_cd05,
         ];
         assert_eq!(regs[22..31], want);
+    }
+
+    #[test]
+    fn packed_conversions_cover_rz_clamps_and_uniform_data() {
+        let mut seed = vec![0; UREG + 11];
+        seed[6] = (-2.0f32).to_bits();
+        seed[7] = (1.0f32 + 2f32.powi(-11) + 2f32.powi(-20)).to_bits();
+        seed[11] = 16_777_219;
+        seed[UREG + 6] = 2.0f32.to_bits();
+        seed[UREG + 7] = 3.0f32.to_bits();
+        let program = [W2J_F2FP_RZ_RELU_SATFINITE, W2J_I2FP_RZ, W2J_UF2FP];
+        let Some(regs) = run(&program.map(|word| (word, "")), &seed) else {
+            return;
+        };
+        assert_eq!([regs[20], regs[23], regs[UREG + 10]], [h(1.0), 16_777_218f32.to_bits(), h2(2.0, 3.0)]);
     }
 }

@@ -185,6 +185,8 @@ struct InputState {
   uint64_t buttons;
   float left[2];
   float right[2];
+  /// a gamepad is present or a key has been pressed.
+  bool connected;
 };
 
 struct OboromiInput {

@@ -35,17 +35,21 @@ pub struct InputState {
     pub buttons: u64,
     pub left: [f32; 2],
     pub right: [f32; 2],
+    /// a gamepad is present or a key has been pressed.
+    pub connected: bool,
 }
 
 struct Host {
     keys: u64,
+    typed: bool,
     pad: InputState,
     pad_name: String,
 }
 
 static HOST: Mutex<Host> = Mutex::new(Host {
     keys: 0,
-    pad: InputState { buttons: 0, left: [0.0; 2], right: [0.0; 2] },
+    typed: false,
+    pad: InputState { buttons: 0, left: [0.0; 2], right: [0.0; 2], connected: false },
     pad_name: String::new(),
 });
 
@@ -71,6 +75,7 @@ const PAD: [(Button, u64); 16] = [
 pub fn key(code: i32, down: bool) {
     let Some(&(_, bit)) = KEYS.iter().find(|(k, _)| *k == code) else { return };
     let mut host = HOST.lock().unwrap();
+    host.typed = true;
     host.keys = if down { host.keys | bit } else { host.keys & !bit };
 }
 
@@ -84,16 +89,17 @@ pub fn snapshot() -> (InputState, String) {
     static START: Once = Once::new();
     START.call_once(|| drop(std::thread::Builder::new().name("gamepad".into()).spawn(gamepad_thread)));
     let host = HOST.lock().unwrap();
-    (merge(host.keys, host.pad), host.pad_name.clone())
+    (merge(host.keys, host.typed, host.pad), host.pad_name.clone())
 }
 
-fn merge(keys: u64, pad: InputState) -> InputState {
+fn merge(keys: u64, typed: bool, pad: InputState) -> InputState {
     let axis = |neg, pos| (keys & pos != 0) as i8 as f32 - (keys & neg != 0) as i8 as f32;
     let stick = |kb: [f32; 2], pad| if kb == [0.0; 2] { pad } else { kb };
     InputState {
         buttons: keys | pad.buttons,
         left: stick([axis(STICK_L_LEFT, STICK_L_RIGHT), axis(STICK_L_DOWN, STICK_L_UP)], pad.left),
         right: stick([axis(STICK_R_LEFT, STICK_R_RIGHT), axis(STICK_R_DOWN, STICK_R_UP)], pad.right),
+        connected: typed || pad.connected,
     }
 }
 
@@ -114,6 +120,7 @@ fn gamepad_thread() {
             buttons: PAD.iter().filter(|(b, _)| pad.is_pressed(*b)).fold(0, |acc, (_, bit)| acc | bit),
             left: [pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)],
             right: [pad.value(Axis::RightStickX), pad.value(Axis::RightStickY)],
+            connected: true,
         };
         host.pad_name = pad.name().to_owned();
     }
@@ -125,8 +132,9 @@ mod tests {
 
     #[test]
     fn keyboard_stick_wins_over_a_centered_gamepad_and_buttons_or() {
-        let pad = InputState { buttons: B, left: [0.0; 2], right: [0.5, 0.0] };
-        let merged = merge(A | STICK_L_RIGHT, pad);
-        assert_eq!(merged, InputState { buttons: A | B | STICK_L_RIGHT, left: [1.0, 0.0], right: [0.5, 0.0] });
+        let pad = InputState { buttons: B, left: [0.0; 2], right: [0.5, 0.0], connected: false };
+        let merged = merge(A | STICK_L_RIGHT, true, pad);
+        let want = InputState { buttons: A | B | STICK_L_RIGHT, left: [1.0, 0.0], right: [0.5, 0.0], connected: true };
+        assert_eq!(merged, want);
     }
 }

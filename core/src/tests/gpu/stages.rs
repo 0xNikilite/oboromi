@@ -53,13 +53,14 @@ mod tests {
         ($($name:literal),*) => { [$(($name, include_bytes!(concat!("../../../tests/fixtures/driver-shaders/", $name, ".bin")).as_slice())),*] };
     }
 
-    const DRIVER_SHADERS: [(&str, &[u8]); 15] = driver_shaders!(
+    const DRIVER_SHADERS: [(&str, &[u8]); 16] = driver_shaders!(
         "triangle.vert", "triangle.frag", "particles.vert", "particles.frag", "particles_update.comp", "pbr.vert", "pbr.frag",
-        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag"
+        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag",
+        "points.geom"
     );
 
-    // The code of a graphics stage follows its 0x80-byte program header, whose byte 11 is a TCS's THREADS_PER_INPUT_PRIMITIVE
-    // (clc797sph.h:58); compute has none.
+    // The code of a graphics stage follows its 0x80-byte program header, whose byte 11 is THREADS_PER_INPUT_PRIMITIVE
+    // (clc797sph.h:58), byte 15 OUTPUT_TOPOLOGY (:60) and byte 16 MAX_OUTPUT_VERTEX_COUNT (:64); compute has none.
     fn driver_module(device: Option<&VkState>, name: &str) -> (Emitter, Vec<ResourceKind>) {
         let bytes = DRIVER_SHADERS.iter().find(|shader| shader.0 == name).unwrap().1;
         let (stage, code) = match &name[name.len() - 4..] {
@@ -67,6 +68,7 @@ mod tests {
             "frag" => (Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &bytes[0x80..]),
             "tesc" => (Stage::TessControl { vertices: bytes[11].into() }, &bytes[0x80..]),
             "tese" => (Stage::TessEval { mode: 2, spacing: 0, order: 3 }, &bytes[0x80..]),
+            "geom" => (Stage::Geometry { input: PrimitiveTopology::Points, output: bytes[15].into(), max_vertices: bytes[16].into(), invocations: bytes[11].into() }, &bytes[0x80..]),
             _ => (Stage::Compute { local_size: [256, 1, 1] }, bytes),
         };
         let program: Vec<u128> = code.chunks(16).map(|word| u128::from_le_bytes(word.try_into().unwrap())).collect();

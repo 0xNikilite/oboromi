@@ -144,6 +144,21 @@ mod tests {
     }
 
     #[test]
+    fn i2f_f32_rounds_toward_the_mode() {
+        let seed = [u32::MAX, 0x100_0001, -0x100_0001i32 as u32];
+        let program = [
+            i2f(16, 0, F32, U32) | (RM as u128) << 78,
+            i2f(17, 0, F32, U32) | (RP as u128) << 78,
+            i2f(18, 1, F32, U32) | (RP as u128) << 78,
+            i2f(19, 1, F32, U32) | (RZ as u128) << 78,
+            i2f(20, 2, F32, S32) | (RM as u128) << 78,
+            i2f(21, 2, F32, S32) | (RP as u128) << 78,
+        ];
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
+        assert_eq!(regs[16..22], [0x4f7f_ffff, 0x4f80_0000, 0x4b80_0001, 0x4b80_0000, 0xcb80_0001, 0xcb80_0000]);
+    }
+
+    #[test]
     fn integer_conversions_use_f16_source_and_destination() {
         if !crate::gpu::device().is_ok_and(|d| d.shader_float16) { return eprintln!("skipping: no shaderFloat16"); }
         let seed = [0xbe00_3e00, 2049];

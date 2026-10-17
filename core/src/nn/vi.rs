@@ -2,10 +2,11 @@
 //! Services/Vi's command ids: one "Default" display and one layer, whose native window parcel names the binder's
 //! producer the way Ryujinx IApplicationDisplayService.OpenLayer writes it.
 
+use crate::cpu::unicorn_interface::TICK_HZ;
 use crate::kernel::Object;
 use crate::nn::binder::{BINDER_ID, HosBinderDriver, NvmapResolve};
 use crate::nn::hipc::{Request, Response, Service};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// vi result InvalidValue, module 114 description 7.
@@ -78,5 +79,9 @@ impl Service for Display {
             }
             _ => Response::unknown_command(cmd),
         }
+    }
+
+    fn event_period(&self, event: &Rc<Cell<bool>>) -> Option<u64> {
+        Rc::ptr_eq(event, &self.binder.borrow().vsync).then_some(TICK_HZ / 60)
     }
 }

@@ -17,16 +17,15 @@ pub struct CpuManager {
 impl CpuManager {
     pub fn new() -> Self {
         let ram = GuestRam::new(MEMORY_SIZE as usize);
-        let cores = (0..CORE_COUNT as u32)
-            .map(|i| UnicornCPU::new_with_shared_mem(i, ram.clone()).unwrap_or_else(|| panic!("Failed to create Core {i}")))
-            .collect();
+        let first = UnicornCPU::new_with_shared_mem(0, ram.clone()).expect("CPU engine");
+        let mut cores = Vec::with_capacity(CORE_COUNT);
+        for id in 1..CORE_COUNT as u32 { cores.push(first.logical_view(id)); }
+        cores.insert(0, first);
         Self { cores, ram }
     }
 
     pub fn run_all(&self) {
-        // for now, just step all cores sequentially (round-robin)
-        // in the future, this would be threaded
-        for (_i, core) in self.cores.iter().enumerate() {
+        for core in &self.cores {
             // just run one step for testing
             core.step();
         }

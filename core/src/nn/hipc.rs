@@ -2,7 +2,7 @@
 
 use crate::cpu::UnicornCPU;
 use crate::kernel::Object;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub const MESSAGE_SIZE: usize = 0x100;
@@ -70,6 +70,8 @@ impl Response {
 
 pub trait Service {
     fn dispatch(&mut self, cmd: u32, request: &mut Request) -> Response;
+    /// Periodic device signals use guest ticks, so waits can shorten CPU slices.
+    fn event_period(&self, _event: &Rc<Cell<bool>>) -> Option<u64> { None }
 }
 
 pub enum ParsedRequest<'a> {

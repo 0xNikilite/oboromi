@@ -45,6 +45,7 @@ struct Slot {
 pub struct HosBinderDriver {
     nvmap: Rc<dyn NvmapResolve>,
     slots: [Slot; 3],
+    count: usize,
     pub vsync: Rc<Cell<bool>>,
     buffer_free: Rc<Cell<bool>>,
 }
@@ -59,7 +60,7 @@ fn words(bytes: &[u8]) -> Vec<u32> {
 
 impl HosBinderDriver {
     pub fn new(nvmap: Rc<dyn NvmapResolve>) -> Self {
-        Self { nvmap, slots: Default::default(), vsync: Rc::default(), buffer_free: Rc::new(Cell::new(true)) }
+        Self { nvmap, slots: Default::default(), count: 3, vsync: Rc::default(), buffer_free: Rc::new(Cell::new(true)) }
     }
 
     /// The reply payload of IGraphicBufferProducer transaction `code`, its status last.
@@ -73,10 +74,23 @@ impl HosBinderDriver {
                 Some(s) => ([&[1, 4 * s.buffer.len() as u32, 0], &s.buffer[..]].concat(), OK),
                 None => (vec![0], BAD_VALUE),
             },
-            2 | 11 => (vec![], OK),
-            3 => match self.slots.iter().position(|s| s.state == State::Free && !s.buffer.is_empty()) {
+            2 => {
+                let count = match word(args, 0) as usize {
+                    0 => self.slots.len(),
+                    count => count,
+                };
+                if (2..=self.slots.len()).contains(&count) && !self.slots.iter().any(|s| s.state == State::Dequeued) {
+                    self.count = count;
+                    self.buffer_free.set(self.slots[..count].iter().any(|s| s.state == State::Free && !s.buffer.is_empty()));
+                    (vec![], OK)
+                } else {
+                    (vec![], BAD_VALUE)
+                }
+            }
+            3 => match self.slots[..self.count].iter().position(|s| s.state == State::Free && !s.buffer.is_empty()) {
                 Some(free) => {
                     self.slots[free].state = State::Dequeued;
+                    self.buffer_free.set(self.slots[..self.count].iter().any(|s| s.state == State::Free && !s.buffer.is_empty()));
                     // A non-null NvMultiFence with no fences.
                     ([vec![free as u32, 1, 36, 0], vec![0; 9]].concat(), OK)
                 }
@@ -95,9 +109,15 @@ impl HosBinderDriver {
                 None => (vec![0], BAD_VALUE),
             },
             10 => (output, OK),
-            14 => match self.slots.get_mut(slot) {
+            11 => {
+                self.slots.iter_mut().for_each(|s| s.state = State::Free);
+                self.buffer_free.set(self.slots[..self.count].iter().any(|s| !s.buffer.is_empty()));
+                (vec![], OK)
+            }
+            14 => match self.slots.get_mut(slot).filter(|_| slot < self.count) {
                 Some(s) => {
                     *s = Slot { state: State::Free, buffer: args.get(4..4 + word(args, 2) as usize / 4).unwrap_or_default().to_vec() };
+                    self.buffer_free.set(true);
                     (vec![], OK)
                 }
                 None => (vec![], BAD_VALUE),
@@ -114,7 +134,7 @@ impl HosBinderDriver {
         let field = |at: usize| buffer.get(at / 4).map(|&w| w as usize);
         let (width, height, pitch, gobs) = (field(4)?, field(8)?, field(SURFACE + 0x14)?, field(SURFACE + 0x24)?);
         let bytes_per_pixel = field(SURFACE + 8)? >> 3 & 0x1f;
-        if bytes_per_pixel != 4 || width * 4 > pitch || gobs > 5 {
+        if width == 0 || height == 0 || pitch == 0 || bytes_per_pixel != 4 || width * 4 > pitch || gobs > 5 {
             return None;
         }
         let block_linear = field(SURFACE + 0x10)? == BLOCK_LINEAR as usize;

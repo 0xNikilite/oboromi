@@ -72,7 +72,7 @@ struct Module {
 #[derive(PartialEq, Eq, Hash)]
 struct PipelineKey {
     shaders: [u64; 2],
-    streams: Vec<(u32, u32)>,
+    streams: Vec<(u32, u32, vk::VertexInputRate)>,
     attributes: Vec<(u32, u32, vk::Format, u32)>,
     topology: vk::PrimitiveTopology,
     colour_write_mask: u8,
@@ -135,28 +135,62 @@ fn gather(space: &PageMap, ram: &[u8], va: u64, out: &mut [u8]) -> Result<(), Me
     Ok(())
 }
 
-// SET_VERTEX_ATTRIBUTE_A COMPONENT_BIT_WIDTHS and NUMERICAL_TYPE values from clc797.h.
+// SET_VERTEX_ATTRIBUTE_A NUMERICAL_TYPE values from clc797.h.
+const SINT: u8 = 3;
+const UINT: u8 = 4;
+const FLOAT: u8 = 7;
+
 fn vertex_format(attribute: VertexAttribute) -> Result<vk::Format, String> {
+    use vk::Format as F;
+    let unsupported = || Err(format!("vertex attribute widths {:#x} type {} swap {} is not implemented", attribute.size, attribute.kind, attribute.bgra));
     const R32_G32_B32_A32: u8 = 0x01;
     const R32_G32_B32: u8 = 0x02;
     const R16_G16_B16_A16: u8 = 0x03;
     const R32_G32: u8 = 0x04;
+    const R16_G16_B16: u8 = 0x05;
     const R8_G8_B8_A8: u8 = 0x0a;
     const R16_G16: u8 = 0x0f;
-    const UNORM: u8 = 2;
-    const FLOAT: u8 = 7;
-    use vk::Format as F;
-    Ok(match (attribute.size, attribute.kind, attribute.bgra) {
-        (R32_G32_B32_A32, FLOAT, false) => F::R32G32B32A32_SFLOAT,
-        (R32_G32_B32, FLOAT, false) => F::R32G32B32_SFLOAT,
-        (R32_G32, FLOAT, false) => F::R32G32_SFLOAT,
-        (R16_G16_B16_A16, FLOAT, false) => F::R16G16B16A16_SFLOAT,
-        (R16_G16_B16_A16, UNORM, false) => F::R16G16B16A16_UNORM,
-        (R16_G16, FLOAT, false) => F::R16G16_SFLOAT,
-        (R16_G16, UNORM, false) => F::R16G16_UNORM,
-        (R8_G8_B8_A8, UNORM, false) => F::R8G8B8A8_UNORM,
-        (size, kind, bgra) => return Err(format!("vertex attribute widths {size:#x} type {kind} swap {bgra} is not implemented")),
-    })
+    const R32: u8 = 0x12;
+    const R8_G8_B8: u8 = 0x13;
+    const R8_G8: u8 = 0x18;
+    const R16: u8 = 0x1b;
+    const R8: u8 = 0x1d;
+    const A8B8G8R8: u8 = 0x2f;
+    const A2B10G10R10: u8 = 0x30;
+    const B10G11R11: u8 = 0x31;
+    const G8R8: u8 = 0x32;
+    // COMPONENT_BIT_WIDTHS (clc797.h) by the first member of the Vulkan family it reads as, and that family's size.
+    let (family, members) = match (attribute.size, attribute.bgra) {
+        (R32_G32_B32_A32, false) => (F::R32G32B32A32_UINT, 3),
+        (R32_G32_B32, false) => (F::R32G32B32_UINT, 3),
+        (R32_G32, false) => (F::R32G32_UINT, 3),
+        (R32, false) => (F::R32_UINT, 3),
+        (R16_G16_B16_A16, false) => (F::R16G16B16A16_UNORM, 7),
+        (R16_G16_B16, false) => (F::R16G16B16_UNORM, 7),
+        (R16_G16, false) => (F::R16G16_UNORM, 7),
+        (R16, false) => (F::R16_UNORM, 7),
+        (R8_G8_B8_A8 | A8B8G8R8, false) => (F::R8G8B8A8_UNORM, 6),
+        (R8_G8_B8_A8 | A8B8G8R8, true) => (F::B8G8R8A8_UNORM, 6),
+        (R8_G8_B8, false) => (F::R8G8B8_UNORM, 6),
+        (R8_G8_B8, true) => (F::B8G8R8_UNORM, 6),
+        (R8_G8 | G8R8, false) => (F::R8G8_UNORM, 6),
+        (R8, false) => (F::R8_UNORM, 6),
+        (A2B10G10R10, false) => (F::A2B10G10R10_UNORM_PACK32, 6),
+        (A2B10G10R10, true) => (F::A2R10G10B10_UNORM_PACK32, 6),
+        (B10G11R11, false) if attribute.kind == FLOAT => return Ok(F::B10G11R11_UFLOAT_PACK32),
+        _ => return unsupported(),
+    };
+    // Vulkan orders a 32-bit family UINT, SINT, SFLOAT and the others UNORM, SNORM, USCALED, SSCALED, UINT, SINT and
+    // for 16 bits SFLOAT, where NUMERICAL_TYPE counts SNORM, UNORM, SINT, UINT, USCALED, SSCALED, FLOAT from 1.
+    let member = match (members, attribute.kind) {
+        (3, UINT) => 0,
+        (3, SINT) => 1,
+        (3, FLOAT) => 2,
+        (6 | 7, kind @ 1..=6) => [1, 0, 5, 4, 2, 3][kind as usize - 1],
+        (7, FLOAT) => 6,
+        _ => return unsupported(),
+    };
+    Ok(F::from_raw(family.as_raw() + member))
 }
 
 // SET_BLEND_COLOR_OP and the coefficient methods take OGL enums or D3D ones (clc797.h).
@@ -354,22 +388,24 @@ impl<'a> Gpu<'a> {
         Ok(code)
     }
 
-    fn module(&mut self, program: ShaderProgram, shader_type: u32) -> Result<u64, String> {
+    /// Bit n of `integer[0]` or `[1]` is set when vertex attribute n is fetched as an unsigned or signed integer.
+    fn module(&mut self, program: ShaderProgram, shader_type: u32, integer: [u32; 2]) -> Result<u64, String> {
         let mut sph = [0; SPH_BYTES];
         gather(&self.space, &self.ram, program.address, &mut sph).map_err(named)?;
         let code = self.code(program.address + SPH_BYTES as u64)?;
+        let header = ProgramHeader::new(&sph);
+        let [uint, sint] = integer.map(|mask| mask & header.inputs);
         let mut hasher = DefaultHasher::new();
-        (sph, &code).hash(&mut hasher);
+        (sph, &code, uint, sint).hash(&mut hasher);
         let key = hasher.finish();
         if self.modules.contains_key(&key) {
             return Ok(key);
         }
-        let header = ProgramHeader::new(&sph);
         if header.version != SPH_VERSION {
             return Err(format!("shader program at {:#x} has SPH version {}, only SPHV4 is implemented", program.address, header.version));
         }
         let stage = match (header.sph_type, header.shader_type) {
-            (1, SHADER_TYPE_VERTEX) if shader_type == SHADER_TYPE_VERTEX => Stage::Vertex,
+            (1, SHADER_TYPE_VERTEX) if shader_type == SHADER_TYPE_VERTEX => Stage::Vertex { uint, sint },
             (2, SHADER_TYPE_PIXEL) if shader_type == SHADER_TYPE_PIXEL && header.colour_targets == 0xf => {
                 Stage::Fragment { flat: header.flat, screen_linear: header.screen_linear, depth: header.depth }
             }
@@ -527,26 +563,32 @@ impl<'a> Gpu<'a> {
         if let Some(i) = [0, 2, 3, 4].into_iter().find(|&i| draw.shader_programs[i].enabled) {
             return Err(format!("shader pipeline {i} is not implemented"));
         }
+        let integer = [UINT, SINT].map(|kind| (0..32).filter(|&i| draw.vertex_attributes[i].kind == kind).fold(0, |mask, i| mask | 1 << i));
         let shaders = [
-            self.module(draw.shader_programs[VERTEX_PIPELINE], SHADER_TYPE_VERTEX)?,
-            self.module(draw.shader_programs[PIXEL_PIPELINE], SHADER_TYPE_PIXEL)?,
+            self.module(draw.shader_programs[VERTEX_PIPELINE], SHADER_TYPE_VERTEX, integer)?,
+            self.module(draw.shader_programs[PIXEL_PIPELINE], SHADER_TYPE_PIXEL, [0; 2])?,
         ];
         let [vs, fs] = shaders.map(|key| &self.modules[&key]);
         if fs.header.inputs & !vs.header.outputs != 0 {
             return Err(format!("pixel shader reads attributes {:#x} the vertex shader does not write", fs.header.inputs & !vs.header.outputs));
         }
 
-        let (mut streams, mut attributes): (Vec<(u32, u32)>, _) = (Vec::new(), Vec::new());
+        let (mut streams, mut attributes): (Vec<(u32, u32, vk::VertexInputRate)>, _) = (Vec::new(), Vec::new());
         for location in (0..32).filter(|location| vs.header.inputs >> location & 1 != 0) {
             let attribute = draw.vertex_attributes[location as usize];
-            let binding = match streams.iter().position(|&(stream, _)| stream == u32::from(attribute.stream)) {
+            let binding = match streams.iter().position(|&(stream, ..)| stream == u32::from(attribute.stream)) {
                 Some(binding) => binding,
                 None => {
                     let stream = draw.vertex_streams[attribute.stream as usize];
                     if !stream.enabled {
                         return Err(format!("attribute {location} reads disabled vertex stream {}", attribute.stream));
                     }
-                    streams.push((attribute.stream.into(), stream.stride.into()));
+                    let rate = match (stream.instanced, stream.frequency) {
+                        (false, _) => vk::VertexInputRate::VERTEX,
+                        (true, 1) => vk::VertexInputRate::INSTANCE,
+                        (true, frequency) => return Err(format!("vertex stream {} advances every {frequency} instances, only every one is implemented", attribute.stream)),
+                    };
+                    streams.push((attribute.stream.into(), stream.stride.into(), rate));
                     streams.len() - 1
                 }
             };
@@ -582,7 +624,7 @@ impl<'a> Gpu<'a> {
         let pipeline_depth = draw.depth_target.map(|target| self.depth_format(target)).transpose()?;
         let key = PipelineKey {
             shaders,
-            streams: streams.iter().enumerate().map(|(binding, &(_, stride))| (binding as u32, stride)).collect(),
+            streams: streams.iter().enumerate().map(|(binding, &(_, stride, rate))| (binding as u32, stride, rate)).collect(),
             attributes,
             topology,
             colour_write_mask: draw.colour_write_mask,
@@ -592,7 +634,7 @@ impl<'a> Gpu<'a> {
 
         let vertex_ranges = streams
             .iter()
-            .map(|&(stream, _)| self.mirror(draw.vertex_streams[stream as usize].address, draw.vertex_streams[stream as usize].size))
+            .map(|&(stream, ..)| self.mirror(draw.vertex_streams[stream as usize].address, draw.vertex_streams[stream as usize].size))
             .collect::<Result<Vec<_>, _>>()?;
         let index_buffer = if draw.indexed {
             let ib = draw.index_buffer;
@@ -621,7 +663,7 @@ impl<'a> Gpu<'a> {
                 let bindings: Vec<_> = key
                     .streams
                     .iter()
-                    .map(|&(binding, stride)| vk::VertexInputBindingDescription { binding, stride, input_rate: vk::VertexInputRate::VERTEX })
+                    .map(|&(binding, stride, input_rate)| vk::VertexInputBindingDescription { binding, stride, input_rate })
                     .collect();
                 let attributes: Vec<_> = key
                     .attributes

@@ -93,7 +93,8 @@ pub enum ResourceKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Stage {
     Compute { local_size: [u32; 3] },
-    Vertex,
+    /// Bit n of `uint` and `sint` is set when generic attribute n is fetched as an unsigned or signed integer.
+    Vertex { uint: u32, sint: u32 },
     /// Bit n of `flat` and `screen_linear` is the interpolation of generic attribute n; `depth` writes FragDepth.
     Fragment { flat: u32, screen_linear: u32, depth: bool },
 }
@@ -293,13 +294,13 @@ impl<'a> Decoder<'a> {
         use spirv::{capability as cap, execution_mode as mode, execution_model as model};
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
-            Stage::Vertex => model::VERTEX,
+            Stage::Vertex { .. } => model::VERTEX,
             Stage::Fragment { .. } => model::FRAGMENT,
         };
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
-            Stage::Vertex => {}
+            Stage::Vertex { .. } => {}
             Stage::Fragment { depth, .. } => {
                 self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]);
                 if depth {

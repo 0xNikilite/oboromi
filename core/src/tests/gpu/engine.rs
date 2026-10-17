@@ -212,6 +212,7 @@ pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], 
 mod tests {
     use super::*;
     use crate::tests::gpu::harness::vk_state;
+    use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f};
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -231,6 +232,7 @@ mod tests {
     const INDICES: u64 = 0x1_0050_0000;
     const DEPTH: u64 = 0x1_0060_0000;
     const TARGET_B: u64 = 0x1_0200_0000;
+    const INSTANCED_PROGRAM: u64 = 0x1_0010_3000;
     // A four-vertex strip with uv in the colour attribute's red and green.
     fn quad(half: f32) -> [Vertex; 4] {
         [([-half, -half], [0, 0, 0, 0]), ([half, -half], [255, 0, 0, 0]), ([-half, half], [0, 255, 0, 0]), ([half, half], [255, 255, 0, 0])]
@@ -442,6 +444,50 @@ mod tests {
             gpu.read(TARGET_B, &mut b).unwrap();
             assert!(a == b && a != previous, "{colours:?}");
             previous = a;
+        }
+    }
+
+    // A type 1 vertex program reading generic 0 x and y, generic 1 and generic 2 x and y: the corner, an integer colour and
+    // an offset. It writes position corner + offset and generic 0 colour / 255.
+    fn instanced_program() -> Vec<u8> {
+        let colour = (0..4).flat_map(|c| [i2f(8 + c, 4 + c, cvt::F32, cvt::U32), fmul_imm(8 + c, 8 + c, 1.0 / 255.0)]);
+        let code: Vec<u128> = [ald(0, 0x80, 2), ald(4, 0x90, 4), ald(2, 0xa0, 2), fadd(12, 0, 2), fadd(13, 1, 3)]
+            .into_iter()
+            .chain(colour)
+            .chain([mov_imm(14, 0), mov_imm(15, 1.0f32.to_bits()), ast(0x70, 12, 4), ast(0x80, 8, 4), exit(), bra(-16)])
+            .collect();
+        program([0, 7, 10].into_iter().chain(192..202).chain(428..436), &code)
+    }
+
+    #[test]
+    fn instanced_stream_places_and_colours_each_instance_from_unsigned_integer_attributes() {
+        const R32_G32_FLOAT: u32 = 0x04 << 21 | 7 << 27;
+        const R8_G8_B8_A8_UINT: u32 = 0x0a << 21 | 4 << 27;
+        const SET_VERTEX_STREAM_INSTANCE_A: u32 = 0x1880;
+        const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
+        let Some(state) = vk_state() else { return };
+        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        gpu.write(INSTANCED_PROGRAM, &instanced_program()).unwrap();
+        let corners = [[-0.25f32, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]];
+        gpu.write(VERTICES, &corners.iter().flatten().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>()).unwrap();
+        let instances = vertex_bytes(&[([-0.5, 0.0], RED), ([0.5, 0.0], GREEN)]);
+        let instances: Vec<u8> = instances.chunks(12).flat_map(|v| [&v[8..], &v[..8]].concat()).collect();
+        gpu.write(VERTICES + 0x100, &instances).unwrap();
+        let [vertices, program] = [VERTICES, INSTANCED_PROGRAM].map(split);
+        let mut words = Vec::new();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        clear_white(&mut words);
+        inc(SET_VERTEX_STREAM_SIZE_A + 8, &[0, 0x100], &mut words);
+        inc(SET_VERTEX_STREAM_A_FORMAT, &[0x1000 | 8], &mut words);
+        inc(SET_VERTEX_STREAM_A_FORMAT + 16, &[0x1000 | 12, vertices[0], vertices[1] + 0x100, 1], &mut words);
+        inc(SET_VERTEX_STREAM_INSTANCE_A + 4, &[1], &mut words);
+        inc(SET_VERTEX_ATTRIBUTE_A, &[R32_G32_FLOAT, 1 | R8_G8_B8_A8_UINT, 1 | 4 << 7 | R32_G32_FLOAT], &mut words);
+        inc(SET_PIPELINE_SHADER + 64 + 0x14, &program, &mut words);
+        inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[5 << 28 | 4 << 16], &mut words);
+        inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT, &[5 << 28 | 4 << 16], &mut words);
+        run(&mut gpu, &words).unwrap();
+        for (x, y, want) in [(16, 32, RED), (48, 32, GREEN), (32, 32, WHITE), (16, 16, WHITE)] {
+            assert_eq!(pixel(&gpu, TARGET, x, y), want, "({x}, {y})");
         }
     }
 }

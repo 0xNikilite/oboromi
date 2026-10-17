@@ -65,6 +65,7 @@ const DRAW_INDEX_BUFFER32_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f0;
 const DRAW_INDEX_BUFFER16_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f4;
 const DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x17f8;
 const BEGIN: usize = 0x1618;
+const SET_VERTEX_STREAM_INSTANCE_A: usize = 0x1880;
 const OGL_SET_CULL: usize = 0x1918;
 const OGL_SET_FRONT_FACE: usize = 0x191c;
 const OGL_SET_CULL_FACE: usize = 0x1920;
@@ -77,6 +78,7 @@ const SET_REPORT_SEMAPHORE_D: usize = 0x1b0c;
 const SET_VERTEX_STREAM_A_FORMAT: usize = 0x1c00;
 const SET_VERTEX_STREAM_A_LOCATION_A: usize = 0x1c04;
 const SET_VERTEX_STREAM_A_LOCATION_B: usize = 0x1c08;
+const SET_VERTEX_STREAM_A_FREQUENCY: usize = 0x1c0c;
 const SET_PIPELINE_SHADER: usize = 0x2000;
 const SET_PIPELINE_BINDING: usize = 0x2010;
 const SET_PIPELINE_PROGRAM_ADDRESS_A: usize = 0x2014;
@@ -107,6 +109,9 @@ pub struct VertexStream {
     pub size: u64,
     pub stride: u16,
     pub enabled: bool,
+    /// Advances every `frequency` instances instead of every vertex.
+    pub instanced: bool,
+    pub frequency: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -445,6 +450,8 @@ impl ThreeD {
                 ),
                 stride: (format & 0xfff) as u16,
                 enabled: format & 0x1000 != 0,
+                instanced: self.word(SET_VERTEX_STREAM_INSTANCE_A + i * 4) & 1 != 0,
+                frequency: self.word(SET_VERTEX_STREAM_A_FREQUENCY + i * 16),
             };
         }
         let mut attributes = [VertexAttribute::default(); 32];

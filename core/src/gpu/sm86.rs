@@ -1414,12 +1414,14 @@ impl<'a> Decoder<'a> {
         let bits = self.alu_src_pair(inst);
         let val = self.ir.emit_bitcast(ty, bits);
         let imm = matches!(inst >> 9 & 7, 2 | 4);
-        self.fp64_src(val, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0)
+        self.fp_src(ty, val, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0)
     }
 
-    fn fp64_src(&mut self, val: u32, abs: bool, neg: bool) -> u32 {
+    fn fp64_reg(&mut self, inst: u128, reg_lsb: u32, abs_bit: u32, neg_bit: u32) -> u32 {
+        let bits = self.load_pair((inst >> reg_lsb & 0xff) as u32);
+        let val = self.bitcast_f64(bits);
         let ty = self.type_f64();
-        self.fp_src(ty, val, abs, neg)
+        self.fp_src(ty, val, inst >> abs_bit & 1 != 0, inst >> neg_bit & 1 != 0)
     }
 
     fn fp64_rounding(inst: u128) {
@@ -1950,15 +1952,9 @@ impl<'a> Decoder<'a> {
     pub fn dadd(&mut self, inst: u128) {
         Self::fp64_rounding(inst);
         let ty = self.type_f64();
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
-        let form = inst >> 9 & 7;
-        let b = if form == 1 { self.load_pair((inst >> 64 & 0xff) as u32) } else { self.alu_src_pair(inst) };
-        let b = self.bitcast_f64(b);
-        let imm = matches!(form, 2 | 4);
-        let (abs, neg) = if form == 1 { (inst >> 74 & 1 != 0, inst >> 75 & 1 != 0) } else { (inst >> 62 & 1 != 0, inst >> 63 & 1 != 0) };
-        let b = self.fp64_src(b, !imm && abs, !imm && neg);
+        let a = self.fp64_reg(inst, 24, 73, 72);
+        // DADD's second operand sits in the C slot, so a register comes from Rc.
+        let b = if inst >> 9 & 7 == 1 { self.fp64_reg(inst, 64, 74, 75) } else { self.fp64_alu_src(inst) };
         let result = self.ir.emit_fadd(ty, a, b);
         let result = self.bitcast_u64(result);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
@@ -1980,13 +1976,9 @@ impl<'a> Decoder<'a> {
     pub fn dfma(&mut self, inst: u128) {
         Self::fp64_rounding(inst);
         let ty = self.type_f64();
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let a = self.fp64_reg(inst, 24, 73, 72);
         let src = self.fp64_alu_src(inst);
-        let c = self.load_pair((inst >> 64 & 0xff) as u32);
-        let c = self.bitcast_f64(c);
-        let c = self.fp64_src(c, inst >> 74 & 1 != 0, inst >> 75 & 1 != 0);
+        let c = self.fp64_reg(inst, 64, 74, 75);
         let [b, c] = if matches!(inst >> 9 & 7, 2 | 3 | 7) { [c, src] } else { [src, c] };
         let result = self.glsl(spirv::glsl::FMA, ty, &[a, b, c]);
         let result = self.bitcast_u64(result);
@@ -2018,18 +2010,14 @@ impl<'a> Decoder<'a> {
     pub fn dmul(&mut self, inst: u128) {
         Self::fp64_rounding(inst);
         let ty = self.type_f64();
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let a = self.fp64_reg(inst, 24, 73, 72);
         let b = self.fp64_alu_src(inst);
         let result = self.ir.emit_fmul(ty, a, b);
         let result = self.bitcast_u64(result);
         self.store_pair((inst >> 16 & 0xff) as u32, result);
     }
     pub fn dsetp(&mut self, inst: u128) {
-        let a = self.load_pair((inst >> 24 & 0xff) as u32);
-        let a = self.bitcast_f64(a);
-        let a = self.fp64_src(a, inst >> 73 & 1 != 0, inst >> 72 & 1 != 0);
+        let a = self.fp64_reg(inst, 24, 73, 72);
         let b = self.fp64_alu_src(inst);
         let value = self.fp_compare((inst >> 76 & 15) as u32, a, b);
         self.store_setp(inst, value);

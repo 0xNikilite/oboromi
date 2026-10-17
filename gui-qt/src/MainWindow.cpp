@@ -36,7 +36,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     buildMenuBar();
     buildUi();
-    new AudioOutput(this);
+    m_audio = new AudioOutput(this);
 
     connect(&m_cpuWatcher, &QFutureWatcher<std::vector<std::string>>::finished,
             this, &MainWindow::onCpuTestsFinished);
@@ -119,11 +119,11 @@ void MainWindow::buildUi() {
     auto *toneButton = new QPushButton("Tone", central);
     toneButton->setCheckable(true);
     connect(toneButton, &QPushButton::toggled, this, [this](bool on) {
-        if (!on) return m_toneTimer.stop();
-        m_toneClock.start();
-        m_toneTimer.start(10);
+        if (on) return m_toneTimer.start(5);
+        m_toneTimer.stop();
+        m_logList->addItem(m_audio->status());
     });
-    connect(&m_toneTimer, &QTimer::timeout, this, [this] { oboromi_audio_test_tone(m_toneClock.restart() / 1000.0f); });
+    connect(&m_toneTimer, &QTimer::timeout, this, [] { oboromi_audio_test_tone(0.1f); });
     buttons->addWidget(toneButton);
     buttons->addStretch();
     m_gamepadLabel = new QLabel(central);

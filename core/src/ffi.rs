@@ -239,15 +239,28 @@ pub unsafe extern "C" fn oboromi_audio_pull(dst: *mut i16, frames: usize) -> usi
     crate::audio::pull(unsafe { std::slice::from_raw_parts_mut(dst, frames * 2) })
 }
 
-/// writes the output format, interleaved i16 samples.
+/// writes the output format, interleaved i16 samples produced `period` frames at a time.
 ///
 /// # Safety
-/// `rate` and `channels` must be valid for writes.
+/// `rate`, `channels` and `period` must be valid for writes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn oboromi_audio_format(rate: *mut u32, channels: *mut u32) {
+pub unsafe extern "C" fn oboromi_audio_format(rate: *mut u32, channels: *mut u32, period: *mut u32) {
     unsafe {
         *rate = crate::audio::RATE;
         *channels = crate::audio::CHANNELS;
+        *period = crate::audio::PERIOD;
+    }
+}
+
+/// writes the frames waiting in the ring and the pulls that ran dry.
+///
+/// # Safety
+/// `queued` and `underruns` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_stats(queued: *mut usize, underruns: *mut u64) {
+    unsafe {
+        *queued = crate::audio::queued();
+        *underruns = crate::audio::underruns();
     }
 }
 

@@ -51,9 +51,11 @@ fn work_buffer_size_matches_the_reference_layout() {
     assert_eq!(set(48_000, 240, 6, 0, 1, 1, 0, 0, 0, 0, 1), 0x7000);
     assert_eq!(set(48_000, 240, 24, 4, 32, 2, 4, 1, 2, 4, 2), 0x40000);
     assert_eq!(set(48_000, 240, 24, 4, 32, 2, 4, 1, 2, 4, 13), 0x41000);
+    assert_eq!(set(48_000, 240, 24, 4, 32, 2, 4, 1, 2, 4, 14), 0x41000);
+    assert_eq!(set(48_000, 240, 24, 4, 32, 2, 4, 1, 2, 4, 15), 0x41000);
     assert_eq!(set(48_000, 240, 22, 1, 96, 1, 1, 0, 0, 0, 6), 0x34000);
     assert_eq!(set(32_000, 160, 6, 0, 24, 1, 0, 0, 0, 0, 2), 0xD000);
-    assert!(work_buffer_size(&parameter(14, 0)).is_err());
+    assert!(work_buffer_size(&parameter(16, 0)).is_err());
 }
 
 #[test]
@@ -79,15 +81,26 @@ fn pcm16_voice_reaches_the_device_sink_at_its_mix_volumes() {
 
 #[test]
 fn biquad_and_delay_effects_run_on_the_final_mix() {
+    for revision in [13, 15] {
+        biquad_and_delay_effects_at(revision);
+    }
+}
+
+fn biquad_and_delay_effects_at(revision: u32) {
     let (samples, bytes) = waveform();
+    let (b0_at, b0, channels): (_, &[u8], _) = if revision >= 15 {
+        (0x30, &0.5f32.to_le_bytes(), 0x44)
+    } else {
+        (0x2C, &8192i16.to_le_bytes(), 0x36)
+    };
     let half_gain = record(
         0xC0,
         &[
             (0, &[6, 1, 1]),
             (0x20, &[0]),
             (0x26, &[0]),
-            (0x2C, &8192i16.to_le_bytes()),
-            (0x36, &[1]),
+            (b0_at, b0),
+            (channels, &[1]),
         ],
     );
     let q14 = |v: f32| ((v * 16384.0) as u32).to_le_bytes();
@@ -107,7 +120,7 @@ fn biquad_and_delay_effects_run_on_the_final_mix() {
         ],
     );
     let (_, output, status) =
-        pcm_scene(13, vec![half_gain, one_period_delay]).play(&mut memory(&bytes), 10);
+        pcm_scene(revision, vec![half_gain, one_period_delay]).play(&mut memory(&bytes), 10);
     let effects = 0x40 + 6 * 0x10 + 0x10;
     assert_eq!([status[effects], status[effects + 0x90]], [3, 3]);
     let left: Vec<i16> = output.iter().step_by(2).copied().collect();

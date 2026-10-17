@@ -9,6 +9,7 @@ pub const POOL_IN: usize = 0x20;
 pub const POOL_OUT: usize = 0x10;
 pub const CHANNEL_IN: usize = 0x70;
 pub const VOICE_IN: usize = 0x170;
+pub const VOICE_IN_V2: usize = 0x188;
 pub const VOICE_OUT: usize = 0x10;
 pub const EFFECT_IN: usize = 0xC0;
 pub const EFFECT_OUT_V1: usize = 0x10;
@@ -24,6 +25,7 @@ pub const SPLITTER_HEADER: usize = 0x20;
 pub const SPLITTER_IN: usize = 0x10;
 pub const DESTINATION_V1: usize = 0x70;
 pub const DESTINATION_V2: usize = 0x90;
+pub const DESTINATION_V2B: usize = 0xA8;
 
 pub fn bytes<const N: usize>(b: &[u8], at: usize) -> [u8; N] {
     b[at..at + N].try_into().unwrap()

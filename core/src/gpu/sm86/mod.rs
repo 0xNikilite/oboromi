@@ -97,7 +97,8 @@ pub enum ResourceKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Stage {
     Compute { local_size: [u32; 3] },
-    Vertex,
+    /// Bit n of `uint` and `sint` is set when generic attribute n is fetched as an unsigned or signed integer.
+    Vertex { uint: u32, sint: u32 },
     /// `input` is the draw's primitive. From the SPH: `output` is OUTPUT_TOPOLOGY (clc797sph.h:60), `max_vertices`
     /// MAX_OUTPUT_VERTEX_COUNT (:64), `invocations` and `vertices` THREADS_PER_INPUT_PRIMITIVE (:58). `mode`, `spacing` and
     /// `order` are DOMAIN_TYPE, SPACING and OUTPUT_PRIMITIVES of SET_TESSELLATION_PARAMETERS (clc797.h:691).
@@ -316,7 +317,7 @@ impl<'a> Decoder<'a> {
         use spirv::{capability as cap, execution_mode as mode, execution_model as model};
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
-            Stage::Vertex => model::VERTEX,
+            Stage::Vertex { .. } => model::VERTEX,
             Stage::TessControl { .. } => model::TESSELLATION_CONTROL,
             Stage::TessEval { .. } => model::TESSELLATION_EVALUATION,
             Stage::Geometry { .. } => model::GEOMETRY,
@@ -325,7 +326,7 @@ impl<'a> Decoder<'a> {
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
-            Stage::Vertex => {}
+            Stage::Vertex { .. } => {}
             Stage::Geometry { input, output, max_vertices, invocations } => {
                 self.ir.emit_capability(cap::GEOMETRY);
                 let output = match output {
@@ -544,7 +545,7 @@ impl<'a> Decoder<'a> {
             self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
         }
         let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
-        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
         self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         self.resources.push(Resource { kind, var });
         var
@@ -679,6 +680,11 @@ impl<'a> Decoder<'a> {
         let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
         let bit = self.pred_bit(uniform, pg, pg_not);
         Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
+    }
+
+    // A pixel program binds its constant buffers and textures apart from the vertex program's, in descriptor set 1.
+    fn descriptor_set(&self) -> u32 {
+        u32::from(matches!(self.stage, Stage::Fragment { .. }))
     }
 
     fn resource(&self, kind: ResourceKind) -> Option<u32> {

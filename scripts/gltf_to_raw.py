@@ -227,12 +227,14 @@ def main():
                      "metallicFactor": pbr.get("metallicFactor", 1.0), "roughnessFactor": pbr.get("roughnessFactor", 1.0),
                      "emissiveFactor": m.get("emissiveFactor", [0, 0, 0]), "normalScale": m.get("normalTexture", {}).get("scale", 1.0),
                      "occlusionStrength": m.get("occlusionTexture", {}).get("strength", 1.0),
-                     "alphaMode": m.get("alphaMode", "OPAQUE"), "textures": {s: f"{src_name(img_slots, src)}.rgba8" for s, src in tex.items()}})
+                     "alphaMode": m.get("alphaMode", "OPAQUE"), "textures": tex})
+    for m in mats:
+        m["textures"] = {s: f"{src_name(img_slots, src)}.rgba8" for s, src in m["textures"].items()}
     textures = []
     for src, uses in sorted(img_slots.items()):
         slots = sorted({s for _, s in uses}, key=SLOTS.index)
-        name = slots[0]
-        srgb = name in SRGB
+        name = src_name(img_slots, src)
+        srgb = slots[0] in SRGB
         im = g["images"][src]
         if "bufferView" in im:
             bv = g["bufferViews"][im["bufferView"]]
@@ -256,7 +258,8 @@ def main():
 
 
 def src_name(img_slots, src):
-    return sorted({s for _, s in img_slots[src]}, key=SLOTS.index)[0]
+    first = lambda i: sorted({s for _, s in img_slots[i]}, key=SLOTS.index)[0]
+    return first(src) if [first(i) for i in img_slots].count(first(src)) == 1 else f"{first(src)}{src}"
 
 
 if __name__ == "__main__":

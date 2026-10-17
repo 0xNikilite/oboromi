@@ -4,31 +4,45 @@ date: 2026-10-17
 decision-makers: jopdorp
 component: [oboromi-gpu]
 ---
-# Workgroup-uniform scheduling for divergent warps
+# Threads that disagree take turns
+
+## In plain words
+
+The GPU runs threads in teams called warps. When teammates take different branches, the real chip parks some, runs the others, and joins them back later. Some instructions make teammates swap values, so they must be at the same place at the same time. We run such programs in turns: each turn, the teammates furthest behind take one step while the rest wait. It is like a tour group where the stragglers always walk next, so everyone meets at every stop.
 
 ## Context and Problem Statement
 
-The translator runs each lane as a loop over a guest pc. Warp collectives (VOTE, SHFL, MATCH, REDUX, tensor ops) and BAR trade data through workgroup barriers, which every invocation must reach together. With lanes at different pcs that is undefined behaviour, and partial-mask votes could not be replayed.
+The translator runs each thread as a loop over its own program counter, the pc. Collectives, instructions where teammates swap values such as VOTE and SHFL, need every thread to reach the same Vulkan barrier together. So does BAR, the chip's own barrier. With threads at different pcs that is undefined behaviour, and votes by part of a warp could not be reproduced.
 
 ## Considered Options
 
-* Structurize the guest control flow into Vulkan loops and selections.
-* Native subgroup operations only.
-* Keep the pc loop and schedule it uniformly across the workgroup.
+* Rebuild the game's jumps as nested Vulkan loops and ifs.
+* Use only Vulkan's subgroups, its own name for warps.
+* Keep the pc loop, and run it in turns across the whole thread group.
 
 ## Decision Outcome
 
-Keep the pc loop. A program with collectives or BAR steps every invocation together: each step the workgroup votes the lowest runnable pc, lanes at that pc run it, the rest sit out with memory effects masked. BSSY and BSYNC tokens are tracked per lane, and BAR arrivals per barrier id until the required lanes arrive. Programs without collectives keep the free per-lane loop. Shared-memory exchange is the reference everywhere.
+Keep the pc loop. A program with collectives or BAR moves every thread of its group, the workgroup, together. Each turn the group votes for the lowest pc any thread waits at. Threads at that pc run one step, and the rest sit out with their memory writes masked.
 
-### Consequences
+BSSY and BSYNC, the chip's "rejoin here" markers, are tracked per thread. BAR arrivals are counted per barrier until all the required threads arrive. Programs without collectives keep the free per-thread loop. Swapping values through shared memory is the one method on every device.
 
-* Good, because divergent votes, shuffles and barriers match silicon, including the partial-mask cases.
-* Good, because it runs on lavapipe, whose subgroups are 8 lanes wide.
-* Bad, because programs with collectives pay a vote and a barrier per step.
-* Bad, because fairness under spin loops is not verified.
+| Device fact | Value |
+|---|---|
+| NVIDIA warp width | 32 threads |
+| Subgroup width on lavapipe | 8 threads |
+
+### What this makes easy
+
+* Votes, shuffles and barriers after a branch match the real chip, including votes by part of a warp.
+* It runs on lavapipe, whose subgroups are narrower than a warp.
+
+### What this makes hard
+
+* Programs with collectives pay a vote and a barrier on every step.
+* Whether a thread spinning in a wait loop ever lets the others move is not verified.
 
 ### Confirmation
 
-The warp scoreboard passes on Intel and lavapipe, and tests cover unequal branch lengths, nested tokens and early exit.
+The warp scoreboard passes on Intel and lavapipe, and tests cover branches of unequal length, nested markers and early exit.
 
-Sources: core/src/gpu/sm86/mod.rs `translate_program`, design note on divergence.
+Sources: core/src/gpu/sm86/mod.rs `translate_program`, core/src/gpu/sm86/warp.rs.

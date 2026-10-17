@@ -45,6 +45,12 @@ impl PageMap {
         }
     }
 
+    /// From the lowest mapped page to the end of the highest.
+    pub fn span(&self) -> Option<Range<u64>> {
+        let pages = self.pa_by_va_page.keys();
+        Some(pages.clone().min()? * PAGE..(pages.max()? + 1) * PAGE)
+    }
+
     pub fn resolve(&self, va: u64, len: u64) -> Result<impl Iterator<Item = PaRange> + '_, MemoryError> {
         let end = va + len;
         if let Some(page) = pages(va, len).find(|page| !self.pa_by_va_page.contains_key(page)) {

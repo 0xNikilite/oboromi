@@ -196,7 +196,7 @@ fn names_unbound_subchannel_and_unsupported_class() {
     assert!(error.contains("unbound subchannel 0"), "{error}");
 
     words.clear();
-    inc(SET_OBJECT, &[0xc7c0], &mut words);
+    inc(SET_OBJECT, &[0xdead], &mut words);
     immediate(0x100, 1, &mut words);
     let memory = bytes(&words);
     let error = Pusher::default()
@@ -206,7 +206,7 @@ fn names_unbound_subchannel_and_unsupported_class() {
         )
         .unwrap_err();
     assert!(
-        error.contains("unsupported class method: class 0xc7c0, method 0x0100"),
+        error.contains("unsupported class method: class 0xdead, method 0x0100"),
         "{error}"
     );
 }
@@ -230,4 +230,14 @@ fn one_increment_advances_only_first_word() {
         pusher.threed().raw((SET_VERTEX_ATTRIBUTE_A / 4 + 1) as u16),
         3
     );
+}
+
+#[test]
+fn subsequent_instances_of_one_draw_merge_into_an_instanced_draw() {
+    const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
+    let mut words = triangle_pushbuffer();
+    non_inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT, &[(4 << 28) | (3 << 16) | 2; 2], &mut words);
+    let events = submit(&words, None);
+    let [Event::Draw(draw)] = events.as_slice() else { panic!("{events:?}") };
+    assert_eq!((draw.first_instance, draw.instance_count), (0, 3));
 }

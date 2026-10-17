@@ -1,62 +1,88 @@
 # Command processor and memory
 
-The command processor reads GPFIFO entries, splits pushbuffers into method writes and routes each write to the class bound on its subchannel. Guest memory sits behind a GPU page map, and the guest's own RAM stays the one copy every host resource is checked against.
+The command processor is the GPU's front desk: it reads the command lists a game writes and hands each command to the right engine. Memory follows one rule: the emulated console RAM holds the only real copy of anything. For example, if a game moves a vertex buffer, the next draw reads the new place, because every copy is checked against RAM.
 
-## GPFIFO and method headers
+## What does a command look like?
 
-| item | bits | meaning |
+A game puts commands in a pushbuffer, a list of 32-bit words in guest memory. It then adds an entry to the GPFIFO, a ring of pointers to those lists. Each command starts with a header word saying which register to write, on which engine, and how many data words follow.
+
+| Item | Bits | Meaning |
 |---|---|---|
-| entry word 0 | 31:2 | pushbuffer address, low part |
-| entry word 1 | 7:0, 9, 30:10, 31 | address high byte, level, length in words, sync |
-| header | 11:0 | method, as a word index |
-| header | 15:13 | subchannel |
-| header | 28:16 | count, or the value for immediate mode |
-| header | 31:29 | mode: 1 incrementing, 3 non-incrementing, 4 immediate, 5 increment once, 7 end of segment |
+| GPFIFO entry word 0 | 31:2 | Pushbuffer address, low part |
+| GPFIFO entry word 1 | 7:0, 9, 30:10, 31 | Address high byte, level, length in words, sync |
+| Header | 11:0 | Method, the register to write, as a word index |
+| Header | 15:13 | Subchannel, the slot that picks the engine |
+| Header | 28:16 | How many data words follow, or the value itself in immediate mode |
+| Header | 31:29 | Mode: 1 incrementing, 3 non-incrementing, 4 immediate, 5 increment once, 7 end of segment |
 
-Methods below 0x40 belong to the channel: `SET_OBJECT` binds a class id to the subchannel, `SEMAPHORE_A` to `D` produce acquire and release events. Anything else goes to the bound class, and an unbound subchannel or unknown class is an error.
+Low method numbers belong to the channel, the command stream itself. Its `SET_OBJECT` binds an engine, a class, to a subchannel, and its `SEMAPHORE_A` to `D` methods write "got this far" signals. Every other method goes to the class bound on the header's subchannel. An empty subchannel or an unknown class is an error.
 
 ```mermaid
 flowchart LR
-    GP["GPFIFO entry"] --> PB["pushbuffer words"]
-    PB --> HDR{"method < 0x40?"}
-    HDR -->|"yes"| CH["channel<br/>SET_OBJECT, semaphores"]
-    HDR -->|"no"| SUB{"class on subchannel"}
-    SUB -->|"0xC797"| TD["3D register file<br/>DrawSnapshot"]
-    SUB -->|"0xC7C0"| CC["compute class, own branch<br/>QMD, DispatchSnapshot"]
-    SUB -->|"other"| ERR["error by name"]
+    GP["GPFIFO entry<br/>Pointer to a command list"] --> PB["Pushbuffer words<br/>Headers and data"]
+    PB --> HDR{"Channel method?<br/>Number below 0x40"}
+    HDR -->|"Yes"| CH["Channel<br/>Bind engines, write signals"]
+    HDR -->|"No"| SUB{"Which engine is on<br/>The subchannel?"}
+    SUB -->|"0xC797"| TD["3D engine registers<br/>Frozen per draw"]
+    SUB -->|"0xC7C0"| CC["Compute engine, own branch<br/>Reads the launch block"]
+    SUB -->|"Other"| ERR["Named error"]
 ```
 
-## The 3D class, 0xC797
+*How one command word finds the engine it is meant for.*
 
-`ThreeD` keeps the raw register words plus dirty groups (vertex streams, attributes, colour targets, viewport and scissor, shader programs, cbuf binds, blend and depth, index buffer). At a draw trigger it emits a `DrawSnapshot`: topology, counts, vertex streams and attributes, the six shader program slots, colour target 0, viewport, scissor, write mask, depth, cull, blend flags, the index buffer and the bound cbufs per binding group. `LOAD_CONSTANT_BUFFER` is an ordered event too, so cbuf updates between draws land in order.
+## What does the 3D engine keep?
 
-## The compute class, 0xC7C0
+The 3D class, 0xC797, is the drawing engine. `ThreeD` keeps its raw register words and notes which groups changed: vertex streams, attributes, colour targets, viewport and scissor, shaders, constant buffer bindings, blend and depth, and the index buffer.
 
-On `gpu/qmd-dispatch`: writing `SEND_SIGNALING_PCAS_B` fetches the 256-byte QMD at `SEND_PCAS_A` and decodes QMDV02_03 into a `DispatchSnapshot`: program address, grid, block, shared size, eight cbufs, two release semaphores, barrier and register counts, shared and local windows, sampler and texture pools. Other QMD versions are rejected.
+At each draw it freezes a `DrawSnapshot`, a copy of everything the draw needs. That covers the triangle type and counts, vertex streams and attributes, and every shader slot. It also holds the first colour target, viewport, scissor, write mask, depth, culling, blending, the index buffer and the bound constant buffers.
 
-## Page map and coherence
+A constant buffer, or cbuf, is a small read-only table the game hands a shader, such as the camera matrix. `LOAD_CONSTANT_BUFFER` updates one, and it is an ordered event too. So a cbuf changed between draws reaches the right draw.
 
-`PageMap` maps GPU VA pages to guest-physical pages, one map per address space, in 64 KiB pages (the big page size Ryujinx maps with; the T239 value is unverified). Unmapped ranges are errors, never a guess. `MemoryTracker` stamps every write to a physical page with a global generation and its writer, CPU or GPU.
+## How is a compute launch read?
 
-| resource | keyed by | refreshed when |
-|---|---|---|
-| buffer mirror (vertices, cbufs) | guest-physical ranges | the ranges' generation moved |
-| render target | ranges, format, size, depth | always written back after the draw |
-| shader module | hash of SPH and code | never, the key is the content |
+The compute class, 0xC7C0, lives on the `gpu/qmd-dispatch` branch. A launch is described by a QMD, a fixed-size block in guest memory. Writing `SEND_SIGNALING_PCAS_B` makes the class fetch the QMD at `SEND_PCAS_A` and decode it into a `DispatchSnapshot`.
 
-The rule: guest memory is the authority. Every GPU result is written back before `submit` returns, and a colour target whose pages changed outside its own draws is an error until loading is implemented, never a stale image. Remapping a VA to other pages changes what the next draw reads.
-
-Why: identity by physical page survives remaps and aliasing, and nothing can show a frame the guest's memory does not hold. See [ADR-0004](../adr/0004-backing-memory-authority-for-coherence.md).
-
-## Deferred
-
-| item | why it waits |
+| QMD field group | What it holds |
 |---|---|
-| MME64 macros | no Ampere header; the only public MME64 docs are Turing's |
-| syncpoint and channel ioctls, nvdrv, nvmap, address-space ioctls | no loader or guest issues them yet |
-| semaphore acquire | errors by name in the engine |
-| 2D, DMA and inline-to-memory classes | not needed by the first scenes |
+| Program | The shader's address |
+| Grid and block | How many thread groups, and how many threads per group |
+| Memory | Shared memory size, shared and local memory windows |
+| Constant buffers | Eight cbuf bindings |
+| Signals | Two release semaphores |
+| Limits | Barrier and register counts |
+| Textures | The sampler and texture pools |
+| Version | QMDV02_03 only; others are rejected |
+
+## How do GPU addresses become memory?
+
+Shaders use GPU virtual addresses (VA), which the game can point anywhere. `PageMap` turns them into guest-physical addresses (PA), the place in emulated RAM where the bytes really sit. There is one map per GPU address space, and an address outside it is an error, never a guess.
+
+`MemoryTracker` stamps every write to a physical page with a global counter, the generation, and who wrote it, CPU or GPU. A host copy compares that counter with the one it was made from, so it knows when it is stale.
+
+| Fact | Value |
+|---|---|
+| Page size | 64 KiB, the big page size Ryujinx uses; the T239 value is unverified |
+| Map scope | One per GPU address space |
+
+| Host copy | Keyed by | Refreshed when |
+|---|---|---|
+| Buffer mirror: vertices, cbufs | Guest-physical ranges | The ranges' generation moved |
+| Render target, the image a draw paints | Ranges, format, size, depth | Always written back after the draw |
+| Translated shader | Hash of shader header and code | Never, the key is the content |
+
+The rule: guest memory is the authority. Every GPU result is written back before `submit` returns. A colour target whose pages changed outside its own draws is an error until loading is implemented, never a stale image. Repointing a VA changes what the next draw reads.
+
+Why: keying by physical page stays right when memory is remapped or shared. And nothing can show a frame the guest's memory does not hold. See [ADR-0004](../adr/0004-backing-memory-authority-for-coherence.md).
+
+## What is still missing, and why?
+
+| Item | Why it waits |
+|---|---|
+| MME64 macros, the GPU's built-in macro processor | No Ampere header exists; the only public MME64 docs are Turing's |
+| Syncpoint and channel calls, nvdrv, nvmap, address-space calls | No loader or game makes them yet |
+| Semaphore acquire, waiting on a signal | The engine reports it as a named error |
+| 2D, DMA and inline-to-memory classes | The first scenes do not need them |
 
 Verified by: `core/src/tests/gpu/fifo.rs` and `memory_map.rs`, the engine acceptance test (draw, report, VA remap), and the QMD tests on its branch.
 
-Sources: core/src/gpu/{fifo,threed,memory,engine}.rs, core/src/gpu/compute_class.rs on gpu/qmd-dispatch, clc76f.h, clc797.h and clc7c0qmd.h field notes in the design note "graphics codebase", project notes on the graphics plan.
+Sources: core/src/gpu/{fifo,threed,memory,engine}.rs, core/src/gpu/compute_class.rs on gpu/qmd-dispatch, NVIDIA's clc76f.h, clc797.h and clc7c0qmd.h.

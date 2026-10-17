@@ -25,7 +25,7 @@ impl<'a> Decoder<'a> {
     // ALD.P and AST.P address the patch instead: outer and inner tessellation levels at 0x0 and 0x10, generic n at 0x20 + 16n (NAK
     // nak_private.h).
     pub fn ald(&mut self, inst: u128) {
-        use spirv::BuiltIn;
+        use spirv::{BuiltIn, storage_class::INPUT};
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
@@ -37,8 +37,15 @@ impl<'a> Decoder<'a> {
         for i in 0..words {
             let attr = ra_offset + 4 * i;
             let val = match (self.stage, patch, attr) {
-                (Stage::Vertex, false, 0x2f8) => self.builtin(BuiltIn::InstanceIndex),
-                (Stage::Vertex, false, 0x2fc) => self.builtin(BuiltIn::VertexIndex),
+                (Stage::Vertex { .. }, false, 0x80..0x280) if !output => {
+                    let kind = ResourceKind::VertexInput { location: (attr - 0x80) / 16 };
+                    let ptr = self.interface_component(kind, INPUT, attr);
+                    let ty = self.interface_type(kind, 1);
+                    let val = self.ir.emit_load(ty, ptr);
+                    if ty == self.type_u32[1] { val } else { self.bitcast_u32(val) }
+                }
+                (Stage::Vertex { .. }, false, 0x2f8) => self.builtin(BuiltIn::InstanceIndex),
+                (Stage::Vertex { .. }, false, 0x2fc) => self.builtin(BuiltIn::VertexIndex),
                 (_, false, 0x60) if primitives => self.builtin(BuiltIn::PrimitiveId),
                 (Stage::TessEval { .. }, false, 0x2f0 | 0x2f4) => {
                     let coord = self.builtin(BuiltIn::TessCoord);
@@ -98,7 +105,6 @@ impl<'a> Decoder<'a> {
                 let kind = ResourceKind::PerVertex { attr: attr & !0xf, output };
                 return Some(self.vertex_component(kind, storage, &[vertex], attr));
             }
-            (false, 0x80..0x280) if !output && self.stage == Stage::Vertex => ResourceKind::VertexInput { location: (attr - 0x80) / 16 },
             (false, 0x70..0x80) if output => ResourceKind::BuiltIn(BuiltIn::Position as u32),
             (false, 0x80..0x280) if output => ResourceKind::Varying { location: (attr - 0x80) / 16, flat: false },
             _ => return None,

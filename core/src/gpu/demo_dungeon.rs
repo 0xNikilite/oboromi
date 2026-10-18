@@ -145,10 +145,10 @@ fn tour_pose(world: &World, seconds: f32) -> TourPose {
     let bob = if pace > 0.01 { 0.02 * (pace / 0.8).min(1.0) * (travelled * TAU / 0.75).sin() } else { 0.0 };
     let eye = add(eye, [0.0, EYE + bob, 0.0]);
     let room_look = smoother(seconds / 6.0);
-    let mut yaw = (62.0 + 50.0 * room_look).to_radians();
+    let mut yaw = (10.0 + 50.0 * room_look).to_radians();
     let mut pitch = (-2.0 + 4.0 * (PI * room_look).sin()).to_radians();
     if seconds >= 6.0 {
-        yaw = (112.0 + (90.0 - 112.0) * smoother((seconds - 6.0) / 3.0)).to_radians();
+        yaw = (60.0 + 30.0 * smoother((seconds - 6.0) / 3.0)).to_radians();
         pitch *= 1.0 - smoother((seconds - 6.0) / 2.0);
     }
     if (11.25..12.75).contains(&seconds) {

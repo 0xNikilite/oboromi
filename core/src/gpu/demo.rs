@@ -370,7 +370,8 @@ impl<'a> Scene<'a> {
         gpu.write(VERTEX_TABLE, &bytes(&vertex_table)).map_err(named)?;
         // The rig's programs stop at their last EXIT; the self-branch a compiled program ends with marks the end.
         let programs: [&[u8]; 2] = if traced {
-            [include_bytes!("../../tests/fixtures/driver-shaders/rt.vert.bin"), include_bytes!("../../tests/fixtures/driver-shaders/rt.frag.bin")]
+            let pixel: &[u8] = if SHOWCASE.load(Ordering::Relaxed) { include_bytes!("../../tests/fixtures/driver-shaders/rt.frag.bin") } else { include_bytes!("../../tests/fixtures/driver-shaders/rt-realtime.frag.bin") };
+            [include_bytes!("../../tests/fixtures/driver-shaders/rt.vert.bin"), pixel]
         } else {
             [include_bytes!("../../tests/fixtures/driver-shaders/pbr.vert.bin"), include_bytes!("../../tests/fixtures/driver-shaders/pbr.frag.bin")]
         };
@@ -545,6 +546,7 @@ const HEIGHT: u32 = 1080;
 
 pub(super) static SCENE: Mutex<Option<(&str, Scene<'static>)>> = Mutex::new(None);
 static RAY_TRACING: AtomicBool = AtomicBool::new(true);
+pub static SHOWCASE: AtomicBool = AtomicBool::new(false);
 
 fn render(asset: &'static str, seconds: f32) -> Result<(), String> {
     let mut slot = SCENE.lock().unwrap();

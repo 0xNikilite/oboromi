@@ -104,7 +104,7 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced.mp4" type="video/mp4"></video>
 
-*Ray-traced BoomBox: The glossy floor mirrors the red and green walls, the chrome sphere reflects the room, the glass sphere bends it, and the moving lights sweep soft shadows.*
+*Ray-traced BoomBox: The glossy floor mirrors the red and green walls, the chrome sphere reflects the room, the glass sphere bends it, and the moving lights sweep soft shadows. On this laptop the ray-traced scene renders slowly and this clip is the offline showcase; a lighter shader is for a later pod round.*
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet.mp4" type="video/mp4"></video>
 

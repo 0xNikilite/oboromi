@@ -1,5 +1,5 @@
 //! Renders a demo offline at fixed time steps, frame i at i / fps seconds, as `frame_%04d.ppm` in a directory:
-//! `cargo run --release -p oboromi-core --example capture -- <demo> [--seconds 8] [--fps 60] --out <dir>`, then
+//! `cargo run --release -p oboromi-core --example capture -- <demo> [--seconds 8] [--fps 60] [--showcase] --out <dir>`, then
 //! `ffmpeg -framerate 60 -i <dir>/frame_%04d.ppm -c:v libx264 -crf 20 -pix_fmt yuv420p -movflags +faststart demo.mp4`.
 use oboromi_core::audio::{CHANNELS, PERIOD, RATE, demo_music, pull, queued};
 use oboromi_core::ffi::oboromi_frame_read;
@@ -94,6 +94,7 @@ fn main() {
         if let Some(rays) = flag("--raytracing") { demo_dungeon::render::RAYS.store(rays == "on", std::sync::atomic::Ordering::Relaxed); }
         if let Some(view) = flag("--view") { demo_dungeon::VIEW.store(view.parse().unwrap(), std::sync::atomic::Ordering::Relaxed); }
     }
+    if args[0] == "raytraced" { demo::SHOWCASE.store(args.iter().any(|a| a == "--showcase"), std::sync::atomic::Ordering::Relaxed); }
     let seconds: f32 = flag("--seconds").map_or(8.0, |s| s.parse().unwrap());
     let start: f32 = flag("--start").map_or(0.0, |s| s.parse().unwrap());
     let fps: f32 = flag("--fps").map_or(60.0, |s| s.parse().unwrap());

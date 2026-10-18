@@ -20,6 +20,7 @@ impl<'a> Decoder<'a> {
         let dst_val = self.ir.emit_iadd(self.type_u32[1], base, offset);
         self.store_register(rd, dst_val);
     }
+    // Attribute addresses as the SPH IMAP/OMAP bits order them (clc797sph.h): position 0x70, generic n 0x80 + 16n, instance and vertex id 0x2f8 and 0x2fc; front facing 0x3fc is NAK's.
     pub fn ald(&mut self, inst: u128) {
         use spirv::{BuiltIn, storage_class::INPUT};
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
@@ -80,20 +81,32 @@ impl<'a> Decoder<'a> {
         self.store_pair(rd, value);
     }
     pub fn ipa(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _stride = (((inst >> 78) & 0x3) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        use spirv::{BuiltIn, storage_class::INPUT};
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let attr = (((inst >> 64) & 0xff) << 2) as u32;
+        let constant = (((inst >> 78) & 0x3) << 0) == 1;
+        assert!(opcode(inst) == 0x326 && inst >> 76 & 3 == 0 && inst >> 78 & 3 < 2 && inst >> 81 & 7 == PT as u128, "only IPA.PASS and IPA.CONSTANT at the pixel centre are implemented");
+        assert!(self.stage == Stage::Fragment, "IPA in a {:?} module is not implemented", self.stage);
+        let val = match attr {
+            0x70..0x80 => {
+                let coord = self.builtin(BuiltIn::FragCoord);
+                let val = self.ir.emit_composite_extract(self.type_f32[1], coord, &[attr / 4 % 4]);
+                self.bitcast_u32(val)
+            }
+            // The PS header's IMAP, not IPA, picks perspective or screen linear, so perspective until the header is read.
+            0x80..0x280 => {
+                let ptr = self.interface_component(ResourceKind::Varying { location: (attr - 0x80) / 16, flat: constant }, INPUT, attr);
+                let val = self.ir.emit_load(self.type_f32[1], ptr);
+                self.bitcast_u32(val)
+            }
+            0x3fc => {
+                let front = self.builtin(BuiltIn::FrontFacing);
+                let all = self.cached_const_u32(u32::MAX);
+                self.ir.emit_select(self.type_u32[1], front, all, self.const_u32_0)
+            }
+            _ => panic!("IPA a[{attr:#x}] is not implemented"),
+        };
+        self.store_register(rd, val);
     }
     pub fn isberd(&mut self, inst: u128) {
         let _pg = (((inst >> 12) & 0x7) << 0);

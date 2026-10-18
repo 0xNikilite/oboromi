@@ -8,6 +8,8 @@ const RATE: f32 = 48_000.0;
 const SPEED: f32 = 343.0;
 const HEAD_RADIUS: f32 = 0.0875;
 const HISTORY: usize = 1 << 17;
+const IMAGE_PATHS: usize = 3;
+const GEOMETRY_BLOCKS: u64 = 10;
 
 pub type V3 = [f32; 3];
 
@@ -115,10 +117,6 @@ struct PathState {
     ears: [Ear; 2],
     gain: f32,
     delay: [f32; 2],
-    from_gain: f32,
-    from_delay: [f32; 2],
-    target_gain: f32,
-    target_delay: [f32; 2],
     initialized: bool,
 }
 
@@ -145,7 +143,10 @@ impl Fdn {
             let mixed = sum - taps[i] + input * 0.22;
             self.damp[i] += (mixed - self.damp[i]) * damping;
             self.lines[i][self.at[i]] = self.damp[i] * decay;
-            self.at[i] = (self.at[i] + 1) % self.lines[i].len();
+            self.at[i] += 1;
+            if self.at[i] == self.lines[i].len() {
+                self.at[i] = 0;
+            }
         }
         [
             (taps[0] + taps[2] - taps[4] - taps[6]) * 0.18,
@@ -157,33 +158,37 @@ impl Fdn {
 struct SourceState {
     history: Vec<f32>,
     written: u64,
-    paths: [PathState; 43],
-    reverbs: Vec<Fdn>,
-    room_weights: Vec<f32>,
-    rooms_initialized: bool,
+    paths: [PathState; IMAGE_PATHS + 1],
+    images: [Path; IMAGE_PATHS],
+    image_count: usize,
+    image_listener: V3,
+    image_source: V3,
+    geometry_block: u64,
 }
 
 impl SourceState {
-    fn new(rooms: usize) -> Self {
+    fn new() -> Self {
         Self {
             history: vec![0.0; HISTORY],
             written: 0,
-            paths: [PathState::default(); 43],
-            reverbs: (0..rooms).map(|_| Fdn::new()).collect(),
-            room_weights: vec![0.0; rooms],
-            rooms_initialized: false,
+            paths: [PathState::default(); IMAGE_PATHS + 1],
+            images: [Path::default(); IMAGE_PATHS],
+            image_count: 0,
+            image_listener: [f32::INFINITY; 3],
+            image_source: [f32::INFINITY; 3],
+            geometry_block: 0,
         }
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Path {
     position: V3,
     gain: f32,
     absorption: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Parameters {
     delay: [f32; 2],
     gain: f32,
@@ -205,6 +210,12 @@ pub struct Spatializer {
     forward: V3,
     up: V3,
     states: HashMap<usize, SourceState>,
+    reverbs: Vec<Fdn>,
+    room_weights: Vec<f32>,
+    room_data: Vec<(f32, f32)>,
+    reverb_input: Vec<[f32; BLOCK]>,
+    rooms_initialized: bool,
+    block: u64,
 }
 
 impl Spatializer {
@@ -216,6 +227,12 @@ impl Spatializer {
             forward: [0.0, 0.0, -1.0],
             up: [0.0, 1.0, 0.0],
             states: HashMap::new(),
+            reverbs: (0..rooms.len()).map(|_| Fdn::new()).collect(),
+            room_weights: vec![0.0; rooms.len()],
+            room_data: rooms.iter().map(room_decay).collect(),
+            reverb_input: vec![[0.0; BLOCK]; rooms.len()],
+            rooms_initialized: false,
+            block: 0,
         }
     }
 
@@ -229,71 +246,100 @@ impl Spatializer {
         self.up = unit(up);
     }
 
+    pub fn begin_block(&mut self) {
+        let targets = self.room_weights(self.listener);
+        if self.rooms_initialized {
+            for (weight, target) in self.room_weights.iter_mut().zip(targets) {
+                *weight += (target - *weight).clamp(-0.005, 0.005);
+            }
+        } else {
+            self.room_weights = targets;
+            self.rooms_initialized = true;
+        }
+        self.reverb_input.iter_mut().for_each(|input| input.fill(0.0));
+    }
+
+    pub fn finish_block(&mut self, out: &mut [[f32; 2]]) {
+        for (room, ((reverb, input), &(decay, damping))) in self.reverbs.iter_mut().zip(&self.reverb_input).zip(&self.room_data).enumerate() {
+            let weight = self.room_weights[room];
+            for (frame, &dry) in out.iter_mut().zip(input) {
+                let wet = reverb.process(dry, decay, damping);
+                frame[0] += wet[0] * weight;
+                frame[1] += wet[1] * weight;
+            }
+        }
+        self.block += 1;
+    }
+
     pub fn render(&mut self, source: &Source, mono: &[f32], out: &mut [[f32; 2]]) {
         assert_eq!(mono.len(), out.len());
         assert!(mono.len() <= BLOCK);
         out.fill([0.0; 2]);
-        let paths = self.paths(source.position);
-        let parameters: Vec<_> = paths.iter().map(|path| parameters(path, source.gain, self.listener, self.forward, self.up, self.mode)).collect();
-        let room_weights = self.room_weights(self.listener);
-        let room_data: Vec<(f32, f32)> = self.rooms.iter().map(room_decay).collect();
-        let rooms = self.rooms.len();
+        let refresh = self.states.get(&source.id).is_none_or(|state| {
+            self.block - state.geometry_block >= GEOMETRY_BLOCKS
+                && (distance_squared(self.listener, state.image_listener) > 0.04
+                    || distance_squared(source.position, state.image_source) > 0.04)
+        });
+        let (images, image_count) = if refresh {
+            self.image_paths(source.position)
+        } else {
+            let state = &self.states[&source.id];
+            (state.images, state.image_count)
+        };
+        let direct = self.direct_path(source.position);
+        let mut table = [Parameters::default(); IMAGE_PATHS + 1];
+        table[0] = parameters(&direct, source.gain, self.listener, self.forward, self.up, self.mode);
+        for (parameter, path) in table[1..].iter_mut().zip(&images[..image_count]) {
+            *parameter = parameters(path, source.gain, self.listener, self.forward, self.up, self.mode);
+        }
         let state = self
             .states
             .entry(source.id)
-            .or_insert_with(|| SourceState::new(rooms));
-        if !state.rooms_initialized {
-            state.room_weights.copy_from_slice(&room_weights);
-            state.rooms_initialized = true;
-        } else {
-            for (weight, &target) in state.room_weights.iter_mut().zip(&room_weights) {
-                *weight += (target - *weight).clamp(-0.005, 0.005);
-            }
+            .or_insert_with(SourceState::new);
+        if refresh {
+            state.images = images;
+            state.image_count = image_count;
+            state.image_listener = self.listener;
+            state.image_source = source.position;
+            state.geometry_block = self.block;
         }
         for &sample in mono {
             state.history[(state.written as usize) & (HISTORY - 1)] = sample;
             state.written += 1;
         }
         let block_start = state.written - mono.len() as u64;
-        for (n, frame) in out.iter_mut().enumerate() {
-            state.written = block_start + n as u64;
-            for (index, parameters) in parameters.iter().enumerate() {
-                binaural(
-                    parameters,
-                    &mut state.paths[index],
-                    &state.history,
-                    state.written,
-                    n,
-                    index == 0,
-                    frame,
-                );
+        if table[0].gain.abs() >= 0.001 {
+            for (index, parameter) in table[..=image_count].iter().enumerate() {
+                binaural_block(parameter, &mut state.paths[index], &state.history, block_start, index == 0, out);
             }
-            let dry = mono[n] * parameters[0].gain * 0.08;
-            for (room, (&weight, &(decay, damping))) in
-                state.room_weights.iter().zip(&room_data).enumerate()
-            {
-                let wet = state.reverbs[room].process(dry * weight, decay, damping);
-                frame[0] += wet[0] * weight;
-                frame[1] += wet[1] * weight;
+            for (room, input) in self.reverb_input.iter_mut().enumerate() {
+                let send = table[0].gain * 0.08 * self.room_weights[room];
+                for (dry, &sample) in input.iter_mut().zip(mono) {
+                    *dry += sample * send;
+                }
             }
         }
         state.written = block_start + mono.len() as u64;
     }
 
-    fn paths(&self, source: V3) -> Vec<Path> {
+    fn direct_path(&self, source: V3) -> Path {
         let direct_distance = length(sub(source, self.listener));
         let (occlusion, absorption) = self.occlusion(source);
-        let mut paths = vec![Path {
+        Path {
             position: source,
             gain: distance_gain(direct_distance) * occlusion,
             absorption,
-        }];
+        }
+    }
+
+    fn image_paths(&self, source: V3) -> ([Path; IMAGE_PATHS], usize) {
+        let mut paths = Vec::with_capacity(42);
         let Some(room) = self
             .rooms
             .iter()
             .find(|room| contains(room, source) && contains(room, self.listener))
         else {
-            return paths;
+            return ([Path::default(); IMAGE_PATHS], 0);
         };
         let first: Vec<(V3, usize)> = (0..6)
             .map(|wall| (mirror(source, room, wall), wall))
@@ -312,7 +358,7 @@ impl Spatializer {
         }
         for &(image, first_wall) in &first {
             for second_wall in 0..6 {
-                if second_wall == first_wall || paths.len() == 43 {
+                if second_wall == first_wall {
                     continue;
                 }
                 let image = mirror(image, room, second_wall);
@@ -330,10 +376,14 @@ impl Spatializer {
                 }
             }
         }
-        for path in paths.iter_mut().skip(1).take(6) {
+        for path in paths.iter_mut().take(6) {
             path.gain *= 0.14;
         }
-        paths
+        paths.sort_unstable_by(|a, b| length(sub(a.position, self.listener)).total_cmp(&length(sub(b.position, self.listener))));
+        let count = paths.len().min(IMAGE_PATHS);
+        let mut images = [Path::default(); IMAGE_PATHS];
+        images[..count].copy_from_slice(&paths[..count]);
+        (images, count)
     }
 
     fn occlusion(&self, source: V3) -> (f32, f32) {
@@ -421,40 +471,37 @@ fn parameters(path: &Path, source_gain: f32, listener: V3, forward: V3, up: V3, 
     }
 }
 
-fn binaural(parameters: &Parameters, previous: &mut PathState, history: &[f32], written: u64, n: usize, direct: bool, frame: &mut [f32; 2]) {
-    if n == 0 {
-        if !previous.initialized {
-            previous.gain = if direct { parameters.gain } else { 0.0 };
-            previous.delay = parameters.delay;
-            previous.initialized = true;
+fn binaural_block(parameters: &Parameters, previous: &mut PathState, history: &[f32], written: u64, direct: bool, out: &mut [[f32; 2]]) {
+    if !previous.initialized {
+        previous.gain = if direct { parameters.gain } else { 0.0 };
+        previous.delay = parameters.delay;
+        previous.initialized = true;
+    }
+    let from_gain = previous.gain;
+    let from_delay = previous.delay;
+    let step = parameters.gain.max(previous.gain) * 0.005;
+    let target_gain = parameters.gain.clamp(previous.gain - step, previous.gain + step);
+    for (n, frame) in out.iter_mut().enumerate() {
+        let t = (n + 1) as f32 / BLOCK as f32;
+        let gain = lerp(from_gain, target_gain, t);
+        for ear in 0..2 {
+            let ear_delay = lerp(from_delay[ear], parameters.delay[ear], t);
+            let mut sample = delayed(history, written + n as u64, ear_delay);
+            sample = lowpass(sample, parameters.shadow[ear], &mut previous.ears[ear].shadow);
+            sample = lowpass(sample, parameters.air, &mut previous.ears[ear].air);
+            sample = lowpass(sample, parameters.material, &mut previous.ears[ear].material);
+            let bass = lowpass(sample, parameters.bass_filter, &mut previous.ears[ear].bass);
+            sample += bass * parameters.bass;
+            let rear_low = lowpass(sample, parameters.rear_filter, &mut previous.ears[ear].rear);
+            sample -= (sample - rear_low) * parameters.rear;
+            let lo = lowpass(sample, parameters.notch[0], &mut previous.ears[ear].notch_lo);
+            let hi = lowpass(sample, parameters.notch[1], &mut previous.ears[ear].notch_hi);
+            sample -= (hi - lo) * 0.24;
+            frame[ear] += sample * gain * parameters.ear_gain[ear] * (1.0 - parameters.rear);
         }
-        previous.from_gain = previous.gain;
-        previous.from_delay = previous.delay;
-        let step = parameters.gain.max(previous.gain) * 0.005;
-        previous.target_gain = parameters.gain.clamp(previous.gain - step, previous.gain + step);
-        previous.target_delay = parameters.delay;
     }
-    let t = (n + 1) as f32 / BLOCK as f32;
-    let gain = lerp(previous.from_gain, previous.target_gain, t);
-    for ear in 0..2 {
-        let ear_delay = lerp(previous.from_delay[ear], previous.target_delay[ear], t);
-        let mut sample = delayed(history, written, ear_delay);
-        sample = lowpass(sample, parameters.shadow[ear], &mut previous.ears[ear].shadow);
-        sample = lowpass(sample, parameters.air, &mut previous.ears[ear].air);
-        sample = lowpass(sample, parameters.material, &mut previous.ears[ear].material);
-        let bass = lowpass(sample, parameters.bass_filter, &mut previous.ears[ear].bass);
-        sample += bass * parameters.bass;
-        let rear_low = lowpass(sample, parameters.rear_filter, &mut previous.ears[ear].rear);
-        sample -= (sample - rear_low) * parameters.rear;
-        let lo = lowpass(sample, parameters.notch[0], &mut previous.ears[ear].notch_lo);
-        let hi = lowpass(sample, parameters.notch[1], &mut previous.ears[ear].notch_hi);
-        sample -= (hi - lo) * 0.24;
-        frame[ear] += sample * gain * parameters.ear_gain[ear] * (1.0 - parameters.rear);
-    }
-    if n + 1 == BLOCK {
-        previous.gain = previous.target_gain;
-        previous.delay = previous.target_delay;
-    }
+    previous.gain = target_gain;
+    previous.delay = parameters.delay;
 }
 
 fn delayed(history: &[f32], written: u64, age: f32) -> f32 {
@@ -565,6 +612,10 @@ fn cross(a: V3, b: V3) -> V3 {
 fn length(a: V3) -> f32 {
     dot(a, a).sqrt()
 }
+fn distance_squared(a: V3, b: V3) -> f32 {
+    let d = sub(a, b);
+    dot(d, d)
+}
 fn unit(a: V3) -> V3 {
     scale(a, 1.0 / length(a).max(1e-9))
 }
@@ -593,7 +644,9 @@ mod tests {
                 mono[0] = 1.0;
             }
             let mut out = [[0.0; 2]; BLOCK];
+            spatial.begin_block();
             spatial.render(&source, &mono, &mut out);
+            spatial.finish_block(&mut out);
             result.extend(out);
         }
         result
@@ -647,6 +700,7 @@ mod tests {
                 .collect();
             let mut out = [[0.0; 2]; BLOCK];
             for _ in 0..4 {
+                spatial.begin_block();
                 spatial.render(
                     &Source {
                         id: 0,
@@ -656,6 +710,7 @@ mod tests {
                     &mono,
                     &mut out,
                 );
+                spatial.finish_block(&mut out);
             }
             let signal: Vec<f32> = out.iter().map(|p| p[0] + p[1]).collect();
             let rms = (signal.iter().map(|v| v * v).sum::<f32>() / BLOCK as f32).sqrt();
@@ -692,7 +747,9 @@ mod tests {
                         [0.0; BLOCK]
                     };
                     let mut out = [[0.0; 2]; BLOCK];
+                    spatial.begin_block();
                     spatial.render(&source, &mono, &mut out);
+                    spatial.finish_block(&mut out);
                     if block > 8 {
                         energy += out.iter().map(|p| p[0] * p[0] + p[1] * p[1]).sum::<f32>();
                     }
@@ -721,19 +778,11 @@ mod tests {
             };
             let parameters = parameters(&path, 1.0, listener, [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], Mode::Speakers);
             let mut arrival = None;
-            for n in 0..=(expected.ceil() as usize + 2) {
-                let mut frame = [0.0; 2];
-                binaural(
-                    &parameters,
-                    &mut state,
-                    &history,
-                    n as u64,
-                    n % BLOCK,
-                    true,
-                    &mut frame,
-                );
-                if frame.iter().any(|sample| sample.abs() > 1e-7) {
-                    arrival = Some(n);
+            for block in 0..=(expected.ceil() as usize / BLOCK + 1) {
+                let mut out = [[0.0; 2]; BLOCK];
+                binaural_block(&parameters, &mut state, &history, (block * BLOCK) as u64, true, &mut out);
+                if let Some(n) = out.iter().position(|frame| frame.iter().any(|sample| sample.abs() > 1e-7)) {
+                    arrival = Some(block * BLOCK + n);
                     break;
                 }
             }

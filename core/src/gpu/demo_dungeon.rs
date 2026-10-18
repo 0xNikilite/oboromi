@@ -4,11 +4,16 @@ use super::{VkState, device};
 use super::demo_dungeon_sound::Sound;
 use std::f32::consts::{PI, TAU};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 #[path = "demo_dungeon_render.rs"]
 pub mod render;
 pub static VIEW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static CAPTURE_SOLO: AtomicU8 = AtomicU8::new(0);
+static CAPTURE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_dungeon_capture() {
+    CAPTURE.store(true, Ordering::Relaxed);
+}
 
 pub fn set_dungeon_audio_solo(name: &str) {
     CAPTURE_SOLO.store(match name { "torch" => 1, "river" => 2, "footsteps" => 3, "drips" => 4, _ => 0 }, Ordering::Relaxed);
@@ -1043,8 +1048,9 @@ impl Dungeon {
             3 | 4 => Vec::new(),
             _ => world.sources.clone(),
         };
-        let sound = Sound::new(&world, &sources);
-        Ok(Self { renderer, world, sound, eye, yaw: if solo == 1 { 0. } else { PI/2. }, pitch: 0., time: 0., idle: if solo == 1 { f32::NEG_INFINITY } else { 3. }, waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river, solo })
+        let yaw = if solo == 1 { 0. } else { PI/2. };
+        let sound = Sound::new(&world, &sources, state.is_some() && !CAPTURE.load(Ordering::Relaxed), eye, yaw);
+        Ok(Self { renderer, world, sound, eye, yaw, pitch: 0., time: 0., idle: if solo == 1 { f32::NEG_INFINITY } else { 3. }, waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river, solo })
     }
 
     pub fn frame(&mut self, seconds: f32) -> Result<Vec<i16>, String> {
@@ -1156,7 +1162,10 @@ impl Dungeon {
         self.audio_time -= periods as f32 * 0.005;
         self.time = seconds;
         let audio=self.sound.render(periods);
-        if render::PROFILE.load(Ordering::Relaxed) {eprintln!("dungeon_cpu_pass,audio,{:.4}",audio_start.elapsed().as_secs_f64()*1000.);}
+        if render::PROFILE.load(Ordering::Relaxed) {
+            eprintln!("dungeon_cpu_pass,audio,{:.4}",audio_start.elapsed().as_secs_f64()*1000.);
+            eprintln!("dungeon_cpu_pass,audio_worker,{:.4}",self.sound.worker_millis());
+        }
         Ok(audio)
     }
 }

@@ -30,7 +30,7 @@ void main(){
         c=mix(vec3(1.5,.025,.001),vec3(4.,.7,.025),clamp(turbulence+core,0.,1.));
         c=mix(c,vec3(6.,4.8,2.6),clamp(core*.8,0.,1.));a*=colour.a;
     }else if(kind<1.5){a=exp(-dot(uv,uv)*5.)*(1.-smoothstep(.6,1.,length(uv)))*colour.a;c*=12.;}
-    else if(kind<2.5){a=texture(web_alpha,uv*.5+.5).g*colour.a;}
+    else if(kind<2.5){vec2 q=uv+vec2(noise(uv*2.7+seed+eye_time.w*.13),noise(uv*3.1-seed-eye_time.w*.09))*.22-.11;a=texture(web_alpha,q*.5+.5).g*colour.a*(.45+.55*noise(uv*3.+seed));}
     else if(kind<3.5) { a=pow(max(0.,1.-dot(uv,uv)),3.)*colour.a; }
     else if(kind<4.5) { a=pow(max(0.,1.-dot(uv,uv)),2.)*colour.a; c=vec3(.15,.3,.35)+pow(max(0.,1.-length(uv-vec2(-.2,.25))*3.),8.)*3.; }
     else if(kind<5.5) { a=exp(-pow((length(uv)-.8)*30.,2.))*colour.a; }

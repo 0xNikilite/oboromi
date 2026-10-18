@@ -66,8 +66,8 @@ fn mutex_condvar_ping_pong_is_exact_after_ten_thousand_rounds() {
     cpu.set_virtual_time(false);
     let mut context = cpu.context().unwrap();
     let mut measurements = Vec::new();
-    for mode in 0..3 {
-        cpu.benchmark_block_hook(mode != 0, CODE.base, CODE.base + IMAGE.len() as u64);
+    for mode in 0..2 {
+        cpu.benchmark_cache(CODE.base, CODE.base + IMAGE.len() as u64);
         cpu.set_pc(CODE.base + 0x1200);
         cpu.set_x(9, 2_000_000);
         let start = Instant::now();
@@ -76,8 +76,7 @@ fn mutex_condvar_ping_pong_is_exact_after_ten_thousand_rounds() {
             cpu.run();
         } else {
             loop {
-                let end = if mode == 1 { u64::MAX } else { cpu.ticks() + 7200 };
-                let preempted = cpu.run_slice(end, 0).unwrap();
+                let preempted = cpu.run_slice(cpu.ticks() + 7200, 0).unwrap();
                 slices += 1;
                 if !preempted {
                     break;
@@ -90,14 +89,13 @@ fn mutex_condvar_ping_pong_is_exact_after_ten_thousand_rounds() {
         assert_eq!(cpu.svc_pending(), Some(0x07));
         assert_eq!(cpu.get_x(9), 0);
     }
-    let (total, slices) = measurements[2];
+    let (total, slices) = measurements[1];
     eprintln!(
-        "block hook: {:.3} us/slice overhead, {:.3} us/slice total, {:.0} switches/s; baseline {:.6}s, hooked {:.6}s, sliced {:.6}s, {} slices",
-        (measurements[1].0 - measurements[0].0) * 1e6 / f64::from(slices),
+        "budget: {:.3} us/slice overhead, {:.3} us/slice total, {:.0} switches/s; baseline {:.6}s, sliced {:.6}s, {} slices",
+        (total - measurements[0].0) * 1e6 / f64::from(slices),
         total * 1e6 / f64::from(slices),
         f64::from(slices) / total,
         measurements[0].0,
-        measurements[1].0,
         total,
         slices
     );
@@ -152,7 +150,7 @@ fn mutex_waiter_boosts_holder_past_medium_priority_and_restores_priority() {
 }
 
 #[test]
-fn seeded_block_preemption_replays_the_same_guest_svc_trace() {
+fn seeded_budget_preemption_replays_the_same_guest_svc_trace() {
     let first = ping_pong(0x1234_5678, true);
     let second = ping_pong(0x1234_5678, true);
     assert_eq!(first, second);

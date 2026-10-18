@@ -1,12 +1,14 @@
 use super::{Cpu, CpuContext, CpuError, GuestRam};
+use crate::gpu::memory::{PAGE, pages};
 use std::cell::Cell;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
-use unicorn_engine::{Arch, Arm64Insn, Context, HookType, Mode, Prot, RegisterARM64, Unicorn, uc_error};
 use std::time::{Duration, Instant};
-use std::ops::{Deref, DerefMut};
+use unicorn_engine::{Arch, Arm64Insn, Context, HookType, Mode, Prot, Query, RegisterARM64, Unicorn, uc_error};
 
 const EXCP_SWI: u32 = 2;
+const INSTRUCTIONS_PER_BLOCK: u64 = 64;
 
 pub use super::TICK_HZ;
 const CLREX: u64 = 0xffff_0000_0000;
@@ -14,6 +16,7 @@ const CLREX: u64 = 0xffff_0000_0000;
 struct Clock {
     epoch: Instant,
     virtual_time: Cell<bool>,
+    block_ticks: Cell<u64>,
     ticks: Cell<u64>,
     core: Cell<u32>,
 }
@@ -27,9 +30,7 @@ impl Clock {
 struct RunState {
     svc: Option<u32>,
     clock: Rc<Clock>,
-    deadline: Option<u64>,
-    sliced: bool,
-    block_hook: Option<unicorn_engine::UcHookId>,
+    dirty_pages: Vec<u64>,
 }
 
 type Emu = Unicorn<'static, RunState>;
@@ -57,9 +58,7 @@ impl Engine {
     fn clear_exclusive(&mut self) -> Result<(), uc_error> {
         // Unicorn contexts include the software monitor; CLREX prevents ABA success after a handoff.
         let pc = self.pc_read()?;
-        let deadline = self.get_data_mut().deadline.take();
         let result = self.emu_start(CLREX, CLREX + 4, 0, 0);
-        self.get_data_mut().deadline = deadline;
         self.reg_write(RegisterARM64::PC, pc)?;
         result
     }
@@ -76,7 +75,7 @@ pub struct UnicornCPU {
 /// The interrupt hook runs under the core's lock, so it only records the SVC and stops;
 /// every other exception (BRK, faults) just stops the core.
 fn new_emu() -> Result<Emu, uc_error> {
-    let mut emu = Unicorn::new_with_data(Arch::ARM64, Mode::LITTLE_ENDIAN, RunState { svc: None, clock: Rc::new(Clock { epoch: Instant::now(), virtual_time: Cell::new(false), ticks: Cell::new(0), core: Cell::new(0) }), deadline: None, sliced: false, block_hook: None })?;
+    let mut emu = Unicorn::new_with_data(Arch::ARM64, Mode::LITTLE_ENDIAN, RunState { svc: None, clock: Rc::new(Clock { epoch: Instant::now(), virtual_time: Cell::new(false), block_ticks: Cell::new(192), ticks: Cell::new(0), core: Cell::new(0) }), dirty_pages: Vec::new() })?;
     emu.add_intr_hook(|uc, intno| {
         if intno == EXCP_SWI {
             // QEMU raises the SVC with PC already past it (translate-a64.c, gen_exception_insn with pc_next).
@@ -88,8 +87,6 @@ fn new_emu() -> Result<Emu, uc_error> {
         }
         let _ = uc.emu_stop();
     })?;
-    let hook = emu.add_block_hook(1, 0, slice_hook)?;
-    emu.get_data_mut().block_hook = Some(hook);
     let mut hook = 0;
     let data = Rc::as_ptr(&emu.get_data().clock).cast_mut().cast();
     // 2.1.5's Rust proxy returns bool, but uc_cb_insn_sys_t returns uint32_t.
@@ -99,16 +96,6 @@ fn new_emu() -> Result<Emu, uc_error> {
     emu.mem_map(CLREX, 0x1000, Prot::READ | Prot::EXEC)?;
     emu.mem_write(CLREX, &0xd503_3f5fu32.to_le_bytes())?;
     Ok(emu)
-}
-
-fn slice_hook(uc: &mut Unicorn<'_, RunState>, _: u64, _: u32) {
-    let data = uc.get_data_mut();
-    if let Some(deadline) = data.deadline {
-        if data.clock.now() >= deadline {
-            data.sliced = true;
-            let _ = uc.emu_stop();
-        } else if data.clock.virtual_time.get() { data.clock.ticks.set(data.clock.ticks.get() + 192); }
-    }
 }
 
 unsafe extern "C" fn mrs(uc: *mut unicorn_engine::uc_engine, reg: RegisterARM64,
@@ -176,9 +163,11 @@ impl UnicornCPU {
         let watched = self.ram.watched();
         // One hook per GPU mapping: Unicorn tests every guest store against each hook's range, and a hit only sets page bits.
         for range in &watched[emu.hooked..] {
-            let ram = Arc::clone(&self.ram);
-            let mark = move |_: &mut Unicorn<RunState>, _, pa, len: usize, _| {
-                ram.mark_cpu_written(pa, len as u64);
+            let mark = |uc: &mut Unicorn<RunState>, _, pa, len: usize, _| {
+                let dirty = &mut uc.get_data_mut().dirty_pages;
+                for page in pages(pa, len as u64) {
+                    if dirty.last() != Some(&page) { dirty.push(page); }
+                }
                 true
             };
             emu.add_mem_hook(HookType::MEM_WRITE, range.start, range.end - 1, mark).expect("write hook");
@@ -197,14 +186,13 @@ impl UnicornCPU {
     }
 
     #[cfg(test)]
-    pub(crate) fn benchmark_block_hook(&self, enabled: bool, start: u64, end: u64) {
+    pub(crate) fn benchmark_cache(&self, start: u64, end: u64) {
         let mut emu = self.lock().0;
-        if let Some(hook) = emu.get_data_mut().block_hook.take() { emu.remove_hook(hook).unwrap(); }
-        if enabled {
-            let hook = emu.add_block_hook(1, 0, slice_hook).unwrap();
-            emu.get_data_mut().block_hook = Some(hook);
-        }
         emu.ctl_remove_cache(start, end).unwrap();
+    }
+
+    pub(crate) fn set_block_ticks(&self, ticks: u64) {
+        self.lock().0.get_data().clock.block_ticks.set(ticks);
     }
 
     pub(crate) fn set_virtual_time(&self, enabled: bool) {
@@ -228,14 +216,32 @@ impl UnicornCPU {
     pub(crate) fn run_slice(&self, deadline: u64, core: usize) -> Result<bool, uc_error> {
         let (mut emu, _turn) = self.lock();
         let data = emu.get_data_mut();
-        data.deadline = Some(deadline);
-        data.sliced = false;
         data.svc = None;
         data.clock.core.set(core as u32);
+        let virtual_time = data.clock.virtual_time.get();
+        let remaining = deadline.saturating_sub(data.clock.now());
+        if remaining == 0 { return Ok(true); }
+        let block_ticks = data.clock.block_ticks.get().max(1);
+        let count = if virtual_time { remaining.div_ceil(block_ticks).saturating_mul(INSTRUCTIONS_PER_BLOCK).min(usize::MAX as u64) as usize } else { 0 };
+        let timeout = if virtual_time { 0 } else { (u128::from(remaining) * 1_000_000).div_ceil(u128::from(TICK_HZ)).min(u128::from(u64::MAX)) as u64 };
         let pc = emu.pc_read()?;
-        let result = emu.emu_start(pc, u64::MAX, 0, 0);
-        emu.get_data_mut().deadline = None;
-        result.map(|()| emu.get_data().sliced)
+        let result = emu.emu_start(pc, u64::MAX, timeout, count);
+        self.flush_dirty(&mut emu);
+        result?;
+        let sliced = if virtual_time { emu.get_data().svc.is_none() } else { emu.query(Query::TIMEOUT)? != 0 };
+        if virtual_time {
+            let elapsed = if sliced { remaining } else { block_ticks };
+            let clock = &emu.get_data().clock;
+            clock.ticks.set(clock.ticks.get().saturating_add(elapsed));
+        }
+        Ok(sliced)
+    }
+
+    fn flush_dirty(&self, emu: &mut Engine) {
+        let dirty = &mut emu.get_data_mut().dirty_pages;
+        dirty.sort_unstable();
+        dirty.dedup();
+        for page in dirty.drain(..) { self.ram.mark_cpu_written(page * PAGE, PAGE); }
     }
 
     pub(crate) fn context(&self) -> Result<Context, uc_error> { self.lock().0.context_init() }
@@ -270,7 +276,9 @@ impl UnicornCPU {
         let pc = emu.reg_read(RegisterARM64::PC).unwrap_or(0);
 
         // Run until we hit a BRK instruction or error
-        match emu.emu_start(pc, 0xFFFF_FFFF_FFFF_FFFF, 0, 0) {
+        let result = emu.emu_start(pc, 0xFFFF_FFFF_FFFF_FFFF, 0, 0);
+        self.flush_dirty(&mut emu);
+        match result {
             Ok(_) => 1, // Success - normal completion
             Err(e) => {
                 // BRK instruction causes an error, which is expected
@@ -289,7 +297,9 @@ impl UnicornCPU {
         let (mut emu, _turn) = self.lock();
         let pc = emu.reg_read(RegisterARM64::PC).unwrap_or(0);
 
-        match emu.emu_start(pc, pc + 4, 0, 1) {
+        let result = emu.emu_start(pc, pc + 4, 0, 1);
+        self.flush_dirty(&mut emu);
+        match result {
             Ok(_) => 0,
             Err(_) => 1,
         }

@@ -182,7 +182,7 @@ fn tour_pose(world: &World, seconds: f32) -> TourPose {
         yaw = (138.0 + 132.0 * smoother((seconds - 54.0) / 10.0)).to_radians();
         pitch = (-8.0 + 5.0 * smoother((seconds - 54.0) / 8.0)).to_radians();
     }
-    let fade = smoother(seconds / 2.5) * (1.0 - smoother((seconds - 61.5) / 2.5));
+    let fade = (PI * 0.5 * (seconds / 2.5).clamp(0.0, 1.0)).sin() * (PI * 0.5 * ((64.0 - seconds) / 2.5).clamp(0.0, 1.0)).sin();
     TourPose { eye, yaw, pitch, fade }
 }
 

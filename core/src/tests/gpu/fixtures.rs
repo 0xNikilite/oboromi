@@ -497,6 +497,7 @@ mod tests {
 
     #[test]
     fn fixtures_match_tensor_silicon() {
+        *crate::gpu::SPEED_HACKS.lock().unwrap() = crate::gpu::SpeedHacks::none();
         let mut score = Score::default();
         let mut unexpected = Vec::new();
         for fixture in tensor_fixtures() {

@@ -125,16 +125,19 @@ mod tests {
     }
 
     #[test]
-    fn fragment_ray_query_binds_the_registered_structure() {
+    fn ray_budget_skips_later_queries_and_unlimited_keeps_the_exact_module() {
+        use crate::gpu::sm86::{Hints, Stage, Translation, emit_module, emit_module_hinted};
         use crate::tests::gpu::engine::{self, BIND_GROUP_CONSTANT_BUFFER, DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, SET_CONSTANT_BUFFER_SELECTOR_A, SET_PIPELINE_SHADER};
-        use crate::tests::gpu_test::inst::{exit, fmul_imm, mov_imm};
+        use crate::tests::gpu::harness::spirv_val;
+        use crate::tests::gpu_test::inst::{exit, mov_imm, mov_reg};
         let Some(state) = vk_state() else { return };
         if state.acceleration_structure.is_none() {
             eprintln!("skipping: device has no ray queries");
             return;
         }
+        let state = Box::leak(Box::new(state));
         let vertices = [([-1.0, -1.0], [0; 4]), ([1.0, -1.0], [0; 4]), ([0.0, 1.0], [0; 4])];
-        let mut gpu = engine::triangle_guest(Box::leak(Box::new(state)), None, 16, 16, &vertices).unwrap();
+        let mut gpu = engine::triangle_guest(state, None, 16, 16, &vertices).unwrap();
         const DATA: u64 = engine::TEXTURES + 0x1000;
         const SHADER: u64 = engine::TEXTURES + 0x2000;
         gpu.write(DATA, &triangles(1.0)).unwrap();
@@ -155,22 +158,35 @@ mod tests {
             mov_imm(4, 0), mov_imm(5, 1), ttu(0x3d1, 0x200, 255, 4),
             0x73d3,
             ttu(0x3d2, 0x300, 0, 8) | 10 << 16 | 7 << 81,
-            fmul_imm(0, 11, 0.25), mov_imm(1, 0), mov_imm(2, 0), mov_imm(3, 1.0f32.to_bits()),
+            mov_imm(4, 0), mov_imm(5, 1), ttu(0x3d1, 0x200, 255, 4),
+            0x73d3,
+            ttu(0x3d2, 0x300, 0, 8) | 10 << 16 | 7 << 81,
+            mov_reg(0, 9), mov_imm(1, 0), mov_imm(2, 0), mov_imm(3, 1.0f32.to_bits()),
             exit(), bra(-16),
         ];
+        let stage = Stage::Fragment { flat: 0, screen_linear: 0, depth: false };
+        let exact = emit_module(Some(state), stage, |decoder| decoder.translate_program(&code));
+        let off = emit_module_hinted(Some(state), stage, Hints { translation: Translation::ForceDispatcher, ray_budget: u32::MAX, ..Default::default() }, |decoder| decoder.translate_program(&code));
+        spirv_val(&off);
+        assert_eq!(off.words(), exact.words());
         let mut shader = vec![0; 0x80];
         for bit in [1, 7, 10, 12, 576, 577, 578, 579] { shader[bit / 8] |= 1 << (bit % 8); }
         shader.extend(code.into_iter().flat_map(u128::to_le_bytes));
-        gpu.write(SHADER, &shader).unwrap();
-        let mut words = Vec::new();
-        engine::frame_state(16, 16, engine::TARGET, [1.0, 0.0, 0.0, 1.0], &mut words);
-        inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &[(SHADER >> 32) as u32, SHADER as u32], &mut words);
-        inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[0x100, (DATA >> 32) as u32, (DATA + 0x200) as u32], &mut words);
-        inc(BIND_GROUP_CONSTANT_BUFFER + 4 * 32, &[1], &mut words);
-        inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
-        engine::run(&mut gpu, &words).unwrap();
-        let mut pixel = [0; 4];
-        gpu.read(engine::TARGET + (8 * 16 + 8) * 4, &mut pixel).unwrap();
-        assert_eq!(pixel, [64, 0, 0, 255]);
+        let mut render = |budget| {
+            gpu.ray_budget = budget;
+            gpu.write(SHADER, &shader).unwrap();
+            let mut words = Vec::new();
+            engine::frame_state(16, 16, engine::TARGET, [1.0, 0.0, 0.0, 1.0], &mut words);
+            inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &[(SHADER >> 32) as u32, SHADER as u32], &mut words);
+            inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[0x100, (DATA >> 32) as u32, (DATA + 0x200) as u32], &mut words);
+            inc(BIND_GROUP_CONSTANT_BUFFER + 4 * 32, &[1], &mut words);
+            inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
+            engine::run(&mut gpu, &words).unwrap();
+            let mut pixel = [0; 4];
+            gpu.read(engine::TARGET + (8 * 16 + 8) * 4, &mut pixel).unwrap();
+            pixel
+        };
+        assert!(render(u32::MAX)[0] > 0);
+        assert_eq!(render(1), [0, 0, 0, 255]);
     }
 }

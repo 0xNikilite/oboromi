@@ -180,6 +180,8 @@ pub struct Decoder<'a> {
     type_surface_2d: [u32; 2],
     type_acceleration_structure: u32,
     acceleration_structure_address: Option<(u32, u32)>,
+    ray_budget: u32,
+    ray_queries: u32,
     derivatives: bool,
     invocations: u32,
     glsl_ext: u32,
@@ -195,11 +197,18 @@ pub struct Decoder<'a> {
     pending_nan: BTreeMap<u32, u32>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct Hints {
     pub timing: bool,
     pub translation: Translation,
     pub tensor: TensorMode,
+    pub ray_budget: u32,
+}
+
+impl Default for Hints {
+    fn default() -> Self {
+        Self { timing: false, translation: Translation::default(), tensor: TensorMode::default(), ray_budget: crate::gpu::SPEED_HACKS.lock().unwrap().ray_budget }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -396,6 +405,8 @@ impl<'a> Decoder<'a> {
             type_surface_2d: [0; 2],
             type_acceleration_structure: 0,
             acceleration_structure_address: None,
+            ray_budget: hints.ray_budget,
+            ray_queries: 0,
             derivatives: false,
             invocations: 0,
             glsl_ext: 0,

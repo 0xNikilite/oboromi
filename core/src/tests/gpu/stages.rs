@@ -53,10 +53,11 @@ mod tests {
         ($($name:literal),*) => { [$(($name, include_bytes!(concat!("../../../tests/fixtures/driver-shaders/", $name, ".bin")).as_slice())),*] };
     }
 
-    const DRIVER_SHADERS: [(&str, &[u8]); 20] = driver_shaders!(
+    const DRIVER_SHADERS: [(&str, &[u8]); 28] = driver_shaders!(
         "triangle.vert", "triangle.frag", "particles.vert", "particles.frag", "particles_update.comp", "pbr.vert", "pbr.frag",
         "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag", "rt.vert", "rt.frag", "points.geom",
-        "triangle-nak.vert", "triangle-nak.frag"
+        "triangle-nak.vert", "triangle-nak.frag", "sprite2d-nak.vert", "sprite2d-nak.frag", "pbr-nak.vert", "pbr-nak.frag",
+        "dungeon_sprite.vert", "dungeon_sprite.frag", "dungeon_sprite-nak.vert", "dungeon_sprite-nak.frag"
     );
 
     // The code of a graphics stage follows its 0x80-byte program header, whose byte 11 is THREADS_PER_INPUT_PRIMITIVE
@@ -101,8 +102,9 @@ mod tests {
         }
         pipeline.descriptors[1].bind_images(images);
         let target = RenderTarget::new(state, SIZE, SIZE, None, None).unwrap();
-        let mut buffer = HostBuffer::new(state, vertices.len() as u64).unwrap();
+        let mut buffer = HostBuffer::new(state, vertices.len().max(1) as u64).unwrap();
         buffer.write(vertices).unwrap();
+        let vertex_buffers: Vec<_> = layout.bindings.first().map(|binding| (&buffer, binding.stride)).into_iter().collect();
         let raster = RasterState {
             viewport: vk::Viewport { x: 0.0, y: 0.0, width: SIZE as f32, height: SIZE as f32, min_depth: 0.0, max_depth: 1.0 },
             scissor: target.extent.into(),
@@ -116,7 +118,7 @@ mod tests {
             blend,
         };
         let draw = DrawState {
-            vertex_buffers: &[(&buffer, layout.bindings[0].stride)],
+            vertex_buffers: &vertex_buffers,
             index_buffer: None,
             vertex_count: count,
             first_vertex: 0,
@@ -209,6 +211,49 @@ mod tests {
         for (x, y) in [(4, 4), (15, 32), (48, 32), (32, 15), (32, 48)] {
             assert_eq!(pixel(&pixels, x, y), [255; 4], "({x}, {y})");
         }
+    }
+
+    #[test]
+    fn nak_compiled_dungeon_sprite_matches_driver() {
+        let Some(state) = vk_state() else { return };
+        let mut global = vec![0.0f32; 76];
+        for i in [0, 5, 10, 15, 16, 21, 26, 31] { global[i] = 1.0; }
+        global[34] = 3.0;
+        global[36] = 1.0;
+        global[41] = 1.0;
+        global[52..55].copy_from_slice(&[SIZE as f32, SIZE as f32, 1.0]);
+        global[64..76].copy_from_slice(&[0.0, 0.0, 0.0, 3.0, 0.5, 0.5, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        let mut table = [0u32; 16];
+        let descriptor = |address: u64, size: u32| [address as u32, (address >> 32) as u32, size, 0];
+        let uniform = |address: u64, size: u32| [(address >> 4) as u32, (address >> 36) as u32 | (size >> 4) << 13];
+        table[2..4].copy_from_slice(&uniform(GLOBAL_BASE, 224));
+        table[4..8].copy_from_slice(&descriptor(GLOBAL_BASE, 0));
+        table[8..12].copy_from_slice(&descriptor(GLOBAL_BASE, 0));
+        table[12..16].copy_from_slice(&descriptor(GLOBAL_BASE + 256, 48));
+        let [pointers, memory, support, zero, corners] = [
+            table.iter().flat_map(|word| word.to_le_bytes()).collect(),
+            bytes(&global),
+            GLOBAL_BASE.to_le_bytes().to_vec(),
+            vec![0; 8],
+            bytes(&[-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0]),
+        ].map(|data| {
+            let mut buffer = HostBuffer::new(&state, data.len() as u64).unwrap();
+            buffer.write(&data).unwrap();
+            buffer
+        });
+        const RGBA8_UNORM: u32 = 8 | 0b010_010_010_010 << 7;
+        let tic = [RGBA8_UNORM | 0o5432 << 19, 0, 2 << 21, 1, 1 | 1 << 23, 1 | 1 << 31, 0, 0];
+        let tsc = [2 | 2 << 3, 1 | 1 << 4, 0, 0, 0, 0, 0, 0];
+        let [tic, tsc] = [tic, tsc].map(|entry| entry.iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>());
+        let pool = TexturePool { tic: &tic, tsc: &tsc };
+        let image = HostImage::new(&state, &pool.texture(0).unwrap(), &[255; 128], &pool.sampler(0).unwrap()).unwrap();
+        let layout = VertexLayout { bindings: &[], attributes: &[], topology: vk::PrimitiveTopology::TRIANGLE_LIST };
+        let buffers = [(SUPPORT_BINDING, &support), (CBUF_BINDING, &zero), (CBUF_BINDING + 1, &corners), (CBUF_BINDING + 0x1d, &pointers), (GLOBAL_BINDING, &memory)];
+        let frames = [
+            ["dungeon_sprite.vert", "dungeon_sprite.frag"],
+            ["dungeon_sprite-nak.vert", "dungeon_sprite-nak.frag"],
+        ].map(|shaders| draw(&state, shaders, &layout, &[], 6, &buffers, &[(TEXTURE_BINDING, &image)]));
+        assert_eq!(sha256(&frames[1]), sha256(&frames[0]));
     }
 
     #[test]

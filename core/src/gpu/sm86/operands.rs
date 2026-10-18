@@ -348,6 +348,7 @@ impl<'a> Decoder<'a> {
         let compute_only = matches!(builtin, BuiltIn::LocalInvocationIndex | BuiltIn::LocalInvocationId | BuiltIn::WorkgroupId);
         let subgroup = matches!(builtin, BuiltIn::SubgroupLocalInvocationId);
         assert!(subgroup || compute_only == matches!(self.stage, Stage::Compute { .. }), "{builtin:?} is not an input of a {:?} module", self.stage);
+        if subgroup { self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM); }
         let ty = match builtin {
             BuiltIn::LocalInvocationIndex | BuiltIn::VertexIndex | BuiltIn::InstanceIndex => self.type_u32[1],
             BuiltIn::SubgroupLocalInvocationId => self.type_u32[1],
@@ -476,6 +477,7 @@ impl<'a> Decoder<'a> {
                 let shift = self.cached_const_u32(if index == 16 { 8 } else { 16 });
                 self.ir.emit_shift_left_logical(self.type_u32[1], vertices, shift)
             }
+            0 if matches!(self.stage, Stage::Fragment { .. }) => self.builtin(BuiltIn::SubgroupLocalInvocationId),
             0 => {
                 let invocation = self.builtin(BuiltIn::LocalInvocationIndex);
                 let mask = self.cached_const_u32(31);

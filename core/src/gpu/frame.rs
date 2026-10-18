@@ -167,7 +167,7 @@ pub fn render_triangle_demo(seconds: f32) -> Result<(), String> {
     let gpu = match &mut *slot {
         Some(gpu) => gpu,
         empty => {
-            let vertices = [([0.0, -0.8], [255, 0, 0, 255]), ([0.7, 0.4], [0, 255, 0, 255]), ([-0.7, 0.4], [0, 0, 255, 255])];
+            let vertices = scene::TRIANGLE_VERTICES;
             empty.insert(triangle_guest(device().map_err(|e| format!("{e:?}"))?, WIDTH, HEIGHT, &vertices).map_err(|e| format!("{e:?}"))?)
         }
     };

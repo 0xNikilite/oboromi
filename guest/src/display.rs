@@ -29,6 +29,47 @@ struct Window {
 }
 
 impl Window {
+    fn open() -> Result<Self> {
+        let sm = svc::connect_to_named_port(c"sm:")?;
+        call(sm, Request { command: 0, send_pid: true, data: &[0, 0], ..Default::default() })?;
+        let root = call(sm, Request { command: 1, data: &[u32::from_le_bytes(*b"vi:m"), 0], ..Default::default() })?;
+        let display = call(root, Request { command: 2, data: &[1], ..Default::default() })?;
+        let mut sessions = [0; 4];
+        for (session, command) in sessions.iter_mut().zip(100..) {
+            *session = call(display, Request { command, ..Default::default() })?;
+        }
+        let [relay, _, manager, _] = sessions;
+        let mut name = [0u32; 16];
+        name[..2].copy_from_slice(&[u32::from_le_bytes(*b"Defa"), u32::from_le_bytes(*b"ult\0")]);
+        let id = svc::request(display, &Request { command: 1010, data: &name, ..Default::default() })?.data;
+        let mut native_window = [0u32; 64];
+        let request = Request { command: 2012, data: &[0, 0, id[0], id[1]], receive: &[buffer(&mut native_window)], ..Default::default() };
+        let layer = svc::request(manager, &request)?.data;
+        call(display, Request { command: 2101, data: &[2, 0, layer[0], layer[1]], ..Default::default() })?;
+
+        let window = Self { relay, binder: native_window[native_window[1] as usize / 4 + 2] };
+        for data in [[window.binder, 1, 0], [window.binder, 1, 1]] {
+            call(relay, Request { command: 1, data: &data, ..Default::default() })?;
+        }
+        call(relay, Request { command: 2, data: &[window.binder, 0x0f], ..Default::default() })?;
+        window.transact(10, &[0, 2, 0])?;
+
+        Ok(window)
+    }
+
+    fn set_buffer(&self, slot: u32, nvmap_id: u32, [width, height]: [u32; 2], size: u32, offset: u32, layout: u32, block_height: u32) -> Result<()> {
+        let header = [0x4742_4652, width, height, width, RGBA_8888, USAGE, 42, 0, 0, 81];
+        let mut graphic_buffer = [0; 81];
+        graphic_buffer[..14].copy_from_slice(&[u32::MAX, nvmap_id, 0, 0xDAFF_CAFF, 42, 0, USAGE, RGBA_8888, RGBA_8888, width, size, 1, 0, width]);
+        graphic_buffer[14..23].copy_from_slice(&[height, A8B8G8R8 as u32, (A8B8G8R8 >> 32) as u32, layout, width * 4, 0, offset, 0xfe, block_height]);
+        graphic_buffer[27] = size;
+        let mut args = [0; 95];
+        args[..4].copy_from_slice(&[slot, 1, 4 * (header.len() + graphic_buffer.len()) as u32, 0]);
+        args[4..14].copy_from_slice(&header);
+        args[14..].copy_from_slice(&graphic_buffer);
+        self.transact(14, &args).map(drop)
+    }
+
     /// Sends IGraphicBufferProducer transaction `code` and returns the first word of the reply, once its status is 0.
     fn transact(&self, code: u32, args: &[u32]) -> Result<u32> {
         let (mut parcel, mut reply) = ([0u32; 128], [0u32; 128]);
@@ -59,29 +100,7 @@ fn offset(x: u32, y: u32) -> u32 {
 /// Opens the default window and queues three frames of a test pattern from framebuffers at `memory`, returning the
 /// queued slots.
 pub fn show(nv: &Nv, nvmap: u32, memory: u64) -> Result<[u32; 3]> {
-    let sm = svc::connect_to_named_port(c"sm:")?;
-    call(sm, Request { command: 0, send_pid: true, data: &[0, 0], ..Default::default() })?;
-    let root = call(sm, Request { command: 1, data: &[u32::from_le_bytes(*b"vi:m"), 0], ..Default::default() })?;
-    let display = call(root, Request { command: 2, data: &[1], ..Default::default() })?;
-    let mut sessions = [0; 4];
-    for (session, command) in sessions.iter_mut().zip(100..) {
-        *session = call(display, Request { command, ..Default::default() })?;
-    }
-    let [relay, _, manager, _] = sessions;
-    let mut name = [0u32; 16];
-    name[..2].copy_from_slice(&[u32::from_le_bytes(*b"Defa"), u32::from_le_bytes(*b"ult\0")]);
-    let id = svc::request(display, &Request { command: 1010, data: &name, ..Default::default() })?.data;
-    let mut native_window = [0u32; 64];
-    let request = Request { command: 2012, data: &[0, 0, id[0], id[1]], receive: &[buffer(&mut native_window)], ..Default::default() };
-    let layer = svc::request(manager, &request)?.data;
-    call(display, Request { command: 2101, data: &[2, 0, layer[0], layer[1]], ..Default::default() })?;
-
-    let window = Window { relay, binder: native_window[native_window[1] as usize / 4 + 2] };
-    for data in [[window.binder, 1, 0], [window.binder, 1, 1]] {
-        call(relay, Request { command: 1, data: &data, ..Default::default() })?;
-    }
-    call(relay, Request { command: 2, data: &[window.binder, 0x0f], ..Default::default() })?;
-    window.transact(10, &[0, 2, 0])?;
+    let window = Window::open()?;
 
     let mut create = NvmapCreate { size: 2 * FRAMEBUFFER, handle: 0 };
     nv.ioctl(nvmap, NVMAP_CREATE, &mut create)?;
@@ -89,16 +108,7 @@ pub fn show(nv: &Nv, nvmap: u32, memory: u64) -> Result<[u32; 3]> {
     let mut nvmap_id = NvmapGetId { id: 0, handle: create.handle };
     nv.ioctl(nvmap, NVMAP_GET_ID, &mut nvmap_id)?;
     for slot in 0..2 {
-        let header = [0x4742_4652, WIDTH, HEIGHT, WIDTH, RGBA_8888, USAGE, 42, 0, 0, 81];
-        let mut graphic_buffer = [0; 81];
-        graphic_buffer[..14].copy_from_slice(&[u32::MAX, nvmap_id.id, 0, 0xDAFF_CAFF, 42, 0, USAGE, RGBA_8888, RGBA_8888, WIDTH, FRAMEBUFFER, 1, 0, WIDTH]);
-        graphic_buffer[14..23].copy_from_slice(&[HEIGHT, A8B8G8R8 as u32, (A8B8G8R8 >> 32) as u32, 3, PITCH, 0, slot * FRAMEBUFFER, 0xfe, BLOCK_HEIGHT_LOG2]);
-        graphic_buffer[27] = FRAMEBUFFER;
-        let mut args = [0; 95];
-        args[..4].copy_from_slice(&[slot, 1, 4 * (header.len() + graphic_buffer.len()) as u32, 0]);
-        args[4..14].copy_from_slice(&header);
-        args[14..].copy_from_slice(&graphic_buffer);
-        window.transact(14, &args)?;
+        window.set_buffer(slot, nvmap_id.id, [WIDTH, HEIGHT], FRAMEBUFFER, slot * FRAMEBUFFER, 3, BLOCK_HEIGHT_LOG2)?;
     }
 
     let (mut slots, mut requested) = ([0; 3], 0);
@@ -121,4 +131,18 @@ pub fn show(nv: &Nv, nvmap: u32, memory: u64) -> Result<[u32; 3]> {
         *queued = slot;
     }
     Ok(slots)
+}
+
+/// Queues the pitch-linear render target without copying or rewriting its pixels.
+pub fn present(nv: &Nv, nvmap: u32, handle: u32, size: [u32; 2]) -> Result<()> {
+    let window = Window::open()?;
+    let mut id = NvmapGetId { id: 0, handle };
+    nv.ioctl(nvmap, NVMAP_GET_ID, &mut id)?;
+    window.set_buffer(0, id.id, size, size[0] * size[1] * 4, 0, 1, 0)?;
+    let slot = window.transact(3, &[1, size[0], size[1], RGBA_8888, USAGE])?;
+    window.transact(1, &[slot])?;
+    let mut input = [0; 24];
+    input[..3].copy_from_slice(&[slot, 84, 0]);
+    input[3 + 11] = 1;
+    window.transact(7, &input).map(drop)
 }

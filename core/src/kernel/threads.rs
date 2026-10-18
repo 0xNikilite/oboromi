@@ -352,12 +352,12 @@ impl Kernel {
         handle
     }
 
-    pub(super) fn run_threads(&mut self, cpu: &UnicornCPU) -> bool {
+    pub(super) fn run_threads(&mut self, cpu: &UnicornCPU, mut stop: impl FnMut() -> bool) -> bool {
         // Loaders set the entry ABI registers after Kernel::start.
         if self.scheduler.switches == 0 && cpu.save(&mut self.scheduler.threads[0].context).is_err() {
             return false;
         }
-        loop {
+        while !stop() {
             self.scheduler.poll(cpu);
             let Some((id, core)) = self.scheduler.select() else {
                 if self.scheduler.threads.iter().all(|t| matches!(t.state, State::Exited)) {
@@ -434,6 +434,7 @@ impl Kernel {
                 self.scheduler.enqueue(id, !self.scheduler.rotate);
             }
         }
+        false
     }
 
     fn thread_id(&self, handle: u32) -> Result<usize, Error> {

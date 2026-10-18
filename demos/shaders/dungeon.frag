@@ -11,7 +11,7 @@ layout(location=4) flat in int kind;
 layout(location=0) out vec4 output_colour;
 layout(set=1,binding=0,std140) uniform Frame {
     mat4 vp; mat4 reflected_vp; vec4 eye_time; vec4 right_quality; vec4 up_rt;
-    vec4 river; vec4 moon; vec4 settings;
+    vec4 river; vec4 moon; vec4 settings; vec4 fog_lights;
 };
 struct Light { vec4 position; vec4 colour; };
 layout(set=1,binding=1,std430) readonly buffer Lights { Light lights[]; };
@@ -38,7 +38,7 @@ float noise(vec2 p) {
 }
 vec3 decode(uvec2 p) { return vec3(unpackHalf2x16(p.x),unpackHalf2x16(p.y).x); }
 vec3 screenSample(vec2 uv, bool reflect_scene) {
-    ivec2 size=ivec2(settings.xy)/(reflect_scene?2:1); ivec2 p=clamp(ivec2(uv*size),ivec2(0),size-1);
+    ivec2 size=ivec2(settings.xy)/(reflect_scene?(right_quality.w>.5?2:4):1); ivec2 p=clamp(ivec2(uv*size),ivec2(0),size-1);
     int at=p.y*size.x+p.x;
     return decode(reflect_scene?reflection[at]:refraction[at]);
 }
@@ -57,6 +57,9 @@ float visibility(vec3 p,vec3 n,vec3 to) {
     return 1.;
 }
 float shadowMap(vec3 direction,int light,vec3 normal) {
+    int slot=int(lights[light].colour.w)-1;
+    if(slot<0)return 1.;
+    int size=right_quality.w>.5?256:128;
     vec3 a=abs(direction);int face;
     if(a.x>a.y && a.x>a.z)face=direction.x>0.?0:1;
     else if(a.y>a.z)face=direction.y>0.?2:3;
@@ -64,10 +67,10 @@ float shadowMap(vec3 direction,int light,vec3 normal) {
     const vec3 rights[6]=vec3[](vec3(0,0,1),vec3(0,0,-1),vec3(1,0,0),vec3(-1,0,0),vec3(-1,0,0),vec3(1,0,0));
     const vec3 ups[6]=vec3[](vec3(0,1,0),vec3(0,1,0),vec3(0,0,1),vec3(0,0,1),vec3(0,1,0),vec3(0,1,0));
     float largest=max(a.x,max(a.y,a.z));vec2 uv=vec2(dot(direction,rights[face]),-dot(direction,ups[face]))/largest*.5+.5;
-    ivec2 p=ivec2(uv*256.);float result=0.;
+    ivec2 p=ivec2(uv*float(size));float result=0.;
     for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
-        ivec2 q=clamp(p+ivec2(x,y),ivec2(0),ivec2(255));
-        float depth=unpackHalf2x16(shadows[(light*6+face)*256*256+q.y*256+q.x].x).x;
+        ivec2 q=clamp(p+ivec2(x,y),ivec2(0),ivec2(size-1));
+        float depth=unpackHalf2x16(shadows[(slot*6+face)*size*size+q.y*size+q.x].x).x;
         result+=float(length(direction)<depth+.025+largest*.008/max(.2,abs(dot(normal,normalize(direction)))));
     }
     return result*.25;
@@ -89,7 +92,8 @@ vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shad
     for(int i=0;i<lights.length();i++) {
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
         if(d2>min(180.,lights[i].colour.r*24.) || dot(n,to)<=0.)continue;
-        float vis=(shadow && settings.z<.5)?(up_rt.w>.5?softVisibility(p,n,to):shadowMap(-to,i,n)):1.;
+        bool casts=right_quality.w>.5 || i==int(fog_lights.x) || i==int(fog_lights.y);
+        float vis=(shadow && casts && settings.z<.5)?(up_rt.w>.5?softVisibility(p,n,to):shadowMap(-to,i,n)):1.;
         c+=brdf(base,n,v,normalize(to),rough,metal)*lights[i].colour.rgb*vis*5./max(.22,d2);
     }
     return c;
@@ -101,7 +105,7 @@ vec3 reflectedFlames(vec3 p,vec3 direction,float limit) {
         vec3 to=lights[i].position.xyz+vec3(0,flame*.25,0)-p;
         float along=dot(to,direction);if(along<0. || along>limit)continue;
         vec3 d=to-direction*along;d.y*=.35;
-        float glow=exp(-dot(d,d)/max(.002,flame*flame*.07));
+        float glow=exp(-dot(d,d)/max(.005,flame*flame*.28));
         c+=lights[i].colour.rgb*glow*3.;
     }
     return c;
@@ -142,17 +146,23 @@ void main() {
         ivec2 pixel=clamp(ivec2(gl_FragCoord.xy),ivec2(0),ivec2(settings.xy)-1);
         float bed_distance=unpackHalf2x16(refraction[pixel.y*int(settings.x)+pixel.x].y).y;
         float thickness=clamp(bed_distance-distance(world,eye_time.xyz),.05,3.);
-        vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.55,.22,.16)*thickness)+vec3(.003,.008,.007);
+        vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.18,.085,.055)*thickness)+vec3(.003,.008,.007);
         float edge=min(abs(world.z-river.y),abs(world.z-river.w));
-        float foam=(1.-smoothstep(.02,.18,edge))*.55+colour.x*.6;
-        foam*=smoothstep(.24,.68,noise(flow*5.));
-        vec3 c=mix(transmitted,reflected_colour,max(.24,fresnel))+illuminate(world,n,v,vec3(0),.09,0.,true)+vec3(foam*.12);
+        float bank=(1.-smoothstep(.02,.24,edge));
+        float crest=smoothstep(.05,.14,world.y+.7)*smoothstep(.28,.55,length(norm.xz))*smoothstep(.45,.75,noise(flow*2.));
+        float foam=max(bank*.8, max(colour.x,crest)*.65);
+        foam*=smoothstep(.45,.75,noise(vec2(world.x*3.-eye_time.w*.7,world.z*14.)));
+        vec3 c=mix(transmitted,reflected_colour,max(.32,fresnel))+illuminate(world,n,v,vec3(0),.14,0.,true)+foam*vec3(.28,.34,.32);
+        if((uint(moon.w)&16u)!=0u)c=n*.5+.5;
+        if((uint(moon.w)&32u)!=0u)c=reflected_colour;
+        if((uint(moon.w)&64u)!=0u)c=transmitted;
         output_colour=vec4(c,distance(world,eye_time.xyz)); return;
     }
     vec3 dp1=dFdx(world),dp2=dFdy(world); vec2 du1=dFdx(tex),du2=dFdy(tex);
     vec3 t=normalize(dp1*du2.y-dp2*du1.y); t=normalize(t-n*dot(n,t));
     vec3 b=normalize(cross(n,t))*sign(du1.x*du2.y-du1.y*du2.x); mat3 basis=mat3(t,b,n);
     if(m!=3) {
+        if(m==1 && right_quality.w<.5)uv=abs(n.x)>max(abs(n.y),abs(n.z))?world.zy*.35:abs(n.y)>abs(n.z)?world.xz*.35:world.xy*.35;
         if(m==0) {
             vec3 tv=transpose(basis)*v; float steps=right_quality.w>.5?mix(28.,12.,abs(tv.z)):mix(12.,6.,abs(tv.z));
             vec2 delta=tv.xy/max(abs(tv.z),.15)*.035/steps; float z=0.;
@@ -160,7 +170,7 @@ void main() {
         }
         vec4 s=surface(uv,m); rough=max(.36,s.g);metal=s.b;ao=s.r;
         base=albedo(uv,m)*colour;
-        if(m==1){
+        if(m==1 && right_quality.w>.5){
             vec3 w=pow(abs(n),vec3(5.));w/=w.x+w.y+w.z;
             base=(albedo(world.zy*.35,1)*w.x+albedo(world.xz*.35,1)*w.y+albedo(world.xy*.35,1)*w.z)*colour;
             s=surface(world.zy*.35,1)*w.x+surface(world.xz*.35,1)*w.y+surface(world.xy*.35,1)*w.z;
@@ -183,7 +193,9 @@ void main() {
         wet=m==0?smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22):(m==1?.14:0.);
         base*=1.-wet*.38; rough=mix(rough,.055,wet);
         vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;
-        if(m==1){
+        if(m==1 && right_quality.w<.5){
+            n=normalize(abs(n.x)>max(abs(n.y),abs(n.z))?vec3(nt.z*sign(n.x),nt.y,nt.x):abs(n.y)>abs(n.z)?vec3(nt.x,nt.z*sign(n.y),nt.y):vec3(nt.x,nt.y,nt.z*sign(n.z)));
+        }else if(m==1){
             vec3 w=pow(abs(n),vec3(5.));w/=w.x+w.y+w.z;
             vec3 nx=normalTex(world.zy*.35,1),ny=normalTex(world.xz*.35,1),nz=normalTex(world.xy*.35,1);
             n=normalize(vec3(nx.z*sign(n.x),nx.y,nx.x)*w.x+vec3(ny.x,ny.z*sign(n.y),ny.y)*w.y+vec3(nz.x,nz.y,nz.z*sign(n.z))*w.z);
@@ -202,6 +214,6 @@ void main() {
         vec3 dir=normalize(n+axis*.65); c*=.6+.4*visibility(world,n,dir*.85);
     }
 #endif
-    if(world.y<-.8) c+=base*pow(.5+.5*sin(world.x*9.+sin(world.z*7.+eye_time.w)*2.+eye_time.w*1.8),12.)*.22;
+    if(world.y<-.8) c+=base*.4+base*pow(.5+.5*sin(world.x*9.+sin(world.z*7.+eye_time.w)*2.+eye_time.w*1.8),12.)*.22;
     output_colour=vec4(c,distance(world,eye_time.xyz));
 }

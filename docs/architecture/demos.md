@@ -122,25 +122,25 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon.mp4" type="video/mp4"></video>
 
-*Showcase: rendered offline at 1080p60 and sized for the console; native Switch 2 performance remains unverified. Layered fire, smoke, wet PBR stone, ray-query shadows and reflections, moving water, fog, dust and moonlight accompany the audren mix. Measured median frame time on Intel Arc MTL is 141.2 ms. The dungeon's shaders are compiled from GLSL for now.*
+*Showcase: rendered offline at 1080p60 and sized for the console; native Switch 2 performance remains unverified. Layered fire, soft smoke, wet PBR stone, ray-query shadows and reflections, wave-driven water with bank foam and low mist, dust and moonlight accompany the audren mix. Measured median frame time on Intel Arc MTL is 143.5 ms. The dungeon's shaders are compiled from GLSL for now.*
 
 Console cost estimate: translated/twin efficiency cannot be measured while these shaders use native GLSL. Only raw Intel GPU measurements are available; a native console total below 16.7 ms has not been established.
 
 | Pass | Realtime GPU ms | Showcase GPU ms | Translated/twin ratio | Native Switch 2 ms |
 |---|---:|---:|---|---|
-| Heightfield | 0.021 | 0.021 | N/A: native GLSL | unverified |
-| Particle simulation | 0.017 | 0.015 | N/A: native GLSL | unverified |
-| Planar reflection | 1.757 | 0.000 | N/A: native GLSL | unverified |
-| Instanced cave formations | 0.353 | 0.097 | N/A: native GLSL | unverified |
-| PBR, shadows and wet reflections | 9.804 | 77.700 | N/A: native GLSL | unverified |
-| River surface | 0.032 | 0.062 | N/A: native GLSL | unverified |
-| Flames, smoke and other sprites | 0.225 | 0.178 | N/A: native GLSL | unverified |
-| Height fog and moon shaft | 0.217 | 0.412 | N/A: native GLSL | unverified |
-| Bloom, heat haze and tonemap | 1.899 | 1.411 | N/A: native GLSL | unverified |
+| Heightfield | 0.022 | 0.020 | N/A: native GLSL | unverified |
+| Particle simulation | 0.045 | 0.039 | N/A: native GLSL | unverified |
+| Planar reflection | 0.755 | 0.000 | N/A: native GLSL | unverified |
+| Instanced cave formations | 0.302 | 0.102 | N/A: native GLSL | unverified |
+| PBR, shadows and wet reflections | 8.814 | 80.604 | N/A: native GLSL | unverified |
+| River surface | 0.026 | 0.067 | N/A: native GLSL | unverified |
+| Flames, smoke and other sprites | 0.249 | 0.347 | N/A: native GLSL | unverified |
+| Height fog, moon shaft and bloom prefilter | 0.309 | 0.515 | N/A: native GLSL | unverified |
+| Bloom reconstruction, heat haze and tonemap | 1.872 | 1.341 | N/A: native GLSL | unverified |
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
 
-*Realtime preset: recorded offline at 1080p60, with baked shadows, planar reflections and reduced particle, water and fog budgets. Measured median frame time on Intel Arc MTL is 62.1 ms; this preset does not yet run at 60 fps. The dungeon's shaders are compiled from GLSL for now.*
+*Realtime preset: recorded offline at 1080p60, with baked shadows, planar reflections and reduced particle, water and fog budgets. Measured median frame time on Intel Arc MTL is 59.0 ms; this preset does not yet run at 60 fps. The dungeon's shaders are compiled from GLSL for now.*
 
 Full-tour release capture, 1200 frames per preset with the first three excluded.
 GPU times are Vulkan timestamp medians, summed within each frame across main and
@@ -150,19 +150,27 @@ Measurements share the laptop with other work.
 
 | Preset | Median frame ms | p95 frame ms | Median summed GPU ms |
 |---|---:|---:|---:|
-| Realtime | 62.15 | 142.17 | 14.97 |
-| Showcase | 141.21 | 211.43 | 82.75 |
+| Realtime | 59.01 | 138.71 | 13.11 |
+| Showcase | 143.50 | 252.42 | 83.77 |
+
+Realtime graphics work including submission and copies takes 27.75 ms median;
+the unchanged audio mix takes 30.43 ms median. The full frame still
+misses the 25 ms goal. Individual medians do not add to the median total.
 
 The scene uses one opaque batch, instanced formations and sprites, and a water
 draw; offscreen room batches and cave formations are culled. Realtime additionally
 renders the reflected scene. Showcase uses 96 particles per light, a 256x64 water
 grid, 24 quarter-resolution fog steps, four shadow rays per contributing light,
-one AO ray and one reflection ray on wet surfaces. Realtime uses 32 particles per
-light, a 128x32 water grid, eight fog steps and a 960x540 planar reflection.
+one AO ray and one reflection ray on wet surfaces. Realtime uses 24 particles per
+light, a 96x24 water grid, four fog steps and a 480x270 planar reflection. Ten
+128px shadow cubemaps are baked, with at most two nearby lights
+casting shadows; rock textures use the dominant face projection.
 These are resource budgets, not measured console frame costs.
 
 The Qt selector and `capture dungeon --quality realtime|showcase` select the presets;
-`--raytracing on|off` overrides ray queries. Intel Arc MTL supports the ray-query
+`--raytracing on|off` overrides ray queries. `--water-debug normal|reflection|refraction`
+isolates water inputs; `DUNGEON_WATER_DUMP=<directory>` writes the live heightfield
+and raw reflection/refraction buffers for inspection. Intel Arc MTL supports the ray-query
 showcase; devices without ray-query support use the raster fallback.
 The [material manifest](https://github.com/jopdorp/oboromi/blob/audio-dungeon/demos/assets/dungeon-materials.md)
 records the ambientCG assets and CC0 licence. Audio is drained directly to WAV

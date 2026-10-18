@@ -53,6 +53,7 @@ pub(super) struct Renderer {
     sprites: GraphicsPipeline<'static>,
     particles_step: ComputePipeline<'static>,
     fog: ComputePipeline<'static>,
+    _bloom_buffer: HostBuffer<'static>,
     _fog_buffer: HostBuffer<'static>,
     post: ComputePipeline<'static>,
     target: RenderTarget<'static>,
@@ -64,6 +65,8 @@ pub(super) struct Renderer {
     particles: HostBuffer<'static>,
     lights: HostBuffer<'static>,
     shadows_ready: bool,
+    shadow_slots: Vec<Option<usize>>,
+    shadow_size: u32,
     shadow_maps: HostBuffer<'static>,
     _rooms: HostBuffer<'static>,
     _geometry: HostBuffer<'static>,
@@ -80,6 +83,7 @@ pub(super) struct Renderer {
     grid: [usize; 2],
     emitter_count: usize,
     extra_particles: usize,
+    water_dump: Option<std::path::PathBuf>,
     pub showcase: bool,
     pub rays: bool,
 }
@@ -202,10 +206,17 @@ impl Renderer {
         } else {
             None
         };
+        let shadow_size = if showcase {256} else {128};
+        let mut shadow_lights: Vec<_> = (0..world.lights.len()).collect();
+        if !showcase {
+            shadow_lights.sort_by(|&a,&b|world.lights[b].colour[0].total_cmp(&world.lights[a].colour[0]));
+            shadow_lights.truncate(10);
+        }
+        let shadow_slots:Vec<_>=(0..world.lights.len()).map(|i|shadow_lights.iter().position(|&l|l==i)).collect();
         let lights_data: Vec<_> = world
             .lights
             .iter()
-            .flat_map(|l| [l.pos[0], l.pos[1], l.pos[2], l.flame, l.colour[0], l.colour[1], l.colour[2], 0.])
+            .enumerate().flat_map(|(i,l)| [l.pos[0], l.pos[1], l.pos[2], l.flame, l.colour[0], l.colour[1], l.colour[2], shadow_slots[i].map_or(0.,|slot|slot as f32+1.)])
             .collect();
         let mut lights = HostBuffer::new(state, (lights_data.len() * 4) as u64).map_err(named)?;
         lights.write(&floats(&lights_data)).map_err(named)?;
@@ -214,14 +225,15 @@ impl Renderer {
         rooms.write(&floats(&bounds)).map_err(named)?;
         let uniforms = HostBuffer::new(state, 256).map_err(named)?;
         let particle_time = HostBuffer::new(state, 16).map_err(named)?;
-        let per_emitter = if showcase { 96 } else { 32 };
+        let per_emitter = if showcase { 96 } else { 24 };
         let extra_particles = world.drips.len() * 2
             + world.props.iter().filter(|p| matches!(p, Prop::Web(..) | Prop::Lantern(..))).count()
-            + 184;
+            + 200;
         let particles = HostBuffer::new(state, ((world.lights.len() * per_emitter + extra_particles) * 48) as u64)
             .map_err(named)?;
         let target = RenderTarget::with_format(state, WIDTH, HEIGHT, Some(DEPTH), None, HDR).map_err(named)?;
-        let reflection = RenderTarget::with_format(state, WIDTH / 2, HEIGHT / 2, Some(DEPTH), None, HDR).map_err(named)?;
+        let reflection_scale=if showcase {2}else{4};
+        let reflection = RenderTarget::with_format(state, WIDTH / reflection_scale, HEIGHT / reflection_scale, Some(DEPTH), None, HDR).map_err(named)?;
         let output = HostBuffer::new(state, u64::from(WIDTH * HEIGHT * 4)).map_err(named)?;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../demos/assets/dungeon");
         let mut textures = Vec::new();
@@ -269,7 +281,7 @@ impl Renderer {
             topology: vk::PrimitiveTopology::TRIANGLE_LIST,
         };
         let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-        let shadow_maps = HostBuffer::new(state, (world.lights.len() * 6 * 256 * 256 * 8) as u64).map_err(named)?;
+        let shadow_maps = HostBuffer::new(state, (shadow_lights.len() * 6 * shadow_size as usize * shadow_size as usize * 8) as u64).map_err(named)?;
         let mut fragment = vec![(0, D::UNIFORM_BUFFER), (1, D::STORAGE_BUFFER)];
         fragment.extend((2..11).map(|b| (b, D::COMBINED_IMAGE_SAMPLER)));
         fragment.extend((11..14).map(|b| (b, D::STORAGE_BUFFER)));
@@ -334,19 +346,44 @@ impl Renderer {
         if let Some(s) = &structure {
             cones.descriptors[1].bind_acceleration_structure(14, s);
         }
-        // Broken, sagging threads rasterised once into a filtered alpha texture.
+        // Red holds torn web strands; green holds the soft smoke density.
         let mut web_bytes=vec![0u8;256*256*4];
         for y in 0..256 {for x in 0..256 {
-            let p=[x as f32/255.*2.-0.82,y as f32/255.*2.-0.77];
-            let angle=p[1].atan2(p[0]);let r=(p[0]*p[0]+p[1]*p[1]).sqrt();
-            let spoke=(angle*9.+0.15*(angle*5.).sin()).sin().abs()*r/9.;
-            let sag=r*(1.+0.035*(angle*18.).cos())+0.008*(angle*7.).sin();
-            let ring=((sag*8.+0.1*(angle*3.).sin()).fract()-0.5).abs()/8.;
-            let broken=(angle*17.+r*37.).sin()>-0.65;
-            let strand=spoke.min(if broken && r<0.85 {ring}else{1.});
-            let alpha=((0.009-strand)/0.007).clamp(0.,1.)*(1.-((r-0.7)/0.5).clamp(0.,1.));
-            let at=(y*256+x)*4;web_bytes[at..at+4].copy_from_slice(&[(alpha*255.) as u8;4]);
+            let q=[x as f32/255.*2.-1.,y as f32/255.*2.-1.];
+            let smoke=(1.-q[0]*q[0]-q[1]*q[1]).max(0.).powf(2.5)*(0.55+0.45*fbm(q[0]*3.,q[1]*3.,64,4,37));
+            web_bytes[(y*256+x)*4+1]=(smoke*255.) as u8;
+            web_bytes[(y*256+x)*4+3]=255;
         }}
+        let mut rng=Rng(831);
+        let nodes:Vec<[f32;2]>=(0..85).map(|_| {
+            let x=rng.range(0.03,0.97);
+            [x,rng.range((x*0.75).min(0.94),0.97)]
+        }).collect();
+        for (i,&a) in nodes.iter().enumerate() {
+            web_bytes[((a[1]*255.) as usize*256+(a[0]*255.) as usize)*4]=70;
+            let mut neighbours:Vec<_>=(i+1..nodes.len()).collect();
+            neighbours.sort_by(|&j,&k|{
+                let d=|n:usize|(nodes[n][0]-a[0]).powi(2)+(nodes[n][1]-a[1]).powi(2);
+                d(j).total_cmp(&d(k))
+            });
+            for &j in neighbours.iter().take(3) {
+                if rng.next()<0.22 {continue;}
+                let b=nodes[j];let sag=rng.range(0.006,0.04);let opacity=rng.range(65.,175.);
+                let point=|t:f32|[(a[0]+(b[0]-a[0])*t)*255.,(a[1]+(b[1]-a[1])*t-sag*(t*PI).sin())*255.];
+                for step in 0..8 {
+                    let a=point(step as f32/8.);let b=point((step+1) as f32/8.);
+                    for y in ((a[1].min(b[1])-1.).max(0.) as usize)..=((a[1].max(b[1])+1.).min(255.) as usize) {
+                        for x in ((a[0].min(b[0])-1.).max(0.) as usize)..=((a[0].max(b[0])+1.).min(255.) as usize) {
+                            let d=[b[0]-a[0],b[1]-a[1]];
+                            let t=(((x as f32-a[0])*d[0]+(y as f32-a[1])*d[1])/(d[0]*d[0]+d[1]*d[1]).max(0.001)).clamp(0.,1.);
+                            let distance=((x as f32-a[0]-t*d[0]).powi(2)+(y as f32-a[1]-t*d[1]).powi(2)).sqrt();
+                            let alpha=((1.-distance).max(0.)*opacity) as u8;
+                            let at=(y*256+x)*4;web_bytes[at]=web_bytes[at].max(alpha);
+                        }
+                    }
+                }
+            }
+        }
         let tic=[8u32|0o2222<<7|0o5432<<19,0,2<<21,32,255|1<<23,255|1<<31,0,0];
         let tic:Vec<u8>=tic.iter().flat_map(|v|v.to_le_bytes()).collect();
         let header=TexturePool{tic:&tic,tsc:&[]}.texture(0)?;
@@ -378,13 +415,14 @@ impl Renderer {
         .map_err(named)?;
         particles_step.descriptors.bind(&[(0, &lights), (1, &particles), (2, &particle_time)]);
         let fog_buffer = HostBuffer::new(state, u64::from(WIDTH / 4 * (HEIGHT / 4) * 16)).map_err(named)?;
+        let bloom_buffer = HostBuffer::new(state, u64::from(WIDTH / 4 * (HEIGHT / 4) * 16)).map_err(named)?;
         let mut fog = ComputePipeline::new(
             state,
             &code(include_bytes!("../../../demos/shaders/dungeon_fog.comp.spv")),
-            &[(0, D::STORAGE_BUFFER), (1, D::STORAGE_BUFFER), (2, D::UNIFORM_BUFFER), (3, D::STORAGE_BUFFER)],
+            &[(0, D::STORAGE_BUFFER), (1, D::STORAGE_BUFFER), (2, D::UNIFORM_BUFFER), (3, D::STORAGE_BUFFER), (4, D::STORAGE_BUFFER)],
         )
         .map_err(named)?;
-        fog.descriptors.bind(&[(0, &target.staging), (1, &fog_buffer), (2, &uniforms), (3, &lights)]);
+        fog.descriptors.bind(&[(0, &target.staging), (1, &fog_buffer), (2, &uniforms), (3, &lights), (4, &bloom_buffer)]);
         let mut post = ComputePipeline::new(
             state,
             &code(include_bytes!("../../../demos/shaders/dungeon_post.comp.spv")),
@@ -394,10 +432,11 @@ impl Renderer {
                 (2, D::UNIFORM_BUFFER),
                 (3, D::STORAGE_BUFFER),
                 (4, D::STORAGE_BUFFER),
+                (5, D::STORAGE_BUFFER),
             ],
         )
         .map_err(named)?;
-        post.descriptors.bind(&[(0, &target.staging), (1, &output), (2, &uniforms), (3, &lights), (4, &fog_buffer)]);
+        post.descriptors.bind(&[(0, &target.staging), (1, &output), (2, &uniforms), (3, &lights), (4, &fog_buffer), (5, &bloom_buffer)]);
         let mut renderer = Self {
             state,
             timestamps,
@@ -410,6 +449,7 @@ impl Renderer {
             particles_step,
             fog,
             _fog_buffer: fog_buffer,
+            _bloom_buffer: bloom_buffer,
             post,
             target,
             reflection,
@@ -421,6 +461,8 @@ impl Renderer {
             lights,
             shadows_ready: false,
             shadow_maps,
+            shadow_slots,
+            shadow_size,
             _rooms: rooms,
             _geometry: geo,
             _web: web,
@@ -436,6 +478,7 @@ impl Renderer {
             grid,
             emitter_count: world.lights.len(),
             extra_particles,
+            water_dump: std::env::var_os("DUNGEON_WATER_DUMP").map(std::path::PathBuf::from),
             showcase,
             rays,
         };
@@ -444,9 +487,11 @@ impl Renderer {
         Ok(renderer)
     }
     fn bake_shadows(&mut self, world: &World) -> Result<(), String> {
-        let target = RenderTarget::with_format(self.state, 256, 256, Some(DEPTH), None, HDR).map_err(named)?;
+        let target = RenderTarget::with_format(self.state, self.shadow_size, self.shadow_size, Some(DEPTH), None, HDR).map_err(named)?;
         let projection = [[1., 0., 0., 0.], [0., -1., 0., 0.], [0., 0., -30. / 29.95, -1.], [0., 0., -1.5 / 29.95, 0.]];
         for (i, light) in world.lights.iter().enumerate() {
+            let Some(slot)=self.shadow_slots[i] else {continue;};
+            let bytes=u64::from(self.shadow_size*self.shadow_size*8);
             for (face, dir) in [[1., 0., 0.], [-1., 0., 0.], [0., 1., 0.], [0., -1., 0.], [0., 0., 1.], [0., 0., -1.]]
                 .into_iter()
                 .enumerate()
@@ -473,8 +518,8 @@ impl Renderer {
                 target.readback().map_err(named)?;
                 self.shadow_maps
                     .write_at(
-                        ((i * 6 + face) * 256 * 256 * 8) as u64,
-                        target.staging.view(0..256 * 256 * 8).map_err(named)?,
+                        (slot * 6 + face) as u64 * bytes,
+                        target.staging.view(0..bytes).map_err(named)?,
                     )
                     .map_err(named)?;
             }
@@ -582,7 +627,7 @@ impl Renderer {
                     } else {
                         1
                     },
-                    clear: clear.then_some(if target.extent.width == 256 {
+                    clear: clear.then_some(if target.extent.width == self.shadow_size {
                         [30.; 4]
                     } else {
                         [0.008, 0.012, 0.018, 40.]
@@ -591,10 +636,10 @@ impl Renderer {
                     load: false,
                     raster,
                 },
-                (PROFILE.load(Ordering::Relaxed) && target.extent.width > 256).then_some(self.timestamps),
+                (PROFILE.load(Ordering::Relaxed) && target.extent.width > self.shadow_size).then_some(self.timestamps),
             )
             .map_err(named)?;
-        if target.extent.width == 256 {
+        if target.extent.width == self.shadow_size {
             return Ok(());
         }
         self.report(if cones {
@@ -642,6 +687,16 @@ impl Renderer {
     ) -> Result<(), String> {
         if !self.rays && !self.shadows_ready {self.bake_shadows(world)?;}
         let grid = self.grid;
+        if let Some(path) = &self.water_dump {
+            std::fs::create_dir_all(path).map_err(named)?;
+            let heights: Vec<_> = waves.iter().map(|p| p[0]).collect();
+            let lo = heights.iter().copied().fold(f32::INFINITY, f32::min);
+            let hi = heights.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let image: Vec<_> = heights.iter().map(|h| ((h-lo)/(hi-lo).max(1e-8)*255.) as u8).collect();
+            std::fs::write(path.join("heightfield.pgm"), [format!("P5\n{} {}\n255\n",grid[0],grid[1]).as_bytes(), &image].concat()).map_err(named)?;
+            std::fs::write(path.join("surface.f32"), floats(waves.as_flattened())).map_err(named)?;
+            eprintln!("water_check,height_range,{lo},{hi},reflection,{}", if self.rays {"TLAS binding14"} else {"planar binding11"});
+        }
         let water: Vec<_> = waves
             .iter()
             .enumerate()
@@ -651,9 +706,9 @@ impl Renderer {
                 let z = world.river.lo[2] + uv[1] * (world.river.hi[2] - world.river.lo[2]);
                 let a = x * 3.2 + z * 1.3 - seconds * 1.4;
                 let b = x * 1.7 - z * 4.2 + seconds * 1.1;
-                let h = h + 0.025 * a.sin() + 0.014 * b.sin();
-                let sx = sx + 0.08 * a.cos() + 0.0238 * b.cos();
-                let sz = sz + 0.0325 * a.cos() - 0.0588 * b.cos();
+                let h = h + 0.055 * a.sin() + 0.025 * b.sin();
+                let sx = sx + 0.176 * a.cos() + 0.0425 * b.cos();
+                let sz = sz + 0.0715 * a.cos() - 0.105 * b.cos();
                 Vertex {
                     pos: [
                         world.river.lo[0] + uv[0] * (world.river.hi[0] - world.river.lo[0]),
@@ -672,10 +727,10 @@ impl Renderer {
         let light_data: Vec<_> = world.lights.iter().enumerate().flat_map(|(i,l)| {
             let phase=i as f32*2.3;
             let flicker=1.+l.flicker*(0.21*(seconds*11.7+phase).sin()+0.11*(seconds*23.1+phase*1.7).sin()+0.08*(seconds*4.3+phase).sin());
-            [l.pos[0],l.pos[1],l.pos[2],l.flame,l.colour[0]*flicker,l.colour[1]*flicker,l.colour[2]*flicker,0.]
+            [l.pos[0],l.pos[1],l.pos[2],l.flame,l.colour[0]*flicker,l.colour[1]*flicker,l.colour[2]*flicker,self.shadow_slots[i].map_or(0.,|slot|slot as f32+1.)]
         }).collect();
         self.lights.write(&floats(&light_data)).map_err(named)?;
-        let per_emitter = if self.showcase { 96 } else { 32 };
+        let per_emitter = if self.showcase { 96 } else { 24 };
         self.particle_time.write(&floats(&[seconds, per_emitter as f32, 0., 0.])).map_err(named)?;
         self.state.dispatch_profiled(&self.particles_step, [(self.emitter_count * per_emitter).div_ceil(64) as u32, 1, 1],self.query_pool()).map_err(named)?;
         self.report("particles")?;
@@ -738,12 +793,17 @@ impl Renderer {
         }
         for prop in &world.props {
             match *prop {
-                Prop::Web(p, signs) => particle(add(p, [signs[0]*0.56, -0.65, signs[1]*0.56]), 8., [0.8, 0.7], signs[0].atan2(-signs[1]), [0.3, 0.33, 0.32, 0.4]),
+                Prop::Web(p, signs) => particle(add(p, [signs[0]*0.32, -0.38, signs[1]*0.32]), 8., [0.45, 0.4], signs[0].atan2(-signs[1]), [0.38, 0.4, 0.37, 0.3]),
                 Prop::Lantern(p, yaw) => {
                     particle(add(p, turn(yaw, [0.235, 0.2, 0.])), 9., [0.16, 0.11], yaw, [3., 0.65, 0.015, 1.])
                 }
                 _ => {}
             }
+        }
+        for i in 0..16 {
+            let x=world.river.lo[0]+(i as f32+0.5)/16.*(world.river.hi[0]-world.river.lo[0]);
+            let z=world.river.lo[2]+(0.5+0.34*(i as f32*2.3+seconds*0.08).sin())*(world.river.hi[2]-world.river.lo[2]);
+            particle([x,WATER+0.18+0.04*(seconds*0.3+i as f32).sin(),z],11.,[1.1,0.14],i as f32,[0.28,0.33,0.36,0.18]);
         }
         let chamber = world.zones[world.bats].space.centre();
         for i in 0..8 {
@@ -787,11 +847,17 @@ impl Renderer {
             self.draw(&self.reflection, u32::MAX, 24 * 12 * 6, false, false)?;
             self.draw(&self.reflection, 0, 6, false, true)?;
             self.reflection.readback().map_err(named)?;
+            if let Some(path) = &self.water_dump {
+                std::fs::write(path.join("reflection.rgba16f"), self.reflection.staging.view(0..self.reflection.staging.size).map_err(named)?).map_err(named)?;
+            }
         }
         self.uniforms(vp, reflected, eye, seconds, right, up, world, false, plane)?;
         self.draw(&self.target, 0, self.visible_count, true, false)?;
         self.draw(&self.target, u32::MAX, 24 * 12 * 6, false, false)?;
         self.target.readback().map_err(named)?;
+        if let Some(path) = &self.water_dump {
+            std::fs::write(path.join("refraction.rgba16f"),self.target.staging.view(0..self.target.staging.size).map_err(named)?).map_err(named)?;
+        }
         self.draw(&self.target, self.count, self.water_indices, false, false)?;
         self.draw(&self.target, 0, 6, false, true)?;
         self.target.readback().map_err(named)?;

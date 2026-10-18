@@ -394,9 +394,10 @@ impl World {
                 }
             }
             if cave {
-                for x in [self.bridge.lo[0] - 0.1, self.bridge.hi[0] + 0.1] {
+                for (i,x) in [self.bridge.lo[0] - 0.1, self.bridge.hi[0] + 0.1].into_iter().enumerate() {
                     let p = [x, 1.5, self.bridge.lo[2] + 0.2];
-                    self.lights.push(Light { pos: p, colour: scale(torch, 2.4), flicker: 1.0, flame: 0.32 });
+                    // Keep the approved acoustic emitters while staging visible lamps on the far walkway.
+                    self.lights.push(Light { pos: [self.river.lo[0]+(self.river.hi[0]-self.river.lo[0])*(0.68+0.16*i as f32),1.62,self.river.hi[2]+0.35], colour: scale(torch, 2.4), flicker: 1.0, flame: 0.32 });
                     self.sources.push((Sfx::Torch, p, 0.45));
                 }
                 self.lights.push(Light { pos: [s.centre()[0], s.hi[1]*0.45, self.river.centre()[2]], colour: [2., 3., 4.5], flicker: 0.0, flame: 0.0 });
@@ -424,7 +425,7 @@ impl World {
                 continue;
             }
             // Webs in the upper corners, skulls and bones along the walls.
-            for corner in 0..4 {
+            for corner in [0,3] {
                 let (x, zz) = (if corner & 1 == 0 { s.lo[0] } else { s.hi[0] }, if corner & 2 == 0 { s.lo[2] } else { s.hi[2] });
                 self.props.push(Prop::Web([x, s.hi[1], zz], [if corner & 1 == 0 { 1.0 } else { -1.0 }, if corner & 2 == 0 { 1.0 } else { -1.0 }]));
             }
@@ -699,9 +700,15 @@ impl World {
             };
             for [z0, z1, y] in floors {
                 let f = |u: f32, v: f32| [s.lo[0] + w * v, y, z0 + (z1 - z0) * u];
-                b.surface(&f, [z1 - z0, w], [1, 1], &|u, v| [(z0 + (z1 - z0) * u) / 4.0 + z as f32 * 0.37, (s.lo[0] + w * v) / 4.0], if y < 0.0 { [0.5, 0.55, 0.55] } else if cave { LIMESTONE } else { STONE });
+                b.surface(&f, [z1 - z0, w], [1, 1], &|u, v| [(z0 + (z1 - z0) * u) / 4.0 + z as f32 * 0.37, (s.lo[0] + w * v) / 4.0], if y < 0.0 { [0.9, 0.95, 0.85] } else if cave { LIMESTONE } else { STONE });
             }
             if cave {
+                let mut pebbles=Rng(1751);
+                for _ in 0..240 {
+                    let p=[pebbles.range(s.lo[0]+0.5,s.hi[0]-0.5),BED+0.1,pebbles.range(self.river.lo[2]+0.05,self.river.hi[2]-0.05)];
+                    let radius=pebbles.range(0.06,0.23);
+                    b.blob(p,[radius,radius*0.6,radius*0.8],pebbles.next()*TAU,&|a,t|1.+0.13*(a*3.+t*7.).sin(),[7,4],LIMESTONE);
+                }
                 for (zz, sign) in [(self.river.lo[2], 1.0), (self.river.hi[2], -1.0)] {
                     let f = |u: f32, v: f32| { let x = if sign > 0.0 { s.lo[0] + w * u } else { s.hi[0] - w * u }; [x, BED - (BED * v), zz] };
                     b.surface(&f, [w, -BED], [1, 1], &|u, v| [u * w / 4.0, (BED - BED * v) / 4.0], LIMESTONE);
@@ -709,7 +716,27 @@ impl World {
             }
         }
         for door in &self.doors {
-            let zone=&self.zones[door.zone];if zone.kind==Kind::Cave {continue;}
+            let zone=&self.zones[door.zone];
+            if zone.kind==Kind::Cave {
+                let k=2-door.axis;let plane=if door.side==0{zone.space.lo[door.axis]}else{zone.space.hi[door.axis]};
+                let centre=(door.span[0]+door.span[1])*0.5;
+                for depth in [0.,0.4,0.85] {for i in 0..13 {
+                    let angle=i as f32/12.*PI;
+                    let mut p=[0.;3];p[door.axis]=plane+depth*if door.side==0{-1.}else{1.};
+                    p[k]=centre+1.08*angle.cos();p[1]=1.85+1.05*angle.sin();
+                    let mut radii=[0.28,0.27,0.28];radii[door.axis]=0.38;
+                    b.blob(p,radii,angle,&|a,t|1.+0.18*(a*4.+t*5.).sin(),[8,5],LIMESTONE);
+                }}
+                for side in [-1.,1.] {
+                    let mut p=[0.;3];p[door.axis]=plane;p[k]=centre+side*0.86;p[1]=2.93;
+                    b.blob(p,[0.35,0.3,0.35],side,&|a,t|1.+0.18*(a*3.+t*5.).sin(),[8,5],LIMESTONE);
+                }
+                for side in [-1.,1.] {for i in 0..6 {
+                    let mut p=[0.;3];p[door.axis]=plane;p[k]=centre+side*1.1;p[1]=(i as f32+0.5)*0.32;
+                    b.blob(p,[0.27,0.23,0.27],i as f32,&|a,t|1.+0.15*(a*3.+t*4.).sin(),[8,5],LIMESTONE);
+                }}
+                continue;
+            }
             let k=2-door.axis;let plane=if door.side==0{zone.space.lo[door.axis]}else{zone.space.hi[door.axis]};
             let centre=(door.span[0]+door.span[1])*0.5;let radius=(door.span[1]-door.span[0])*0.5+0.17;
             for i in 0..9 {
@@ -773,9 +800,14 @@ impl Builder {
     }
 
     fn chain(&mut self, top: V3, length: f32) {
-        for i in 0..(length / 0.085) as usize {
-            let radii = if i % 2 == 0 { [0.012, 0.05, 0.032] } else { [0.032, 0.05, 0.012] };
-            self.blob(add(top, [0.0, -0.085 * i as f32 - 0.04, 0.0]), radii, 0.0, &|_, _| 1.0, [6, 4], IRON);
+        for i in 0..(length / 0.095).ceil() as usize {
+            let centre=add(top,[0.,-0.095*i as f32-0.05,0.]);
+            let point=|u:f32,v:f32| {
+                let a=u*TAU;let b=v*TAU;let r=0.010;
+                let p=[(0.035+r*b.cos())*a.cos(),(0.06+r*b.cos())*a.sin(),r*b.sin()];
+                add(centre,turn(if i%2==0 {0.}else{PI/2.},p))
+            };
+            self.prop(&point,[12,6],centre,0.07,IRON);
         }
     }
 }
@@ -796,8 +828,9 @@ impl World {
                 b.tube([x, y, g.lo[2]], [x, y, g.hi[2]], &|_| 0.02, 6, IRON);
             }
         }
-        for x in [g.lo[0] - 0.1, g.hi[0] + 0.1] {
-            b.tube([x, 0.0, g.lo[2] + 0.2], [x, 1.45, g.lo[2] + 0.2], &|t| 0.06 - 0.02 * t, 8, WOOD);
+        for light in self.lights.iter().filter(|light|light.flame==0.32) {
+            let p=light.pos;
+            b.tube([p[0],0.,p[2]], add(p,[0.,-0.17,0.]), &|t| 0.06 - 0.02 * t, 8, WOOD);
         }
         if self.grate.hi[1] > 0.0 {
             let r = self.grate;
@@ -834,12 +867,14 @@ impl World {
                 }
                 Prop::Chain(top, length) => b.chain(top, length),
                 Prop::Cage(top) => {
-                    b.chain(top, 1.3);
+                    b.chain(top, 1.4);
                     let (bottom, height, radius) = (add(top, [0.0, -2.6, 0.0]), 1.2, 0.45);
                     for i in 0..12 {
                         let a = i as f32 / 12.0 * TAU;
                         let ring = |y: f32, a: f32| add(bottom, [radius * a.cos(), y, radius * a.sin()]);
-                        b.tube(ring(0.0, a), add(ring(height, a), scale([a.cos(), 0.0, a.sin()], -0.15)), &|_| 0.014, 5, IRON);
+                        let shoulder=add(ring(height,a),scale([a.cos(),0.,a.sin()],-0.15));
+                        b.tube(ring(0.0, a), shoulder, &|_| 0.014, 5, IRON);
+                        b.tube(shoulder,add(top,[0.,-1.4,0.]),&|_|0.014,5,IRON);
                         for y in [0.0, height * 0.55] {
                             b.tube(ring(y, a), ring(y, a + TAU / 12.0), &|_| 0.016, 5, IRON);
                         }
@@ -868,7 +903,9 @@ impl World {
                 }
                 Prop::Coin(p) => {
                     let first=b.vertices.len();
-                    b.blob(p,[0.035,0.007,0.035],p[0],&|_,_|1.,[8,4],[1.1,0.65,0.16]);
+                    let face=|u:f32,v:f32|{let a=u*TAU;let y=(0.5-v)*0.014;let r=0.035-0.003*((v-0.5)*2.).abs();add(p,[r*a.cos(),y,r*a.sin()])};
+                    b.prop(&face,[16,4],p,0.04,[1.1,0.65,0.16]);
+                    b.blob(add(p,[0.,0.004,0.]),[0.032,0.004,0.032],p[0],&|_,_|1.,[16,4],[1.1,0.65,0.16]);
                     for v in &mut b.vertices[first..]{v.material=5.;}
                 }
                 Prop::Web(..) => {}
@@ -1006,17 +1043,22 @@ impl Dungeon {
         let view: Matrix = std::array::from_fn(|column| std::array::from_fn(|row| if row == 3 { if column == 3 { 1.0 } else { 0.0 } } else if column == 3 { -dot(axes[row], self.eye) } else { axes[row][column] }));
         let focal = 1.0 / (PI / 6.0).tan();
         let projection = [[focal * HEIGHT as f32 / WIDTH as f32, 0.0, 0.0, 0.0], [0.0, -focal, 0.0, 0.0], [0.0, 0.0, -100.0 / 99.9, -1.0], [0.0, 0.0, -10.0 / 99.9, 0.0]];
+        let graphics_start=std::time::Instant::now();
         if let (Some(renderer),Some(river))=(&mut self.renderer,&mut self.river) {
             let waves=river.step(self.world.river,dt,&impacts,renderer.query_pool())?;
             renderer.report("simulation")?;
             renderer.frame(&self.world,self.eye,view,projection,seconds,right,up,&waves)?;
         }
+        if render::PROFILE.load(Ordering::Relaxed) {eprintln!("dungeon_cpu_pass,graphics,{:.4}",graphics_start.elapsed().as_secs_f64()*1000.);}
+        let audio_start=std::time::Instant::now();
         self.sound.listen(&self.world, self.eye, self.yaw, dt);
         self.audio_time += dt;
         let periods = (self.audio_time / 0.005).floor() as usize;
         self.audio_time -= periods as f32 * 0.005;
         self.time = seconds;
-        Ok(self.sound.render(periods))
+        let audio=self.sound.render(periods);
+        if render::PROFILE.load(Ordering::Relaxed) {eprintln!("dungeon_cpu_pass,audio,{:.4}",audio_start.elapsed().as_secs_f64()*1000.);}
+        Ok(audio)
     }
 }
 
@@ -1039,7 +1081,7 @@ pub fn render_dungeon_audio_frame(seconds:f32)->Result<(),String> {
     Ok(())
 }
 
-fn water_grid() -> [usize; 2] { if render::SHOWCASE.load(std::sync::atomic::Ordering::Relaxed) { [256,64] } else { [128,32] } }
+fn water_grid() -> [usize; 2] { if render::SHOWCASE.load(std::sync::atomic::Ordering::Relaxed) { [256,64] } else { [96,24] } }
 
 struct River {
     state: &'static VkState,

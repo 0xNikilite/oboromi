@@ -18,6 +18,18 @@ pub fn parcel_size(voices: usize, sinks: usize) -> usize { 0x40 + 0x10 + 0x20 * 
 fn record(bytes: &mut [u8], at: usize, fields: &[(usize, &[u8])]) {
     for &(offset, value) in fields { bytes[at + offset..at + offset + value.len()].copy_from_slice(value); }
 }
+fn sin_cos(angle: f32) -> (f32, f32) {
+    let x = f64::from(angle) % core::f64::consts::TAU;
+    let x = if x > core::f64::consts::PI { x - core::f64::consts::TAU } else if x < -core::f64::consts::PI { x + core::f64::consts::TAU } else { x };
+    let (mut sin, mut cos, mut s, mut c) = (x, 1.0, x, 1.0);
+    for n in 1..13 {
+        s *= -x * x / ((2 * n) * (2 * n + 1)) as f64;
+        c *= -x * x / ((2 * n - 1) * (2 * n)) as f64;
+        sin += s;
+        cos += c;
+    }
+    (sin as f32, cos as f32)
+}
 pub fn parcel(bytes: &mut [u8], notes: &mut [Note], samples: &[(u64, u32)], pool: (u64, u64), first: bool, biquad: &[u8; 10], ring: Option<u64>) -> usize {
     let (voices, sinks) = (notes.len(), 1 + usize::from(ring.is_some()));
     let sizes = [0x10, 0x20 * (EFFECTS + 4 * voices), 0x70 * voices, 0x170 * voices, 0xc0 * EFFECTS, 0x950, 0x140 * sinks, 0x10];
@@ -30,7 +42,7 @@ pub fn parcel(bytes: &mut [u8], notes: &mut [Note], samples: &[(u64, u32)], pool
     record(bytes, at, &[(0, &pool.0.to_le_bytes()), (8, &pool.1.to_le_bytes()), (0x10, &4u32.to_le_bytes())]); at += sizes[1];
     for (i, note) in notes.iter_mut().enumerate() {
         let id = (i as u32).to_le_bytes();
-        let (sin, cos) = crate::pbr::sin_cos((note.pan.clamp(-1.0, 1.0) + 1.0) * FRAC_PI_4);
+        let (sin, cos) = sin_cos((note.pan.clamp(-1.0, 1.0) + 1.0) * FRAC_PI_4);
         record(bytes, at + i * 0x70, &[(0, &id), (4, &cos.to_le_bytes()), (8, &sin.to_le_bytes()), (0x64, &[1])]);
         let (address, samples) = samples[note.sample];
         let voice = at + sizes[2] + i * 0x170;

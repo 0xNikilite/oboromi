@@ -38,10 +38,26 @@ float noise(vec2 p) {
 }
 vec3 decode(uvec2 p) { return vec3(unpackHalf2x16(p.x),unpackHalf2x16(p.y).x); }
 vec3 screenSample(vec2 uv, bool reflect_scene) {
-    ivec2 size=ivec2(settings.xy)/(reflect_scene?(right_quality.w>.5?2:4):1); ivec2 p=clamp(ivec2(uv*size),ivec2(0),size-1);
-    int at=p.y*size.x+p.x;
+    ivec2 size=ivec2(settings.xy)/(reflect_scene?(right_quality.w>.5?2:4):1);
+    ivec2 p=clamp(ivec2(uv*size),ivec2(0),size-1);int at=p.y*size.x+p.x;
     return decode(reflect_scene?reflection[at]:refraction[at]);
 }
+vec3 reflectionLinear(vec2 uv) {
+    ivec2 size=ivec2(settings.xy)/(right_quality.w>.5?2:4);
+    vec2 pixel=uv*vec2(size)-.5, f=fract(pixel);ivec2 base=ivec2(floor(pixel));
+    vec3 samples[4];
+    for(int i=0;i<4;i++) {
+        ivec2 p=clamp(base+ivec2(i%2,i/2),ivec2(0),size-1);int at=p.y*size.x+p.x;
+        samples[i]=decode(reflection[at]);
+    }
+    return mix(mix(samples[0],samples[1],f.x),mix(samples[2],samples[3],f.x),f.y);
+}
+vec3 roughReflection(vec2 uv,float rough) {
+    vec2 radius=vec2(rough*12.)/settings.xy;
+    return (reflectionLinear(uv)*2.+reflectionLinear(uv+radius)+reflectionLinear(uv-radius)
+        +reflectionLinear(uv+radius*vec2(1,-1))+reflectionLinear(uv+radius*vec2(-1,1)))/6.;
+}
+
 vec4 surface(vec2 uv,int m) { return m==0?texture(floor_surface,uv):m==2?texture(iron_surface,uv):texture(rock_surface,uv); }
 vec3 albedo(vec2 uv,int m) { return pow(m==0?texture(floor_colour,uv).rgb:m==2?texture(iron_colour,uv).rgb:texture(rock_colour,uv).rgb,vec3(2.2)); }
 vec3 normalTex(vec2 uv,int m) { return (m==0?texture(floor_normal,uv).xyz:m==2?texture(iron_normal,uv).xyz:texture(rock_normal,uv).xyz)*2.-1.; }
@@ -89,7 +105,8 @@ vec3 brdf(vec3 base,vec3 n,vec3 v,vec3 l,float rough,float metal) {
 }
 vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shadow) {
     vec3 c=base*vec3(.045,.055,.065);
-    for(int i=0;i<lights.length();i++) {
+    for(int j=0;j<(right_quality.w>.5?lights.length():4);j++) {
+        int i=right_quality.w>.5?j:int(fog_lights[j]);
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
         if(d2>min(180.,lights[i].colour.r*24.) || dot(n,to)<=0.)continue;
         bool casts=lights[i].position.w>0. && (right_quality.w>.5 || i==int(fog_lights.x) || i==int(fog_lights.y));
@@ -104,9 +121,9 @@ vec3 reflectedFlames(vec3 p,vec3 direction,float limit) {
         float flame=lights[i].position.w;if(flame<=0.)continue;
         vec3 to=lights[i].position.xyz+vec3(0,flame*.25,0)-p;
         float along=dot(to,direction);if(along<0. || along>limit)continue;
-        vec3 d=to-direction*along;d.y*=.35;
-        float glow=exp(-dot(d,d)/max(.005,flame*flame*.28));
-        c+=lights[i].colour.rgb*glow*3.;
+        vec3 d=to-direction*along;d.y*=.5;
+        float glow=exp(-dot(d,d)/max(.002,flame*flame*.065));
+        c+=lights[i].colour.rgb*glow*2.;
     }
     return c;
 }
@@ -138,21 +155,25 @@ void main() {
     if(m==4) {
         vec2 flow=world.xz*2.+vec2(-eye_time.w*.2,eye_time.w*.04);
         vec2 ripple=vec2(cos(world.x*6.+world.z*3.-eye_time.w*2.1),cos(world.x*4.-world.z*7.+eye_time.w*1.7));
-        n=normalize(n+vec3(ripple.x*.12+(noise(flow*3.)-.5)*.12,0,ripple.y*.1+(noise(flow*3.+9.)-.5)*.12));
+        n=normalize(n+vec3(ripple.x*.018+(noise(flow*3.)-.5)*.012,0,ripple.y*.015+(noise(flow*3.+9.)-.5)*.012));
         vec2 screen=gl_FragCoord.xy/settings.xy;
         vec4 r=reflected_vp*vec4(world,1); vec2 refl=r.xy/r.w*.5+.5;
-        vec3 reflected_colour=reflected(world+n*.025,reflect(-v,n),(up_rt.w>.5?vec3(0):screenSample(refl+n.xz*.025,true)));
+        vec3 reflected_colour=reflected(world+n*.025,reflect(-v,n),(up_rt.w>.5?vec3(0):roughReflection(refl+n.xz*.012,.24)));
+        if(up_rt.w>.5) {
+            vec3 direction=reflect(-v,n), tangent=normalize(cross(direction,abs(direction.y)>.9?vec3(1,0,0):vec3(0,1,0)))*.009;
+            reflected_colour=(reflected_colour*2.+reflected(world+n*.025,normalize(direction+tangent),vec3(0))+reflected(world+n*.025,normalize(direction-tangent),vec3(0)))*.25;
+        }
         float fresnel=.02+.98*pow(1.-max(dot(n,v),0.),5.);
         ivec2 pixel=clamp(ivec2(gl_FragCoord.xy),ivec2(0),ivec2(settings.xy)-1);
         float bed_distance=unpackHalf2x16(refraction[pixel.y*int(settings.x)+pixel.x].y).y;
         float thickness=clamp(bed_distance-distance(world,eye_time.xyz),.05,3.);
-        vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.18,.085,.055)*thickness)+vec3(.003,.008,.007);
+        vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.18,.085,.055)*thickness)+vec3(.008,.022,.026)*(1.-exp(-thickness));
         float edge=min(tex.y,1.-tex.y)*(river.w-river.y);
-        float bank=(1.-smoothstep(.02,.24,edge));
+        float bank=(1.-smoothstep(.015,.16,edge));
         float crest=smoothstep(.05,.14,world.y+.7)*smoothstep(.28,.55,length(norm.xz))*smoothstep(.45,.75,noise(flow*2.));
-        float foam=max(bank*.8, max(colour.x,crest)*.65);
+        float foam=max(bank*.45, max(colour.x,crest)*.65);
         foam*=smoothstep(.45,.75,noise(vec2(world.x*3.-eye_time.w*.7,world.z*14.)));
-        vec3 c=mix(transmitted,reflected_colour,max(.12,fresnel))+illuminate(world,n,v,vec3(0),.14,0.,true)+foam*vec3(.28,.34,.32);
+        vec3 c=mix(transmitted,reflected_colour,fresnel)+illuminate(world,n,v,vec3(0),.095,0.,true)+foam*vec3(.28,.34,.32);
         if((uint(moon.w)&16u)!=0u)c=n*.5+.5;
         if((uint(moon.w)&32u)!=0u)c=reflected_colour;
         if((uint(moon.w)&64u)!=0u)c=transmitted;
@@ -178,19 +199,20 @@ void main() {
         }
         float moss=(1.-s.r)*smoothstep(.35,.65,noise(world.xz*.65+world.y));
         base=mix(base,vec3(.025,.06,.012),moss*.6);
-        float macro=noise(world.xz*.19)*.65+noise(world.xz*.77+13.)*.35;
-        float wall=10.;
-        for(int i=0;i<rooms.length();i++) {
-            vec4 r=rooms[i];vec2 d=min(world.xz-r.xy,r.zw-world.xz);
-            if(min(d.x,d.y)>=-.02)wall=min(wall,min(d.x,d.y));
-        }
-        float grime=(1.-smoothstep(0.,.65,wall))*smoothstep(.2,.7,noise(world.xz*3.1));
+        wet=m==1?.14:0.;
         if(m==0){
+            float macro=noise(world.xz*.19)*.65+noise(world.xz*.77+13.)*.35;
+            float wall=10.;
+            for(int i=0;i<rooms.length();i++) {
+                vec4 r=rooms[i];vec2 d=min(world.xz-r.xy,r.zw-world.xz);
+                if(min(d.x,d.y)>=-.02)wall=min(wall,min(d.x,d.y));
+            }
+            float grime=(1.-smoothstep(0.,.65,wall))*smoothstep(.2,.7,noise(world.xz*3.1));
             base*=mix(vec3(.52,.59,.43),vec3(1.12,.94,.76),macro);
             base=mix(base,vec3(.018,.035,.009),grime*(1.-s.r*.6)*.75);
             rough=clamp(rough+.18+(macro-.5)*.22,.62,.96);
+            wet=smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22);
         }else if(m==1){base*=mix(.55,1.,smoothstep(0.,.55,world.y));}
-        wet=m==0?smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22):(m==1?.14:0.);
         base*=1.-wet*.38; rough=mix(rough,.055,wet);
         vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;
         if(m==1 && right_quality.w<.5){

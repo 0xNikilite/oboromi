@@ -92,6 +92,13 @@ pub(super) struct Renderer {
     pub rays: bool,
 }
 impl Renderer {
+    fn hanging_drips(world: &World) -> impl Iterator<Item=(V3,f32)> + '_ {
+        world.props.iter().filter_map(|prop| match *prop {
+            Prop::Stalactite(p,h,_) if p[0]>world.zones[world.cave].space.hi[0]-5.5 && (p[2]-world.river.centre()[2]).abs()<2.5 =>
+                Some(([p[0]+(p[0]*3.).sin()*0.17,p[1]-h,p[2]+(p[2]*2.).cos()*0.17],WATER)),
+            _ => None,
+        })
+    }
     pub(super) fn new(state: &'static VkState, world: &World, mesh: &Builder, waves: &HostBuffer) -> Result<Self, String> {
         use vk::DescriptorType as D;
         let timestamps = unsafe {
@@ -148,8 +155,9 @@ impl Renderer {
             cones_data.extend([origin[0], origin[1], origin[2], height, radius, tilt[0], tilt[1], 0.]);
             let first = ray_vertices.len() as u32;
             let point = |u: f32, t: f32| {
+                let t=t*(2.-t);
                 let a = u * TAU;
-                let r = ((1. - t).powf(1.4) + 0.006) * (1. + 0.08 * (a * 5. + t * 8.).sin()) * radius;
+                let r = ((1.-t*t).max(0.000004).sqrt()*(0.55+0.45*(-t*4.).exp())) * (1. + 0.12 * (a * 5. + t * 8. + origin[0]).sin()) * radius;
                 add(origin, [r * a.cos() + t * tilt[0], t * height, r * a.sin() + t * tilt[1]])
             };
             for y in 0..=12 {
@@ -237,9 +245,9 @@ impl Renderer {
         let uniforms = HostBuffer::new(state, 256).map_err(named)?;
         let particle_time = HostBuffer::new(state, 16).map_err(named)?;
         let per_emitter = if showcase { 96 } else { 24 };
-        let extra_particles = world.drips.len() * 2
+        let extra_particles = (world.drips.len()+Self::hanging_drips(world).count()) * 2
             + world.props.iter().filter(|p| matches!(p, Prop::Web(..) | Prop::Lantern(..))).count()
-            + 200;
+            + 220;
         let particles = HostBuffer::new(state, ((world.lights.len() * per_emitter + extra_particles) * 48) as u64)
             .map_err(named)?;
         let target = RenderTarget::with_format(state, WIDTH, HEIGHT, Some(DEPTH), None, HDR).map_err(named)?;
@@ -494,6 +502,7 @@ impl Renderer {
             showcase,
             rays,
         };
+        if PROFILE.load(Ordering::Relaxed) {eprintln!("dungeon_settings,showcase={showcase},ray_queries={rays}");}
         renderer.rays = RAYS.load(Ordering::Relaxed) && rays;
         if !renderer.rays { renderer.bake_shadows(world)?; }
         Ok(renderer)
@@ -631,7 +640,7 @@ impl Renderer {
         let draw=DrawState {
                     vertex_buffers: if sprites || cones { &[] } else { &vb },
                     index_buffer: if sprites || cones { None } else { Some((&self.indices, vk::IndexType::UINT32)) },
-                    vertex_count: count,
+                    vertex_count: if cones && !self.showcase {12*8*6} else {count},
                     first_vertex: if cones { 0 } else { first },
                     first_instance: 0,
                     instance_count: if sprites {
@@ -743,7 +752,7 @@ impl Renderer {
                 p[0], p[1], p[2], kind, size[0], size[1], seed, 0., colour[0], colour[1], colour[2], colour[3],
             ]);
         };
-        for (i, &(tip, floor)) in world.drips.iter().enumerate() {
+        for (i, (tip, floor)) in world.drips.iter().copied().chain(Self::hanging_drips(world)).enumerate() {
             let period = 2.4 + (i % 5) as f32 * 0.3;
             let fall = ((tip[1] - floor) / 4.9).sqrt();
             let age = (seconds + i as f32 * 0.71).rem_euclid(period);
@@ -803,10 +812,16 @@ impl Renderer {
                 _ => {}
             }
         }
-        for i in 0..16 {
-            let x=world.river.lo[0]+(i as f32+0.5)/16.*(world.river.hi[0]-world.river.lo[0]);
-            let z=world.river.lo[2]+(0.5+0.34*(i as f32*2.3+seconds*0.08).sin())*(world.river.hi[2]-world.river.lo[2]);
-            particle([x,WATER+0.18+0.04*(seconds*0.3+i as f32).sin(),z],11.,[1.5,0.23],i as f32,[0.32,0.43,0.53,0.26]);
+        for i in 0..28 {
+            let seed=i as f32*2.39996;
+            let x=world.river.lo[0]+(i as f32+0.5)/28.*(world.river.hi[0]-world.river.lo[0])+0.45*(seconds*0.12+seed).sin();
+            let z=world.river.centre()[2]+1.1*(seed+seconds*0.06).sin();
+            let h=0.28+0.12*(seed*1.7).sin();
+            particle([x,WATER+h*0.65,z],11.,[1.2+0.4*seed.sin(),h],seed,[0.25,0.32,0.38,0.25]);
+        }
+        for i in 0..8 {
+            let seed=i as f32*2.39996;let age=(seconds*0.16+i as f32*0.127).fract();
+            particle([world.bridge.centre()[0]+0.5*seed.sin(),WATER+0.2+age*0.9,world.river.centre()[2]+seed.cos()],11.,[0.35+age*0.35,0.3+age*0.25],seed,[0.28,0.34,0.4,0.3*(PI*age).sin()]);
         }
         let chamber = world.zones[world.bats].space.centre();
         for i in 0..8 {

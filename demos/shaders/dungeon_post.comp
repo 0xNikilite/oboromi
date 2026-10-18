@@ -36,5 +36,5 @@ void main(){
     c=(c*fog.a+fog.rgb)*1.15;
     c=clamp(c*(2.51*c+.03)/(c*(2.43*c+.59)+.14),0.,1.);
     vec2 uv=(vec2(p)+.5)/settings.xy; c*=1.-.18*pow(length(uv-.5),2.);
-    c=pow(c,vec3(1./2.2));pixels[p.y*int(settings.x)+p.x]=packUnorm4x8(vec4(c,1));
+    c=pow(c,vec3(1./2.2))*min(fract(moon.w)*2.002,1.);pixels[p.y*int(settings.x)+p.x]=packUnorm4x8(vec4(c,1));
 }

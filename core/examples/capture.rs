@@ -77,9 +77,13 @@ fn main() {
     };
     if args[0] == "dungeon" {
         demo_dungeon::render::PROFILE.store(args.iter().any(|a|a=="--profile"), std::sync::atomic::Ordering::Relaxed);
+        if let Some(debug) = flag("--water-debug") {
+            let bit=match debug.as_str(){"normal"=>16,"reflection"=>32,"refraction"=>64,_=>panic!("--water-debug normal|reflection|refraction")};
+            demo_dungeon::render::DISABLED.fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Some(disabled) = flag("--disable") {
             let mask=disabled.split(',').map(|effect|match effect {"fire"=>1,"water"=>2,"bloom"=>4,"fog"=>8,_=>panic!("unknown effect {effect}")}).fold(0,|a,b|a|b);
-            demo_dungeon::render::DISABLED.store(mask, std::sync::atomic::Ordering::Relaxed);
+            demo_dungeon::render::DISABLED.fetch_or(mask, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(quality) = flag("--quality") {
             assert!(quality == "realtime" || quality == "showcase", "--quality realtime|showcase");

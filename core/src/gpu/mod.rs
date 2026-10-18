@@ -6,6 +6,7 @@ pub mod cubin;
 #[cfg(feature = "cuda")]
 pub mod cuda;
 pub mod frame;
+pub mod memory;
 pub mod present;
 pub mod sm86;
 pub mod spirv;

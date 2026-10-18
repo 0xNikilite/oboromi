@@ -45,7 +45,7 @@ mod tests {
         let core = cpu.get_core(0).unwrap();
         let mut kernel = Kernel::default();
         kernel.hid.borrow_mut().input = || InputState { buttons: 1, left: [0.5, -0.5], right: [0.0; 2], connected: true };
-        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::with_ram(Box::leak(Box::new(state)), cpu.ram.clone(), None, Default::default()).unwrap())));
+        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::with_ram(Box::leak(Box::new(state)), cpu.ram.clone(), None, crate::gpu::SpeedHacks::none()).unwrap())));
         kernel.sm.borrow_mut().0.insert("nvdrv".into(), nvdrv.clone() as Rc<RefCell<dyn Service>>);
         kernel.sm.borrow_mut().0.extend(vi::services(nvdrv));
         kernel.start(core, entry, image.len() as u64);
@@ -78,7 +78,7 @@ mod tests {
         let cpus = CpuManager::new_with_backend(CpuBackend::Unicorn);
         let cpu = cpus.get_core(0).unwrap();
         let mut kernel = Kernel::default();
-        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::with_ram(state, cpus.ram.clone(), None, Default::default()).unwrap())));
+        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::with_ram(state, cpus.ram.clone(), None, crate::gpu::SpeedHacks::none()).unwrap())));
         kernel.sm.borrow_mut().0.insert("nvdrv".into(), nvdrv.clone() as Rc<RefCell<dyn Service>>);
         kernel.sm.borrow_mut().0.extend(vi::services(nvdrv));
         crate::loader::nro::load(&cpus.ram, cpu, &mut kernel, &path).unwrap();

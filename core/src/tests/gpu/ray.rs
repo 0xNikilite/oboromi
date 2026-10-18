@@ -58,8 +58,8 @@ mod tests {
         [qmd[48], qmd[49]] = [PROGRAM as u32, (PROGRAM >> 32) as u32];
         let mut words = Vec::new();
         inc(SET_OBJECT, &[0xc7c0], &mut words);
-        inc(SEND_PCAS_A, &[(QMD >> 8) as u32], &mut words);
-        inc(SEND_SIGNALING_PCAS2_B, &[3], &mut words);
+        inc(SEND_PCAS_A as usize, &[(QMD >> 8) as u32], &mut words);
+        inc(SEND_SIGNALING_PCAS2_B as usize, &[3], &mut words);
         gpu.write(CBUF0, &cbuf0).unwrap();
         gpu.write(QMD, &bytes(&qmd)).unwrap();
         gpu.write(GUEST, &bytes(&words)).unwrap();
@@ -176,7 +176,7 @@ mod tests {
             gpu.ray_budget = budget;
             gpu.write(SHADER, &shader).unwrap();
             let mut words = Vec::new();
-            engine::frame_state(16, 16, engine::TARGET, [1.0, 0.0, 0.0, 1.0], &mut words);
+            engine::frame_state(16, 16, &scene::Addresses { target: engine::TARGET, ..engine::ADDRESSES }, [1.0, 0.0, 0.0, 1.0], &mut words);
             inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &[(SHADER >> 32) as u32, SHADER as u32], &mut words);
             inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[0x100, (DATA >> 32) as u32, (DATA + 0x200) as u32], &mut words);
             inc(BIND_GROUP_CONSTANT_BUFFER + 4 * 32, &[1], &mut words);

@@ -157,7 +157,7 @@ float ambientVisibility(vec3 p,vec3 n) {
     const vec3 rays[3]=vec3[](vec3(.18,.12,.98),vec3(-.57,.21,.79),vec3(.42,-.61,.67));
     float open=0.;
     for(int i=0;i<3;i++){vec3 d=normalize(tangent*rays[i].x+bitangent*rays[i].y+n*rays[i].z);open+=visibility(p,n,d*(i==0?.38:1.15));}
-    return .32+.68*open/3.;
+    return open/3.;
 #else
     return 1.;
 #endif
@@ -170,7 +170,7 @@ vec3 brdf(vec3 base,vec3 n,vec3 v,vec3 l,float rough,float metal) {
     return ((1.-f)*(1.-metal)*base/PI+spec)*nl;
 }
 vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shadow) {
-    vec3 c=base*vec3(.045,.055,.065);
+    vec3 c=up_rt.w>.5 && right_quality.w>.5 && settings.z<.5?vec3(0):base*vec3(.045,.055,.065);
     for(int j=0;j<(right_quality.w>.5?lights.length():6);j++) {
         int i=right_quality.w>.5?j:int(j<4?fog_lights[j]:grid[j-2]);
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
@@ -333,8 +333,11 @@ void main() {
         c=mix(c,reflected(world+n*.03,reflect(-v,n),(up_rt.w>.5?vec3(0):screenSample(refl+n.xz*.012,true))),wet*f*.8);
     }
 #ifdef RAY_QUERY
-    if(up_rt.w>.5 && right_quality.w>.5 && settings.z<.5){c*=ambientVisibility(world,n);c+=diffuseBounce(world,n,base);}
+    bool traced=up_rt.w>.5 && right_quality.w>.5 && settings.z<.5;
+    if(traced)c+=diffuseBounce(world,n,base)*ambientVisibility(world,n);
+#else
+    const bool traced=false;
 #endif
-    if(world.y<-.8) c+=base*.4+base*pow(.5+.5*sin(world.x*9.+sin(world.z*7.+eye_time.w)*2.+eye_time.w*1.8),12.)*.22;
+    if(world.y<-.8 && !traced)c+=base*.4+base*pow(.5+.5*sin(world.x*9.+sin(world.z*7.+eye_time.w)*2.+eye_time.w*1.8),12.)*.22;
     output_colour=vec4(c,distance(world,eye_time.xyz));
 }

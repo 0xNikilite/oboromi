@@ -120,17 +120,17 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 ### Dungeon
 
-<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon.mp4" type="video/mp4"></video>
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raytraced.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raytraced.mp4" type="video/mp4"></video>
 
-*Showcase: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. Ray queries make the flame shadows dance, reflect in wet calcite and add warm limestone bounce.*
+*Dungeon ray traced: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. Ray queries make the flame shadows dance, reflect in wet calcite and add traced limestone bounce.*
 
-<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raster.mp4" type="video/mp4"></video>
 
-*Realtime: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. This version uses baked shadows and planar reflections.*
+*Dungeon raster: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. This version uses baked shadows and planar reflections.*
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/dungeon-v8-rt-compare.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-compare.mp4" type="video/mp4"></video>
 
-*Raster is left and ray queries are right over the same fifteen reveal seconds. The right ceiling and firepit stay warmer while every flame moves its soft shadow; wet calcite catches the torches. Mean absolute RGB difference is 5.76% over all 900 frames.*
+*Dungeon raster is left and Dungeon ray traced is right over the same fifteen reveal seconds. Every flame moves its traced shadow; wet calcite catches the torches. Mean absolute RGB difference is 8.94% over all 900 frames.*
 
 ![Raster and ray-query dungeon frame](https://raw.githubusercontent.com/jopdorp/oboromi/assets/dungeon-v8-rt-compare.png)
 
@@ -139,20 +139,20 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 The release clips contain 4320 unique frames and the same approved mix at -16 LUFS and -1 dBTP. Native console cost remains unverified while this path uses its own GLSL shaders.
 
 The scene uses one opaque batch, instanced formations and sprites, and a water
-draw; offscreen room batches and cave formations are culled. Realtime additionally
-renders the reflected scene. Showcase uses 96 particles per light, a 256x64 water
+draw; offscreen room batches and cave formations are culled. Dungeon raster additionally
+renders the reflected scene. Dungeon ray traced uses 96 particles per light, a 256x64 water
 grid, 24 quarter-resolution fog steps, five shadow rays per contributing flame,
-three occlusion rays, one reflection ray on wet floors and calcite, and three nearby rays on the river. Realtime uses 24 particles per
+three occlusion rays, one reflection ray on wet floors and calcite, and three nearby rays on the river. Dungeon raster uses 24 particles per
 light, a 96x24 water grid, four fog steps and a 480x270 planar reflection. Ten
 128px shadow cubemaps are baked, with at most two nearby lights
 casting shadows; rock textures use the dominant face projection.
 These are resource budgets, not measured console frame costs.
 
-The Qt selector and `capture dungeon --quality realtime|showcase` select the presets;
+The Qt selector and `capture dungeon --quality realtime|showcase` select the raster and ray-traced presets;
 `--raytracing on|off` overrides ray queries. `--water-debug normal|reflection|refraction`
 isolates water inputs; `DUNGEON_WATER_DUMP=<directory>` writes the live heightfield
 and raw reflection/refraction buffers for inspection. Intel Arc MTL supports the ray-query
-showcase; devices without ray-query support use the raster fallback.
+ray-traced path; devices without ray-query support use the raster fallback.
 The [material manifest](https://github.com/jopdorp/oboromi/blob/guest-path/demos/assets/dungeon-materials.md)
 records the ambientCG assets and CC0 licence. Audio is drained directly to WAV
 without opening a device, with the approved publication gain and limiter retained.

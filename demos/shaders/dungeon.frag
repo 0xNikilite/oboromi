@@ -148,10 +148,10 @@ void main() {
         float thickness=clamp(bed_distance-distance(world,eye_time.xyz),.05,3.);
         vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.18,.085,.055)*thickness)+vec3(.003,.008,.007);
         float edge=min(abs(world.z-river.y),abs(world.z-river.w));
-        float bank=(1.-smoothstep(.03,.38,edge));
-        float crest=smoothstep(.16,.32,length(norm.xz))*smoothstep(.35,.65,noise(flow*2.));
+        float bank=(1.-smoothstep(.02,.24,edge));
+        float crest=smoothstep(.05,.14,world.y+.7)*smoothstep(.28,.55,length(norm.xz))*smoothstep(.45,.75,noise(flow*2.));
         float foam=max(bank*.8, max(colour.x,crest)*.65);
-        foam*=smoothstep(.25,.65,noise(vec2(world.x*3.-eye_time.w*.7,world.z*14.)));
+        foam*=smoothstep(.45,.75,noise(vec2(world.x*3.-eye_time.w*.7,world.z*14.)));
         vec3 c=mix(transmitted,reflected_colour,max(.32,fresnel))+illuminate(world,n,v,vec3(0),.14,0.,true)+foam*vec3(.28,.34,.32);
         if((uint(moon.w)&16u)!=0u)c=n*.5+.5;
         if((uint(moon.w)&32u)!=0u)c=reflected_colour;

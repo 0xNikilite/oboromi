@@ -8,7 +8,7 @@ use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::cubin::{Arg, Kernel};
 use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS};
 use oboromi_core::gpu::{frame::{render_demo_frame, render_test_frame}, surface_device};
-use oboromi_core::tests::gpu::harness::{GLOBAL_BASE, Grid, translate_module};
+use oboromi_core::tests::gpu::{graphics, harness::{GLOBAL_BASE, Grid, translate_module}};
 use oboromi_core::tests::gpu::silicon::exact_cooperative_hmma;
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
@@ -75,7 +75,7 @@ fn versus(state: &VkState, name: &str, spv: &[u8], groups: [u32; 3], args: &[Arg
     let memory = HostBuffer::new(state, out.len() as u64).unwrap();
     let bindings = [(CBUF_BINDING, DescriptorType::UNIFORM_BUFFER), (GLOBAL_BINDING, DescriptorType::STORAGE_BUFFER)];
     let mut pipeline = ComputePipeline::new(state, &words, &bindings).unwrap();
-    pipeline.bind(&[(CBUF_BINDING, &uniforms), (GLOBAL_BINDING, &memory)]);
+    pipeline.descriptors.bind(&[(CBUF_BINDING, &uniforms), (GLOBAL_BINDING, &memory)]);
     let glsl = bench(&format!("{name} glsl twin"), 2, 20, Some(state), || {
         state.dispatch(&pipeline, groups).unwrap();
         memory.read(&mut out).unwrap();
@@ -147,13 +147,16 @@ fn main() {
     let mut pipeline = ComputePipeline::new(state, &words, &bindings).unwrap();
     let mut input = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
-    pipeline.bind(&[(10, &input), (11, &output)]);
+    pipeline.descriptors.bind(&[(10, &input), (11, &output)]);
     let mut out = [0u8; STATE_WORDS * 4];
     bench("dispatch+fence+readback", 50, 1000, Some(state), || {
         input.write(&[0; STATE_WORDS * 4]).unwrap();
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         output.read(black_box(&mut out)).unwrap();
     });
+    let mut triangle = graphics::triangle(state).unwrap();
+    let mut triangle_pixels = vec![0; (graphics::SIZE * graphics::SIZE * 4) as usize];
+    bench("draw+readback 64x64 triangle", 50, 1000, Some(state), || triangle(&mut triangle_pixels).unwrap());
     let frame = HostBuffer::new(state, pixels.len() as u64).unwrap();
     bench("present_buffer 1080p", 10, 200, Some(state), || {
         present_buffer(&frame, w as u32, h as u32).unwrap()

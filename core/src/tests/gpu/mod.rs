@@ -10,6 +10,7 @@ mod cuda;
 mod fixtures;
 mod fifo;
 pub mod fp;
+pub mod graphics;
 mod int_alu;
 mod memory;
 mod memory_map;

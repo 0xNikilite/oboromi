@@ -52,7 +52,7 @@ pub fn spirv_val(module: &Emitter) {
     assert!(out.status.success(), "{out:?}");
 }
 
-fn vk_state() -> Option<VkState> {
+pub fn vk_state() -> Option<VkState> {
     match VkState::new() {
         Ok(s) => Some(s),
         Err(e @ (VkError::Loader | VkError::NoDevice)) => {
@@ -237,8 +237,8 @@ pub fn run_on(
     let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
     let mut bound = vec![(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)];
     bound.extend(hints.as_ref().map(|buffer| (hint_binding, buffer)));
-    pipeline.bind(&bound);
-    pipeline.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
+    pipeline.descriptors.bind(&bound);
+    pipeline.descriptors.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {
         let mut out = vec![0u8; len * 4];
@@ -288,7 +288,7 @@ impl<'a> Grid<'a> {
         let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
         let bindings: Vec<_> = [(GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo)].into_iter().chain(cbufs.iter().map(|&(binding, _)| (binding, ubo))).collect();
         let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
-        pipeline.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support)].into_iter().chain(cbufs.iter().map(|(binding, buffer)| (*binding, buffer))).collect::<Vec<_>>());
+        pipeline.descriptors.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support)].into_iter().chain(cbufs.iter().map(|(binding, buffer)| (*binding, buffer))).collect::<Vec<_>>());
         Self { state, pipeline, global, _support: support, _cbufs: cbufs, memory, spans }
     }
 

@@ -130,7 +130,7 @@ impl Frame {
         let ubo = DescriptorType::UNIFORM_BUFFER;
         let bindings = [(SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo), (GLOBAL_BINDING, DescriptorType::STORAGE_BUFFER)];
         let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings)?;
-        pipeline.bind(&[(SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf0), (GLOBAL_BINDING, &pixels_buffer)]);
+        pipeline.descriptors.bind(&[(SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf0), (GLOBAL_BINDING, &pixels_buffer)]);
         Ok(Self { pipeline, pixels_buffer, cbuf0, _support: support, pixels: vec![0; size as usize] })
     }
 

@@ -7,6 +7,7 @@ pub mod cubin;
 pub mod cuda;
 pub mod fifo;
 pub mod frame;
+pub mod graphics;
 pub mod memory;
 pub mod present;
 pub mod sm86;
@@ -84,7 +85,7 @@ impl VkState {
     pub fn new() -> Result<Self, VkError> {
         let _lifetimes = DEVICE_LIFETIMES.lock().unwrap_or_else(|e| e.into_inner());
         let entry = unsafe { ash::Entry::load() }.map_err(|_| VkError::Loader)?;
-        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
         let extensions = if SURFACES.load(Relaxed) {
             unsafe { entry.enumerate_instance_extension_properties(None)? }
         } else {
@@ -180,16 +181,12 @@ impl VkState {
         surfaces: bool,
     ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, bool, bool, bool), VkError> {
         // Blits into swapchain images need a graphics queue.
-        let queue_flags = if surfaces {
-            vk::QueueFlags::COMPUTE | vk::QueueFlags::GRAPHICS
-        } else {
-            vk::QueueFlags::COMPUTE
-        };
+        let queue_flags = vk::QueueFlags::COMPUTE | vk::QueueFlags::GRAPHICS;
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
             .into_iter()
             .filter(|&pd| {
                 unsafe { instance.get_physical_device_properties(pd) }.api_version
-                    >= vk::API_VERSION_1_2
+                    >= vk::API_VERSION_1_3
             })
             .find_map(|pd| {
                 unsafe { instance.get_physical_device_queue_family_properties(pd) }
@@ -260,6 +257,7 @@ impl VkState {
         let mut enabled_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default().vulkan_memory_model(cooperative_matrix);
         let mut enabled_shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default()
             .shader_device_clock(shader_device_clock);
+        let mut enabled_vulkan13 = vk::PhysicalDeviceVulkan13Features::default().dynamic_rendering(true);
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&enabled_extensions)
@@ -270,7 +268,8 @@ impl VkState {
             .push_next(&mut enabled_derivatives)
             .push_next(&mut enabled_shader_clock)
             .push_next(&mut enabled_cooperative)
-            .push_next(&mut enabled_memory_model);
+            .push_next(&mut enabled_memory_model)
+            .push_next(&mut enabled_vulkan13);
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::gpu::texture::TexturePool;
+    use crate::gpu::texture::{TexturePool, block_linear_to_pitch, pitch_to_block_linear};
     use crate::tests::gpu::harness::{Textures, run_textured, spirv_val, translate_module};
     use crate::tests::gpu_test::inst::{self, texture};
 
@@ -15,7 +15,7 @@ mod tests {
         run_format(program, seeds, texels, filter, RGBA8_UNORM)
     }
 
-    // A pitch-linear 4x4 header of `format` at TIC index 1 and a clamp-to-edge sampler at TSC index 1.
+    // A pitch-linear 4x4 header of `format` and a clamp-to-edge sampler.
     fn run_format(program: &[u128], seeds: &[Vec<u32>], texels: &[u8], filter: u32, format: u32) -> Option<Vec<Vec<u32>>> {
         let header = [
             format | 0o5432 << 19,
@@ -27,11 +27,15 @@ mod tests {
             0,
             0,
         ];
-        let sampler = [2 | 2 << 3, filter | filter << 4, 0, 0, 0, 0, 0, 0];
+        let rows: Vec<u8> = texels.chunks(16).flat_map(|row| [row, &[0; PITCH - 16]].concat()).collect();
+        run_entries(program, seeds, header, [2 | 2 << 3, filter | filter << 4, 0, 0, 0, 0, 0, 0], &rows)
+    }
+
+    // `header` at TIC index 1 and `sampler` at TSC index 1, the header's texels at TEXELS_ADDRESS.
+    fn run_entries(program: &[u128], seeds: &[Vec<u32>], header: [u32; 8], sampler: [u32; 8], texels: &[u8]) -> Option<Vec<Vec<u32>>> {
         let entries = |entry: [u32; 8]| -> Vec<u8> { [[0; 8], entry].iter().flatten().flat_map(|w| w.to_le_bytes()).collect() };
         let (tic, tsc) = (entries(header), entries(sampler));
-        let rows: Vec<u8> = texels.chunks(16).flat_map(|row| [row, &[0; PITCH - 16]].concat()).collect();
-        let memory = [(TEXELS_ADDRESS, &rows[..])];
+        let memory = [(TEXELS_ADDRESS, texels)];
         let textures = Textures { handle: 1 << 20 | 1, pool: TexturePool { tic: &tic, tsc: &tsc }, memory: &memory };
         run_textured(|d| d.translate_program(program), seeds, &[], &[], &textures).map(|(lanes, _)| lanes)
     }
@@ -196,5 +200,106 @@ mod tests {
         let mut old: Vec<u32> = lanes.iter().map(|regs| regs[5]).collect();
         old.sort();
         assert_eq!(old, (32..64).collect::<Vec<_>>());
+    }
+
+    fn converter_block_linear(pitch: &[u8], row_bytes: u32, gob_height_log2: u32) -> Option<Vec<u8>> {
+        let script = "import sys, numpy as np; sys.path.insert(0, 'scripts'); from gltf_to_raw import block_linear; \
+            n, g = map(int, sys.argv[1:]); sys.stdout.buffer.write(block_linear(np.frombuffer(sys.stdin.buffer.read(), np.uint8).reshape(-1, n), g).tobytes())";
+        let mut child = std::process::Command::new("python3")
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+            .args(["-B", "-c", script, &row_bytes.to_string(), &gob_height_log2.to_string()])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), pitch).unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success() || stderr.contains("ModuleNotFoundError"), "{stderr}");
+        out.status.success().then_some(out.stdout)
+    }
+
+    #[test]
+    fn block_linear_round_trips_and_matches_the_converter() {
+        let rgba: Vec<u8> = (0..64 * 64).flat_map(|i| [i % 64 * 4, i / 64 * 4, (i % 64 + i / 64) * 2, 255].map(|c| c as u8)).collect();
+        let r8: Vec<u8> = (0..128 * 32).map(|i| (i % 128 * 2 + i / 128) as u8).collect();
+        for (pitch, width, height, bytes_per_pixel) in [(&rgba, 64, 64, 4), (&r8, 128, 32, 1)] {
+            let swizzled = pitch_to_block_linear(pitch, width, height, bytes_per_pixel, 1);
+            assert_eq!(block_linear_to_pitch(&swizzled, width, height, bytes_per_pixel, 1), *pitch);
+            match converter_block_linear(pitch, width * bytes_per_pixel, 1) {
+                Some(converted) => assert_eq!(converted, swizzled, "{width}x{height}"),
+                None => eprintln!("skipping the converter: no numpy"),
+            }
+        }
+        // Pixel (9, 11) is byte 36 of row 11: the second GOB of its block, the upper 32 bytes, row pair 1, odd row, byte 4.
+        let swizzled = pitch_to_block_linear(&rgba, 64, 64, 4, 1);
+        assert_eq!(swizzled[512 + 256 + 64 + 16 + 4..][..4], rgba[4 * (11 * 64 + 9)..][..4]);
+    }
+
+    #[test]
+    fn tex_ll_samples_each_level_of_a_block_linear_mip_chain() {
+        let level0: Vec<u8> = (0..64 * 16 * 4).map(|i| (i * 3 + 1) as u8).collect();
+        let level1: Vec<u8> = (0..32 * 8 * 4).map(|i| (255 - i * 5) as u8).collect();
+        // Level 1 is eight rows, so its gob height halves to one GOB and its second GOB column starts 512 bytes in.
+        let texels = [pitch_to_block_linear(&level0, 64, 16, 4, 1), pitch_to_block_linear(&level1, 32, 8, 4, 0)].concat();
+        let header = [
+            RGBA8_UNORM | 0o5432 << 19,
+            TEXELS_ADDRESS as u32,
+            (TEXELS_ADDRESS >> 32) as u32 | 3 << 21,
+            1 << 3 | 1 << 28,
+            63 | 1 << 23,
+            15 | 1 << 31,
+            0,
+            0,
+        ];
+        const MIP_POINT: u32 = 2;
+        let sampler = [2 | 2 << 3, NEAREST | NEAREST << 4 | MIP_POINT << 6, 256 << 12, 0, 0, 0, 0, 0];
+        let center = |i: u32, size: u32| ((i as f32 + 0.5) / size as f32).to_bits();
+        let level0_texels: Vec<[u32; 2]> = (0..256).map(|t| [t % 64, t / 64 * 5]).collect();
+        let seeds: Vec<Vec<u32>> = level0_texels
+            .iter()
+            .map(|&[x, y]| vec![0, 0, center(x, 64), center(y, 16), 0, 0, 0, 0, 0])
+            .chain((0..256).map(|t| vec![0, 0, center(t % 32, 32), center(t / 32, 8), 0, 0, 0, 0, 1f32.to_bits()]))
+            .collect();
+        let program = [inst::with_rb(texture(inst::TEX_LL_2D, 4, 6, 2, 3, 0x10, 0xf), 8)];
+        let Some(lanes) = run_entries(&program, &seeds, header, sampler, &texels) else { return };
+        let expected = level0_texels.iter().map(|&[x, y]| &level0[4 * (64 * y + x) as usize..][..4]).chain(level1.chunks(4));
+        for (t, (regs, texel)) in lanes.iter().zip(expected).enumerate() {
+            let bytes: Vec<u8> = regs[4..8].iter().map(|&r| (f32::from_bits(r) * 255.0).round() as u8).collect();
+            assert_eq!(bytes, texel, "lane {t}");
+        }
+    }
+
+    #[test]
+    fn tld_fetches_bc1_blocks_from_a_block_linear_texture() {
+        let device = crate::gpu::device();
+        if device.is_ok_and(|d| unsafe { d.instance.get_physical_device_features(d.physical_device) }.texture_compression_bc == 0) {
+            eprintln!("skipping: Vulkan device lacks textureCompressionBC");
+            return;
+        }
+        const DXT1_UNORM: u32 = 0x24 | 0b010_010_010_010 << 7;
+        // Each 4x4 block is its first 565 endpoint everywhere: red, green, blue and white.
+        let colors = [0xf800u16, 0x07e0, 0x001f, 0xffff];
+        let blocks: Vec<u8> = colors.iter().flat_map(|c| [c.to_le_bytes(), [0; 2], [0; 2], [0; 2]].concat()).collect();
+        let header = [
+            DXT1_UNORM | 0o5432 << 19,
+            TEXELS_ADDRESS as u32,
+            (TEXELS_ADDRESS >> 32) as u32 | 3 << 21,
+            0,
+            7 | 1 << 23,
+            7 | 1 << 31,
+            0,
+            0,
+        ];
+        let seeds: Vec<Vec<u32>> = (0..64).map(|t| vec![0, 0, t % 8, t / 8]).collect();
+        let program = [texture(inst::TLD_LZ_2D, 4, 6, 2, 3, 0x10, 0xf)];
+        let sampler = [2 | 2 << 3, NEAREST | NEAREST << 4, 0, 0, 0, 0, 0, 0];
+        let Some(lanes) = run_entries(&program, &seeds, header, sampler, &pitch_to_block_linear(&blocks, 2, 2, 8, 0)) else { return };
+        let rgba = [[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1], [1, 1, 1, 1]];
+        for (t, regs) in lanes.iter().enumerate() {
+            let block = t / 32 * 2 + t % 8 / 4;
+            assert_eq!(regs[4..8].iter().map(|&r| f32::from_bits(r)).collect::<Vec<_>>(), rgba[block].map(|c| c as f32), "texel {t}");
+        }
     }
 }

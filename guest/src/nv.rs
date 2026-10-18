@@ -82,7 +82,7 @@ fn buffer(nv: &Nv, [nvmap, space]: [u32; 2], address: u64, size: u32) -> svc::Re
     Ok((map.offset, create.handle))
 }
 
-fn guest_slice<T>(address: u64, len: usize) -> &'static mut [T] {
+pub fn guest_slice<T>(address: u64, len: usize) -> &'static mut [T] {
     unsafe { core::slice::from_raw_parts_mut(address as *mut T, len) }
 }
 

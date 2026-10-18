@@ -71,3 +71,7 @@ pub fn ipc_buffer() -> *mut [u32; 64] {
     unsafe { asm!("mrs {}, tpidrro_el0", out(reg) tls, options(nomem, nostack, preserves_flags)) };
     tls as *mut [u32; 64]
 }
+
+pub fn wait_event(event: u32) -> Result<()> {
+    unsafe { call::<0x18>(0, core::ptr::from_ref(&event) as u64, 1, u64::MAX)?; call::<0x17>(u64::from(event), 0, 0, 0) }.map(drop)
+}

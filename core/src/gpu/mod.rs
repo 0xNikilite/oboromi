@@ -39,7 +39,7 @@ impl From<vk::Result> for VkError {
     }
 }
 
-/// Settings that trade accuracy for speed, all off by default.
+/// Settings that trade accuracy for speed, all on by default.
 #[derive(Clone, Copy)]
 pub struct SpeedHacks {
     pub fast_tensor: bool,
@@ -49,13 +49,23 @@ pub struct SpeedHacks {
     pub skip_draw_while_compiling: bool,
 }
 
-impl Default for SpeedHacks {
-    fn default() -> Self {
+impl SpeedHacks {
+    pub const fn none() -> Self {
         Self { fast_tensor: false, ray_budget: u32::MAX, skip_draw_while_compiling: false }
+    }
+
+    const fn all() -> Self {
+        Self { fast_tensor: true, ray_budget: 1, skip_draw_while_compiling: true }
     }
 }
 
-pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false, ray_budget: u32::MAX, skip_draw_while_compiling: false });
+impl Default for SpeedHacks {
+    fn default() -> Self { if exact_mode() { Self::none() } else { Self::all() } }
+}
+
+pub(crate) fn exact_mode() -> bool { std::env::var("OBOROMI_EXACT").as_deref() == Ok("1") }
+
+pub static SPEED_HACKS: std::sync::LazyLock<std::sync::Mutex<SpeedHacks>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(SpeedHacks::default()));
 
 pub struct VkState {
     pub entry: ash::Entry,

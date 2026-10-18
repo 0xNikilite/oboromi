@@ -19,8 +19,11 @@ pub enum CpuBackend { Unicorn, Dynarmic }
 
 impl CpuManager {
     pub fn new() -> Self {
-        let backend = match std::env::var("OBOROMI_CPU").as_deref() { Ok("dynarmic") => CpuBackend::Dynarmic, _ => CpuBackend::Unicorn };
-        Self::new_with_backend(backend)
+        Self::new_with_backend(Self::default_backend())
+    }
+
+    pub(crate) fn default_backend() -> CpuBackend {
+        if crate::gpu::exact_mode() || std::env::var("OBOROMI_CPU").as_deref() == Ok("unicorn") { CpuBackend::Unicorn } else { CpuBackend::Dynarmic }
     }
 
     pub fn new_with_backend(backend: CpuBackend) -> Self {

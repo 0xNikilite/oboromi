@@ -61,6 +61,57 @@ vec3 roughReflection(vec2 uv,float rough) {
 vec4 surface(vec2 uv,int m) { return m==0?texture(floor_surface,uv):m==2?texture(iron_surface,uv):texture(rock_surface,uv); }
 vec3 albedo(vec2 uv,int m) { return pow(m==0?texture(floor_colour,uv).rgb:m==2?texture(iron_colour,uv).rgb:texture(rock_colour,uv).rgb,vec3(2.2)); }
 vec3 normalTex(vec2 uv,int m) { return (m==0?texture(floor_normal,uv).xyz:m==2?texture(iron_normal,uv).xyz:texture(rock_normal,uv).xyz)*2.-1.; }
+float fbmNoise(vec2 p) { return noise(p)*.57+noise(p*2.03+17.)*.29+noise(p*4.09+41.)*.14; }
+float riverDistance(vec2 p) { vec2 d=max(max(river.xy-p,p-river.zw),0.);return length(d); }
+float sootAt(vec3 p) {
+    float soot=0.;
+    for(int i=0;i<lights.length();i++) {
+        float flame=lights[i].position.w,rise=p.y-lights[i].position.y;if(flame<=0. || rise<=0.)continue;
+        float spread=.16+rise*(flame>1.? .42:.16),fade=1.-smoothstep(flame>1.?7.:3.,flame>1.?9.:4.2,rise);
+        soot=max(soot,exp(-dot(p.xz-lights[i].position.xz,p.xz-lights[i].position.xz)/(spread*spread))*fade);
+    }
+    return soot;
+}
+vec4 stoneMaterial(vec3 texel,vec3 p,vec3 n,int m,vec2 uv) {
+    float zone=fbmNoise(p.xz*.13+vec2(p.y*.07,-p.y*.05));
+    if(m==1) {
+        float along=abs(n.x)>abs(n.z)?p.z:p.x,row=floor(p.y/.42);
+        vec2 joint=abs((abs(n.y)>.7?fract(p.xz/vec2(.88,.52)):fract(vec2(along/.88+mod(row,2.)*.5,p.y/.42)))-.5);
+        float mortar=smoothstep(.455,.49,max(joint.x,joint.y)),wear=1.-smoothstep(0.,.58,p.y);
+        vec3 dressed=mix(vec3(.052,.06,.066),texel*vec3(.4,.43,.47),.22);
+        dressed=mix(dressed,vec3(.018,.021,.022),mortar);dressed*=1.-wear*.24;
+        return vec4(dressed,mix(.82,.58,wear));
+    }
+    if(m==8) {
+        vec3 pebble=mix(vec3(.25,.27,.27),vec3(.43,.34,.23),smoothstep(.32,.75,zone));
+        pebble=mix(pebble,texel*vec3(1.1,.98,.8),.32);
+        float submerged=1.-smoothstep(-.75,-.3,p.y);
+        return vec4(pebble*(1.-submerged*.42),mix(.76,.32,submerged));
+    }
+    float along=abs(n.x)>abs(n.z)?p.z:p.x;
+    if(m==7) {
+        float amber=smoothstep(.5,.76,fbmNoise(vec2(along*.28+p.y*.035,p.y*.13-p.x*.025)));
+        float tip=smoothstep(.62,.98,uv.y),crust=smoothstep(.72,.84,fbmNoise(p.xz*.19+vec2(p.y*.11)))*(1.-tip*.7);
+        vec3 calcite=mix(vec3(.68,.63,.52),vec3(.83,.43,.13),amber*.72);
+        calcite=mix(calcite,texel*vec3(1.35,1.18,.88),.18);
+        float soot=max(crust*.7,sootAt(p));calcite=mix(calcite,vec3(.018,.013,.009),soot*.84);
+        return vec4(calcite,mix(mix(.28,.045,tip),.94,soot));
+    }
+    float vertical=1.-smoothstep(.48,.88,abs(n.y));
+    float flow=vertical*smoothstep(.54,.72,fbmNoise(vec2(along*.2,p.y*.045+p.x*.018)));
+    float iron=smoothstep(.66,.82,fbmNoise(vec2(p.y*.31+zone,along*.065)))*(1.-flow*.45);
+    float crack=1.-smoothstep(.025,.08,abs(fract(along*.19+noise(vec2(p.y*.17,dot(p.xz,vec2(.07,.11))))*.72)-.5));
+    float manganese=crack*smoothstep(.56,.72,fbmNoise(p.xz*.14+vec2(p.y*.05,-p.y*.08)));
+    vec3 limestone=mix(vec3(.37,.39,.36),vec3(.56,.48,.34),smoothstep(.28,.78,zone));
+    limestone=mix(limestone,texel*vec3(1.4,1.28,1.02),.24);
+    limestone=mix(limestone,mix(vec3(.72,.68,.56),vec3(.76,.42,.15),iron),flow*.78);
+    limestone=mix(limestone,vec3(.46,.16,.045),iron*.48);
+    float riverWet=1.-smoothstep(.08,1.,length(vec2(riverDistance(p.xz),max(p.y+.7,0.))));
+    float bio=smoothstep(-.8,-.66,p.y)*(1.-smoothstep(-.25,-.12,p.y))*(1.-smoothstep(.04,.55,riverDistance(p.xz)));
+    float soot=max(manganese*.82,sootAt(p));
+    limestone*=1.-riverWet*.42;limestone=mix(limestone,vec3(.025,.033,.018),bio*.78);limestone=mix(limestone,vec3(.014,.01,.007),soot*.88);
+    return vec4(limestone,mix(mix(.76,.28,riverWet),.95,max(bio,soot)));
+}
 float visibility(vec3 p,vec3 n,vec3 to) {
 #ifdef RAY_QUERY
     if(up_rt.w>0.5) {
@@ -130,6 +181,33 @@ vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shad
     }
     return c;
 }
+vec3 calciteTransmission(vec3 p,vec3 n,vec3 v,float thin) {
+    vec3 c=vec3(0);
+    for(int i=0;i<lights.length();i++) {
+        vec3 to=lights[i].position.xyz-p;float d2=dot(to,to),back=max(dot(-n,normalize(to)),0.);
+        c+=lights[i].colour.rgb*back*(.012+.035*thin)*(.3+.7*pow(1.-abs(dot(n,v)),2.))/max(.5,d2);
+    }
+    return c;
+}
+#ifdef RAY_QUERY
+vec3 diffuseBounce(vec3 p,vec3 n,vec3 base) {
+    vec3 tangent=normalize(cross(n,abs(n.y)>.8?vec3(1,0,0):vec3(0,1,0))),bitangent=cross(n,tangent),c=vec3(0);
+    const vec3 rays[2]=vec3[](vec3(.53,.21,.82),vec3(-.37,.49,.79));
+    for(int ray=0;ray<2;ray++) {
+        vec3 direction=normalize(tangent*rays[ray].x+bitangent*rays[ray].y+n*rays[ray].z);
+        rayQueryEXT q;rayQueryInitializeEXT(q,scene,gl_RayFlagsOpaqueEXT,255,p+n*.02,.025,direction,12.);
+        while(rayQueryProceedEXT(q)){}
+        if(rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT)continue;
+        int i=int(rayQueryGetIntersectionPrimitiveIndexEXT(q,true))*3;vec2 b=rayQueryGetIntersectionBarycentricsEXT(q,true);vec3 w=vec3(1.-b.x-b.y,b);
+        vec3 hit=triangles[i].position.xyz*w.x+triangles[i+1].position.xyz*w.y+triangles[i+2].position.xyz*w.z;
+        vec3 hitNormal=normalize(triangles[i].normal.xyz*w.x+triangles[i+1].normal.xyz*w.y+triangles[i+2].normal.xyz*w.z);
+        int m=int(triangles[i].position.w);vec2 uv=abs(hitNormal.y)>.6?hit.xz*.35:abs(hitNormal.x)>.6?hit.zy*.35:hit.xy*.35;
+        vec3 hitBase=albedo(uv,m)*triangles[i].tint.rgb;if(m==1 || m>=6)hitBase=stoneMaterial(hitBase,hit,hitNormal,m,uv).rgb;
+        c+=illuminate(hit,hitNormal,-direction,hitBase,.72,0.,false)*max(dot(n,direction),0.);
+    }
+    return base*c*.48;
+}
+#endif
 vec3 reflectedFlames(vec3 p,vec3 direction,float limit) {
     vec3 c=vec3(0);
     for(int i=0;i<lights.length();i++) {
@@ -155,6 +233,7 @@ vec3 reflected(vec3 p,vec3 direction,vec3 fallback) {
             int m=int(triangles[i].position.w); vec2 uv=abs(n.y)>.6?pos.xz*.35:abs(n.x)>.6?pos.zy*.35:pos.xy*.35;
             vec3 reflected_texel=m==0?textureLod(floor_colour,uv,2.).rgb:m==2?textureLod(iron_colour,uv,2.).rgb:textureLod(rock_colour,uv,2.).rgb;
             vec3 base=pow(reflected_texel,vec3(2.2))*triangles[i].tint.rgb;
+            if(m==1 || m>=6)base=stoneMaterial(base,pos,n,m,uv).rgb;
             return illuminate(pos,n,-direction,base,.55,0.,false)+reflectedFlames(p,direction,rayQueryGetIntersectionTEXT(q,true));
         }
         return vec3(.008,.013,.025)+reflectedFlames(p,direction,45.);
@@ -198,7 +277,8 @@ void main() {
     vec3 t=normalize(dp1*du2.y-dp2*du1.y); t=normalize(t-n*dot(n,t));
     vec3 b=normalize(cross(n,t))*sign(du1.x*du2.y-du1.y*du2.x); mat3 basis=mat3(t,b,n);
     if(m!=3) {
-        if(m==1 && right_quality.w<.5)uv=abs(n.x)>max(abs(n.y),abs(n.z))?world.zy*.35:abs(n.y)>abs(n.z)?world.xz*.35:world.xy*.35;
+        bool projected=m==1 || m==6;
+        if(projected && right_quality.w<.5)uv=abs(n.x)>max(abs(n.y),abs(n.z))?world.zy*.35:abs(n.y)>abs(n.z)?world.xz*.35:world.xy*.35;
         if(m==0) {
             vec3 tv=transpose(basis)*v; float steps=right_quality.w>.5?mix(28.,12.,abs(tv.z)):mix(12.,6.,abs(tv.z));
             vec2 delta=tv.xy/max(abs(tv.z),.15)*.035/steps; float z=0.;
@@ -206,14 +286,14 @@ void main() {
         }
         vec4 s=surface(uv,m); rough=max(.36,s.g);metal=s.b;ao=s.r;
         base=albedo(uv,m)*colour;
-        if(m==1 && right_quality.w>.5){
+        if(projected && right_quality.w>.5){
             vec3 w=pow(abs(n),vec3(5.));w/=w.x+w.y+w.z;
             base=(albedo(world.zy*.35,1)*w.x+albedo(world.xz*.35,1)*w.y+albedo(world.xy*.35,1)*w.z)*colour;
             s=surface(world.zy*.35,1)*w.x+surface(world.xz*.35,1)*w.y+surface(world.xy*.35,1)*w.z;
             rough=max(.48,s.g);ao=s.r;
         }
-        float moss=(1.-s.r)*smoothstep(.35,.65,noise(world.xz*.65+world.y));
-        base=mix(base,vec3(.025,.06,.012),moss*.6);
+        float moss=float(m==1)*(1.-s.r)*smoothstep(.35,.65,noise(world.xz*.65+world.y));
+        base=mix(base,vec3(.025,.06,.012),moss*.35);
         wet=m==1?.14:0.;
         if(m==0){
             float macro=noise(world.xz*.19)*.65+noise(world.xz*.77+13.)*.35;
@@ -227,12 +307,12 @@ void main() {
             base=mix(base,vec3(.018,.035,.009),grime*(1.-s.r*.6)*.75);
             rough=clamp(rough+.18+(macro-.5)*.22,.62,.96);
             wet=smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22);
-        }else if(m==1){base*=mix(.55,1.,smoothstep(0.,.55,world.y));}
+        }else if(m==1 || m>=6){vec4 stone=stoneMaterial(base,world,n,m,uv);base=stone.rgb;rough=stone.a;}
         base*=1.-wet*.38; rough=mix(rough,.055,wet);
-        vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;
-        if(m==1 && right_quality.w<.5){
+        vec3 nt=normalTex(uv,m);nt.xy*=m==1?.35:1.-wet*.93;
+        if(projected && right_quality.w<.5){
             n=normalize(abs(n.x)>max(abs(n.y),abs(n.z))?vec3(nt.z*sign(n.x),nt.y,nt.x):abs(n.y)>abs(n.z)?vec3(nt.x,nt.z*sign(n.y),nt.y):vec3(nt.x,nt.y,nt.z*sign(n.z)));
-        }else if(m==1){
+        }else if(projected){
             vec3 w=pow(abs(n),vec3(5.));w/=w.x+w.y+w.z;
             vec3 nx=normalTex(world.zy*.35,1),ny=normalTex(world.xz*.35,1),nz=normalTex(world.xy*.35,1);
             n=normalize(vec3(nx.z*sign(n.x),nx.y,nx.x)*w.x+vec3(ny.x,ny.z*sign(n.y),ny.y)*w.y+vec3(nz.x,nz.y,nz.z*sign(n.z))*w.z);
@@ -240,13 +320,20 @@ void main() {
     } else { base=colour*mix(vec3(.24),albedo(uv,1),.2); rough=clamp(surface(uv,1).g,.4,.85); }
     if(m==5){base=colour;rough=.2;metal=1.;}
     vec3 c=illuminate(world,n,v,base,max(.065,rough),metal,true)*ao;
+    if(m==7)c+=base*calciteTransmission(world,n,v,smoothstep(.62,.98,tex.y));
+#ifdef RAY_QUERY
+    if(up_rt.w>.5 && m==7 && rough<.45 && settings.z<.5) {
+        float f=.06+.94*pow(1.-max(dot(n,v),0.),5.);
+        c=mix(c,reflected(world+n*.03,reflect(-v,n),vec3(0)),f*(1.-smoothstep(.08,.45,rough))*.58);
+    }
+#endif
     if(m==0 && wet>.05 && settings.z<.5) {
         vec4 r=reflected_vp*vec4(world,1);vec2 refl=r.xy/r.w*.5+.5;
         float f=.035+.965*pow(1.-max(dot(n,v),0.),5.);
         c=mix(c,reflected(world+n*.03,reflect(-v,n),(up_rt.w>.5?vec3(0):screenSample(refl+n.xz*.012,true))),wet*f*.8);
     }
 #ifdef RAY_QUERY
-    if(up_rt.w>.5 && right_quality.w>.5 && settings.z<.5)c*=ambientVisibility(world,n);
+    if(up_rt.w>.5 && right_quality.w>.5 && settings.z<.5){c*=ambientVisibility(world,n);c+=diffuseBounce(world,n,base);}
 #endif
     if(world.y<-.8) c+=base*.4+base*pow(.5+.5*sin(world.x*9.+sin(world.z*7.+eye_time.w)*2.+eye_time.w*1.8),12.)*.22;
     output_colour=vec4(c,distance(world,eye_time.xyz));

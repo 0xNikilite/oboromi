@@ -24,7 +24,6 @@ pub enum Sample {
     Wind,
     Heart,
     Creak,
-    Bats,
     Room,
     Drip,
     Scream,
@@ -42,7 +41,6 @@ impl From<Sfx> for Sample {
             Sfx::Wind => Sample::Wind,
             Sfx::Heart => Sample::Heart,
             Sfx::Creak => Sample::Creak,
-            Sfx::Bats => Sample::Bats,
         }
     }
 }
@@ -63,7 +61,7 @@ fn sample(kind: Sample) -> Vec<f32> {
         Sample::Wind => "wind",
         Sample::Heart => "heart",
         Sample::Creak => "creak",
-        Sample::Bats | Sample::Scream => return vec![0.0],
+        Sample::Scream => return vec![0.0],
         Sample::Room => "room",
         Sample::Drip => "drip0",
         Sample::Step | Sample::WetStep | Sample::GravelStep => "stone0",
@@ -71,7 +69,7 @@ fn sample(kind: Sample) -> Vec<f32> {
     recording(name)
 }
 
-const SAMPLES: [Sample; 13] = [Sample::Torch, Sample::Fire, Sample::River, Sample::Wind, Sample::Heart, Sample::Creak, Sample::Bats, Sample::Room, Sample::Drip, Sample::Scream, Sample::Step, Sample::WetStep, Sample::GravelStep];
+const SAMPLES: [Sample; 12] = [Sample::Torch, Sample::Fire, Sample::River, Sample::Wind, Sample::Heart, Sample::Creak, Sample::Room, Sample::Drip, Sample::Scream, Sample::Step, Sample::WetStep, Sample::GravelStep];
 
 fn looping(kind: Sample) -> bool {
     !matches!(kind, Sample::Creak | Sample::Drip | Sample::Scream | Sample::Step | Sample::WetStep | Sample::GravelStep)
@@ -173,10 +171,6 @@ impl Engine {
         let mut renderer = Renderer::open(parameter, &mut work).unwrap();
         renderer.start();
         Engine { renderer, memory: HostMemory { base: BASE, bytes: vec![0; 0x1000] }, samples, drips, steps, voices, spatial: Spatializer::new(&world.acoustic_rooms(), Mode::Headphones), bridge: world.bridge, reveal: world.zones[world.cave].space, rng: Rng(0xd21f_740b), drip_at: (12.0 * RATE) as u64, next_drip: 0, in_reveal: false, reveal_at: 0, last_eye: [0.0; 3], mix_gain: 0.46, rendered: 0, creak, creak_played: false, ambient, configured: false, next_step: 0, output: vec![0; 0x2_0000] }
-    }
-
-    pub fn move_source(&mut self, i: usize, pos: V3) {
-        self.voices[i].pos = pos;
     }
 
     /// Plays a drip ping, the scream or a footstep at `pos`.
@@ -327,7 +321,6 @@ static WORKER_NANOS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Command {
-    Move { source: usize, pos: V3 },
     Play { sample: Sample, pos: V3, gain: f32, pitch: f32 },
     Listen { eye: V3, yaw: f32, dt: f32 },
 }
@@ -409,7 +402,7 @@ mod tests {
             for source in 0..COMMANDS * 4 {
                 loop {
                     if let Some(command) = consumer.pop() {
-                        assert_eq!(command, Command::Move { source, pos: [source as f32; 3] });
+                        assert_eq!(command, Command::Listen { eye: [source as f32; 3], yaw: 0., dt: 0. });
                         break;
                     }
                     std::thread::yield_now();
@@ -417,7 +410,7 @@ mod tests {
             }
         });
         for source in 0..COMMANDS * 4 {
-            let command = Command::Move { source, pos: [source as f32; 3] };
+            let command = Command::Listen { eye: [source as f32; 3], yaw: 0., dt: 0. };
             while !ring.push(command) {
                 std::thread::yield_now();
             }
@@ -444,7 +437,6 @@ impl Worker {
             while !thread_stop.load(Ordering::Acquire) {
                 while let Some(command) = thread_commands.pop() {
                     match command {
-                        Command::Move { source, pos } => engine.move_source(source, pos),
                         Command::Play { sample, pos, gain, pitch } => engine.play(sample, pos, gain, pitch),
                         Command::Listen { eye, yaw, dt } => engine.listen(eye, yaw, dt),
                     }
@@ -495,11 +487,6 @@ impl Sound {
         } else {
             Self { engine: Some(engine), worker: None }
         }
-    }
-
-    pub fn move_source(&mut self, source: usize, pos: V3) {
-        if let Some(worker) = &self.worker { worker.send(Command::Move { source, pos }); }
-        else { self.engine.as_mut().unwrap().move_source(source, pos); }
     }
 
     pub fn play(&mut self, sample: Sample, pos: V3, gain: f32, pitch: f32) {

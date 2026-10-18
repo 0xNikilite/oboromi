@@ -9,7 +9,7 @@ mod tests {
     use crate::gpu::spirv::BuiltIn as B;
     use crate::gpu::threed::PrimitiveTopology;
     use crate::tests::gpu::graphics::{SIZE, opaque};
-    use crate::tests::gpu::harness::{GLOBAL_BASE, spirv_val, vk_state};
+    use crate::tests::gpu::harness::{GLOBAL_BASE, sha256, spirv_val, vk_state};
     use crate::tests::gpu_test::inst::*;
     use ash::vk::{self, DescriptorType};
 
@@ -53,9 +53,10 @@ mod tests {
         ($($name:literal),*) => { [$(($name, include_bytes!(concat!("../../../tests/fixtures/driver-shaders/", $name, ".bin")).as_slice())),*] };
     }
 
-    const DRIVER_SHADERS: [(&str, &[u8]); 18] = driver_shaders!(
+    const DRIVER_SHADERS: [(&str, &[u8]); 20] = driver_shaders!(
         "triangle.vert", "triangle.frag", "particles.vert", "particles.frag", "particles_update.comp", "pbr.vert", "pbr.frag",
-        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag", "rt.vert", "rt.frag", "points.geom"
+        "post.vert", "post.frag", "sprite2d.vert", "sprite2d.frag", "quad.tesc", "quad.tese", "dynquad.tesc", "msaa.frag", "rt.vert", "rt.frag", "points.geom",
+        "triangle-nak.vert", "triangle-nak.frag"
     );
 
     // The code of a graphics stage follows its 0x80-byte program header, whose byte 11 is THREADS_PER_INPUT_PRIMITIVE
@@ -161,6 +162,18 @@ mod tests {
                 assert_eq!(pixel(&pixels, x, y), [255; 4], "({x}, {y})");
             }
         }
+    }
+
+    #[test]
+    fn nak_compiled_triangle_matches_driver() {
+        let Some(state) = vk_state() else { return };
+        let vertices = bytes(&[-0.875, -0.875, 1.5, -0.5, 0.875, -0.875, -0.5, 1.5, -0.875, 0.875, -0.5, -0.5]);
+        let bindings = [vk::VertexInputBindingDescription { binding: 0, stride: 16, input_rate: vk::VertexInputRate::VERTEX }];
+        let attributes = [vk::VertexInputAttributeDescription { location: 0, binding: 0, format: vk::Format::R32G32B32A32_SFLOAT, offset: 0 }];
+        let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology: vk::PrimitiveTopology::TRIANGLE_LIST };
+        let [driver, nak] = [["triangle.vert", "triangle.frag"], ["triangle-nak.vert", "triangle-nak.frag"]]
+            .map(|shaders| draw(&state, shaders, &layout, &vertices, 3, &[], &[]));
+        assert_eq!(sha256(&nak), sha256(&driver));
     }
 
     #[test]

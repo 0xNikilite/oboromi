@@ -3,5 +3,6 @@ One fixture per line, id is <capture>#<index in that capture> and word_hex the i
 observed:true means the outputs were captured on silicon, false marks a case that could not be run.
 The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
 mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.
-kernels.cubin is kernels.cu built with nvcc -arch=sm_86 -O3 -cubin (CUDA 13.1), its mul_add has the words of the mul-add fixtures and gradient draws the gradient fixture's frame.
-bench/ holds the perf example's microbenchmarks: bench.cubin is bench.cu built the same way, and each <kernel>.spv is its GLSL twin <kernel>.comp built with glslangValidator -V --target-env vulkan1.2.
+driver-shaders holds NVIDIA driver 580 SM86 output (RTX A6000, Vulkan pipeline cache) for demos/shaders and a minimal pass-through triangle pair: each graphics file is the 0x80-byte program header followed by the code, the compute file is code only.
+query-{candidates,hit,address,flags}.comp.bin are the rig's GL_EXT_ray_query compute shaders, compiled by NVIDIA driver 580 for an RTX 3090; they cover candidate confirmation, opaque hits, a push-constant TLAS address and ray flags.
+rt.vert.bin and rt.frag.bin are pbr.vert and rt.frag (area-light shadows, mirror, glass and glossy reflections, AO and one-bounce light from both lights), and pbr.frag.bin is pbr.frag with its fill and rim lights, compiled by NVIDIA driver 580.126.20 on an RTX 3090. Bank 0x1d holds texture handles at +0, the TLAS at +0x18 and the uniform-buffer handle at +0x28.

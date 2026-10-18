@@ -137,14 +137,7 @@ impl<'a> Decoder<'a> {
             (3, 1) => {
                 let val = self.f16_alu_src(inst, ftz);
                 let f64_ty = self.type_f64();
-                let converted = self.ir.emit_f_convert(f64_ty, val);
-                let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
-                let u64_ty = self.type_u64();
-                let canonical = self.ir.emit_constant_typed(u64_ty, 0x7fff_ffff_ffff_ffffu64);
-                let bits = self.ir.emit_bitcast(u64_ty, converted);
-                let bits = self.ir.emit_select(u64_ty, nan, canonical, bits);
-                self.store_pair(rd as u32, bits);
-                return;
+                self.ir.emit_f_convert(f64_ty, val)
             }
             (1, src) => {
                 let (mut val, src_f64) = match src {

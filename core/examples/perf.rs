@@ -1,15 +1,16 @@
-//! Latency of the hot paths in microseconds with the GPU time of each path's last submit, then frame breakdowns and
-//! microbenchmarks against GLSL twins: `cargo run --release -p oboromi-core [--features cuda] --example perf`.
+//! Latency of the hot paths in microseconds: `MESA_SHADER_CACHE_DISABLE=true cargo run --release -p oboromi-core --example perf`,
+//! where the variable keeps Mesa's own shader cache from warming the cold pipeline rows.
 use ash::vk::DescriptorType;
 use oboromi_core::display::{attach_surface, present, present_buffer};
-use oboromi_core::ffi::oboromi_frame_read;
-use oboromi_core::gpu::VkState;
+use oboromi_core::ffi::{oboromi_frame_read, oboromi_set_tensor_mode};
 use oboromi_core::gpu::compute::{ComputePipeline, HostBuffer};
 use oboromi_core::gpu::cubin::{Arg, Kernel};
-use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS};
-use oboromi_core::gpu::{frame::{render_demo_frame, render_test_frame}, surface_device};
-use oboromi_core::tests::gpu::{graphics, harness::{GLOBAL_BASE, Grid, translate_module}};
-use oboromi_core::tests::gpu::silicon::exact_cooperative_hmma;
+use oboromi_core::gpu::pipeline_cache::Disk;
+use oboromi_core::gpu::sm86::{CBUF_BINDING, GLOBAL_BINDING, STATE_WORDS, SUPPORT_BINDING, Stage, emit_module};
+use oboromi_core::audio::demo_music::{music, sequence};
+use oboromi_core::gpu::{VkState, demo, demo_bounce::render_bounce_frame, demo_particles::{self, render_particles_frame}, demo_post::render_post_frame, demo_sprites::render_sprites_frame, surface_device, frame::{julia_program, render_demo_frame, render_test_frame, render_triangle_demo}};
+use oboromi_core::tests::gpu::engine::{TARGET, TEXTURES, VERTICES, texture_header, textured_quad_frame, triangle_frame, triangle_guest, vertex_bytes};
+use oboromi_core::tests::gpu::{graphics, harness::{GLOBAL_BASE, Grid, translate_module}, silicon::exact_cooperative_hmma};
 use oboromi_core::tests::gpu_test::inst;
 use std::hint::black_box;
 use std::time::Instant;
@@ -46,7 +47,6 @@ fn breakdown(name: &str, [frame, gpu]: [f64; 2], copy: f64, present: f64, cold: 
     println!("{name:<30}gpu {gpu:.0}, submit+fence {fence:.0}, readback copy {copy:.0}, present {present:.0}, translate+pipeline once {cold:.0}");
 }
 
-/// The kernel's grid and the cold microseconds of translating it and building its pipeline, spirv-val included.
 fn kernel_grid<'a>(state: &'a VkState, kernel: &Kernel, grid: [u32; 3], block: [u32; 3], args: &[Arg]) -> (Grid<'a>, f64) {
     let (banks, regions) = kernel.launch(grid, block, args, GLOBAL_BASE);
     let t = Instant::now();
@@ -62,14 +62,12 @@ fn values(args: &[Arg]) -> Vec<u8> {
     args.iter().flat_map(|arg| if let Arg::Value(bytes) = *arg { bytes } else { &[] }).copied().collect()
 }
 
-/// Runs a bench kernel translated and as its GLSL twin, which takes the kernel's values in the uniform at the cbuf
-/// binding and its buffers back to back in global memory, returning both GPU p50s in microseconds.
-fn versus(state: &VkState, name: &str, spv: &[u8], groups: [u32; 3], args: &[Arg]) -> [f64; 2] {
-    let (kernel, block) = (Kernel::load(BENCH, name).unwrap(), [256, 1, 1]);
+fn versus(state: &VkState, name: &str, spv: &[u8], groups: [u32; 3], block: [u32; 3], args: &[Arg]) -> [f64; 2] {
+    let kernel = Kernel::load(BENCH, name).unwrap();
     let mut grid = kernel_grid(state, &kernel, groups, block, args).0;
     let translated = bench(&format!("{name} translated"), 2, 20, Some(state), || drop(black_box(grid.run(groups))))[1];
     let words = ash::util::read_spv(&mut std::io::Cursor::new(spv)).unwrap();
-    let mut uniforms = HostBuffer::new(state, 16).unwrap();
+    let mut uniforms = HostBuffer::new(state, 32).unwrap();
     uniforms.write(&values(args)).unwrap();
     let mut out = vec![0; buffers(args).iter().map(|buffer| buffer.len()).sum()];
     let memory = HostBuffer::new(state, out.len() as u64).unwrap();
@@ -115,6 +113,11 @@ fn main() {
     bench("translate hints on", 20, 200, None, || {
         black_box(translate_module(black_box(&program), true, None, true));
     });
+    let mut song = music();
+    bench("audren music period", 20, 2000, None, || {
+        sequence(&mut song);
+        black_box(song.period());
+    });
     let (w, h) = (1920, 1080);
     let pixels = vec![0x80u8; w * h * 4];
     let mut dst = vec![0u8; pixels.len()];
@@ -131,7 +134,9 @@ fn main() {
         oboromi_core::audio::pull(&mut pulled);
         black_box(&pulled);
     });
-    bench("vk device init (cold)", 0, 1, None, || drop(surface_device()));
+    bench("vk device init (cold)", 0, 1, None, || {
+        let _ = surface_device();
+    });
     let state = match surface_device() {
         Ok(state) => state,
         Err(e) => return println!("gpu paths skipped: {e:?}"),
@@ -144,6 +149,19 @@ fn main() {
     println!("device: {:?}", props.device_name_as_c_str().unwrap());
     let exact = exact_cooperative_hmma(state);
     println!("hmma: cooperative matrices for (k, f32 accumulator) {exact:?} of f16 tiles {:?}, loops otherwise", state.cooperative_f16_tiles);
+    let (block, groups, chain) = ([128, 1, 1], [32, 1, 1], 16);
+    let sources = [8, 9, 12, 13].map(|reg| inst::s2r(reg, 33));
+    let hmmas = vec![inst::alu3(inst::HMMA | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 4); chain];
+    let store = [inst::mov_imm(2, GLOBAL_BASE as u32), inst::mov_imm(3, (GLOBAL_BASE >> 32) as u32), inst::stg(2, 0, 4), inst::stg(2, 4, 5), inst::stg(2, 8, 6), inst::stg(2, 12, 7), inst::exit()];
+    let hmma_program = [&sources[..], &hmmas, &store].concat();
+    let ops = f64::from(groups[0] * block[0] / 32) * chain as f64;
+    let [exact, fast] = [false, true].map(|fast| {
+        oboromi_set_tensor_mode(fast);
+        let mut grid = Grid::new(state, &hmma_program, block, &[], &[(GLOBAL_BASE, &[0; 16])]);
+        bench(if fast { "hmma fast" } else { "hmma exact" }, 2, 20, Some(state), || drop(black_box(grid.run(groups))))[1]
+    });
+    oboromi_set_tensor_mode(false);
+    println!("hmma 16816.F32 gpu ns per warp op: exact {:.0}, fast {:.0}", exact * 1e3 / ops, fast * 1e3 / ops);
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
     let words = translate_module(&program, true, Some(state), false).words();
     let ssbo = DescriptorType::STORAGE_BUFFER;
@@ -151,6 +169,34 @@ fn main() {
     bench("pipeline create (cold)", 0, 1, None, || {
         drop(ComputePipeline::new(state, &words, &bindings).unwrap());
     });
+    let julia = emit_module(Some(state), Stage::Compute { local_size: [16, 16, 1] }, |d| d.translate_program(&julia_program())).words();
+    let ubo = DescriptorType::UNIFORM_BUFFER;
+    let julia_bindings = [(SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo), (GLOBAL_BINDING, ssbo)];
+    let root = std::env::temp_dir().join(format!("oboromi-perf-{}", std::process::id()));
+    let disk = Disk::open(&root, "perf", &props).unwrap();
+    for start in ["cold", "from disk"] {
+        let fresh = VkState::new().unwrap();
+        if start != "cold" {
+            disk.load(&fresh).unwrap();
+        }
+        bench(&format!("triangle pipeline {start}"), 0, 1, None, || drop(graphics::triangle_pipeline(&fresh).unwrap()));
+        bench(&format!("julia pipeline {start}"), 0, 1, None, || drop(ComputePipeline::new(&fresh, &julia, &julia_bindings).unwrap()));
+        disk.flush(&fresh).unwrap();
+    }
+    for start in ["cold", "warm"] {
+        let fresh = Box::leak(Box::new(VkState::new().unwrap()));
+        let mut gpu = triangle_guest(fresh, Some((&root, "engine")), 1920, 1080, &[([0.0, -0.8], [255; 4]), ([0.7, 0.4], [255; 4]), ([-0.7, 0.4], [255; 4])]).unwrap();
+        bench(&format!("engine first frame {start}"), 0, 1, Some(fresh), || triangle_frame(&mut gpu, 1920, 1080, [1.0, 0.0, 0.0, 1.0], 0).unwrap());
+    }
+    let _ = std::fs::remove_dir_all(root);
+    for (name, libraries) in [("triangle monolithic compile", false), ("triangle libraries + link", true)] {
+        let mut fresh = VkState::new().unwrap();
+        fresh.graphics_pipeline_library &= libraries;
+        bench(name, 0, 1, None, || drop(graphics::triangle_pipeline(&fresh).unwrap()));
+        if fresh.graphics_pipeline_library {
+            bench("triangle link only", 0, 1, None, || drop(graphics::triangle_pipeline(&fresh).unwrap()));
+        }
+    }
     let mut pipeline = ComputePipeline::new(state, &words, &bindings).unwrap();
     let mut input = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
     let output = HostBuffer::new(state, STATE_WORDS as u64 * 4).unwrap();
@@ -161,13 +207,13 @@ fn main() {
         state.dispatch(&pipeline, [1, 1, 1]).unwrap();
         output.read(black_box(&mut out)).unwrap();
     });
-    let mut triangle = graphics::triangle(state).unwrap();
-    let mut triangle_pixels = vec![0; (graphics::SIZE * graphics::SIZE * 4) as usize];
-    bench("draw+readback 64x64 triangle", 50, 1000, Some(state), || triangle(&mut triangle_pixels).unwrap());
     let frame = HostBuffer::new(state, pixels.len() as u64).unwrap();
     bench("present_buffer 1080p", 10, 200, Some(state), || {
         present_buffer(&frame, w as u32, h as u32).unwrap()
     });
+    let mut triangle = graphics::triangle(state).unwrap();
+    let mut triangle_pixels = vec![0; (graphics::SIZE * graphics::SIZE * 4) as usize];
+    bench("draw+readback 64x64 triangle", 50, 1000, Some(state), || triangle(black_box(&mut triangle_pixels)).unwrap());
     bench("render_test_frame e2e", 2, 20, Some(state), || {
         render_test_frame().unwrap()
     });
@@ -195,24 +241,48 @@ fn main() {
         drop(black_box(copy.to_vec()));
     })[0];
     let mandelbrot_present = bench("present 800x600", 2, 100, None, || present(mw, mh, &image))[0];
-    native("cubin mandelbrot native cuda", &mandelbrot, [50, 38, 1], [16, 16, 1], &args);
+    if std::env::var_os("OBOROMI_PERF_NATIVE").is_some() {
+        versus(state, "mandelbrot", include_bytes!("../tests/fixtures/bench/mandelbrot.spv"), [50, 38, 1], [16, 16, 1], &args);
+    }
     println!("breakdown, us");
     breakdown("julia frame", julia, julia_copy, julia_present, julia_cold - julia[0]);
     breakdown("mandelbrot frame", mandelbrot_frame, mandelbrot_copy, mandelbrot_present, mandelbrot_cold);
-    println!("native equivalence, translated vs its GLSL twin through the same ComputePipeline");
-    let (groups, iterations) = (1024u32, 64u32);
-    let sums = vec![0; groups as usize * 256 * 4];
-    let fma_values = [iterations.to_le_bytes(), 0.999f32.to_le_bytes(), 0.001f32.to_le_bytes()];
-    let args: Vec<_> = [Arg::Buffer(&sums)].into_iter().chain(fma_values.iter().map(|value| Arg::Value(value))).collect();
-    let fma = versus(state, "fma_chain", include_bytes!("../tests/fixtures/bench/fma_chain.spv"), [groups, 1, 1], &args);
-    let flops = 2.0 * f64::from(groups * 256) * f64::from(iterations * 256);
-    let bytes = 64 << 20;
-    let (source, sink, add) = (vec![0; bytes], vec![0; bytes], 1f32.to_le_bytes());
-    let stream_args = [Arg::Buffer(&source), Arg::Buffer(&sink), Arg::Value(&add)];
-    let stream = versus(state, "stream_add", include_bytes!("../tests/fixtures/bench/stream_add.spv"), [(bytes / 16 / 256) as u32, 1, 1], &stream_args);
-    let empty = versus(state, "empty", include_bytes!("../tests/fixtures/bench/empty.spv"), [1, 1, 1], &[Arg::Buffer(&[0; 16])]);
-    for (metric, [translated, glsl]) in [("GFLOP/s", fma.map(|us| flops / us / 1e3)), ("GB/s read+write", stream.map(|us| 2.0 * bytes as f64 / us / 1e3)), ("empty kernel gpu us", empty)] {
-        println!("{metric:<30}translated {translated:.1}, glsl twin {glsl:.1}, ratio {:.2}", translated / glsl);
+    bench("pushbuffer triangle 1080p", 2, 100, Some(state), || render_triangle_demo(0.25).unwrap());
+    bench("demo post 1080p", 2, 100, Some(state), || render_post_frame(0.25).unwrap());
+    bench("demo sprites 1080p", 2, 100, Some(state), || render_sprites_frame(0.25).unwrap());
+    bench("demo particles 1080p", 2, 100, Some(state), || render_particles_frame(0.25).unwrap());
+    let mut particles = demo_particles::Particles::new(state).unwrap();
+    bench("particles update", 2, 100, Some(state), || particles.update(0.25).unwrap());
+    bench("particles draw", 2, 100, Some(state), || particles.draw(0.25).unwrap());
+    bench("particles present", 2, 100, Some(state), || particles.gpu.present(demo_particles::TARGET, 1920, 1080).unwrap());
+    let mut quad = triangle_guest(state, None, 1920, 1080, &[([0.0; 2], [0; 4]); 3]).unwrap();
+    let corners = [([-1.0, -1.0], [0, 0, 0, 0]), ([1.0, -1.0], [255, 0, 0, 0]), ([-1.0, 1.0], [0, 255, 0, 0]), ([1.0, 1.0], [255, 255, 0, 0])];
+    quad.write(VERTICES, &vertex_bytes(&corners)).unwrap();
+    quad.write(TEXTURES + 0x1000, &(0..64 * 64 * 4).map(|i| i as u8).collect::<Vec<_>>()).unwrap();
+    texture_header(&mut quad, TEXTURES + 0x1000, 64, 64, 64 * 4).unwrap();
+    bench("pushbuffer textured quad 1080p", 2, 100, Some(state), || textured_quad_frame(&mut quad, 1920, 1080, TARGET, 0).unwrap());
+    bench("demo bounce 1080p", 2, 100, Some(state), || render_bounce_frame(0.25).unwrap());
+    bench("demo boombox 1080p", 2, 100, Some(state), || demo::render_boombox_frame(0.25).unwrap());
+    match demo::asset_dir("flighthelmet").exists() {
+        true => { bench("demo helmet 1080p", 2, 100, Some(state), || demo::render_helmet_frame(0.25).unwrap()); }
+        false => println!("demo helmet 1080p skipped: run demos/assets/fetch.sh"),
+    }
+    if std::env::var_os("OBOROMI_PERF_NATIVE").is_some() {
+        println!("native equivalence, translated vs its GLSL twin through the same ComputePipeline");
+        let (groups, iterations) = (1024u32, 64u32);
+        let sums = vec![0; groups as usize * 256 * 4];
+        let fma_values = [iterations.to_le_bytes(), 0.999f32.to_le_bytes(), 0.001f32.to_le_bytes()];
+        let args: Vec<_> = [Arg::Buffer(&sums)].into_iter().chain(fma_values.iter().map(|value| Arg::Value(value))).collect();
+        let fma = versus(state, "fma_chain", include_bytes!("../tests/fixtures/bench/fma_chain.spv"), [groups, 1, 1], [256, 1, 1], &args);
+        let flops = 2.0 * f64::from(groups * 256) * f64::from(iterations * 256);
+        let bytes = 64 << 20;
+        let (source, sink, add) = (vec![0; bytes], vec![0; bytes], 1f32.to_le_bytes());
+        let stream_args = [Arg::Buffer(&source), Arg::Buffer(&sink), Arg::Value(&add)];
+        let stream = versus(state, "stream_add", include_bytes!("../tests/fixtures/bench/stream_add.spv"), [(bytes / 16 / 256) as u32, 1, 1], [256, 1, 1], &stream_args);
+        let empty = versus(state, "empty", include_bytes!("../tests/fixtures/bench/empty.spv"), [1, 1, 1], [256, 1, 1], &[Arg::Buffer(&[0; 16])]);
+        for (metric, [translated, glsl]) in [("GFLOP/s", fma.map(|us| flops / us / 1e3)), ("GB/s read+write", stream.map(|us| 2.0 * bytes as f64 / us / 1e3)), ("empty kernel gpu us", empty)] {
+            println!("{metric:<30}translated {translated:.1}, glsl twin {glsl:.1}, ratio {:.2}", translated / glsl);
+        }
     }
     let headless = ash::ext::headless_surface::Instance::new(&state.entry, &state.instance);
     let surface = unsafe { headless.create_headless_surface(&Default::default(), None) }.unwrap();

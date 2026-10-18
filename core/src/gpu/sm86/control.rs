@@ -80,6 +80,15 @@ impl<'a> Decoder<'a> {
             states.push((ptr, state, arrived, pred, op, count));
         }
         let candidate = self.ir.emit_select(ty, runnable, pc, none);
+        if matches!(self.stage, Stage::Fragment { .. }) {
+            assert!(bars.is_empty(), "workgroup barrier in a fragment shader");
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_ARITHMETIC);
+            let scope = self.cached_const_u32(spirv::scope::SUBGROUP);
+            let scheduled = self.ir.emit_group_non_uniform_umin(ty, scope, 0, candidate);
+            self.here = Some(self.ir.emit_iequal(bool_ty, candidate, scheduled));
+            return [scheduled; 2];
+        }
         let step = self.ir.emit_load(ty, self.var_step);
         let [three, stride] = [3, SCHEDULE_STRIDE].map(|c| self.cached_const_u32(c));
         let [now, next] = [self.const_u32_0, self.const_u32_1].map(|offset| {
@@ -250,6 +259,12 @@ impl<'a> Decoder<'a> {
             let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
             target = self.ir.emit_select(self.type_u32[1], taken, target, next);
         }
+        if inst >> 87 & 0xf != u128::from(PT) {
+            let bit = self.pp_bit(inst);
+            let taken = self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0);
+            let next = self.ir.emit_load(self.type_u32[1], self.var_pc);
+            target = self.ir.emit_select(self.type_u32[1], taken, target, next);
+        }
         self.ir.emit_store(self.var_pc, target);
     }
     pub fn break_(&mut self, inst: u128) {
@@ -289,8 +304,32 @@ impl<'a> Decoder<'a> {
     // The host driver owns dependency scoreboarding.
     pub fn depbar(&mut self, _inst: u128) {}
     pub fn exit(&mut self, _inst: u128) {
+        if let Stage::Fragment { depth, .. } = self.stage {
+            // One render target, so the PS header's OMAP has its colour in R0-R3 at EXIT.
+            let target = self.interface_var(ResourceKind::FragmentOutput { location: 0 }, spirv::storage_class::OUTPUT);
+            let colour: Vec<u32> = (0..4).map(|reg| {
+                let bits = self.load_register(reg);
+                self.bitcast_f32(bits)
+            }).collect();
+            let colour = self.ir.emit_composite_construct(self.type_f32[4], &colour);
+            self.ir.emit_store(target, colour);
+            if depth {
+                // Depth is two registers past the last colour output (Ryujinx TranslatorContext.GetDepthRegister).
+                let var = self.frag_depth();
+                let bits = self.load_register(5);
+                let value = self.bitcast_f32(bits);
+                self.ir.emit_store(var, value);
+            }
+        }
+        let ptr = self.barrier_token(ATEXIT_PC);
+        let atexit = self.ir.emit_load(self.type_u32[1], ptr);
+        self.ir.emit_store(ptr, self.const_u32_0);
+        let none = self.ir.emit_iequal(self.type_bool[1], atexit, self.const_u32_0);
+        let four = self.cached_const_u32(4);
+        let routine = self.ir.emit_shift_right_logical(self.type_u32[1], atexit, four);
         let exit = self.cached_const_u32(u32::MAX);
-        self.ir.emit_store(self.var_pc, exit);
+        let next = self.ir.emit_select(self.type_u32[1], none, exit, routine);
+        self.ir.emit_store(self.var_pc, next);
     }
     pub fn jmp(&mut self, inst: u128) {
         let op = opcode(inst);
@@ -325,12 +364,17 @@ impl<'a> Decoder<'a> {
         self.jump_to_register(inst, false);
     }
     pub fn kill(&mut self, inst: u128) {
+        if matches!(self.stage, Stage::Fragment { .. }) {
+            self.ir.emit_capability(spirv::capability::DEMOTE_TO_HELPER_INVOCATION);
+            self.ir.emit_extension("SPV_EXT_demote_to_helper_invocation");
+            return self.ir.emit_demote_to_helper_invocation();
+        }
         // KILL is pixel-only on hardware, so a compute invocation that reaches one just ends like at EXIT.
         self.exit(inst);
     }
     pub fn lepc(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
-        let address = self.cached_const_u32((self.pc + 1) * 16);
+        let address = self.cached_const_u32(self.pc * 16);
         let ty = self.type_u64();
         let address = self.ir.emit_u_convert(ty, address);
         self.store_pair(rd, address);

@@ -1,9 +1,12 @@
 #include "MainWindow.h"
 
 #include <QDesktopServices>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenuBar>
@@ -43,6 +46,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             this, &MainWindow::onGpuTestsFinished);
 
     m_logList->addItem("click 'Run CPU Tests' to begin");
+    // the vulkan display is a separate native window, so keys are taken before any widget sees them
+    qApp->installEventFilter(this);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)
+        oboromi_input_key(static_cast<QKeyEvent *>(event)->key(), event->type() == QEvent::KeyPress);
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::buildMenuBar() {
@@ -84,18 +95,61 @@ void MainWindow::buildUi() {
     auto *frameButton = new QPushButton("Render Test Frame", central);
     connect(frameButton, &QPushButton::clicked, this, &MainWindow::onRenderTestFrameClicked);
     buttons->addWidget(frameButton);
-    auto *demoButton = new QPushButton("Demo", central);
-    demoButton->setCheckable(true);
-    connect(demoButton, &QPushButton::toggled, this, [this](bool on) {
-        if (!on) return m_demoTimer.stop();
-        m_demoClock.start();
-        m_demoTimer.start(16);
+    for (auto [name, render] : {std::pair{"Demo", RustBridge::renderDemoFrame}, {"Triangle", RustBridge::renderTriangleDemo}, {"Post", RustBridge::renderPostFrame},
+                                {"Dungeon", RustBridge::renderDungeonFrame}, {"Sprites", RustBridge::renderSpritesFrame}, {"BoomBox", RustBridge::renderBoomBoxDemo}, {"Ray traced", RustBridge::renderRaytracedDemo}, {"Helmet", RustBridge::renderHelmetDemo},
+                                {"Particles", RustBridge::renderParticlesFrame}, {"Music", RustBridge::renderMusicDemo}, {"Bounce", RustBridge::renderBounceDemo}}) {
+        auto *demoButton = new QPushButton(name, central);
+        demoButton->setCheckable(true);
+        connect(demoButton, &QPushButton::toggled, this, [this, render](bool on) {
+            if (!on) {
+                m_demoTimer.stop();
+                m_demoFrameClock.invalidate();
+                m_frameLabel->clear();
+                RustBridge::flushDemoCaches();
+                return;
+            }
+            m_demoRender = render;
+            m_demoClock.start();
+            m_demoTimer.start(16);
+        });
+        buttons->addWidget(demoButton);
+    }
+    auto *rayTracing = new QCheckBox("Ray tracing", central);
+    rayTracing->setChecked(true);
+    connect(rayTracing, &QCheckBox::toggled, this, RustBridge::setRaytracingEnabled);
+    buttons->addWidget(rayTracing);
+    auto *fastTensors = new QCheckBox("Fast tensors", central);
+    connect(fastTensors, &QCheckBox::toggled, this, oboromi_set_tensor_mode);
+    buttons->addWidget(fastTensors);
+    auto *rayBudget = new QCheckBox("Ray budget", central);
+    connect(rayBudget, &QCheckBox::toggled, this, [](bool enabled) { oboromi_set_ray_budget(enabled ? 1 : UINT32_MAX); });
+    buttons->addWidget(rayBudget);
+    auto *quality = new QComboBox(central);
+    quality->addItems({"Dungeon: showcase", "Dungeon: realtime"});
+    auto *rays = new QCheckBox("Ray tracing", central);
+    rays->setEnabled(oboromi_dungeon_ray_queries());
+    rays->setChecked(rays->isEnabled());
+    connect(quality, &QComboBox::currentIndexChanged, this, [quality, rays](int index) {
+        rays->setChecked(index == 0 && rays->isEnabled());
+        oboromi_dungeon_settings(index == 0, rays->isChecked());
     });
+    connect(rays, &QCheckBox::toggled, this, [quality](bool enabled) { oboromi_dungeon_settings(quality->currentIndex() == 0, enabled); });
+    buttons->addWidget(quality);
+    buttons->addWidget(rays);
+    auto *spatialMode = new QComboBox(central);
+    spatialMode->addItems({"Headphones", "Speakers"});
+    connect(spatialMode, &QComboBox::currentIndexChanged, this, [](int mode) { oboromi_set_dungeon_speakers(mode == 1); });
+    buttons->addWidget(spatialMode);
     connect(&m_demoTimer, &QTimer::timeout, this, [this] {
-        if (m_demoFrame.isFinished())
-            m_demoFrame = QtConcurrent::run(RustBridge::renderDemoFrame, m_demoClock.elapsed() / 1000.0f);
+        if (m_demoFrame.isFinished()) {
+            if (m_demoFrameClock.isValid()) m_frameLabel->setText(QString("%1 ms").arg(m_demoFrameClock.restart()));
+            else m_demoFrameClock.start();
+            m_demoFrame = QtConcurrent::run(m_demoRender, m_demoClock.elapsed() / 1000.0f);
+        }
+        OboromiInput input;
+        oboromi_input_state(&input);
+        m_gamepadLabel->setText(input.gamepad[0] ? QString("gamepad: ") + input.gamepad : QString());
     });
-    buttons->addWidget(demoButton);
     auto *toneButton = new QPushButton("Tone", central);
     toneButton->setCheckable(true);
     connect(toneButton, &QPushButton::toggled, this, [this](bool on) {
@@ -106,6 +160,10 @@ void MainWindow::buildUi() {
     connect(&m_toneTimer, &QTimer::timeout, this, [] { oboromi_audio_test_tone(0.1f); });
     buttons->addWidget(toneButton);
     buttons->addStretch();
+    m_frameLabel = new QLabel(central);
+    buttons->addWidget(m_frameLabel);
+    m_gamepadLabel = new QLabel(central);
+    buttons->addWidget(m_gamepadLabel);
     layout->addLayout(buttons);
 
     layout->addWidget(createDisplay(central), /*stretch=*/3);

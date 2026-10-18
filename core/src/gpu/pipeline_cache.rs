@@ -244,8 +244,14 @@ fn encode(kind: ResourceKind) -> [u32; 4] {
         VertexInput { location } => [13, location, 0, 0],
         Varying { location, flat } => [14, location, flat.into(), 0],
         FragmentOutput { location } => [15, location, 0, 0],
-        Mma => [16, 0, 0, 0],
-        Hints => [17, 0, 0, 0],
+        PerVertex { attr, output } => [16, attr, output.into(), 0],
+        Patch { location } => [17, location, 0, 0],
+        Ttu => [18, 0, 0, 0],
+        RayQuery => [19, 0, 0, 0],
+        AccelerationStructure { cbuf_bank, byte_offset } => [20, cbuf_bank, byte_offset, 0],
+        Mma => [21, 0, 0, 0],
+        GlobalVector(words) => [22, words, 0, 0],
+        Hints => [23, 0, 0, 0],
     }
 }
 
@@ -268,8 +274,14 @@ fn decode([tag, a, b, c]: [u32; 4]) -> Option<ResourceKind> {
         13 => VertexInput { location: a },
         14 => Varying { location: a, flat: b != 0 },
         15 => FragmentOutput { location: a },
-        16 => Mma,
-        17 => Hints,
+        16 => PerVertex { attr: a, output: b != 0 },
+        17 => Patch { location: a },
+        18 => Ttu,
+        19 => RayQuery,
+        20 => AccelerationStructure { cbuf_bank: a, byte_offset: b },
+        21 => Mma,
+        22 => GlobalVector(a),
+        23 => Hints,
         _ => return None,
     })
 }

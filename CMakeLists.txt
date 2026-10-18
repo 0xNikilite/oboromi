@@ -49,9 +49,13 @@ target_link_libraries(oboromi-gui PRIVATE
     oboromi_core
 )
 
-# Windows system libs needed by rust staticlib
+# system libs needed by rust staticlib
 if(WIN32)
     target_link_libraries(oboromi-gui PRIVATE ws2_32 userenv ntdll bcrypt)
+elseif(APPLE)
+    target_link_libraries(oboromi_core INTERFACE "-framework IOKit" "-framework CoreFoundation")
+else()
+    target_link_libraries(oboromi_core INTERFACE udev)
 endif()
 
 if(WIN32)

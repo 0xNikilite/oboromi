@@ -1,0 +1,91 @@
+{
+ "vertex_count": 406,
+ "index_count": 2046,
+ "vertex_stride": 48,
+ "vertex_layout": "position f32x3, normal f32x3, tangent f32x4, uv f32x2",
+ "primitives": [
+  {
+   "mesh": 0,
+   "primitive": 0,
+   "material": 0,
+   "vertex_offset": 0,
+   "vertex_count": 406,
+   "first_index": 0,
+   "index_count": 2046
+  }
+ ],
+ "materials": [
+  {
+   "index": 0,
+   "name": "2256_Avocado_d",
+   "baseColorFactor": [
+    1,
+    1,
+    1,
+    1
+   ],
+   "metallicFactor": 1.0,
+   "roughnessFactor": 1.0,
+   "emissiveFactor": [
+    0,
+    0,
+    0
+   ],
+   "normalScale": 1.0,
+   "occlusionStrength": 1.0,
+   "alphaMode": "OPAQUE",
+   "textures": {
+    "baseColor": "baseColor.rgba8",
+    "metallicRoughness": "metallicRoughness.rgba8",
+    "normal": "normal.rgba8"
+   }
+  }
+ ],
+ "textures": [
+  {
+   "file": "baseColor.rgba8",
+   "image": 0,
+   "slots": [
+    "baseColor"
+   ],
+   "width": 256,
+   "height": 256,
+   "mips": 9,
+   "color_space": "srgb",
+   "bytes": 351232,
+   "layout": "block_linear",
+   "gob_height_log2": 1
+  },
+  {
+   "file": "metallicRoughness.rgba8",
+   "image": 1,
+   "slots": [
+    "metallicRoughness"
+   ],
+   "width": 256,
+   "height": 256,
+   "mips": 9,
+   "color_space": "linear",
+   "bytes": 351232,
+   "layout": "block_linear",
+   "gob_height_log2": 1
+  },
+  {
+   "file": "normal.rgba8",
+   "image": 2,
+   "slots": [
+    "normal"
+   ],
+   "width": 256,
+   "height": 256,
+   "mips": 9,
+   "color_space": "linear",
+   "bytes": 351232,
+   "layout": "block_linear",
+   "gob_height_log2": 1
+  }
+ ],
+ "source_url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/./Models/Avocado/glTF-Binary/Avocado.glb",
+ "author": "Microsoft",
+ "license": "Creative Commons Zero v1.0 Universal"
+}

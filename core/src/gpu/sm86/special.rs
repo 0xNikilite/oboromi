@@ -11,7 +11,13 @@ impl<'a> Decoder<'a> {
             self.store_register(nth_reg(rd, RZ, i), val);
         }
     }
-    pub fn csmtest(&mut self, _inst: u128) {}
+    // CSMTEST votes on the clip space masks (CCMP F, CSM_TA/TR/MX, T, FCSM_TA/TR/MX in sm_86_instructions.txt) of the
+    // vertex batch, whose semantics are not public. Only T reads true, so a driver VS never takes its `@P0 EXIT` on
+    // FCSM_TR (trivially rejected) and always writes the position, which Vulkan then clips and culls itself.
+    pub fn csmtest(&mut self, inst: u128) {
+        let result = if inst >> 76 & 7 == 4 { self.const_u32_1 } else { self.const_u32_0 };
+        self.store_setp(inst, result);
+    }
     pub fn ide(&mut self, _inst: u128) {}
     pub fn mufu(&mut self, inst: u128) {
         use spirv::glsl::{COS, EXP2, INVERSE_SQRT, LOG2, SIN, SQRT, TANH};
@@ -35,10 +41,10 @@ impl<'a> Decoder<'a> {
             9 => self.glsl(TANH, ty, &[x]),
             op => panic!("MUFU op {op} (RCP64H, RSQ64H) is not implemented"),
         };
-        let bits = self.canonical_nan_bits(val);
+        let bits = self.bitcast_u32(val);
         // RCP flushes a subnormal result to zero.
         let bits = if inst >> 74 & 0xf == 4 { self.flush_subnormal(bits) } else { bits };
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn nop(&mut self, _inst: u128) {
         self.ir.emit_nop();
@@ -66,76 +72,5 @@ impl<'a> Decoder<'a> {
     }
     pub fn setctaid(&mut self, _inst: u128) {
         panic!("SETCTAID cannot change the compute harness workgroup id");
-    }
-    pub fn ttucctl(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ftz = (((inst >> 80) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ttugo(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ttuld(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _sc_absolute = (((inst >> 74) & 0x1) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ttumacrofuse(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _sb = (((inst >> 40) & 0x1f) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ttuopen(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
-    }
-    pub fn ttust(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _ra_offset = (((inst >> 40) & 0xffff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
     }
 }

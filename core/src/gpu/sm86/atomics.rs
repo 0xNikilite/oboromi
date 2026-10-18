@@ -1,59 +1,10 @@
 use super::*;
 
 impl<'a> Decoder<'a> {
-    fn global_f32_at(&mut self, address: u32) -> u32 {
-        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
-        let kind = ResourceKind::Ssbo(2);
-        let var = match self.resource(kind) {
-            Some(var) => var,
-            None => {
-                let array = self.ir.emit_type_runtime_array(self.type_f32[1]);
-                let block = self.ir.emit_type_struct(&[array]);
-                let ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
-                self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[4]);
-                self.ir.emit_decorate(block, deco::BLOCK, &[]);
-                self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
-                let var = self.ir.emit_variable(ptr, STORAGE_BUFFER);
-                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
-                self.ir.emit_decorate(var, deco::BINDING, &[GLOBAL_BINDING]);
-                self.resources.push(Resource { kind, var });
-                var
-            }
-        };
-        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
-        let rel = self.ir.emit_isub(self.type_u32[1], address, base);
-        let two = self.cached_const_u32(2);
-        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, two);
-        let ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, self.type_f32[1]);
-        self.ir.emit_access_chain(ptr, var, &[self.const_u32_0, index])
-    }
-
     fn global_u64_at(&mut self, address: u32) -> u32 {
-        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
-        let ty = self.type_u64();
         self.ir.emit_capability(INT64_ATOMICS);
-        let var = match self.resource(ResourceKind::Global64) {
-            Some(var) => var,
-            None => {
-                let array = self.ir.emit_type_runtime_array(ty);
-                let block = self.ir.emit_type_struct(&[array]);
-                self.type_ptr_ssbo64 = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
-                self.type_ptr_ssbo_u64 = self.ir.emit_type_pointer(STORAGE_BUFFER, ty);
-                self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[8]);
-                self.ir.emit_decorate(block, deco::BLOCK, &[]);
-                self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
-                let var = self.ir.emit_variable(self.type_ptr_ssbo64, STORAGE_BUFFER);
-                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
-                self.ir.emit_decorate(var, deco::BINDING, &[GLOBAL_BINDING]);
-                self.resources.push(Resource { kind: ResourceKind::Global64, var });
-                var
-            }
-        };
-        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
-        let rel = self.ir.emit_isub(self.type_u32[1], address, base);
-        let three = self.cached_const_u32(3);
-        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, three);
-        self.ir.emit_access_chain(self.type_ptr_ssbo_u64, var, &[self.const_u32_0, index])
+        let ty = self.type_u64();
+        self.global_element_at(ResourceKind::Global64, ty, 8, address)
     }
 
     fn global_atomic(&mut self, inst: u128, op: u32, sz: u32, rb: u32) -> u32 {
@@ -79,8 +30,6 @@ impl<'a> Decoder<'a> {
         match sz {
             3 => {
                 assert!(op == 0, "ATOM.F32 only defines ADD");
-                assert!(crate::gpu::device().is_ok_and(|d| d.shader_buffer_float32_atomic_add), "ATOM.ADD.F32 requires shaderBufferFloat32AtomicAdd");
-                let ptr = self.global_f32_at(address);
                 self.atomic_fadd(ptr, scope, sem, value)
             }
             4 => {
@@ -134,6 +83,10 @@ impl<'a> Decoder<'a> {
         }
     }
     pub fn atomg(&mut self, inst: u128) {
+        // Session 6: ATOM.CAST on global memory leaves both the memory word and Rd untouched on silicon.
+        if opcode(inst) == 0x38b && inst >> 87 & 1 != 0 {
+            return;
+        }
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let rb = (((inst >> 32) & 0xff) << 0) as u32;
         let sz = (((inst >> 73) & 0xf) << 0) as u32;

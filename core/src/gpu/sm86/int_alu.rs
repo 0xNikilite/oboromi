@@ -283,7 +283,12 @@ impl<'a> Decoder<'a> {
         const MOV_IRF_I: u32 = 0x1878;
         const MOV_IRF_C: u32 = 0x1a78;
         const MOV_R_IRF: u32 = 0x1c78;
+        // Session 6: silicon faults on an index of 256 or more; here any index past R253 reads 0 and drops the write as RZ does.
         let indexed_ptr = |this: &mut Self, ur| {
+            // An indirect read observes any register; an indirect write must clear its old provenance.
+            for reg in this.pending_nan.keys().copied().collect::<Vec<_>>() {
+                this.load_register(reg);
+            }
             let index = this.load_ureg(ur);
             let limit = this.cached_const_u32(MAX_REG_COUNT as u32);
             let valid = this.ir.emit_uless_than(this.type_bool[1], index, limit);
@@ -293,12 +298,7 @@ impl<'a> Decoder<'a> {
             (ptr, valid)
         };
         let val = match opcode(inst) {
-            MOV_RR | MOV_RI | MOV_RC | MOV_RU => self.alu_src(inst),
-            MOV_RCX => {
-                let bank = self.load_ureg((inst >> 32 & 0x3f) as u32);
-                let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) << 2) as u32);
-                self.load_dynamic_cbuf(bank, offset)
-            }
+            MOV_RR | MOV_RI | MOV_RC | MOV_RU | MOV_RCX => self.alu_src(inst),
             MOV_IRF_R | MOV_IRF_I | MOV_IRF_C => {
                 let field = (inst >> 32) as u32;
                 let val = match opcode(inst) {

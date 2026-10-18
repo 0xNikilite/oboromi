@@ -16,6 +16,7 @@ libc = "0.2.177"
 memmap2 = "0.9.9"
 log = { workspace = true }
 ash = "0.38.0"
+gilrs = "0.11.2"
 
 [features]
 default = []

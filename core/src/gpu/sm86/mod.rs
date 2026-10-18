@@ -2,13 +2,16 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use ash::vk;
 use crate::gpu::VkState;
+use crate::gpu::threed::PrimitiveTopology;
 use crate::gpu::spirv::{self, storage_class};
 
 mod access;
 mod atomics;
+mod cfg;
+pub use cfg::{plan, Translation};
 mod compare;
 mod control;
 mod convert;
@@ -16,8 +19,10 @@ mod fp;
 mod int_alu;
 mod memory;
 mod operands;
+mod ray;
 mod shared;
 mod special;
+mod structured;
 mod tensor;
 pub use tensor::{cooperative_tile, f16_hmma_shape};
 mod texture;
@@ -55,12 +60,13 @@ const EXIT: u32 = 0x94d;
 const RET: u32 = 0x950;
 const KILL: u32 = 0x95b;
 const BSYNC: u32 = 0x941;
-// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT
-// and the WARPSYNC mask it waits on.
+// Per lane after the BSSY tokens B0..B15: its arrival on each guest barrier, the last BAR.RED result for B2R.RESULT,
+// the WARPSYNC mask it waits on and the byte address its EXIT jumps to, 0 for none.
 const BAR_ARRIVALS: u32 = 16;
 const BAR_RESULT: u32 = 32;
 const WARPSYNC_MASK: u32 = 33;
-const SYNC_WORDS: u32 = 34;
+const ATEXIT_PC: u32 = 34;
+const SYNC_WORDS: u32 = 35;
 // A schedule slot holds the pc vote, then per guest barrier the arrivals plus their BAR.RED predicates in the high half,
 // and the arrivals' thread count OR-ed with bit 12 for a running lane yet to arrive.
 const SCHEDULE_STRIDE: u32 = 1 + 2 * 16;
@@ -71,7 +77,6 @@ const S2UR: u32 = 0x1c3;
 const R2UR: u32 = 0x3c2;
 pub const SHARED_WORDS: u32 = 256;
 const ROUNDING: [u32; 4] = [spirv::glsl::ROUND_EVEN, spirv::glsl::FLOOR, spirv::glsl::CEIL, spirv::glsl::TRUNC];
-static MAX_CONST_BANK: usize = 17;
 static ALLOW_F16_PARTIAL_WRITES: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -88,12 +93,24 @@ pub enum ResourceKind {
     Mma,
     Schedule,
     Global64,
+    GlobalVector(u32),
     Hints,
     Texture2D { cbuf_bank: u32, byte_offset: u32 },
     Surface2D { cbuf_bank: u32, byte_offset: u32, format: vk::Format },
     VertexInput { location: u32 },
     Varying { location: u32, flat: bool },
     FragmentOutput { location: u32 },
+    /// The vec4 at attribute `attr` of every vertex of the primitive or patch.
+    PerVertex { attr: u32, output: bool },
+    Patch { location: u32 },
+    Ttu,
+    RayQuery,
+    AccelerationStructure { cbuf_bank: u32, byte_offset: u32 },
+}
+
+/// A module binds its acceleration structure after its textures and surfaces.
+pub fn acceleration_structure_binding(kinds: &[ResourceKind]) -> u32 {
+    TEXTURE_BINDING + kinds.iter().filter(|kind| matches!(kind, ResourceKind::Texture2D { .. } | ResourceKind::Surface2D { .. })).count() as u32
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -101,6 +118,12 @@ pub enum Stage {
     Compute { local_size: [u32; 3] },
     /// Bit n of `uint` and `sint` is set when generic attribute n is fetched as an unsigned or signed integer.
     Vertex { uint: u32, sint: u32 },
+    /// `input` is the draw's primitive. From the SPH: `output` is OUTPUT_TOPOLOGY (clc797sph.h:60), `max_vertices`
+    /// MAX_OUTPUT_VERTEX_COUNT (:64), `invocations` and `vertices` THREADS_PER_INPUT_PRIMITIVE (:58). `mode`, `spacing` and
+    /// `order` are DOMAIN_TYPE, SPACING and OUTPUT_PRIMITIVES of SET_TESSELLATION_PARAMETERS (clc797.h:691).
+    Geometry { input: PrimitiveTopology, output: u32, max_vertices: u32, invocations: u32 },
+    TessControl { vertices: u32 },
+    TessEval { mode: u32, spacing: u32, order: u32 },
     /// Bit n of `flat` and `screen_linear` is the interpolation of generic attribute n; `depth` writes FragDepth.
     Fragment { flat: u32, screen_linear: u32, depth: bool },
 }
@@ -138,8 +161,6 @@ pub struct Decoder<'a> {
     const_u32_1: u32,
     type_ptr_ssbo: u32,
     type_ptr_ssbo_u32: u32,
-    type_ptr_ssbo64: u32,
-    type_ptr_ssbo_u64: u32,
     type_ptr_shared_u32: u32,
     type_ptr_shared_u64: u32,
     type_ptr_cbuf: u32,
@@ -152,10 +173,15 @@ pub struct Decoder<'a> {
     mma_vars: [u32; 9],
     device: Option<&'a VkState>,
     pub force_cooperative_hmma: Option<bool>,
+    tensor: TensorMode,
     cooperative_types: HashMap<[u32; 4], u32>,
     type_texture_2d: u32,
     type_sampled_texture_2d: u32,
     type_surface_2d: [u32; 2],
+    type_acceleration_structure: u32,
+    acceleration_structure_address: Option<(u32, u32)>,
+    ray_budget: u32,
+    ray_queries: u32,
     derivatives: bool,
     invocations: u32,
     glsl_ext: u32,
@@ -164,11 +190,45 @@ pub struct Decoder<'a> {
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
     timing: Timing,
+    translation: Translation,
+    entry: usize,
+    type_ptr_local: u32,
+    locals: Option<Locals>,
+    pending_nan: BTreeMap<u32, u32>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct Hints {
     pub timing: bool,
+    pub translation: Translation,
+    pub tensor: TensorMode,
+    pub ray_budget: u32,
+}
+
+impl Default for Hints {
+    fn default() -> Self {
+        Self { timing: false, translation: Translation::default(), tensor: TensorMode::default(), ray_budget: crate::gpu::SPEED_HACKS.lock().unwrap().ray_budget }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum TensorMode {
+    Exact,
+    Fast,
+}
+
+impl Default for TensorMode {
+    fn default() -> Self {
+        if crate::gpu::SPEED_HACKS.lock().unwrap().fast_tensor { Self::Fast } else { Self::Exact }
+    }
+}
+
+// Function variables standing in for the state slots a structured program touches, declared at the function's
+// `entry` and seeded from the aggregate at `start`.
+struct Locals {
+    vars: BTreeMap<u32, u32>,
+    entry: usize,
+    start: usize,
 }
 
 enum Timing {
@@ -195,6 +255,16 @@ pub fn branch_target(pc: u32, inst: u128) -> Option<u32> {
     }
 }
 
+fn dynamic_target(inst: u128) -> bool {
+    matches!(opcode(inst), 0x357 | 0x957 | CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950)
+}
+
+fn guard_pred(inst: u128) -> Option<cfg::Pred> {
+    let (index, not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
+    let op = opcode(inst) & 0x1ff;
+    (index != PT).then(|| cfg::Pred { uniform: matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU, index, not })
+}
+
 fn nth_reg(reg: u32, zero: u32, i: u32) -> u32 {
     if reg == zero { reg } else { reg + i }
 }
@@ -210,6 +280,18 @@ fn assert_round_to_nearest(inst: u128) {
     assert!(mode == 0, "{} rounding mode is not implemented", ["RN", "RM", "RP", "RZ"][mode]);
 }
 
+fn deferred_nan(inst: u128) -> bool {
+    match opcode(inst) & 0x1ff {
+        0x020 | 0x021 | 0x023 | 0x009 | 0x108 => true, // FMUL, FADD, FFMA, FMNMX, MUFU
+        0x107 => inst >> 84 & 3 == 2 && inst >> 75 & 3 == 2, // FRND.F32.F32
+        _ => false,
+    }
+}
+
+fn ignores_nan_payload(inst: u128) -> bool {
+    deferred_nan(inst) || matches!(opcode(inst) & 0x1ff, 0x00a | 0x00b) // FSET, FSETP
+}
+
 fn is_uniform(inst: u128) -> bool {
     inst >> 91 & 1 != 0 && matches!(inst >> 9 & 7, 1 | 2 | 4)
 }
@@ -223,6 +305,19 @@ fn partial_warpsync(inst: u128) -> bool {
     opcode(inst) & 0x1ff == 0x148 && !(opcode(inst) == 0x948 && (inst >> 32) as u32 == u32::MAX)
 }
 
+// The input execution mode of a geometry shader drawn with `input` and the vertices of each of its primitives.
+fn geometry_input(input: PrimitiveTopology) -> (u32, u32) {
+    use {PrimitiveTopology::*, spirv::execution_mode::*};
+    match input {
+        Points => (INPUT_POINTS, 1),
+        Lines | LineLoop | LineStrip => (INPUT_LINES, 2),
+        LineListAdjacency | LineStripAdjacency => (INPUT_LINES_ADJACENCY, 4),
+        Triangles | TriangleStrip | TriangleFan => (TRIANGLES, 3),
+        TriangleListAdjacency | TriangleStripAdjacency => (INPUT_TRIANGLES_ADJACENCY, 6),
+        _ => panic!("a geometry shader cannot draw {input:?}"),
+    }
+}
+
 fn guest_barriers(words: &[u128]) -> Vec<u32> {
     let bars = words.iter().filter(|&&inst| opcode(inst) & 0x1ff == 0x11d);
     if bars.clone().any(|&inst| opcode(inst) == 0x51d) {
@@ -234,7 +329,15 @@ fn guest_barriers(words: &[u128]) -> Vec<u32> {
     ids
 }
 
-pub fn emit_module(device: Option<&VkState>, stage: Stage, hints: Hints, body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
+pub fn emit_module(device: Option<&VkState>, stage: Stage, body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
+    let mut hints = Hints::default();
+    if !matches!(stage, Stage::Compute { .. }) {
+        hints.translation = Translation::ForceDispatcher;
+    }
+    emit_module_hinted(device, stage, hints, body)
+}
+
+pub fn emit_module_hinted(device: Option<&VkState>, stage: Stage, hints: Hints, body: impl FnOnce(&mut Decoder)) -> spirv::Emitter {
     let mut emitter = spirv::Emitter::new();
     emitter.emit_header();
     emitter.emit_capability(spirv::capability::SHADER);
@@ -245,6 +348,7 @@ pub fn emit_module(device: Option<&VkState>, stage: Stage, hints: Hints, body: i
     let func_ty = decoder.ir.emit_type_function(void_ty, &[]);
     let func = decoder.ir.emit_function(void_ty, 0, func_ty);
     decoder.ir.emit_label();
+    decoder.entry = decoder.ir.function_len();
     if let Stage::Compute { local_size } = stage {
         decoder.invocations = local_size.iter().product();
     }
@@ -282,8 +386,6 @@ impl<'a> Decoder<'a> {
             const_u32_1: 0,
             type_ptr_ssbo: 0,
             type_ptr_ssbo_u32: 0,
-            type_ptr_ssbo64: 0,
-            type_ptr_ssbo_u64: 0,
             type_ptr_shared_u32: 0,
             type_ptr_shared_u64: 0,
             type_ptr_cbuf: 0,
@@ -296,16 +398,26 @@ impl<'a> Decoder<'a> {
             mma_vars: [0; 9],
             device,
             force_cooperative_hmma: None,
+            tensor: hints.tensor,
             cooperative_types: HashMap::new(),
             type_texture_2d: 0,
             type_sampled_texture_2d: 0,
             type_surface_2d: [0; 2],
+            type_acceleration_structure: 0,
+            acceleration_structure_address: None,
+            ray_budget: hints.ray_budget,
+            ray_queries: 0,
             derivatives: false,
             invocations: 0,
             glsl_ext: 0,
             resources: Vec::new(),
             stores_global: false,
             const_cache: HashMap::new(),
+            translation: hints.translation,
+            entry: 0,
+            type_ptr_local: 0,
+            locals: None,
+            pending_nan: BTreeMap::new(),
             timing: if !hints.timing { Timing::Off } else if let Some(device) = device.filter(|d| d.shader_device_clock) {
                 Timing::Clock { period: device.timestamp_period, emitted: false }
             } else {
@@ -325,23 +437,54 @@ impl<'a> Decoder<'a> {
         }
         // SPIR-V 1.4+ entry points must list every global variable they use, not just Input/Output.
         let resources = self.resources.iter().map(|r| r.var);
-        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).collect();
+        let interface: Vec<u32> = [self.var_abstract_state, self.var_pc, self.var_rpc[0], self.var_rpc[1], self.var_live, self.var_step, self.var_tokens].into_iter().chain(resources).chain(self.mma_vars.into_iter().filter(|&var| var != 0)).chain(self.pending_nan.values().copied()).collect();
         use spirv::{capability as cap, execution_mode as mode, execution_model as model};
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
             Stage::Vertex { .. } => model::VERTEX,
+            Stage::TessControl { .. } => model::TESSELLATION_CONTROL,
+            Stage::TessEval { .. } => model::TESSELLATION_EVALUATION,
+            Stage::Geometry { .. } => model::GEOMETRY,
             Stage::Fragment { .. } => model::FRAGMENT,
         };
+        self.bind_acceleration_structure();
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
             Stage::Vertex { .. } => {}
+            Stage::Geometry { input, output, max_vertices, invocations } => {
+                self.ir.emit_capability(cap::GEOMETRY);
+                let output = match output {
+                    1 => mode::OUTPUT_POINTS,
+                    6 => mode::OUTPUT_LINE_STRIP,
+                    7 => mode::OUTPUT_TRIANGLE_STRIP,
+                    _ => panic!("OUTPUT_TOPOLOGY {output} is not a geometry shader output"),
+                };
+                for (mode, literals) in [(geometry_input(input).0, &[][..]), (output, &[]), (mode::OUTPUT_VERTICES, &[max_vertices]), (mode::INVOCATIONS, &[invocations])] {
+                    self.ir.emit_execution_mode(func, mode, literals);
+                }
+            }
+            Stage::TessControl { vertices } => {
+                self.ir.emit_capability(cap::TESSELLATION);
+                self.ir.emit_execution_mode(func, mode::OUTPUT_VERTICES, &[vertices]);
+            }
+            Stage::TessEval { mode: domain, spacing, order } => {
+                self.ir.emit_capability(cap::TESSELLATION);
+                let order = [Some(mode::POINT_MODE), None, Some(mode::VERTEX_ORDER_CW), Some(mode::VERTEX_ORDER_CCW)][order as usize];
+                let modes = [[mode::ISOLINES, mode::TRIANGLES, mode::QUADS][domain as usize], [mode::SPACING_EQUAL, mode::SPACING_FRACTIONAL_ODD, mode::SPACING_FRACTIONAL_EVEN][spacing as usize]];
+                for mode in modes.into_iter().chain(order) {
+                    self.ir.emit_execution_mode(func, mode, &[]);
+                }
+            }
             Stage::Fragment { depth, .. } => {
                 self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]);
                 if depth {
                     self.ir.emit_execution_mode(func, mode::DEPTH_REPLACING, &[]);
                 }
             }
+        }
+        if self.resource(ResourceKind::BuiltIn(spirv::BuiltIn::SampleId as u32)).is_some() {
+            self.ir.emit_capability(cap::SAMPLE_RATE_SHADING);
         }
         let Some(device) = device else { return };
         for (capability, execution_mode, widths) in [
@@ -395,6 +538,7 @@ impl<'a> Decoder<'a> {
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
             self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(storage_class::PRIVATE, type_regs_array);
         }
+        self.type_ptr_local = self.ir.emit_type_pointer(storage_class::FUNCTION, self.type_u32[1]);
 
         // Define generic pointers
         for i in 1..=4 {
@@ -431,8 +575,7 @@ impl<'a> Decoder<'a> {
         let output = self.resource(ResourceKind::Ssbo(1)).unwrap();
         let base = self.invocation_state_base();
         for slot in 0..STATE_WORDS as u32 {
-            let ptr = self.state_slot(slot);
-            let value = self.ir.emit_load(self.type_u32[1], ptr);
+            let value = if slot < MAX_REG_COUNT as u32 { self.load_register(slot) } else { self.load_slot(slot) };
             let word = self.ssbo_word(output, base, slot);
             self.ir.emit_store(word, value);
         }
@@ -468,6 +611,28 @@ impl<'a> Decoder<'a> {
     fn warp_exchange(&mut self, val: u32, lanes: &[u32]) -> Vec<[u32; 2]> {
         const MAX_INVOCATIONS: u32 = 1024;
         let ty = self.type_u32[1];
+        if matches!(self.stage, Stage::Fragment { .. }) {
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_SHUFFLE);
+            self.ir.emit_capability(spirv::capability::GROUP_NON_UNIFORM_BALLOT);
+            let scope = self.cached_const_u32(spirv::scope::SUBGROUP);
+            let own = self.builtin(spirv::BuiltIn::SubgroupLocalInvocationId);
+            let yes = self.ir.emit_constant_true(self.type_bool[1]);
+            let present = self.ir.emit_group_non_uniform_ballot(self.type_u32[4], scope, yes);
+            let mask = self.cached_const_u32(!31);
+            let base = self.ir.emit_bitwise_and(ty, own, mask);
+            let value = self.ir.emit_select(ty, self.active, val, self.const_u32_0);
+            let active = self.bool_bit(self.active);
+            return lanes.iter().map(|&lane| {
+                let source = self.ir.emit_iadd(ty, base, lane);
+                let exists = self.ir.emit_group_non_uniform_ballot_bit_extract(self.type_bool[1], scope, present, source);
+                let source = self.ir.emit_select(ty, exists, source, own);
+                [value, active].map(|word| {
+                    let word = self.ir.emit_group_non_uniform_shuffle(ty, scope, word, source);
+                    self.ir.emit_select(ty, exists, word, self.const_u32_0)
+                })
+            }).collect();
+        }
         let invocation = self.builtin(spirv::BuiltIn::LocalInvocationIndex);
         let flags = self.cached_const_u32(MAX_INVOCATIONS);
         let val = self.ir.emit_select(ty, self.active, val, self.const_u32_0);
@@ -539,9 +704,21 @@ impl<'a> Decoder<'a> {
     // Warp collectives and BAR meet at workgroup barriers, so a program with them steps every invocation through the same
     // iterations: each iteration runs the lowest pc a lane can run and lanes at any other pc sit it out.
     pub fn translate_program(&mut self, words: &[u128]) {
+        self.acceleration_structure_address = ray::acceleration_structure_address(words);
+        for &inst in words.iter().filter(|&&inst| deferred_nan(inst)) {
+            let reg = (inst >> 16 & 0xff) as u32;
+            if reg != RZ { self.nan_flag(reg); }
+        }
+        if self.translation != Translation::ForceDispatcher {
+            match plan(words) {
+                Ok(plan) => return self.translate_structured(words, &plan),
+                Err(reason) => assert!(self.translation == Translation::Auto, "no structured translation: {reason}"),
+            }
+        }
         let len = words.len() as u32;
-        // BRX, JMX and CALL Ra only know their target at run time, so such a program dispatches on every pc; RET lands after a CALL.
-        let indirect = words.iter().any(|inst| matches!(opcode(*inst), CALL_ABS_R | CALL_REL_R | 0x1943 | 0x1944 | 0xb43 | BRX | BRXU | JMX | JMXU | 0xb4a | 0x1b4a | 0x174a | 0x194a | 0x154a | 0x1950));
+        // BRX, JMX, CALL Ra and BMOV ATEXIT_PC only know their target at run time, so such a program dispatches on every pc; RET
+        // lands after a CALL.
+        let indirect = words.iter().any(|&inst| dynamic_target(inst));
         let mut leaders: Vec<u32> = if indirect { (0..=len).collect() } else { vec![0, len] };
         for (pc, &inst) in (0..).zip(words) {
             leaders.extend(branch_target(pc, inst));
@@ -569,7 +746,7 @@ impl<'a> Decoder<'a> {
         let end = self.cached_const_u32(len);
         let start = self.ir.emit_select(self.type_u32[1], dead, end, self.const_u32_0);
         self.ir.emit_store(self.var_pc, start);
-        if uniform {
+        if uniform && matches!(self.stage, Stage::Compute { .. }) {
             self.clear_schedule_slot(self.const_u32_0, &guest_barriers(words));
             self.workgroup_barrier();
         }
@@ -639,10 +816,16 @@ impl<'a> Decoder<'a> {
         let Some(cond) = cond else { return self.translate(inst) };
         if exchanges(inst) {
             self.active = cond;
+            let flags: Vec<_> = self.pending_nan.values().map(|&var| (var, self.ir.emit_load(self.type_u32[1], var))).collect();
             let before = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
             self.translate(inst);
             let after = self.ir.emit_load(self.type_abstract_state, self.var_abstract_state);
             let kept = self.ir.emit_select(self.type_abstract_state, cond, after, before);
+            for (var, before) in flags {
+                let after = self.ir.emit_load(self.type_u32[1], var);
+                let kept = self.ir.emit_select(self.type_u32[1], cond, after, before);
+                self.ir.emit_store(var, kept);
+            }
             return self.ir.emit_store(self.var_abstract_state, kept);
         }
         let [then, after] = [(); 2].map(|_| self.ir.alloc_id());
@@ -655,15 +838,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn guard(&mut self, inst: u128) -> Option<u32> {
-        let (pg, pg_not) = ((inst >> 12 & 7) as u32, inst >> 15 & 1 != 0);
-        if pg == PT {
-            return None;
-        }
-        // Uniform datapath opcodes, except VOTEU, take their guard from UP0..UP6 instead of P0..P6.
-        let op = opcode(inst) & 0x1ff;
-        let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
-        let bit = self.pred_bit(uniform, pg, pg_not);
-        Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
+        guard_pred(inst).map(|pred| self.holds(&[pred]))
     }
 
     // A pixel program binds its constant buffers and textures apart from the vertex program's, in descriptor set 1.
@@ -681,6 +856,34 @@ impl<'a> Decoder<'a> {
     }
 
     fn state_slot(&mut self, slot: u32) -> u32 {
+        match self.locals {
+            Some(_) if slot < STATE_WORDS as u32 - 1 => self.local(slot),
+            _ => self.aggregate_slot(slot),
+        }
+    }
+
+    fn local(&mut self, slot: u32) -> u32 {
+        let locals = self.locals.as_ref().unwrap();
+        if let Some(&var) = locals.vars.get(&slot) {
+            return var;
+        }
+        // SPIR-V 2.4: a function's OpVariables are the first instructions of its first block.
+        let (entry, len) = (locals.entry, self.ir.function_len());
+        let var = self.ir.emit_variable(self.type_ptr_local, storage_class::FUNCTION);
+        self.ir.move_tail(len, entry);
+        let start = self.locals.as_ref().unwrap().start + self.ir.function_len() - len;
+        let len = self.ir.function_len();
+        let ptr = self.aggregate_slot(slot);
+        let value = self.ir.emit_load(self.type_u32[1], ptr);
+        self.ir.emit_store(var, value);
+        self.ir.move_tail(len, start);
+        let locals = self.locals.as_mut().unwrap();
+        locals.start = start;
+        locals.vars.insert(slot, var);
+        var
+    }
+
+    fn aggregate_slot(&mut self, slot: u32) -> u32 {
         let (regs, uregs) = (MAX_REG_COUNT as u32, MAX_UNIFORM_REG_COUNT as u32);
         match slot {
             s if s < regs => self.state_ptr(&[0, s]),
@@ -691,29 +894,35 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    fn load_slot(&mut self, slot: u32) -> u32 {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
+    fn store_slot(&mut self, slot: u32, val: u32) {
+        let ptr = self.state_slot(slot);
+        self.ir.emit_store(ptr, val);
+    }
+
     fn load_ureg(&mut self, ur: u32) -> u32 {
         if ur == URZ {
             return self.const_u32_0;
         }
-        let ptr = self.state_ptr(&[2, ur]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32 + 1 + ur)
     }
 
     fn store_ureg(&mut self, ur: u32, val: u32) {
         if ur != URZ {
-            let ptr = self.state_ptr(&[2, ur]);
-            self.ir.emit_store(ptr, val);
+            self.store_slot(MAX_REG_COUNT as u32 + 1 + ur, val);
         }
     }
 
     fn load_upredicate(&mut self) -> u32 {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(STATE_WORDS as u32 - 2)
     }
 
     fn store_upredicate(&mut self, val: u32) {
-        let ptr = self.state_ptr(&[3]);
-        self.ir.emit_store(ptr, val);
+        self.store_slot(STATE_WORDS as u32 - 2, val);
     }
 
     fn ssbo_word(&mut self, var: u32, base: u32, offset: u32) -> u32 {
@@ -734,34 +943,55 @@ impl<'a> Decoder<'a> {
         id
     }
 
+    fn nan_flag(&mut self, reg: u32) -> u32 {
+        *self.pending_nan.entry(reg).or_insert_with(|| {
+            self.ir.emit_variable_init(self.type_ptr_u32[1], storage_class::PRIVATE, self.const_u32_0)
+        })
+    }
+
+    fn store_fp_register(&mut self, reg: u32, bits: u32) {
+        if reg == RZ { return; }
+        assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
+        let flag = self.nan_flag(reg);
+        self.store_slot(reg, bits);
+        self.ir.emit_store(flag, self.const_u32_1);
+    }
+
     fn load_register(&mut self, reg: u32) -> u32 {
+        let bits = self.load_float_register(reg);
+        let Some(&flag) = self.pending_nan.get(&reg) else { return bits };
+        let pending = self.ir.emit_load(self.type_u32[1], flag);
+        let pending = self.ir.emit_inot_equal(self.type_bool[1], pending, self.const_u32_0);
+        let val = self.bitcast_f32(bits);
+        let canonical = self.canonical_nan_bits(val);
+        let bits = self.ir.emit_select(self.type_u32[1], pending, canonical, bits);
+        self.store_register(reg, bits);
+        bits
+    }
+
+    fn load_float_register(&mut self, reg: u32) -> u32 {
         if reg == RZ {
             return self.const_u32_0;
         }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_load(self.type_u32[1], reg_ptr)
+        self.load_slot(reg)
     }
 
     fn store_register(&mut self, reg: u32, val: u32) {
         if reg == RZ { return; }
         assert!(reg < MAX_REG_COUNT as u32, "Register index out of bounds");
-        let array_ptr = self.ir.emit_access_chain(self.type_ptr_abstract_state_regs, self.var_abstract_state, &[self.const_u32_0]);
-        let idx = self.cached_const_u32(reg);
-        let reg_ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], array_ptr, &[idx]);
-        self.ir.emit_store(reg_ptr, val);
+        self.store_slot(reg, val);
+        if let Some(&flag) = self.pending_nan.get(&reg) {
+            self.ir.emit_store(flag, self.const_u32_0);
+        }
     }
 
     fn load_predicate(&mut self) -> u32 {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_load(self.type_u32[1], ptr)
+        self.load_slot(MAX_REG_COUNT as u32)
     }
 
     fn store_predicate(&mut self, val: u32) {
-        let ptr = self.ir.emit_access_chain(self.type_ptr_u32[1], self.var_abstract_state, &[self.const_u32_1]);
-        self.ir.emit_store(ptr, val)
+        self.store_slot(MAX_REG_COUNT as u32, val)
     }
 
     pub fn finish(&mut self) {

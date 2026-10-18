@@ -1,13 +1,13 @@
 //! A GPU channel over guest RAM: pushbuffers run through the pusher, and each draw or compute launch translates the
 //! guest's programs, mirrors the buffers and textures it reads and writes what it renders or stores back to guest
 //! memory, so guest-physical pages stay the only identity of every resource.
-use super::compute::{ComputePipeline, HostBuffer, HostImage};
+use super::compute::{AccelerationStructure, ComputePipeline, HostBuffer, HostImage, Triangles};
 use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
-use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Writer, within};
+use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Ram, Writer, ZeroCopy, within};
 use super::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy, hash};
-use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, Hints, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
+use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, Hints, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, Translation, acceleration_structure_binding, branch_target, emit_module_hinted};
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::{SpeedHacks, VkError, VkState};
@@ -102,6 +102,27 @@ struct TargetKey {
 /// A texture's guest pages and the TIC and TSC entries it was decoded from.
 type TextureKey = (Vec<PaRange>, [u8; 32], [u8; 32]);
 
+/// Guest triangles one instance of an acceleration structure is built from: R32G32B32_SFLOAT positions at the start of
+/// each `stride`-byte vertex, u32 indices and the row-major 3x4 object-to-world transform.
+#[derive(Clone, Copy)]
+pub struct Geometry {
+    pub vertices: u64,
+    pub stride: u32,
+    pub vertex_count: u32,
+    pub indices: u64,
+    pub index_count: u32,
+    pub transform: [[f32; 4]; 3],
+    pub opaque: bool,
+}
+
+/// A registered guest acceleration structure, its geometry's guest pages and the host build of their `generation`.
+struct Traversable<'a> {
+    geometry: Vec<Geometry>,
+    ranges: Vec<PaRange>,
+    generation: u64,
+    built: Option<AccelerationStructure<'a>>,
+}
+
 /// A colour target and the depth target drawn with it, which lives only on the host: nothing reads guest depth.
 struct Target<'a> {
     render_target: RenderTarget<'a>,
@@ -114,15 +135,18 @@ struct Target<'a> {
 
 pub struct Gpu<'a> {
     state: &'static VkState,
-    pub ram: Vec<u8>,
     pub space: PageMap,
     pub memory: MemoryTracker,
+    /// None where guest RAM cannot be imported, so buffers and render targets mirror it.
+    pub zero_copy: Option<ZeroCopy<'a>>,
     pusher: Pusher,
     modules: HashMap<u64, Module>,
     pipelines: PipelineBuilder<'static, PipelineKey, Pipeline>,
-    kernels: HashMap<u64, Vec<(u32, vk::DescriptorType)>>,
+    kernels: HashMap<u64, (Vec<(u32, vk::DescriptorType)>, Option<(u32, u32, u32)>)>,
     /// Guest programs translated rather than read back from the disk cache.
     pub translated: usize,
+    pub(crate) ray_budget: u32,
+    traversables: HashMap<u64, Traversable<'a>>,
     support: Option<HostBuffer<'a>>,
     targets: HashMap<TargetKey, Target<'a>>,
     mirrors: HashMap<Vec<PaRange>, Mapping<'a>>,
@@ -133,6 +157,8 @@ pub struct Gpu<'a> {
     pixels: Vec<u8>,
     /// The report timestamp counts nanoseconds from here.
     started: Instant,
+    // Declared after every imported Vulkan resource so their memory is freed before its host allocation.
+    ram: Ram,
 }
 
 fn named(e: impl std::fmt::Debug) -> String {
@@ -159,7 +185,12 @@ fn settle_ranges(targets: &mut HashMap<TargetKey, Target>, memory: &mut MemoryTr
     for (key, target) in targets {
         let Some(pending) = target.pending.take_if(|pending| within(&key.ranges, pending.clone()).any(|(_, piece)| overlaps(&piece))) else { continue };
         let pieces: Vec<_> = within(&key.ranges, pending.clone()).map(|(_, piece)| piece).collect();
-        memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);
+        if target.render_target.staging.imported.is_some() {
+            target.render_target.readback()?;
+            pieces.iter().for_each(|piece| memory.mark_gpu_written(piece.start, piece.end - piece.start));
+        } else {
+            memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);
+        }
         target.generation = generation(memory, &key.ranges);
     }
     Ok(())
@@ -344,6 +375,7 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
 impl<'a> Gpu<'a> {
     /// Keeps translated programs and the pipeline cache under `cache`'s root and title when given.
     pub fn new(state: &'static VkState, ram_bytes: usize, cache: Option<(&Path, &str)>, hacks: SpeedHacks) -> Result<Self, VkError> {
+        let alignment = state.external_memory_host.as_ref().map_or(align_of::<u128>(), |(_, alignment)| *alignment as usize);
         let policy = if hacks.skip_draw_while_compiling { PipelinePolicy::SkipDraw } else { PipelinePolicy::Wait };
         let disk = cache.and_then(|(root, title)| {
             let device = unsafe { state.instance.get_physical_device_properties(state.physical_device) };
@@ -351,14 +383,16 @@ impl<'a> Gpu<'a> {
         });
         Ok(Self {
             state,
-            ram: vec![0; ram_bytes],
+            zero_copy: ZeroCopy::new(state),
             space: PageMap::default(),
             memory: MemoryTracker::default(),
             pusher: Pusher::default(),
             modules: HashMap::new(),
             pipelines: PipelineBuilder::new(state, policy, disk)?,
             kernels: HashMap::new(),
+            traversables: HashMap::new(),
             translated: 0,
+            ray_budget: hacks.ray_budget,
             support: None,
             targets: HashMap::new(),
             mirrors: HashMap::new(),
@@ -368,6 +402,7 @@ impl<'a> Gpu<'a> {
             pending_depth_clear: None,
             pixels: Vec::new(),
             started: Instant::now(),
+            ram: Ram::new(ram_bytes, alignment),
         })
     }
 
@@ -375,12 +410,62 @@ impl<'a> Gpu<'a> {
         self.pipelines.flush()
     }
 
+    #[cfg(test)]
+    pub(crate) fn grow_ram(&mut self, bytes: usize) {
+        assert!(self.zero_copy.as_ref().is_none_or(|zero_copy| !zero_copy.imported()));
+        self.ram.resize(bytes);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ram_len(&self) -> usize {
+        self.ram.len()
+    }
+
+    /// Registers the acceleration structure the guest builds at `gpu_va` from `geometry`, one instance per entry, so a
+    /// program handing that address to the TTU traces a host build of it, rebuilt whenever the geometry's pages change.
+    // The guest's native BVH format is not known, so the host builds its own structure from the guest's build inputs.
+    pub fn register_acceleration_structure(&mut self, gpu_va: u64, geometry: Vec<Geometry>) -> Result<(), MemoryError> {
+        let mut ranges = Vec::new();
+        for g in &geometry {
+            ranges.extend(self.space.resolve(g.vertices, u64::from(g.stride) * u64::from(g.vertex_count))?);
+            ranges.extend(self.space.resolve(g.indices, 4 * u64::from(g.index_count))?);
+        }
+        self.traversables.insert(gpu_va, Traversable { geometry, ranges, generation: 0, built: None });
+        Ok(())
+    }
+
+    fn build_traversable(&mut self, va: u64) -> Result<(), String> {
+        if self.state.acceleration_structure.is_none() {
+            return Err("ray queries are not supported by this device".into());
+        }
+        let entry = self.traversables.get_mut(&va).ok_or_else(|| format!("no acceleration structure is registered at {va:#x}"))?;
+        let current = generation(&self.memory, &entry.ranges);
+        if entry.built.is_some() && entry.generation == current {
+            return Ok(());
+        }
+        let mut meshes = Vec::new();
+        for g in &entry.geometry {
+            let mut vertices = vec![0; (g.stride * g.vertex_count) as usize];
+            let mut indices = vec![0; 4 * g.index_count as usize];
+            gather(&self.space, &self.ram, g.vertices, &mut vertices).map_err(named)?;
+            gather(&self.space, &self.ram, g.indices, &mut indices).map_err(named)?;
+            let word = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            let positions: Vec<[f32; 3]> = vertices.chunks(g.stride as usize).map(|v| [0, 4, 8].map(|at| f32::from_bits(word(v, at)))).collect();
+            meshes.push((positions, indices.chunks(4).map(|i| word(i, 0)).collect::<Vec<_>>()));
+        }
+        let instances: Vec<_> = entry.geometry.iter().zip(&meshes).map(|(g, (positions, indices))| Triangles { positions, indices, transform: g.transform, opaque: g.opaque }).collect();
+        entry.built = Some(AccelerationStructure::new(self.state, &instances).map_err(named)?);
+        entry.generation = current;
+        Ok(())
+    }
+
     /// A CPU write of guest memory at `va`.
     pub fn write(&mut self, va: u64, bytes: &[u8]) -> Result<(), MemoryError> {
         self.store(va, bytes, Writer::Cpu)
     }
 
-    pub fn read(&self, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+    pub fn read(&mut self, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+        self.settle(va, out.len() as u64)?;
         gather(&self.space, &self.ram, va, out)
     }
 
@@ -395,14 +480,18 @@ impl<'a> Gpu<'a> {
     }
 
     fn store(&mut self, va: u64, bytes: &[u8], writer: Writer) -> Result<(), MemoryError> {
-        self.settle(va, bytes.len() as u64)?;
         let ranges: Vec<_> = self.space.resolve(va, bytes.len() as u64)?.collect();
+        for (key, target) in &mut self.targets {
+            if key.ranges == ranges {
+                target.pending = None;
+            }
+        }
+        settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &ranges)?;
         self.memory.store(&mut self.ram, &ranges, bytes, writer);
         Ok(())
     }
 
-    /// Runs GPFIFO entries to completion: every draw has landed in guest memory when this returns. Inside a submit a
-    /// target reaches guest memory only when something touches its pages, so many draws read it back once.
+    /// Runs GPFIFO entries to completion. A target reaches guest memory only when something touches its pages.
     pub fn submit(&mut self, entries: &[[u8; 8]]) -> Result<(), String> {
         let (space, ram) = (&self.space, &self.ram);
         let events = self.pusher.submit(entries.iter().copied(), |va, len| {
@@ -446,7 +535,7 @@ impl<'a> Gpu<'a> {
         if let Some((target, colour)) = self.pending_clear.take() {
             self.fill(target, colour)?;
         }
-        self.settle_all().map_err(named)
+        Ok(())
     }
 
     /// Writes a clear no draw consumed into the target's guest memory, where the target's next draw loads it from.
@@ -495,6 +584,7 @@ impl<'a> Gpu<'a> {
         let header = ProgramHeader::new(&sph);
         let [uint, sint] = integer.map(|mask| mask & header.inputs);
         let key = hash((sph, &code, uint, sint));
+        let key = if self.ray_budget == u32::MAX { key } else { hash((key, self.ray_budget)) };
         if self.modules.contains_key(&key) {
             return Ok(key);
         }
@@ -521,12 +611,13 @@ impl<'a> Gpu<'a> {
         }
         self.translated += 1;
         let (mut resources, mut stores_global) = (Vec::new(), false);
-        let words = emit_module(Some(self.state), stage, Hints::default(), |decoder| {
+        let translation = if matches!(stage, Stage::Compute { .. }) { Translation::default() } else { Translation::ForceDispatcher };
+        let module = emit_module_hinted(Some(self.state), stage, Hints { translation, ray_budget: self.ray_budget, ..Default::default() }, |decoder| {
             decoder.translate_program(code);
             resources = decoder.resources.iter().map(|r| r.kind).collect();
             stores_global = decoder.stores_global;
-        })
-        .words();
+        });
+        let words = module.words();
         if let Some(disk) = disk {
             let _ = disk.store_spirv(key, &words, &resources, stores_global);
         }
@@ -545,10 +636,21 @@ impl<'a> Gpu<'a> {
             self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
         }
         self.support.as_mut().unwrap().write(&span.start.to_le_bytes()).map_err(named)?;
-        let ranges = self.space.resolve(span.start, len).map_err(|e| format!("the global window over all mapped guest memory: {e:?}"))?.collect();
+        let ranges: Vec<_> = self.space.resolve(span.start, len).map_err(|e| format!("the global window over all mapped guest memory: {e:?}"))?.collect();
         match &mut self.window {
-            Some(window) if window.buffer.size >= len => window.retarget(ranges),
-            window => *window = Some(Mapping::new(HostBuffer::new(self.state, len.next_power_of_two()).map_err(named)?, ranges)),
+            Some(window) if window.buffer.imported.is_some() && window.ranges == ranges => {}
+            Some(window) if window.buffer.imported.is_none() && window.buffer.size >= len => window.retarget(ranges),
+            window => {
+                let imported = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let buffer = match imported {
+                    Some(buffer) => buffer,
+                    None => HostBuffer::new(self.state, len.next_power_of_two()).map_err(named)?,
+                };
+                *window = Some(Mapping::new(buffer, ranges));
+            }
         }
         self.memory.refresh(self.window.as_mut().unwrap(), &self.ram).map_err(named)
     }
@@ -564,29 +666,35 @@ impl<'a> Gpu<'a> {
             (words, resources, _) = self.translate(key, Stage::Compute { local_size: dispatch.block }, &code);
             let (ubo, ssbo) = (vk::DescriptorType::UNIFORM_BUFFER, vk::DescriptorType::STORAGE_BUFFER);
             let mut bindings = Vec::new();
-            for kind in resources {
+            let mut traversable = None;
+            for &kind in &resources {
                 let binding = match kind {
                     ResourceKind::Support => (SUPPORT_BINDING, ubo),
                     ResourceKind::Cbuf(slot) => (CBUF_BINDING + slot, ubo),
-                    ResourceKind::Global | ResourceKind::Global64 => (GLOBAL_BINDING, ssbo),
-                    ResourceKind::BuiltIn(_) | ResourceKind::Local | ResourceKind::Shared | ResourceKind::Shared64 | ResourceKind::Warp | ResourceKind::Schedule => continue,
+                    ResourceKind::Global | ResourceKind::Global64 | ResourceKind::GlobalVector(_) => (GLOBAL_BINDING, ssbo),
+                    ResourceKind::AccelerationStructure { cbuf_bank, byte_offset } => {
+                        traversable = Some((acceleration_structure_binding(&resources), cbuf_bank, byte_offset));
+                        continue;
+                    }
+                    ResourceKind::BuiltIn(_) | ResourceKind::Local | ResourceKind::Shared | ResourceKind::Shared64 | ResourceKind::Warp | ResourceKind::Mma | ResourceKind::Schedule | ResourceKind::Ttu | ResourceKind::RayQuery => continue,
                     kind => return Err(format!("{kind:?} in a compute dispatch is not implemented")),
                 };
                 if !bindings.contains(&binding) {
                     bindings.push(binding);
                 }
             }
-            self.kernels.insert(key, bindings);
+            self.kernels.insert(key, (bindings, traversable));
         }
         let (state, pipeline_key) = (self.state, PipelineKey::Dispatch(key));
         self.pipelines
             .get_or_request(&pipeline_key, || {
-                let bindings = self.kernels[&key].clone();
+                let (mut bindings, traversable) = self.kernels[&key].clone();
+                bindings.extend(traversable.map(|(binding, ..)| (binding, vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)));
                 move || ComputePipeline::new(state, &words, &bindings).map(Pipeline::Dispatch)
             })
             .map_err(named)?;
         let mut buffers = Vec::new();
-        for (binding, _) in self.kernels[&key].clone() {
+        for (binding, _) in self.kernels[&key].0.clone() {
             match binding {
                 GLOBAL_BINDING => self.window()?,
                 SUPPORT_BINDING => {}
@@ -597,8 +705,22 @@ impl<'a> Gpu<'a> {
                 }
             }
         }
+        let traversable = match self.kernels[&key].1 {
+            Some((binding, bank, offset)) => {
+                let buffer = dispatch.constant_buffers[bank as usize].ok_or_else(|| format!("QMD constant buffer {bank} with the TLAS address is not valid"))?;
+                let mut va = [0; 8];
+                gather(&self.space, &self.ram, buffer.address + u64::from(offset), &mut va).map_err(named)?;
+                let va = u64::from_le_bytes(va);
+                self.build_traversable(va)?;
+                Some((binding, va))
+            }
+            None => None,
+        };
         let Lookup::Ready(Pipeline::Dispatch(pipeline)) = self.pipelines.wait(&pipeline_key).map_err(named)? else { unreachable!() };
-        let bindings = &self.kernels[&key];
+        let bindings = &self.kernels[&key].0;
+        if let Some((binding, va)) = traversable {
+            pipeline.descriptors.bind_acceleration_structure(binding, self.traversables[&va].built.as_ref().unwrap());
+        }
         let mut bound: Vec<_> = buffers.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].buffer)).collect();
         let global = bindings.iter().any(|&(binding, _)| binding == GLOBAL_BINDING);
         if global {
@@ -664,7 +786,14 @@ impl<'a> Gpu<'a> {
         match self.mirrors.get_mut(&ranges) {
             Some(mapping) => self.memory.refresh(mapping, &self.ram).map_err(named)?,
             None => {
-                let mapping = self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?;
+                let imported = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let mapping = match imported {
+                    Some(buffer) => Mapping::new(buffer, ranges.clone()),
+                    None => self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?,
+                };
                 self.mirrors.insert(ranges.clone(), mapping);
             }
         }
@@ -710,6 +839,7 @@ impl<'a> Gpu<'a> {
         let mut cbufs: [Vec<(u32, ConstantBuffer)>; 2] = Default::default();
         let mut windows = [false; 2];
         let mut textures = Vec::new();
+        let mut traversables = [None; 2];
         for (stage, (module, pipeline)) in [(vs, VERTEX_PIPELINE), (fs, PIXEL_PIPELINE)].into_iter().enumerate() {
             let group = draw.shader_programs[pipeline].binding_group as usize;
             let bound = |slot: u32| draw.constant_buffers[group][slot as usize].ok_or_else(|| format!("constant buffer slot {slot} of binding group {group} is not bound"));
@@ -722,11 +852,21 @@ impl<'a> Gpu<'a> {
                         gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut handle).map_err(named)?;
                         textures.push((images.next().unwrap(), u32::from_le_bytes(handle)));
                     }
-                    ResourceKind::Global | ResourceKind::Support => windows[stage] = true,
+                    ResourceKind::AccelerationStructure { cbuf_bank, byte_offset } => {
+                        let mut address = [0; 8];
+                        gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut address).map_err(named)?;
+                        traversables[stage] = Some((acceleration_structure_binding(&module.resources), u64::from_le_bytes(address)));
+                    }
+                    ResourceKind::Global | ResourceKind::GlobalVector(_) | ResourceKind::Support => windows[stage] = true,
+                    ResourceKind::Mma | ResourceKind::Ttu | ResourceKind::RayQuery => {}
                     ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
                     kind => return Err(format!("{kind:?} in shader pipeline {pipeline} is not implemented")),
                 }
             }
+        }
+
+        for (_, va) in traversables.into_iter().flatten() {
+            self.build_traversable(va)?;
         }
 
         let ct = draw.colour_target;
@@ -782,6 +922,11 @@ impl<'a> Gpu<'a> {
             for (bindings, _) in [&mut vs_bindings, &mut fs_bindings].into_iter().zip(windows).filter(|&(_, window)| window) {
                 bindings.extend([(GLOBAL_BINDING, vk::DescriptorType::STORAGE_BUFFER), (SUPPORT_BINDING, ubo)]);
             }
+            for (bindings, traversable) in [&mut vs_bindings, &mut fs_bindings].into_iter().zip(traversables) {
+                if let Some((binding, _)) = traversable {
+                    bindings.push((binding, vk::DescriptorType::ACCELERATION_STRUCTURE_KHR));
+                }
+            }
             fs_bindings.extend(textures.iter().map(|&(binding, _)| (binding, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)));
             let [vs, fs] = shaders.map(|key| self.modules[&key].words.clone());
             move || {
@@ -798,6 +943,11 @@ impl<'a> Gpu<'a> {
             }
             descriptors.bind(&buffers);
         }
+        for (descriptors, traversable) in pipeline.descriptors.iter_mut().zip(traversables) {
+            if let Some((binding, va)) = traversable {
+                descriptors.bind_acceleration_structure(binding, self.traversables[&va].built.as_ref().unwrap());
+            }
+        }
         pipeline.descriptors[1].bind_images(&textures.iter().map(|(binding, key)| (*binding, &self.textures[key].1)).collect::<Vec<_>>());
 
         let len = u64::from(extent.width * extent.height * 4);
@@ -813,12 +963,17 @@ impl<'a> Gpu<'a> {
         let target = match self.targets.entry(target_key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth).map_err(named)?;
+                let staging = match &mut self.zero_copy {
+                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    None => None,
+                };
+                let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth, staging).map_err(named)?;
                 entry.insert(Target { render_target, generation: u64::MAX, pending: None, depth_cleared: false })
             }
         };
         let load = clear.is_none() && target.generation != current;
-        if load {
+        let imported = target.render_target.staging.imported.is_some();
+        if load && !imported {
             self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
             gather(&self.space, &self.ram, ct.address, &mut self.pixels).map_err(named)?;
             target.render_target.write(&self.pixels).map_err(named)?;
@@ -842,7 +997,21 @@ impl<'a> Gpu<'a> {
             load,
             raster: raster_state(draw, extent, topology, blend),
         };
-        self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
+        if self.ray_budget == u32::MAX {
+            self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
+        } else {
+            let mut tile = draw_state;
+            let top = tile.raster.scissor.offset.y.max(0) as u32;
+            let bottom = (tile.raster.scissor.offset.y + tile.raster.scissor.extent.height as i32).max(0) as u32;
+            for y in (top..bottom.min(extent.height)).step_by(32) {
+                tile.raster.scissor.offset.y = y as i32;
+                tile.raster.scissor.extent.height = (bottom - y).min(32);
+                self.state.draw(pipeline, &target.render_target, &tile).map_err(named)?;
+                tile.clear = None;
+                tile.clear_depth = None;
+                tile.load = false;
+            }
+        }
         let rows = draw_state.rows(extent.height);
         let drawn = u64::from(rows.start * extent.width * 4)..u64::from(rows.end * extent.width * 4);
         if !drawn.is_empty() {

@@ -3,8 +3,10 @@ mod tests {
     use crate::gpu::texture::TexturePool;
     use crate::tests::gpu::silicon::{numbers, observed, string, tensor_fixtures, tensor_mismatch, tensor_program, tensor_seeds};
     use crate::tests::gpu::harness::{
-        run_lanes, run_regs, run_textured, translate_module, Textures, GLOBAL_BASE, LIVE, PRED,
+        both_ways, run_kernel, run_lanes, run_regs, run_textured, translate_module, Textures, GLOBAL_BASE, LIVE, PRED,
     };
+    use crate::gpu::cubin::{Arg, Kernel};
+    use crate::gpu::sm86::plan;
     use crate::tests::gpu_test::inst;
     use std::collections::BTreeMap;
     use std::panic::catch_unwind;
@@ -251,15 +253,7 @@ mod tests {
         "s3#026/fp32/mufu-tanh-r1-r3",
         // suatom: the order in which lanes hitting the same texel apply their atomics is up to the device.
         "s5suatom#000/suatom/d-2d-add",
-        "s6convert#002/convert-f16/f2f-f16-f64-rz",
-        "s6convert#003/convert-f16/f2f-f64-f16",
-        "s6atomic#000/atom/add-f16x2-rn",
-        "s6atomic#001/atom/add-f32-ftz-rn",
-        "s6atomic#002/atom/cast-32",
-        "s6atomic#003/atom/cast-64",
-        "s6atomic#004/atom/min-f16x2",
-        "s6atomic#006/atom/max-f16x2",
-        "s6atomic#007/atoms/cast-32",
+        // tex-lod: silicon sampled a 3-level mipmapped array, but the ingest dropped mip_levels and textures decode one level.
         "s6tex#002/tex-lod/lb-r6",
         "s6tex#003/tex-lod/ll-r6",
         "s6tex#004/tex-lod/lc-r6",
@@ -270,7 +264,6 @@ mod tests {
     const LLVMPIPE_FAILURES: &[&str] = &[
         // convert: llvmpipe truncates an f64 RoundEven.
         "s3#030/convert/f2i-s64-f64-r10-r12",
-        "s6atomic#008/atoms/cast-64",
         // tex: lavapipe reads an infinite unnormalized coordinate as texel 0 instead of clamping to the edge.
         "tex#003/tex/lod-lz",
         "tex#005/tex/lod-ll",
@@ -289,6 +282,10 @@ mod tests {
         "s5tex#010/tex/mask-a",
         // tmml: lavapipe scales the lod of unnormalized coordinates by the texture size once more.
         "s5tmml#000/tmml/lod-2d-derivatives-first-to-r8",
+        // tex: lavapipe takes another level than silicon for one lane of the implicit lod case.
+        "tex#001/tex/lod-auto",
+        "s4tex#001/tex/lod-auto",
+        "s5tex#001/tex/lod-auto",
     ];
 
     fn destination_width(fixture: &WarpFixture) -> usize {
@@ -569,11 +566,11 @@ mod tests {
             if matches!(fixture.family.as_str(), "lds" | "sts" | "atoms") {
                 words.insert(
                     0,
-                    0x004f_c800_0000_0800_0000_0011_0000_0388 | (shared as u128) << 24,
+                    0x004f_c800_0000_0800_0000_0011_0000_7388 | (shared as u128) << 24,
                 );
             }
             if matches!(fixture.family.as_str(), "sts" | "atoms") {
-                words.push(0x004f_c800_0000_0800_0000_0000_0011_0984 | (shared as u128) << 24);
+                words.push(0x004f_c800_0000_0800_0000_0000_0011_7984 | (shared as u128) << 24);
             }
             if catch_unwind(|| translate_module(&words, true, None, false)).is_err() {
                 score.unimplemented += 1;
@@ -593,8 +590,9 @@ mod tests {
                 seed[fixture.global_lo] = global as u32;
                 seed[fixture.global_hi] = (global >> 32) as u32;
                 seed[fixture.output_regs[1]] = 0x5100_0000 | seed[shared] / 4;
-                seed[PRED] = 1;
-                seed[LIVE] = fixture.lanes_active >> lane & 1;
+                // The rig masks lanes through the word's own @P0, so the PT prelude still seeds every lane's shared word.
+                seed[PRED] = fixture.lanes_active >> lane & 1;
+                seed[LIVE] = 1;
             }
             let global_before: Vec<_> = if !fixture.global_before.is_empty() {
                 fixture.global_before.clone()
@@ -668,10 +666,6 @@ mod tests {
             let id = &fixture.id;
             if !fixture.observed {
                 score.skipped += 1;
-                continue;
-            }
-            if fixture.family == "mov-indexed" && fixture.case.starts_with("dst-cbuf") && !llvmpipe {
-                score.unimplemented += 1;
                 continue;
             }
             if catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
@@ -790,5 +784,63 @@ mod tests {
             );
         }
         assert!(unexpected.is_empty(), "unexpected failures: {unexpected:?}");
+    }
+
+    // nvcc -arch=sm_86 bench kernels, each launched with small arguments.
+    fn bench_launches() -> Vec<(&'static str, [u32; 3], [u32; 3], Vec<Vec<u8>>, Vec<u8>)> {
+        let mandelbrot = [80u32, 60, 64].map(u32::to_le_bytes).into_iter().chain([-2.5f32, -1.5, 0.05].map(f32::to_le_bytes)).flatten().collect();
+        let fma = [4u32.to_le_bytes(), 0.999f32.to_le_bytes(), 0.001f32.to_le_bytes()].concat();
+        vec![
+            ("mandelbrot", [5, 4, 1], [16, 16, 1], vec![vec![0; 80 * 60 * 4]], mandelbrot),
+            ("fma_chain", [2, 1, 1], [256, 1, 1], vec![vec![0; 2 * 256 * 4]], fma),
+            ("stream_add", [1, 1, 1], [256, 1, 1], vec![(0..4096u32).flat_map(|i| (i as f32).to_le_bytes()).collect(), vec![0; 4096 * 4]], 1f32.to_le_bytes().to_vec()),
+            ("empty", [1, 1, 1], [256, 1, 1], vec![vec![0; 16]], Vec::new()),
+        ]
+    }
+
+    #[test]
+    fn structured_translation_matches_the_dispatcher() {
+        const BENCH: &[u8] = include_bytes!("../../../tests/fixtures/bench/bench.cubin");
+        let mut structured = 0;
+        let mut rejected: BTreeMap<String, usize> = BTreeMap::new();
+        let mut eligible = |words: &[u128]| match plan(words) {
+            Ok(_) => {
+                structured += 1;
+                true
+            }
+            Err(reason) => {
+                *rejected.entry(reason.split(" at pc").next().unwrap().to_string()).or_default() += 1;
+                false
+            }
+        };
+        let jsonl = [include_str!("../../../tests/fixtures/sm86-thread.jsonl"), include_str!("../../../tests/fixtures/sm86-predicate.jsonl"), include_str!("../../../tests/fixtures/sm86-observer.jsonl")];
+        for fixture in jsonl.into_iter().flat_map(fixtures) {
+            if !eligible(&fixture.words) || catch_unwind(|| translate_module(&fixture.words, true, None, false)).is_err() {
+                continue;
+            }
+            let mut seed = vec![0; LIVE];
+            for (&reg, &value) in fixture.input_regs.iter().zip(&fixture.inputs) {
+                seed[reg] = value;
+            }
+            let [dispatched, planned] = both_ways(|| run_regs(&fixture.words, &seed, &[], &[]));
+            assert_eq!(dispatched, planned, "{}", fixture.id);
+        }
+        for fixture in texture_fixtures().iter().filter(|fixture| fixture.observed && eligible(&[fixture.word])) {
+            let [dispatched, planned] = both_ways(|| catch_unwind(|| run_texture_fixture(fixture)).ok());
+            assert_eq!(dispatched, planned, "{}", fixture.id);
+        }
+        for fixture in tensor_fixtures() {
+            eligible(&tensor_program(&fixture));
+        }
+        for (name, grid, block, buffers, values) in bench_launches() {
+            let kernel = Kernel::load(BENCH, name).unwrap();
+            if !eligible(&kernel.words) {
+                continue;
+            }
+            let args: Vec<Arg> = buffers.iter().map(|buffer| Arg::Buffer(buffer)).chain(values.chunks(4).map(Arg::Value)).collect();
+            let [dispatched, planned] = both_ways(|| run_kernel(BENCH, name, grid, block, &args));
+            assert_eq!(dispatched, planned, "{name}");
+        }
+        println!("structured {structured}, dispatcher only {rejected:?}");
     }
 }

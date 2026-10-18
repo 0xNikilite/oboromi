@@ -26,7 +26,7 @@ impl<'a> Decoder<'a> {
         old
     }
 
-    // Guest cbuf slot N is a std140 UBO at set 0, binding 1 + N, holding uvec4 data[4096]; the host support UBO is binding 0.
+    // Guest cbuf slot N is a std140 UBO at set 0, binding CBUF_BINDING + N, holding uvec4 data[4096]; the host support UBO is binding 0.
     pub(super) fn load_cbuf(&mut self, kind: ResourceKind, offset: u32) -> u32 {
         let var = match self.resource(kind) {
             Some(var) => var,
@@ -40,10 +40,21 @@ impl<'a> Decoder<'a> {
         self.ir.emit_load(self.type_u32[1], ptr)
     }
 
+    // URa, URa+1 hold a bindless cbuf handle: the base address >> 4 in bits 0..45, the size >> 4 above (NVK nvk_bindless_cbuf).
+    pub(super) fn load_bindless_cbuf(&mut self, ur: u32, offset: u32) -> u32 {
+        let handle = self.load_ureg(ur);
+        let four = self.cached_const_u32(4);
+        let base = self.ir.emit_shift_left_logical(self.type_u32[1], handle, four);
+        let offset = self.cached_const_u32(offset);
+        let address = self.ir.emit_iadd(self.type_u32[1], base, offset);
+        let ptr = self.global_word_at(address);
+        self.ir.emit_load(self.type_u32[1], ptr)
+    }
+
     fn declare_cbuf(&mut self, kind: ResourceKind) -> u32 {
         use spirv::{decoration as deco, storage_class::UNIFORM};
         let binding = match kind {
-            ResourceKind::Cbuf(slot) if slot < 8 => CBUF_BINDING + slot,
+            ResourceKind::Cbuf(slot) => CBUF_BINDING + slot,
             ResourceKind::Support => SUPPORT_BINDING,
             _ => panic!("{kind:?} has no compute uniform binding"),
         };
@@ -75,6 +86,44 @@ impl<'a> Decoder<'a> {
         let two = self.cached_const_u32(2);
         let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, two);
         self.ir.emit_access_chain(self.type_ptr_ssbo_u32, var, &[self.const_u32_0, index])
+    }
+
+    // A view of the global window as a runtime array of `ty`, `stride` bytes each, aliasing the u32 one at its binding.
+    pub(super) fn global_element_at(&mut self, kind: ResourceKind, ty: u32, stride: u32, address: u32) -> u32 {
+        use spirv::{decoration as deco, storage_class::STORAGE_BUFFER};
+        let var = match self.resource(kind) {
+            Some(var) => var,
+            None => {
+                let array = self.ir.emit_type_runtime_array(ty);
+                let block = self.ir.emit_type_struct(&[array]);
+                let ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, block);
+                self.ir.emit_decorate(array, deco::ARRAY_STRIDE, &[stride]);
+                self.ir.emit_decorate(block, deco::BLOCK, &[]);
+                self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
+                let var = self.ir.emit_variable(ptr, STORAGE_BUFFER);
+                self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+                self.ir.emit_decorate(var, deco::BINDING, &[GLOBAL_BINDING]);
+                self.resources.push(Resource { kind, var });
+                var
+            }
+        };
+        let base = self.load_cbuf(ResourceKind::Support, self.const_u32_0);
+        let rel = self.ir.emit_isub(self.type_u32[1], address, base);
+        let shift = self.cached_const_u32(stride.trailing_zeros());
+        let index = self.ir.emit_shift_right_logical(self.type_u32[1], rel, shift);
+        let ptr = self.ir.emit_type_pointer(STORAGE_BUFFER, ty);
+        self.ir.emit_access_chain(ptr, var, &[self.const_u32_0, index])
+    }
+
+    // 64- and 128-bit global accesses stay one vector access: NVIDIA turns word accesses to a window in host memory into
+    // partial PCIe transactions, many times slower.
+    fn global_vector_at(&mut self, kind: ResourceKind, address: u32, size: u32) -> Option<(u32, u32)> {
+        if kind != ResourceKind::Global || !matches!(self.stage, Stage::Compute { .. }) || !matches!(size, 5 | 6) {
+            return None;
+        }
+        let words = access_words(size);
+        let ty = self.type_u32[words as usize];
+        Some((self.global_element_at(ResourceKind::GlobalVector(words), ty, 4 * words, address), ty))
     }
 
     pub(super) fn global_address(&mut self, inst: u128, uniform: u32, offset_shift: u32) -> u32 {
@@ -122,26 +171,27 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    // Session 6: ATOM.ADD.F32 flushes both operands and the sum, and it and ATOM.F16x2 store canonical NaNs.
     pub(super) fn atomic_fadd(&mut self, ptr: u32, scope: u32, sem: u32, value: u32) -> u32 {
-        self.ir.emit_capability(spirv::capability::ATOMIC_FLOAT32_ADD);
-        self.ir.emit_extension("SPV_EXT_shader_atomic_float_add");
-        let ty = self.type_f32[1];
-        let value = self.bitcast_f32(value);
-        let old = self.ir.emit_atomic_fadd(ty, ptr, scope, sem, value);
-        self.bitcast_u32(old)
+        self.atomic_update(ptr, scope, sem, |d, old| {
+            let [old, value] = [old, value].map(|word| d.fp_operand(word, false, false, true));
+            let sum = d.ir.emit_fadd(d.type_f32[1], old, value);
+            let sum = d.canonical_nan_bits(sum);
+            d.flush_subnormal(sum)
+        })
     }
 
     pub(super) fn atomic_f16x2(&mut self, ptr: u32, scope: u32, sem: u32, op: u32, value: u32) -> u32 {
         self.atomic_update(ptr, scope, sem, |d, old| {
-            let ty = d.type_f16x2();
-            let [old, value] = [old, value].map(|word| d.unpack_half2(word));
-            let new = match op {
-                0 => d.ir.emit_fadd(ty, old, value),
-                1 => d.glsl(spirv::glsl::N_MIN, ty, &[old, value]),
-                2 => d.glsl(spirv::glsl::N_MAX, ty, &[old, value]),
+            let ty = d.type_f32[1];
+            let [old, value] = [old, value].map(|word| d.half2_lanes(word, 0, false, false, false));
+            let new = [0, 1].map(|i| match op {
+                0 => d.ir.emit_fadd(ty, old[i], value[i]),
+                1 => d.glsl(spirv::glsl::N_MIN, ty, &[old[i], value[i]]),
+                2 => d.glsl(spirv::glsl::N_MAX, ty, &[old[i], value[i]]),
                 _ => panic!("ATOM.F16x2 operation {op}"),
-            };
-            d.bitcast_u32(new)
+            });
+            d.pack_half2(new)
         })
     }
 
@@ -220,6 +270,14 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn load_memory(&mut self, kind: ResourceKind, address: u32, size: u32, dst: u32) {
+        if let Some((ptr, ty)) = self.global_vector_at(kind, address, size) {
+            let vector = self.ir.emit_load(ty, ptr);
+            for i in 0..access_words(size) {
+                let word = self.ir.emit_composite_extract(self.type_u32[1], vector, &[i]);
+                self.store_register(nth_reg(dst, RZ, i), word);
+            }
+            return;
+        }
         for i in 0..access_words(size) {
             let offset = self.cached_const_u32(4 * i);
             let word_address = self.ir.emit_iadd(self.type_u32[1], address, offset);

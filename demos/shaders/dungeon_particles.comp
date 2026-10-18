@@ -1,0 +1,44 @@
+#version 450
+layout(local_size_x=64) in;
+struct Light { vec4 position; vec4 colour; };
+struct Particle { vec4 position; vec4 size; vec4 colour; };
+layout(binding=0,std430) readonly buffer Lights { Light lights[]; };
+layout(binding=1,std430) writeonly buffer Particles { Particle particles[]; };
+layout(binding=2,std140) uniform Time { vec4 time_count; };
+float hash(float x){uint h=uint(x)*747796405u+2891336453u;h=((h>>((h>>28u)+4u))^h)*277803737u;return float((h>>22u)^h)/4294967296.;}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);float a=i.x+4096.*i.y;return mix(mix(hash(a),hash(a+1.),f.x),mix(hash(a+4096.),hash(a+4097.),f.x),f.y);}
+vec3 potential(vec3 p){return vec3(noise(p.yz+31.),noise(p.zx+71.),noise(p.xy+113.));}
+vec3 curl(vec3 p){const float e=.03;vec3 dx=potential(p+vec3(e,0,0))-potential(p-vec3(e,0,0));vec3 dy=potential(p+vec3(0,e,0))-potential(p-vec3(0,e,0));vec3 dz=potential(p+vec3(0,0,e))-potential(p-vec3(0,0,e));return vec3(dy.z-dz.y,dz.x-dx.z,dx.y-dy.x)/(2.*e);}
+void main(){
+    uint i=gl_GlobalInvocationID.x; if(i>=lights.length()*uint(time_count.y))return;
+    int count=int(time_count.y), emitter=int(i)/count,k=int(i)%count;
+    Light l=lights[emitter]; float seed=float(i)+1.,scale=max(l.position.w,.04);
+    float lifetime=mix(1.8,4.8,hash(seed+31.));
+    float age=fract(time_count.x/lifetime+hash(seed+3.));
+    float type=k<9?0.:k%2==0?2.:1.;
+    vec3 p=l.position.xyz;
+    vec4 colour=vec4(1.,.28,.018,1.);
+    vec2 size;
+    if(type==0.) {
+        float angle=float(k)*2.39996;
+        float radius=sqrt(float(k)/9.)*scale*.28;
+        p+=vec3(cos(angle)*radius,scale*(.04+hash(seed)*.17),sin(angle)*radius);
+        size=vec2(.3,.46+hash(seed)*.28)*scale; colour.a=k<3?.8:.38;
+    }else if(type==2.) {
+        vec3 drift=vec3(hash(seed+17.)-.5,0,hash(seed+43.)-.5);
+        p+=drift*scale*(.3+age)+vec3(0,sqrt(scale)*(.55+age*3.6),0);
+        p+=curl(p*.7+vec3(0,-time_count.x*.22,0))*age*scale*.18;
+        size=vec2(.13+age*.58,.17+age*.43)*sqrt(scale)*mix(.45,1.55,hash(seed+97.));
+        colour=vec4(mix(vec3(.3,.17,.09),vec3(.12,.14,.16),smoothstep(0.,.5,age)),smoothstep(0.,.12,age)*pow(1.-age,2.)*mix(.06,.17,hash(seed+137.)));
+    }else {
+        vec3 spawn=vec3(hash(seed+13.)-.5,hash(seed+23.)*.3,hash(seed+47.)-.5)*scale*.65;
+        vec3 velocity=vec3(hash(seed+59.)-.5,.65+hash(seed+83.),hash(seed+101.)-.5);
+        p+=spawn+velocity*age*sqrt(scale)*1.8;
+        p+=curl(p*.9+vec3(0,-time_count.x*.35,0))*age*sqrt(scale)*.3;
+        if(k%3==0)p.y-=age*age*scale*1.7;
+        size=vec2(.004+.009*hash(seed+109.))*sqrt(scale);
+        colour.rgb*=mix(.35,1.35,hash(seed+127.));colour.a=smoothstep(0.,.06,age)*pow(1.-age,1.5)*.8;
+    }
+    if(l.position.w==0.)colour.a=0.;
+    particles[i]=Particle(vec4(p,type),vec4(size,seed,age),colour);
+}

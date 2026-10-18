@@ -392,9 +392,10 @@ impl<'a> Decoder<'a> {
         let clamp_value = self.load_register(ra + 2);
         let clamp = self.bitcast_f32(clamp_value);
         let mode = inst >> 87 & 7;
-        assert!(rb != RZ || !matches!(mode, 0 | 4 | 6), "TEX with Rb=RZ is illegal instruction on silicon");
+        assert!(rb != RZ || inst >> 90 & 1 != 0 || !matches!(mode, 0 | 4 | 6), "TEX with Rb=RZ is illegal instruction on silicon");
         let (image_ops, operands) = match mode {
-            0 => todo!("TEX implicit LOD waits for the fragment-stage translator"),
+            0 if matches!(self.stage, Stage::Fragment { .. }) => (0, Vec::new()),
+            0 => todo!("TEX implicit LOD waits for compute derivatives"),
             1 => (LOD_OPERAND, vec![self.bitcast_f32(self.const_u32_0)]),
             2 => (BIAS_OPERAND, vec![rb_f32]),
             3 => (LOD_OPERAND, vec![rb_f32]),
@@ -404,16 +405,12 @@ impl<'a> Decoder<'a> {
             _ => panic!("TEX lod mode {mode}"),
         };
         // .SCR splits the operands between Ra and Rb, so without a lod operand y is in Rb (RTX 3090 fixtures).
-        let y = if inst >> 60 & 1 != 0 && mode == 1 { rb } else { ra + 1 };
+        let y = if inst >> 60 & 1 != 0 && mode < 2 { rb } else { ra + 1 };
         let coord = self.float_vec2([ra, y]);
         let sampled = self.texture_2d(inst);
-        if matches!(mode, 2 | 4 | 5) {
-            self.derivatives = true;
-        }
-        if matches!(mode, 4 | 5) {
-            self.ir.emit_capability(spirv::capability::MIN_LOD);
-        }
-        let implicit_operands: Vec<_> = std::iter::once(image_ops).chain(operands.iter().copied()).collect();
+        if matches!(mode, 0 | 2 | 4 | 5) { self.derivatives = true; }
+        if matches!(mode, 4 | 5) { self.ir.emit_capability(spirv::capability::MIN_LOD); }
+        let implicit_operands: Vec<_> = (image_ops != 0).then_some(image_ops).into_iter().chain(operands.iter().copied()).collect();
         let texel = if inst >> 78 & 1 != 0 {
             let dref_reg = rb + matches!(mode, 2 | 3 | 5) as u32;
             let dref = self.load_register(dref_reg);
@@ -455,9 +452,11 @@ impl<'a> Decoder<'a> {
         self.store_texel(inst, bits);
     }
 
-    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1.
+    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1; with Rd = RZ they start at Rd2, as the
+    // NVIDIA driver's `TEX RZ, R0, ..., 0x2` that goes on to read the green texel from R0 shows.
     fn store_texel(&mut self, inst: u128, texel: u32) {
         let [rd, rd2] = [16, 64].map(|bit| (inst >> bit & 0xff) as u32);
+        let [rd, rd2] = if rd == RZ { [rd2, RZ] } else { [rd, rd2] };
         let written = (0..4).filter(|c| inst >> (72 + c) & 1 != 0);
         for (i, component) in written.enumerate() {
             let value = self.ir.emit_composite_extract(self.type_u32[1], texel, &[component]);

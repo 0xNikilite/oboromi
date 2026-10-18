@@ -17,13 +17,14 @@ impl<'a> Decoder<'a> {
     // .SAT maps NaN to +0, which NClamp does and FClamp leaves undefined.
     fn fp_arith_result(&mut self, inst: u128, val: u32, ftz: bool) -> u32 {
         assert_round_to_nearest(inst);
+        self.ir.emit_decorate(val, spirv::decoration::NO_CONTRACTION, &[]);
         let val = if inst >> 77 & 1 != 0 {
             let [zero, one] = [0.0f32, 1.0].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c));
             self.glsl(spirv::glsl::N_CLAMP, self.type_f32[1], &[val, zero, one])
         } else {
             val
         };
-        let bits = self.canonical_nan_bits(val);
+        let bits = self.bitcast_u32(val);
         if ftz { self.flush_subnormal(bits) } else { bits }
     }
 
@@ -83,7 +84,7 @@ impl<'a> Decoder<'a> {
         let b = self.fp_alu_src(inst, ftz);
         let sum = self.ir.emit_fadd(self.type_f32[1], a, b);
         let bits = self.fp_arith_result(inst, sum, ftz);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fchk(&mut self, _inst: u128) {
         panic!("FCHK is not implemented: NAK, Ryujinx and Eden have no lowering for it, so it waits for silicon fixtures");
@@ -98,7 +99,7 @@ impl<'a> Decoder<'a> {
         let [a, b] = if fmz { self.fmz_operands(a, b) } else { [a, b] };
         let val = self.glsl(spirv::glsl::FMA, self.type_f32[1], &[a, b, c]);
         let bits = self.fp_arith_result(inst, val, ftz);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fmul(&mut self, inst: u128) {
         let fmz = inst >> 76 & 1 != 0;
@@ -107,13 +108,33 @@ impl<'a> Decoder<'a> {
         let b = self.fp_alu_src(inst, ftz);
         let [a, b] = if fmz { self.fmz_operands(a, b) } else { [a, b] };
         let mut product = self.ir.emit_fmul(self.type_f32[1], a, b);
+        let rounding = inst >> 78 & 3;
+        if rounding == 3 {
+            product = self.round_product_toward_zero(product, a, b);
+        }
         let scale = (inst >> 84 & 7) as i32 - 4;
         if scale != 0 {
             let factor = self.ir.emit_constant_typed(self.type_f32[1], 2f32.powi(scale));
             product = self.ir.emit_fmul(self.type_f32[1], product, factor);
         }
-        let bits = self.fp_arith_result(inst, product, ftz);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        let bits = self.fp_arith_result(if rounding == 3 { inst & !(3 << 78) } else { inst }, product, ftz);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
+    }
+    // Fma gives the exact residual a * b - p, whose sign says whether p was rounded away from zero; a device that does not
+    // fuse Fma gets a zero residual and so the nearest product.
+    fn round_product_toward_zero(&mut self, product: u32, a: u32, b: u32) -> u32 {
+        let (ty, uty, bool_ty) = (self.type_f32[1], self.type_u32[1], self.type_bool[1]);
+        let negated = self.ir.emit_fnegate(ty, product);
+        let residual = self.glsl(spirv::glsl::FMA, ty, &[a, b, negated]);
+        let zero = self.ir.emit_constant_typed(ty, 0.0f32);
+        let inexact = self.ir.emit_ford_not_equal(bool_ty, residual, zero);
+        let [bits, residual_bits] = [product, residual].map(|x| self.bitcast_u32(x));
+        let signs = self.ir.emit_bitwise_xor(uty, bits, residual_bits);
+        let opposite = self.ir.emit_sless_than(bool_ty, signs, self.const_u32_0);
+        let away = self.ir.emit_logical_and(bool_ty, inexact, opposite);
+        let toward_zero = self.ir.emit_isub(uty, bits, self.const_u32_1);
+        let bits = self.ir.emit_select(uty, away, toward_zero, bits);
+        self.bitcast_f32(bits)
     }
     pub fn frnd(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
@@ -130,8 +151,8 @@ impl<'a> Decoder<'a> {
             10 => {
                 let val = self.fp_alu_src(inst, ftz);
                 let val = self.glsl(ROUNDING[rnd], self.type_f32[1], &[val]);
-                let val = self.canonical_nan_bits(val);
-                self.store_register(rd, val);
+                let val = self.bitcast_u32(val);
+                self.store_fp_register(rd, val);
             }
             15 => {
                 let val = self.fp64_alu_src(inst);

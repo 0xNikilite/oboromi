@@ -65,7 +65,7 @@ float visibility(vec3 p,vec3 n,vec3 to) {
 #ifdef RAY_QUERY
     if(up_rt.w>0.5) {
         rayQueryEXT q;
-        rayQueryInitializeEXT(q,scene,gl_RayFlagsTerminateOnFirstHitEXT|gl_RayFlagsOpaqueEXT,255,p+n*.025,.005,normalize(to),max(.006,length(to)-.04));
+        rayQueryInitializeEXT(q,scene,gl_RayFlagsTerminateOnFirstHitEXT|gl_RayFlagsOpaqueEXT,255,p+n*.012,.003,normalize(to),max(.004,length(to)-.02));
         while(rayQueryProceedEXT(q)){}
         return rayQueryGetIntersectionTypeEXT(q,true)==gl_RayQueryCommittedIntersectionNoneEXT?1.:0.;
     }
@@ -91,10 +91,25 @@ float shadowMap(vec3 direction,int light,vec3 normal) {
     }
     return result*.25;
 }
-float softVisibility(vec3 p,vec3 n,vec3 to) {
-    vec3 axis=normalize(cross(normalize(to),abs(normalize(to).y)>.9?vec3(1,0,0):vec3(0,1,0)))*.07;
-    vec3 other=cross(normalize(to),axis);
-    return (visibility(p,n,to+axis)+visibility(p,n,to-axis)+visibility(p,n,to+other)+visibility(p,n,to-other))*.25;
+float softVisibility(vec3 p,vec3 n,vec3 to,float radius) {
+    vec3 direction=normalize(to);
+    vec3 axis=normalize(cross(direction,abs(direction.y)>.9?vec3(1,0,0):vec3(0,1,0)))*radius;
+    vec3 other=cross(direction,axis);
+    const vec2 disk[12]=vec2[](vec2(0),vec2(.43,.12),vec2(-.38,.31),vec2(.14,-.48),vec2(.68,.54),vec2(-.72,.45),vec2(.58,-.65),vec2(-.51,-.71),vec2(.95,.05),vec2(-.08,.92),vec2(-.91,-.18),vec2(.12,-.97));
+    float open=0.;
+    for(int i=0;i<12;i++)open+=visibility(p,n,to+axis*disk[i].x+other*disk[i].y);
+    return open/12.;
+}
+float ambientVisibility(vec3 p,vec3 n) {
+#ifdef RAY_QUERY
+    vec3 tangent=normalize(cross(n,abs(n.y)>.8?vec3(1,0,0):vec3(0,1,0))),bitangent=cross(n,tangent);
+    const vec3 rays[6]=vec3[](vec3(.18,.12,.98),vec3(-.57,.21,.79),vec3(.42,-.61,.67),vec3(-.24,-.73,.64),vec3(.79,.36,.49),vec3(-.82,.41,.40));
+    float open=0.;
+    for(int i=0;i<6;i++){vec3 d=normalize(tangent*rays[i].x+bitangent*rays[i].y+n*rays[i].z);open+=visibility(p,n,d*(i<2?.38:1.15));}
+    return .32+.68*open/6.;
+#else
+    return 1.;
+#endif
 }
 vec3 brdf(vec3 base,vec3 n,vec3 v,vec3 l,float rough,float metal) {
     vec3 h=normalize(v+l); float nl=max(dot(n,l),0.), nv=max(dot(n,v),.001), nh=max(dot(n,h),0.);
@@ -110,7 +125,7 @@ vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shad
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
         if(d2>min(180.,lights[i].colour.r*24.) || dot(n,to)<=0.)continue;
         bool casts=lights[i].position.w>0. && (right_quality.w>.5 || i==int(fog_lights.x) || i==int(fog_lights.y));
-        float vis=(shadow && casts && settings.z<.5)?(up_rt.w>.5?softVisibility(p,n,to):shadowMap(-to,i,n)):1.;
+        float vis=(shadow && casts && settings.z<.5)?(up_rt.w>.5?softVisibility(p,n,to,clamp(lights[i].position.w*.32,.12,.5)):shadowMap(-to,i,n)):1.;
         c+=brdf(base,n,v,normalize(to),rough,metal)*lights[i].colour.rgb*vis*5./max(.22,d2);
     }
     return c;
@@ -123,7 +138,7 @@ vec3 reflectedFlames(vec3 p,vec3 direction,float limit) {
         float along=dot(to,direction);if(along<0. || along>limit)continue;
         vec3 d=to-direction*along;d.y*=.5;
         float glow=exp(-dot(d,d)/max(.002,flame*flame*.065));
-        c+=lights[i].colour.rgb*glow*2.;
+        c+=lights[i].colour.rgb*glow*4.;
     }
     return c;
 }
@@ -231,10 +246,7 @@ void main() {
         c=mix(c,reflected(world+n*.03,reflect(-v,n),(up_rt.w>.5?vec3(0):screenSample(refl+n.xz*.012,true))),wet*f*.8);
     }
 #ifdef RAY_QUERY
-    if(up_rt.w>.5 && right_quality.w>.5 && settings.z<.5) {
-        vec3 axis=normalize(cross(n,abs(n.y)>.8?vec3(1,0,0):vec3(0,1,0)));
-        vec3 dir=normalize(n+axis*.65); c*=.6+.4*visibility(world,n,dir*.85);
-    }
+    if(up_rt.w>.5 && right_quality.w>.5 && settings.z<.5)c*=ambientVisibility(world,n);
 #endif
     if(world.y<-.8) c+=base*.4+base*pow(.5+.5*sin(world.x*9.+sin(world.z*7.+eye_time.w)*2.+eye_time.w*1.8),12.)*.22;
     output_colour=vec4(c,distance(world,eye_time.xyz));

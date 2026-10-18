@@ -1,6 +1,7 @@
 use crate::nn;
 use crate::sys;
 
+pub mod audren;
 pub mod binder;
 pub mod fs;
 pub mod hid;
@@ -41,7 +42,7 @@ macro_rules! define_service {
 define_service!(
     acc, adraw, ahid, aoc, apm, arp,
     aud, audctl, auddebug, auddev, auddmg, audin, audout,
-    audrec, audren, audsmx, avm, banana, batlog, bcat, bgtc,
+    audrec, audsmx, avm, banana, batlog, bcat, bgtc,
     bpc, bpmpmr, bsd, bsdcfg, bt, btdrv, btm, btp, capmtp,
     caps, caps2, cec_mgr, chat, clkrst, codecctl, csrng,
     dauth, disp, dispdrv, dmnt, dns, dt, ectx, erpt, es,

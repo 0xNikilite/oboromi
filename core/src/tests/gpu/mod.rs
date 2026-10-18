@@ -8,6 +8,7 @@ mod cubin;
 #[cfg(feature = "cuda")]
 mod cuda;
 mod fixtures;
+mod fifo;
 pub mod fp;
 mod int_alu;
 mod memory;

@@ -5,12 +5,14 @@ pub mod compute;
 pub mod cubin;
 #[cfg(feature = "cuda")]
 pub mod cuda;
+pub mod fifo;
 pub mod frame;
 pub mod memory;
 pub mod present;
 pub mod sm86;
 pub mod spirv;
 pub mod texture;
+pub mod threed;
 
 #[derive(Debug)]
 pub enum VkError {

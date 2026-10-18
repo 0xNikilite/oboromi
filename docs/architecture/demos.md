@@ -124,20 +124,6 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 *Showcase: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. Ray queries add flame-sized soft shadows, contact shadows, off-screen reflections and crevice occlusion.*
 
-Console cost estimate: translated/twin efficiency cannot be measured while these shaders use native GLSL. Only raw Intel GPU measurements are available; a native console total below 16.7 ms has not been established.
-
-| Pass | Realtime GPU ms | Showcase GPU ms | Translated/twin ratio | Native Switch 2 ms |
-|---|---:|---:|---|---|
-| Heightfield | 0.021 | 0.020 | N/A: native GLSL | unverified |
-| Particle simulation | 0.043 | 0.036 | N/A: native GLSL | unverified |
-| Planar reflection | 0.480 | 0.000 | N/A: native GLSL | unverified |
-| Instanced cave formations | 0.148 | 0.141 | N/A: native GLSL | unverified |
-| PBR, shadows and wet reflections | 4.803 | 88.338 | N/A: native GLSL | unverified |
-| River surface | 0.015 | 0.056 | N/A: native GLSL | unverified |
-| Flames, smoke and other sprites | 0.311 | 0.717 | N/A: native GLSL | unverified |
-| Height fog, moon shaft and bloom prefilter | 0.298 | 0.472 | N/A: native GLSL | unverified |
-| Bloom reconstruction, heat haze and tonemap | 1.875 | 1.308 | N/A: native GLSL | unverified |
-
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
 
 *Realtime: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. This version uses baked shadows and planar reflections.*
@@ -146,36 +132,7 @@ Console cost estimate: translated/twin efficiency cannot be measured while these
 
 *Raster is left. Ray queries are right. The right side traces every torch and the fire for softer shadows, contact under the bridge and rocks, reflected off-screen walls and torches, and darker rock crevices. The difference is small in this frame and clearest in the water.*
 
-Release measurements use 3840 frames per run, excluding the first three. GPU times
-are Vulkan timestamp medians, summed within each frame across main and reflection
-draws. Per-pass medians need not sum to the median total. Frame times include GPU
-waits and audio but exclude PPM writes. Offline capture uses synchronous audio;
-the live harness drains the audio ring on a separate clock without a window or audio
-device. Both clips use the same round-six mix at -16 LUFS and -1 dBTP.
-
-| Run | Median frame ms | p95 frame ms | Median summed GPU ms |
-|---|---:|---:|---:|
-| Realtime live tour | 9.67 | 13.50 | 5.81 |
-| Realtime cave entrance | 14.49 | 15.08 | 10.73 |
-| Realtime cave downstream | 13.15 | 13.70 | 9.43 |
-| Realtime offline capture | 18.38 | 34.90 | 8.04 |
-| Showcase offline capture | 100.14 | 211.66 | 91.10 |
-
-Cave GPU timings, realtime preset:
-
-| Pass | Entrance ms | Downstream ms |
-|---|---:|---:|
-| Heightfield | 0.016 | 0.016 |
-| Particle simulation | 0.035 | 0.035 |
-| Planar reflection | 0.643 | 0.510 |
-| Instanced cave formations | 0.836 | 1.042 |
-| PBR, shadows and wet reflections | 6.450 | 5.000 |
-| River surface | 0.248 | 0.455 |
-| Flames, smoke and other sprites | 0.879 | 0.737 |
-| Height fog, moon shaft and bloom prefilter | 0.279 | 0.280 |
-| Bloom reconstruction, heat haze and tonemap | 1.326 | 1.341 |
-
-Active graphics CPU in the live tour is 0.454 ms median. Recorded Vulkan commands are reused, heightfield vertices stay on the GPU, and the audio worker keeps mixing off the frame thread. No guest pushbuffer or FIFO decode is involved in this native GLSL path. These measurements do not establish stable 60 fps on other hardware.
+The release clips contain 3840 unique frames and the same round-six mix at -16 LUFS and -1 dBTP. Native console cost remains unverified while this path uses its own GLSL shaders.
 
 The scene uses one opaque batch, instanced formations and sprites, and a water
 draw; offscreen room batches and cave formations are culled. Realtime additionally

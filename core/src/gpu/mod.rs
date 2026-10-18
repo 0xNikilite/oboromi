@@ -40,14 +40,22 @@ impl From<vk::Result> for VkError {
 }
 
 /// Settings that trade accuracy for speed, all off by default.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct SpeedHacks {
     pub fast_tensor: bool,
+    /// Ray-query sites kept per shader, `u32::MAX` for no limit.
+    pub ray_budget: u32,
     /// Skips draws whose pipeline is still compiling instead of waiting, so new shaders pop in.
     pub skip_draw_while_compiling: bool,
 }
 
-pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false, skip_draw_while_compiling: false });
+impl Default for SpeedHacks {
+    fn default() -> Self {
+        Self { fast_tensor: false, ray_budget: u32::MAX, skip_draw_while_compiling: false }
+    }
+}
+
+pub static SPEED_HACKS: std::sync::Mutex<SpeedHacks> = std::sync::Mutex::new(SpeedHacks { fast_tensor: false, ray_budget: u32::MAX, skip_draw_while_compiling: false });
 
 pub struct VkState {
     pub entry: ash::Entry,

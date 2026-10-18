@@ -35,6 +35,7 @@ pub struct RasterState {
     pub blend: vk::PipelineColorBlendAttachmentState,
 }
 
+#[derive(Clone, Copy)]
 pub struct DrawState<'a> {
     /// Each with its SET_VERTEX_STREAM_A_FORMAT stride.
     pub vertex_buffers: &'a [(&'a HostBuffer<'a>, u32)],

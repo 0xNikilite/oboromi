@@ -36,6 +36,7 @@ mod tests {
     // guest.bin is what scripts/build-guest.sh builds from guest/. nvdrv needs a GPU, which the kernel's own sm: lacks.
     #[test]
     fn the_guest_image_initializes_services_draws_and_presents() {
+        let _exact = crate::gpu::ExactSpeedHacks::new();
         let _display = DISPLAY_TEST.lock().unwrap();
         let Some(state) = vk_state() else { return };
         let cpu = CpuManager::new_with_backend(CpuBackend::Unicorn);
@@ -61,6 +62,7 @@ mod tests {
 
     #[test]
     fn guest_triangle_end_to_end() {
+        let _exact = crate::gpu::ExactSpeedHacks::new();
         let _display = DISPLAY_TEST.lock().unwrap();
         let state = crate::gpu::device().expect("guest triangle requires Vulkan");
         crate::gpu::frame::render_triangle_demo(0.0).unwrap();

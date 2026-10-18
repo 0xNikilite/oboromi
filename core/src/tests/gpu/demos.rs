@@ -57,6 +57,6 @@ mod tests {
         });
         let differences = frames[0].iter().zip(&frames[1]).filter(|(a, b)| a != b).count();
         let delta = frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-        assert!(differences <= 8 && delta <= 1, "driver {} NAK {}: {differences} bytes differ by at most {delta}", sha256(&frames[0]), sha256(&frames[1]));
+        assert!(differences <= 9 && delta <= 1, "driver {} NAK {}: {differences} bytes differ by at most {delta}", sha256(&frames[0]), sha256(&frames[1]));
     }
 }

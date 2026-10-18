@@ -6,7 +6,12 @@ use crate::audio::parcel::put;
 use crate::audio::renderer::{AudioRendererParameter, Renderer, work_buffer_size};
 use crate::audio::spatial::{BLOCK, Mix, Mode, Source, Spatializer};
 use std::f32::consts::{PI, TAU};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 const RATE: f32 = 48_000.0;
 const BASE: u64 = 0x10000;
@@ -227,7 +232,7 @@ struct Voice {
 
 pub const DRIPS: usize = 8;
 
-pub struct Sound {
+struct Engine {
     renderer: Renderer,
     memory: HostMemory,
     samples: Vec<Vec<f32>>,
@@ -246,9 +251,9 @@ pub fn set_mode(mode: Mode) {
     MODE.store(u8::from(mode == Mode::Speakers), Ordering::Relaxed);
 }
 
-impl Sound {
+impl Engine {
     /// The renderer with one looping voice per source, then the drip, scream and footstep voices.
-    pub fn new(world: &World, sources: &[(Sfx, V3, f32)]) -> Sound {
+    fn new(world: &World, sources: &[(Sfx, V3, f32)]) -> Engine {
         let samples = SAMPLES.map(sample).into();
         let steps = (0..24).map(|i| step(i / 8 == 1, i / 8 == 2, i % 8)).collect();
         let mut voices: Vec<Voice> = sources.iter().enumerate().map(|(i, &(sfx, pos, gain))| Voice { sample: sfx.into(), pos, gain: gain * if sfx == Sfx::Heart { 0.8 } else { 2.0 }, pitch: 0.92 + 0.16 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active: true, tail: usize::MAX, variation: 0 }).collect();
@@ -259,7 +264,7 @@ impl Sound {
         let mut work = vec![0; work_buffer_size(&parameter).unwrap() as usize];
         let mut renderer = Renderer::open(parameter, &mut work).unwrap();
         renderer.start();
-        Sound { renderer, memory: HostMemory { base: BASE, bytes: vec![0; 0x1000] }, samples, steps, voices, spatial: Spatializer::new(&world.acoustic_rooms(), Mode::Headphones), configured: false, next_drip: 0, next_step: 0, output: vec![0; 0x2_0000] }
+        Engine { renderer, memory: HostMemory { base: BASE, bytes: vec![0; 0x1000] }, samples, steps, voices, spatial: Spatializer::new(&world.acoustic_rooms(), Mode::Headphones), configured: false, next_drip: 0, next_step: 0, output: vec![0; 0x2_0000] }
     }
 
     pub fn move_source(&mut self, i: usize, pos: V3) {
@@ -287,7 +292,7 @@ impl Sound {
         self.voices[slot] = Voice { sample, pos, gain: gain * if step { 10.0f32.powf(decibels / 20.0) } else { 1.0 }, pitch: pitch * if step { 2.0f32.powf(semitones / 12.0) } else { 1.0 }, cursor: 0.0, active: true, tail: 800, variation };
     }
 
-    pub fn listen(&mut self, _world: &World, eye: V3, yaw: f32, _dt: f32) {
+    fn listen(&mut self, eye: V3, yaw: f32) {
         self.spatial.set_mode(if MODE.load(Ordering::Relaxed) == 0 { Mode::Headphones } else { Mode::Speakers });
         self.spatial.set_listener(eye, [yaw.sin(), 0.0, -yaw.cos()], [0.0, 1.0, 0.0]);
     }
@@ -302,6 +307,7 @@ impl Sound {
         let mut output = Vec::with_capacity(periods * BLOCK * 2);
         for _ in 0..periods {
             let mut mix = Mix::new();
+            self.spatial.begin_block();
             for (id, voice) in self.voices.iter_mut().enumerate().filter(|(_, voice)| voice.active || voice.tail > 0) {
                 let pcm = if matches!(voice.sample, Sample::Step | Sample::WetStep | Sample::GravelStep) { &self.steps[(voice.sample as usize - Sample::Step as usize) * 8 + voice.variation] } else { &self.samples[voice.sample as usize] };
                 let mut mono = [0.0; BLOCK];
@@ -326,6 +332,9 @@ impl Sound {
                 self.spatial.render(&Source { id, position: voice.pos, gain: voice.gain }, &mono, &mut stereo);
                 mix.add(&stereo);
             }
+            let mut reverb = [[0.0; 2]; BLOCK];
+            self.spatial.finish_block(&mut reverb);
+            mix.add(&reverb);
             for (frame, samples) in mix.finish().iter().enumerate() {
                 for channel in 0..2 {
                     let at = channel * 0x400 + frame * 2;
@@ -365,5 +374,180 @@ impl Sound {
         let total = 0x40 + sections.iter().map(Vec::len).sum::<usize>();
         put(&mut header, 0x3C, &(total as u32).to_le_bytes());
         [header, sections.concat()].concat()
+    }
+}
+
+const COMMANDS: usize = 1024;
+static WORKER_NANOS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Command {
+    Move { source: usize, pos: V3 },
+    Play { sample: Sample, pos: V3, gain: f32, pitch: f32 },
+    Listen { eye: V3, yaw: f32 },
+}
+
+struct CommandRing {
+    slots: [UnsafeCell<MaybeUninit<Command>>; COMMANDS],
+    written: AtomicUsize,
+    read: AtomicUsize,
+}
+
+// Sound owns the only producer and its worker owns the only consumer; release/acquire publishes each slot.
+unsafe impl Sync for CommandRing {}
+
+impl CommandRing {
+    fn new() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit())),
+            written: AtomicUsize::new(0),
+            read: AtomicUsize::new(0),
+        }
+    }
+
+    fn push(&self, command: Command) -> bool {
+        let written = self.written.load(Ordering::Relaxed);
+        if written.wrapping_sub(self.read.load(Ordering::Acquire)) == COMMANDS {
+            return false;
+        }
+        // SAFETY: only the producer writes this slot, and it cannot lap the consumer.
+        unsafe { (*self.slots[written % COMMANDS].get()).write(command) };
+        self.written.store(written.wrapping_add(1), Ordering::Release);
+        true
+    }
+
+    fn pop(&self) -> Option<Command> {
+        let read = self.read.load(Ordering::Relaxed);
+        if read == self.written.load(Ordering::Acquire) {
+            return None;
+        }
+        // SAFETY: the acquire load observed the producer's initialized slot.
+        let command = unsafe { (*self.slots[read % COMMANDS].get()).assume_init_read() };
+        self.read.store(read.wrapping_add(1), Ordering::Release);
+        Some(command)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_ring_hands_off_in_order() {
+        let ring = Arc::new(CommandRing::new());
+        let consumer = Arc::clone(&ring);
+        let thread = std::thread::spawn(move || {
+            for source in 0..COMMANDS * 4 {
+                loop {
+                    if let Some(command) = consumer.pop() {
+                        assert_eq!(command, Command::Move { source, pos: [source as f32; 3] });
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        });
+        for source in 0..COMMANDS * 4 {
+            let command = Command::Move { source, pos: [source as f32; 3] };
+            while !ring.push(command) {
+                std::thread::yield_now();
+            }
+        }
+        thread.join().unwrap();
+    }
+}
+
+struct Worker {
+    commands: Arc<CommandRing>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Worker {
+    fn new(mut engine: Engine) -> Self {
+        let commands = Arc::new(CommandRing::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_commands = Arc::clone(&commands);
+        let thread_stop = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let period = Duration::from_millis(5);
+            let mut deadline = Instant::now();
+            while !thread_stop.load(Ordering::Acquire) {
+                while let Some(command) = thread_commands.pop() {
+                    match command {
+                        Command::Move { source, pos } => engine.move_source(source, pos),
+                        Command::Play { sample, pos, gain, pitch } => engine.play(sample, pos, gain, pitch),
+                        Command::Listen { eye, yaw } => engine.listen(eye, yaw),
+                    }
+                }
+                if crate::audio::queued() <= 3 * BLOCK {
+                    let start = Instant::now();
+                    let output = engine.render(1);
+                    crate::audio::play(&[&output]);
+                    WORKER_NANOS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                }
+                deadline += period;
+                let now = Instant::now();
+                if deadline > now {
+                    std::thread::sleep(deadline - now);
+                } else {
+                    deadline = now;
+                }
+            }
+        });
+        Self { commands, stop, thread: Some(thread) }
+    }
+
+    fn send(&self, command: Command) {
+        assert!(self.commands.push(command), "audio command ring full");
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+pub struct Sound {
+    engine: Option<Engine>,
+    worker: Option<Worker>,
+}
+
+impl Sound {
+    pub fn new(world: &World, sources: &[(Sfx, V3, f32)], threaded: bool, eye: V3, yaw: f32) -> Self {
+        let mut engine = Engine::new(world, sources);
+        engine.listen(eye, yaw);
+        if threaded {
+            Self { engine: None, worker: Some(Worker::new(engine)) }
+        } else {
+            Self { engine: Some(engine), worker: None }
+        }
+    }
+
+    pub fn move_source(&mut self, source: usize, pos: V3) {
+        if let Some(worker) = &self.worker { worker.send(Command::Move { source, pos }); }
+        else { self.engine.as_mut().unwrap().move_source(source, pos); }
+    }
+
+    pub fn play(&mut self, sample: Sample, pos: V3, gain: f32, pitch: f32) {
+        if let Some(worker) = &self.worker { worker.send(Command::Play { sample, pos, gain, pitch }); }
+        else { self.engine.as_mut().unwrap().play(sample, pos, gain, pitch); }
+    }
+
+    pub fn listen(&mut self, _world: &World, eye: V3, yaw: f32, _dt: f32) {
+        if let Some(worker) = &self.worker { worker.send(Command::Listen { eye, yaw }); }
+        else { self.engine.as_mut().unwrap().listen(eye, yaw); }
+    }
+
+    pub fn render(&mut self, periods: usize) -> Vec<i16> {
+        self.engine.as_mut().map_or_else(Vec::new, |engine| engine.render(periods))
+    }
+
+    pub fn worker_millis(&self) -> f64 {
+        if self.worker.is_some() { WORKER_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e6 } else { 0.0 }
     }
 }

@@ -21,3 +21,13 @@ fetch_dungeon() {
     tar -xJf "$dir/materials.tar.xz" -C "$dir" && rm "$dir/materials.tar.xz"
 }
 fetch_dungeon
+
+fetch_dungeon_audio() {
+    dir=$(dirname "$0")/dungeon-audio
+    [ -f "$dir/SOURCES" ] && return
+    mkdir -p "$dir"
+    curl -fL https://raw.githubusercontent.com/jopdorp/oboromi/0a0fed7aa8769da0ff28d1e529201bd7087fd49a/dungeon-audio.tar.xz -o "$dir/audio.tar.xz"
+    echo "1e426c7c3a0f307bc55a2b9dd9a42dbddb0c02a78df7f8a81c1f8ac84dd6b0d6  $dir/audio.tar.xz" | sha256sum -c -
+    tar -xJf "$dir/audio.tar.xz" -C "$dir" && rm "$dir/audio.tar.xz"
+}
+fetch_dungeon_audio

@@ -25,7 +25,7 @@ void main() {
     vec3 a=vec3(drda*radial.x-radius*radial.y,0,drda*radial.y+radius*radial.x);
     vec3 b=vec3(drdh*radial.x+c.radius_tilt.y,c.origin_height.w,drdh*radial.y+c.radius_tilt.z);
     norm=normalize(cross(b,a))*sign(c.origin_height.w);
-    tex=vec2(u*1.3,t*abs(c.origin_height.w)*.45);
-    colour=vec3(.65,.69,.62)*mix(.35,1.,smoothstep(0.,.15,t));kind=1;
+    tex=vec2(u*1.3,t);
+    colour=vec3(1.45,1.32,1.08);kind=7;
     gl_Position=vp*vec4(world,1);
 }

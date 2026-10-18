@@ -168,8 +168,8 @@ impl Renderer {
                         pos: point(u, t),
                         normal: scale(normal, -height.signum()),
                         uv: [u, t],
-                        tint: [0.65, 0.69, 0.62],
-                        material: 1.,
+                        tint: CALCITE,
+                        material: 7.,
                     });
                 }
             }

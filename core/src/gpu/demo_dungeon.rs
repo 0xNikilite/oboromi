@@ -727,6 +727,8 @@ const WOOD: V3 = [0.42, 0.27, 0.15];
 const WAX: V3 = [1.5, 1.35, 1.0];
 const PUMPKIN: V3 = [2.2, 0.9, 0.12];
 const LIMESTONE: V3 = [1.25, 1.15, 0.95];
+const CALCITE: V3 = [1.45, 1.32, 1.08];
+const PEBBLE: V3 = [1.05, 0.98, 0.84];
 
 #[derive(Default)]
 struct Builder {
@@ -740,7 +742,7 @@ impl Builder {
         for j in 0..=cells[1] { for i in 0..=cells[0] {
             let [s,t]=[i as f32/cells[0] as f32,j as f32/cells[1] as f32];
             let (normal,_) = frame(f,s,t);
-            let material=if prop { if tint==IRON {2.} else if tint==LIMESTONE || tint==STONE {1.} else {3.} } else if normal[1]>0.8 && f(s,t)[1]>=-0.1 {0.} else {1.};
+            let material=if tint==LIMESTONE {6.} else if tint==CALCITE {7.} else if tint==PEBBLE {8.} else if prop { if tint==IRON {2.} else if tint==STONE {1.} else {3.} } else if normal[1]>0.8 && f(s,t)[1]>=-0.1 {0.} else {1.};
             let pos=f(s,t);
             let tex=if prop { if normal[1].abs()>0.6 {[pos[0]*0.35,pos[2]*0.35]} else {[pos[0]*0.35+pos[2]*0.35,pos[1]*0.35]} } else {uv(s,t)};
             self.vertices.push(Vertex{pos,normal,uv:tex,tint,material});
@@ -860,7 +862,7 @@ impl World {
                     p[k]=debris.range(s.lo[k]+0.3,s.hi[k]-0.3);p[1]=0.025;
                     if debris.next()<0.3 {
                         let size=debris.range(0.035,0.13);
-                        b.blob(p,[size,size*0.6,size*0.8],debris.next()*TAU,&|a,t|1.+0.16*(a*5.+t*3.).sin(),[6,4],LIMESTONE);
+                        b.blob(p,[size,size*0.6,size*0.8],debris.next()*TAU,&|a,t|1.+0.16*(a*5.+t*3.).sin(),[6,4],STONE);
                     }else{
                         let d=turn(debris.next()*TAU,[debris.range(0.06,0.19),0.,0.]);
                         b.tube(sub(p,d),add(p,d),&|_|0.005,3,[0.75,0.53,0.24]);
@@ -883,7 +885,7 @@ impl World {
                     };
                     let first=b.vertices.len();
                     b.surface(&f,[d,w],[16,64],&|u,v|[u*d*0.35,v*w*0.35],LIMESTONE);
-                    for v in &mut b.vertices[first..] {v.material=1.;if strip==1 {v.tint=scale(LIMESTONE,0.45);}}
+                    for v in &mut b.vertices[first..] {if strip==1 {v.material=8.;v.tint=PEBBLE;}}
                 }
                 let mut pebbles=Rng(1751);
                 for _ in 0..420 {
@@ -891,7 +893,7 @@ impl World {
                     let near=self.river_bank(x,0)-0.5;let far=self.river_bank(x,1)+0.5;
                     let p=[x,BED+1.2*(2.*u-1.).abs().powf(3.)+0.08,near+(far-near)*u];
                     let radius=pebbles.range(0.06,0.25);
-                    b.blob(p,[radius,radius*0.6,radius*0.8],pebbles.next()*TAU,&|a,t|1.+0.13*(a*3.+t*7.).sin(),[7,4],LIMESTONE);
+                    b.blob(p,[radius,radius*0.6,radius*0.8],pebbles.next()*TAU,&|a,t|1.+0.13*(a*3.+t*7.).sin(),[7,4],PEBBLE);
                 }
                 for end in 0..2 {
                     let x=if end==0 {s.lo[0]} else {s.hi[0]};let sign=if end==0 {-1.}else{1.};
@@ -913,7 +915,7 @@ impl World {
                     for depth in [0.,0.65,1.3] {for i in 0..15 {
                         let a=(i as f32+0.5)/15.*PI;
                         let p=[x+sign*depth,0.35+2.9*a.sin(),centre+radius*a.cos()];
-                        b.blob(p,[0.48,0.35,0.38],a,&|a,t|1.+0.18*(a*5.+t*3.).sin(),[8,5],LIMESTONE);
+                        b.blob(p,[0.48,0.35,0.38],a,&|a,t|1.+0.18*(a*5.+t*3.).sin(),[8,5],PEBBLE);
                     }}
                     let f=|u:f32,v:f32|[x+sign*v*4.,BED,near+(far-near)*u];
                     b.surface(&f,[far-near,4.],[1,1],&|u,v|[u,v],LIMESTONE);
@@ -929,7 +931,7 @@ impl World {
                         let x=s.lo[0]+(i as f32+0.5)/90.*w;
                         let radius=pebbles.range(0.12,0.38);
                         let p=[x,-0.08,self.river_bank(x,side)+sign*0.45];
-                        b.blob(p,[radius,radius*0.7,radius*0.8],x,&|a,t|1.+0.2*(a*4.+t*6.).sin(),[8,5],LIMESTONE);
+                        b.blob(p,[radius,radius*0.7,radius*0.8],x,&|a,t|1.+0.2*(a*4.+t*6.).sin(),[8,5],PEBBLE);
                     }
                 }
             } else {
@@ -965,11 +967,11 @@ impl World {
                 let angle=(i as f32+0.5)/9.*PI;
                 let mut p=[0.;3];p[door.axis]=plane;p[k]=centre+radius*angle.cos();p[1]=door.top-0.8+radius*angle.sin();
                 let mut lo=sub(p,[0.22,0.19,0.22]);let mut hi=add(p,[0.22,0.19,0.22]);lo[door.axis]-=0.09;hi[door.axis]+=0.09;
-                b.block(lo,hi,LIMESTONE);
+                b.block(lo,hi,STONE);
             }
             for side in [-1.,1.] {for i in 0..7 {
                 let mut p=[0.;3];p[door.axis]=plane;p[k]=centre+side*radius;p[1]=(i as f32+0.5)*0.32;
-                b.block(sub(p,[0.23,0.15,0.23]),add(p,[0.23,0.15,0.23]),LIMESTONE);
+                b.block(sub(p,[0.23,0.15,0.23]),add(p,[0.23,0.15,0.23]),STONE);
             }}
         }
         self.bridge_and_props(b);
@@ -1072,7 +1074,7 @@ impl World {
             if let Prop::Stalagmite(p,_,radius)=*prop {
                 for i in 0..7 {
                     let a=i as f32*2.39996;let r=radius*(0.9+0.25*(a*3.).sin());
-                    b.blob(add(p,[r*a.cos(),0.035,r*a.sin()]),[radius*0.5,0.12,radius*0.4],a,&|a,t|1.+0.15*(a*5.+t*4.).sin(),[7,4],LIMESTONE);
+                    b.blob(add(p,[r*a.cos(),0.035,r*a.sin()]),[radius*0.5,0.12,radius*0.4],a,&|a,t|1.+0.15*(a*5.+t*4.).sin(),[7,4],CALCITE);
                 }
             }
         }

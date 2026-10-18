@@ -45,6 +45,10 @@ vec3 tangent_ray(vec3 axis,float spread,int index,float seed){
  float u=(float(index)+hash(gl_FragCoord.xy+seed))/float(RAYS),phi=6.2831853*fract(float(index)*0.6180339+seed);
  return normalize(axis+spread*sqrt(u)*(cos(phi)*t+sin(phi)*b));
 }
+vec3 bounce_light(vec3 p,uint instance,bool key){
+ vec4 light=key?light_dir:ambient; vec3 n=room_normal(p,instance),l=light.xyz-p; float distance=length(l),hit; uint id; l/=distance;
+ return trace(p+n*sky.w,l,distance-light.w,hit,id)?vec3(0):room_colour(p,instance)*(key?light_colour.rgb/PI:vec3(0.18,0.35,0.8)*0.45)*max(dot(n,l),0.0);
+}
 float visibility(vec3 p,vec3 n,vec4 light,float seed){
  vec3 centre=light.xyz-p; float distance=length(centre),open=0.0; vec3 axis=centre/distance;
  for(int i=0;i<RAYS;i++){vec3 ray=tangent_ray(axis,light.w/distance,i,seed);float hit;uint instance;open+=trace(p+n*sky.w,ray,distance-light.w,hit,instance)?0.0:1.0;}
@@ -73,11 +77,13 @@ void main(){
  vec3 f0=mix(vec3(0.04),albedo,metallic),fresnel=f0+(1.0-f0)*pow(1.0-max(dot(v,h),0.0),5.0);
  vec3 direct=((1.0-fresnel)*(1.0-metallic)*albedo/PI+fresnel*a2/(PI*d*d)/((nl*(1.0-k)+k)*(nv*(1.0-k)+k)*4.0))*light_colour.rgb*nl*(nl>0?visibility(in_world,geometric,light_dir,1.3):0.0);
  direct+=albedo*vec3(0.18,0.35,0.8)*max(dot(n,cool),0.0)*visibility(in_world,geometric,ambient,8.9)*0.45;
- vec3 origin=in_world+geometric*sky.w,bounce=vec3(0);float ao=0.0;
- for(int i=0;i<RAYS;i++){vec3 ray=hemisphere(geometric,i,12.1);float distance;uint instance;bool hit=trace(origin,ray,1.0,distance,instance);ao+=hit?0.0:1.0;if(i<GLOSSY&&hit)bounce+=room_colour(origin+ray*distance,instance);}
- vec3 indirect=albedo*(vec3(0.045)*(ao/float(RAYS))+bounce*0.055);
+ vec3 origin=in_world+geometric*sky.w,indirect=vec3(0);
  bool floor=in_world.y< -0.95&&geometric.y>0.8,chrome=length(in_world-vec3(-1.65,-0.35,-0.55))<0.72,glass_sphere=length(in_world-vec3(1.65,-0.35,-0.45))<0.72;
  if(floor)indirect+=reflected(origin,reflect(-v,n),0.15)*0.72;else if(chrome)indirect=hit_colour(origin,reflect(-v,n));else if(glass_sphere)indirect=glass(in_world,n,v);else if(metallic>0.45)indirect+=reflected(origin,reflect(-v,n),roughness*0.35)*fresnel;
+ if(!chrome&&!glass_sphere){vec3 bounce=vec3(0);float ao=0.0;
+  // Each direction is traced once per light: shading both lights in one iteration spills registers on SM86.
+  for(int i=0;i<RAYS*2;i++){vec3 ray=hemisphere(geometric,i/2,12.1);float distance;uint instance;bool hit=trace(origin,ray,20.0,distance,instance);ao+=hit&&distance<1.0?0.0:1.0;if(hit)bounce+=bounce_light(origin+ray*distance,instance,i%2==0);}
+  indirect+=albedo*(vec3(0.045)*ao/2.0+bounce)/float(RAYS);}
  vec3 emissive=srgb_to_linear(texture(emissive_map,in_uv).rgb)*emissive_factor.rgb;
  out_colour=vec4(pow(aces((direct+indirect+emissive)*0.72),vec3(1.0/2.2)),1.0);
 }

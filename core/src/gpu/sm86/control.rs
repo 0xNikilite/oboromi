@@ -364,7 +364,11 @@ impl<'a> Decoder<'a> {
         self.jump_to_register(inst, false);
     }
     pub fn kill(&mut self, inst: u128) {
-        assert!(!matches!(self.stage, Stage::Fragment { .. }), "KILL as a fragment discard is not implemented");
+        if matches!(self.stage, Stage::Fragment { .. }) {
+            self.ir.emit_capability(spirv::capability::DEMOTE_TO_HELPER_INVOCATION);
+            self.ir.emit_extension("SPV_EXT_demote_to_helper_invocation");
+            return self.ir.emit_demote_to_helper_invocation();
+        }
         // KILL is pixel-only on hardware, so a compute invocation that reaches one just ends like at EXIT.
         self.exit(inst);
     }

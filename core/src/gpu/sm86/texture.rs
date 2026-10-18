@@ -392,7 +392,7 @@ impl<'a> Decoder<'a> {
         let clamp_value = self.load_register(ra + 2);
         let clamp = self.bitcast_f32(clamp_value);
         let mode = inst >> 87 & 7;
-        assert!(rb != RZ || !matches!(mode, 0 | 4 | 6), "TEX with Rb=RZ is illegal instruction on silicon");
+        assert!(rb != RZ || inst >> 90 & 1 != 0 || !matches!(mode, 0 | 4 | 6), "TEX with Rb=RZ is illegal instruction on silicon");
         let (image_ops, operands) = match mode {
             0 if matches!(self.stage, Stage::Fragment { .. }) => (0, Vec::new()),
             0 => todo!("TEX implicit LOD waits for compute derivatives"),

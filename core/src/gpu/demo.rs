@@ -36,7 +36,7 @@ const ROOM_MATERIALS: [([u8; 3], f32, f32); 8] = [
     ([28, 31, 38], 0.75, 0.18), ([150, 18, 24], 0.0, 0.72), ([20, 112, 52], 0.0, 0.72),
     ([218, 205, 174], 0.0, 0.72), ([226, 215, 188], 0.0, 0.8), ([205, 218, 232], 1.0, 0.06),
     ([120, 195, 220], 0.2, 0.42),
-    ([80, 190, 255], 0.0, 0.25),
+    ([255, 190, 96], 0.0, 0.25),
 ];
 
 // The driver's bank 0x1d: TEX handle k at +4k in GLSL declaration order, the binding 1 block's address at +0x18
@@ -234,11 +234,19 @@ pub struct Scene<'a> {
     material_count: usize,
     model_indices: u32,
     light_first: u32,
-    light_y: f32,
+    light_position: [f32; 3],
     frame: u32,
 }
 
 impl<'a> Scene<'a> {
+    #[cfg(test)]
+    pub(crate) fn replace_programs(&mut self, programs: [&[u8]; 2]) -> Result<(), String> {
+        for (va, program) in [VERTEX_PROGRAM, PIXEL_PROGRAM].into_iter().zip(programs) {
+            self.gpu.write(va, &[program, &bra(-16).to_le_bytes()].concat()).map_err(|e| format!("{e:?}"))?;
+        }
+        Ok(())
+    }
+
     /// Lays the asset in demos/assets/`asset` out in guest memory and runs the init segment.
     pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, asset: &str, width: u32, height: u32) -> Result<Self, String> {
         let room = asset.starts_with("raytraced");
@@ -357,7 +365,7 @@ impl<'a> Scene<'a> {
                 let mut table = [t, t + 1, t + 2, t + 3, t + 4, 0, 0, 0, 0, 0, 0, 0];
                 if traced { [table[6], table[7]] = [TLAS as u32, (TLAS >> 32) as u32]; }
                 [table[uniform_pointer], table[uniform_pointer + 1]] = uniform_handle(va + MATERIAL_UNIFORMS, if traced { 128 } else { 112 });
-                let emissive = if i + 1 == ROOM_MATERIALS.len() { [2.0, 4.0, 8.0, 0.0] } else { [0.0; 4] };
+                let emissive = if i + 1 == ROOM_MATERIALS.len() { [12.0, 8.0, 3.0, 0.0] } else { [0.0; 4] };
                 let mut uniforms = [&light[..], &[0.0, 3.0, 2.9, 2.7, 0.0, 0.18, 0.18, 0.2, 0.0], &eye, &[1.0], &[1.0; 4], &emissive, &[*metallic, *roughness, 1.0, 1.0]].concat();
                 if traced { uniforms.extend([0.65, 0.75, 0.9, 0.002]); }
                 gpu.write(va, &bytes(&table)).map_err(named)?;
@@ -435,7 +443,7 @@ impl<'a> Scene<'a> {
             vec![Geometry { vertices: VERTICES, stride: 48, vertex_count: model_vertices as u32, indices: indices_va, index_count: model_indices as u32, transform: [[0.0; 4]; 3], opaque: true },
                 Geometry { vertices: VERTICES, stride: 48, vertex_count: (vertices.len() / 48) as u32, indices: indices_va + model_indices as u64 * 4, index_count: (indices.len() / 4 - model_indices) as u32 - light_count, transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], opaque: true }]
         } else { Vec::new() };
-        Ok(Self { gpu, target, width, height, draws, blends, textures: texture_va, fit, geometry, traced, room, material_count: materials.len() + if room { ROOM_MATERIALS.len() } else { 0 }, model_indices: model_indices as u32, light_first, light_y: 0.7, frame: 0 })
+        Ok(Self { gpu, target, width, height, draws, blends, textures: texture_va, fit, geometry, traced, room, material_count: materials.len() + if room { ROOM_MATERIALS.len() } else { 0 }, model_indices: model_indices as u32, light_first, light_position: [0.0; 3], frame: 0 })
     }
 
     /// Turns the model to `seconds` at 0.8 rad/s, draws every primitive and waits for the frame's report.
@@ -461,14 +469,14 @@ impl<'a> Scene<'a> {
         view[3] = [-right.iter().zip(eye).map(|(a, b)| a * b).sum::<f32>(), -up.iter().zip(eye).map(|(a, b)| a * b).sum::<f32>(), -length, 1.0];
         if self.room {
             let (orbit, bob) = ((seconds * 0.45).sin(), (seconds * 1.4).sin());
-            let key = [orbit * 1.8, 2.15 + bob * 0.12, 0.4 + 1.25 * (seconds * 0.45).cos()];
+            let key = [orbit * 2.4, 0.05 + bob * 0.16, 0.4 + 1.25 * (seconds * 0.45).cos()];
             let length = key.iter().map(|v| v * v).sum::<f32>().sqrt();
             let direction = key.map(|v| v / length);
             let light = if self.traced { [key[0], key[1], key[2], 0.32] } else { [direction[0], direction[1], direction[2], 0.0] };
             let cool = [-1.65, 0.7 + 0.25 * bob, -0.55, 0.12];
-            let head = [&light[..], &[4.1, 3.5, 3.0, 0.0], if self.traced { &cool[..] } else { &[0.17, 0.18, 0.22, 0.0] }, &eye, &[1.0]].concat();
+            let head = [&light[..], &[10.5, 8.2, 5.6, 0.0], if self.traced { &cool[..] } else { &[0.17, 0.18, 0.22, 0.0] }, &eye, &[1.0]].concat();
             for material in 0..self.material_count { self.gpu.write(MATERIALS + MATERIAL_STRIDE * material as u64 + MATERIAL_UNIFORMS, &floats(&head)).map_err(|e| format!("{e:?}"))?; }
-            self.light_y = 0.7 + 0.25 * bob;
+            self.light_position = key;
         }
         self.draw(model, multiply(projection, view), eye)
     }
@@ -514,7 +522,7 @@ impl<'a> Scene<'a> {
             }
             if self.room && first >= self.model_indices {
                 let mut object = IDENTITY;
-                if first == self.light_first { object[3] = [-1.65, self.light_y, -0.55, 1.0]; }
+                if first == self.light_first { object[3] = [self.light_position[0], self.light_position[1], self.light_position[2], 1.0]; }
                 let uniforms: Vec<u32> = [object, view_proj].as_flattened().as_flattened().iter().map(|f| f.to_bits()).collect();
                 inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[128, split(VERTEX_UNIFORMS)[0], split(VERTEX_UNIFORMS)[1], 0], &mut words);
                 non_inc(LOAD_CONSTANT_BUFFER, &uniforms, &mut words);

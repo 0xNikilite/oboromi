@@ -120,11 +120,11 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 ### Dungeon
 
-<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raytraced.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raytraced.mp4" type="video/mp4"></video>
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raytraced.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raytraced.mp4" type="video/mp4"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon.mp4" type="video/mp4"></video>
 
 *Dungeon ray traced: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. Ray queries make the flame shadows dance, reflect in wet calcite and add traced limestone bounce.*
 
-<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raster.mp4" type="video/mp4"></video>
+<video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-raster.mp4" type="video/mp4"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
 
 *Dungeon raster: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. This version uses baked shadows and planar reflections.*
 

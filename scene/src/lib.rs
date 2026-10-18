@@ -4,6 +4,7 @@
 #![no_std]
 
 pub mod sass;
+pub mod sound;
 pub mod threed;
 
 /// The host class methods every subchannel shares (clc76f.h).

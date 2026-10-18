@@ -31,9 +31,12 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    static DISPLAY_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // guest.bin is what scripts/build-guest.sh builds from guest/. nvdrv needs a GPU, which the kernel's own sm: lacks.
     #[test]
     fn the_guest_image_initializes_services_draws_and_presents() {
+        let _display = DISPLAY_TEST.lock().unwrap();
         let Some(state) = vk_state() else { return };
         let cpu = CpuManager::new();
         let image = include_bytes!("../tests/fixtures/guest/guest.bin");
@@ -55,4 +58,41 @@ mod tests {
         assert_eq!((frame.width, frame.height), (128, 64));
         assert_eq!(&frame.pixels[(20 * 128 + 20) * 4..][..4], &[40, 80, 192, 255]);
     }
+
+    #[test]
+    fn guest_triangle_end_to_end() {
+        let _display = DISPLAY_TEST.lock().unwrap();
+        let state = crate::gpu::device().expect("guest triangle requires Vulkan");
+        crate::gpu::frame::render_triangle_demo(0.0).unwrap();
+        let (generation, expected) = {
+            let frame = crate::display::DISPLAY.lock().unwrap();
+            assert_eq!((frame.width, frame.height), (1920, 1080));
+            (frame.generation, frame.pixels.clone())
+        };
+        let dir = std::env::temp_dir().join(format!("oboromi-triangle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("triangle.nro");
+        std::fs::write(&path, include_bytes!("../tests/fixtures/guest/triangle.nro")).unwrap();
+        let cpus = CpuManager::new();
+        let cpu = cpus.get_core(0).unwrap();
+        let mut kernel = Kernel::default();
+        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::new(state, cpus.ram.clone()))));
+        kernel.sm.borrow_mut().0.insert("nvdrv".into(), nvdrv.clone() as Rc<RefCell<dyn Service>>);
+        kernel.sm.borrow_mut().0.extend(vi::services(nvdrv));
+        crate::loader::nro::load(&cpus.ram, cpu, &mut kernel, &path).unwrap();
+        assert!(!kernel.run_until(cpu, || crate::display::DISPLAY.lock().unwrap().generation > generation), "{:?}", kernel.debug_output);
+        {
+            let frame = crate::display::DISPLAY.lock().unwrap();
+            assert_eq!(frame.generation, generation + 1);
+            assert_eq!((frame.width, frame.height), (1920, 1080));
+            let digest = |bytes: &[u8]| bytes.iter().fold(0xcbf29ce484222325u64, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3));
+            assert_eq!(digest(&frame.pixels), digest(&expected));
+            assert!(frame.pixels == expected);
+            println!("guest and host triangle FNV-1a: {:016x}", digest(&frame.pixels));
+        }
+        assert!(kernel.run(cpu));
+        assert!(kernel.debug_output.is_empty(), "{:?}", kernel.debug_output);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 }

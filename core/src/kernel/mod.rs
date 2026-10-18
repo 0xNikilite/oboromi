@@ -327,7 +327,10 @@ impl Kernel {
     }
 
     /// Runs ready threads and deadlines until process exit or an unhandled stop.
-    pub fn run(&mut self, cpu: &UnicornCPU) -> bool { self.run_threads(cpu) }
+    pub fn run(&mut self, cpu: &UnicornCPU) -> bool { self.run_until(cpu, || false) }
+
+    /// Runs until the process exits or `stop` is true; returns true only on process exit.
+    pub fn run_until(&mut self, cpu: &UnicornCPU, stop: impl FnMut() -> bool) -> bool { self.run_threads(cpu, stop) }
 
     /// Returns x0-x7 after the call, or None once the process has exited.
     /// SVC ids and register use: yuzu src/core/hle/kernel/svc.h SvcId and svc.cpp SvcWrap_*64.

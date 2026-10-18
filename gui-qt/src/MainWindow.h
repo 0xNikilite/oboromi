@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+class AudioOutput;
 class QListWidget;
 class QPushButton;
 
@@ -39,4 +40,6 @@ private:
     QTimer m_demoTimer;
     QElapsedTimer m_demoClock;
     QFuture<bool> m_demoFrame;
+    QTimer m_toneTimer;
+    AudioOutput *m_audio = nullptr;
 };

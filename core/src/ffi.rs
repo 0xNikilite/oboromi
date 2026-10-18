@@ -144,3 +144,53 @@ pub extern "C" fn oboromi_display_surface(surface: vk::SurfaceKHR, width: u32, h
         Ok(Ok(()))
     )
 }
+
+/// copies up to `frames` queued stereo frames into `dst` and zero-fills the
+/// rest, returns the frames copied.
+///
+/// # Safety
+/// `dst` must be null or valid for `frames * 2` writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_pull(dst: *mut i16, frames: usize) -> usize {
+    if dst.is_null() {
+        return 0;
+    }
+    crate::audio::pull(unsafe { std::slice::from_raw_parts_mut(dst, frames * 2) })
+}
+
+/// writes the output format, interleaved i16 samples produced `period` frames at a time.
+///
+/// # Safety
+/// `rate`, `channels` and `period` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_format(rate: *mut u32, channels: *mut u32, period: *mut u32) {
+    unsafe {
+        *rate = crate::audio::RATE;
+        *channels = crate::audio::CHANNELS;
+        *period = crate::audio::PERIOD;
+    }
+}
+
+/// writes the frames waiting in the ring and the pulls that ran dry.
+///
+/// # Safety
+/// `queued` and `underruns` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_stats(queued: *mut usize, underruns: *mut u64) {
+    unsafe {
+        *queued = crate::audio::queued();
+        *underruns = crate::audio::underruns();
+    }
+}
+
+/// frames ever queued, changes whenever something is produced.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_audio_generation() -> u64 {
+    crate::audio::generation()
+}
+
+/// queues `seconds` more of a 440 hz test tone, returns the frames that fit.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_audio_test_tone(seconds: f32) -> usize {
+    crate::audio::test_tone(seconds)
+}

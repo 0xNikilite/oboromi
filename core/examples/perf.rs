@@ -124,6 +124,13 @@ fn main() {
         unsafe { oboromi_frame_read(dst.as_mut_ptr(), dst.len(), &mut fw, &mut fh) };
         black_box(&dst);
     });
+    let period = vec![0x1234i16; 2 * oboromi_core::audio::PERIOD as usize];
+    let mut pulled = period.clone();
+    bench("audio latency push->pull", 100, 10000, None, || {
+        oboromi_core::audio::push(&period);
+        oboromi_core::audio::pull(&mut pulled);
+        black_box(&pulled);
+    });
     bench("vk device init (cold)", 0, 1, None, || drop(surface_device()));
     let state = match surface_device() {
         Ok(state) => state,

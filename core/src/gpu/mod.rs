@@ -83,7 +83,6 @@ pub fn surface_device() -> Result<&'static VkState, VkError> {
     SURFACES.store(true, Relaxed);
     device()
 }
-
 // The Vulkan loader unlinks a destroyed device under a different lock than vkGetDeviceProcAddr walks the device list
 // with, so creating a device while another thread destroys one reads freed memory.
 static DEVICE_LIFETIMES: std::sync::Mutex<()> = std::sync::Mutex::new(());

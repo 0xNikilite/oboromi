@@ -223,4 +223,29 @@ void *oboromi_vk_instance();
 /// false if the device cannot present to it.
 bool oboromi_display_surface(uint64_t surface, uint32_t width, uint32_t height);
 
+/// copies up to `frames` queued stereo frames into `dst` and zero-fills the
+/// rest, returns the frames copied.
+///
+/// # Safety
+/// `dst` must be null or valid for `frames * 2` writes.
+uintptr_t oboromi_audio_pull(int16_t *dst, uintptr_t frames);
+
+/// writes the output format, interleaved i16 samples produced `period` frames at a time.
+///
+/// # Safety
+/// `rate`, `channels` and `period` must be valid for writes.
+void oboromi_audio_format(uint32_t *rate, uint32_t *channels, uint32_t *period);
+
+/// writes the frames waiting in the ring and the pulls that ran dry.
+///
+/// # Safety
+/// `queued` and `underruns` must be valid for writes.
+void oboromi_audio_stats(uintptr_t *queued, uint64_t *underruns);
+
+/// frames ever queued, changes whenever something is produced.
+uint64_t oboromi_audio_generation();
+
+/// queues `seconds` more of a 440 hz test tone, returns the frames that fit.
+uintptr_t oboromi_audio_test_tone(float seconds);
+
 }  // extern "C"

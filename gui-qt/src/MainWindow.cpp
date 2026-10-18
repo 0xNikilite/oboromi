@@ -14,8 +14,10 @@
 #include <QWidget>
 #include <QtConcurrent/QtConcurrent>
 
+#include "AudioOutput.h"
 #include "DisplayWidget.h"
 #include "RustBridge.h"
+#include "oboromi_core.h"
 
 namespace {
 
@@ -33,6 +35,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     buildMenuBar();
     buildUi();
+    m_audio = new AudioOutput(this);
 
     connect(&m_cpuWatcher, &QFutureWatcher<std::vector<std::string>>::finished,
             this, &MainWindow::onCpuTestsFinished);
@@ -93,6 +96,15 @@ void MainWindow::buildUi() {
             m_demoFrame = QtConcurrent::run(RustBridge::renderDemoFrame, m_demoClock.elapsed() / 1000.0f);
     });
     buttons->addWidget(demoButton);
+    auto *toneButton = new QPushButton("Tone", central);
+    toneButton->setCheckable(true);
+    connect(toneButton, &QPushButton::toggled, this, [this](bool on) {
+        if (on) return m_toneTimer.start(5);
+        m_toneTimer.stop();
+        m_logList->addItem(m_audio->status());
+    });
+    connect(&m_toneTimer, &QTimer::timeout, this, [] { oboromi_audio_test_tone(0.1f); });
+    buttons->addWidget(toneButton);
     buttons->addStretch();
     layout->addLayout(buttons);
 

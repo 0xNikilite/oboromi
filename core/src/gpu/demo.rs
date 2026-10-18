@@ -239,6 +239,14 @@ pub struct Scene<'a> {
 }
 
 impl<'a> Scene<'a> {
+    #[cfg(test)]
+    pub(crate) fn replace_programs(&mut self, programs: [&[u8]; 2]) -> Result<(), String> {
+        for (va, program) in [VERTEX_PROGRAM, PIXEL_PROGRAM].into_iter().zip(programs) {
+            self.gpu.write(va, &[program, &bra(-16).to_le_bytes()].concat()).map_err(|e| format!("{e:?}"))?;
+        }
+        Ok(())
+    }
+
     /// Lays the asset in demos/assets/`asset` out in guest memory and runs the init segment.
     pub fn new(state: &'static VkState, cache: Option<(&Path, &str)>, asset: &str, width: u32, height: u32) -> Result<Self, String> {
         let room = asset.starts_with("raytraced");

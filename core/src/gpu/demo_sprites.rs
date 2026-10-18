@@ -155,14 +155,19 @@ fn init_segment(width: u32, height: u32) -> Vec<u32> {
 
 /// Guest memory holding the scene with its init segment run, drawing into a `width` x `height` target at `TARGET`.
 pub fn sprites_guest(state: &'static VkState, cache: Option<(&Path, &str)>, width: u32, height: u32) -> Result<Gpu<'static>, String> {
+    sprites_guest_with_programs(state, cache, width, height, [
+        include_bytes!("../../tests/fixtures/driver-shaders/sprite2d.vert.bin"),
+        include_bytes!("../../tests/fixtures/driver-shaders/sprite2d.frag.bin"),
+    ])
+}
+
+pub(crate) fn sprites_guest_with_programs(state: &'static VkState, cache: Option<(&Path, &str)>, width: u32, height: u32, programs: [&[u8]; 2]) -> Result<Gpu<'static>, String> {
     let named = |e| format!("{e:?}");
     let len = (TARGET - BASE + u64::from(width * height) * 4).next_multiple_of(PAGE);
     let mut gpu = Gpu::new(state, len as usize, cache, *super::SPEED_HACKS.lock().unwrap()).map_err(|e| format!("{e:?}"))?;
     gpu.space.map(BASE, 0, len);
     // The rig's programs stop at their last EXIT; the self-branch a compiled program ends with marks the end.
-    let vertex = include_bytes!("../../tests/fixtures/driver-shaders/sprite2d.vert.bin");
-    let pixel = include_bytes!("../../tests/fixtures/driver-shaders/sprite2d.frag.bin");
-    for (va, program) in [(VERTEX_PROGRAM, &vertex[..]), (PIXEL_PROGRAM, pixel)] {
+    for (va, program) in [VERTEX_PROGRAM, PIXEL_PROGRAM].into_iter().zip(programs) {
         gpu.write(va, &[program, &bra(-16).to_le_bytes()].concat()).map_err(named)?;
     }
     // A bindless cbuf handle: the address >> 4 in bits 0..45 and the size >> 4 above (NVK nvk_bindless_cbuf).

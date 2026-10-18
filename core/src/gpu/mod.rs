@@ -365,7 +365,9 @@ impl VkState {
             .extended_dynamic_state3_color_blend_enable(true)
             .extended_dynamic_state3_color_blend_equation(true)
             .extended_dynamic_state3_color_write_mask(true);
-        let mut enabled_vulkan13 = vk::PhysicalDeviceVulkan13Features::default().dynamic_rendering(true);
+        let mut enabled_vulkan13 = vk::PhysicalDeviceVulkan13Features::default()
+            .dynamic_rendering(true)
+            .shader_demote_to_helper_invocation(true);
         let mut enabled_addresses = vk::PhysicalDeviceBufferDeviceAddressFeatures::default().buffer_device_address(true);
         let mut enabled_structures = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
         let mut enabled_queries = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);

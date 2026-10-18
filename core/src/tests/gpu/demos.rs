@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::gpu::demo::{Scene, asset_dir};
-    use crate::tests::gpu::harness::shared_device;
+    use crate::tests::gpu::harness::{sha256, shared_device};
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -38,5 +38,25 @@ mod tests {
     #[test]
     fn helmet_frame_draws_its_six_materials_over_the_clear_colour() {
         check_first_frame("flighthelmet", "86b4284268d42ed1a9b234877200c307d4e44e3095bce6f1925c9fcd4e37a686");
+    }
+
+    #[test]
+    fn nak_compiled_boombox_matches_driver() {
+        if !asset_dir("boombox").exists() { return eprintln!("skipped: run demos/assets/fetch.sh for boombox"); }
+        let Some(state) = shared_device() else { return };
+        let frames = [None, Some([
+            include_bytes!("../../../tests/fixtures/driver-shaders/pbr-nak.vert.bin").as_slice(),
+            include_bytes!("../../../tests/fixtures/driver-shaders/pbr-nak.frag.bin").as_slice(),
+        ])].map(|programs| {
+            let mut scene = Scene::new(state, None, "boombox", WIDTH, HEIGHT).unwrap();
+            if let Some(programs) = programs { scene.replace_programs(programs).unwrap(); }
+            scene.frame(0.0).unwrap();
+            let mut pixels = vec![0; (WIDTH * HEIGHT * 4) as usize];
+            scene.gpu.read(scene.target, &mut pixels).unwrap();
+            pixels
+        });
+        let differences = frames[0].iter().zip(&frames[1]).filter(|(a, b)| a != b).count();
+        let delta = frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(differences <= 8 && delta <= 1, "driver {} NAK {}: {differences} bytes differ by at most {delta}", sha256(&frames[0]), sha256(&frames[1]));
     }
 }

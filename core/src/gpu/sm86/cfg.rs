@@ -142,6 +142,8 @@ fn unsupported(pc: usize, inst: u128) -> Option<String> {
         "indexed register"
     } else if op == BREAK {
         "BREAK"
+    } else if op == KILL {
+        "KILL"
     } else {
         return None;
     };

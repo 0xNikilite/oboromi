@@ -401,7 +401,7 @@ impl VkState {
         unsafe {
             if let Some((pool,offset))=timestamp {
                 d.cmd_reset_query_pool(cmd,pool,offset,2);
-                d.cmd_write_timestamp(cmd,Stage::TOP_OF_PIPE,pool,offset);
+                d.cmd_write_timestamp(cmd,Stage::BOTTOM_OF_PIPE,pool,offset);
             }
             if draw.load {
                 d.cmd_pipeline_barrier(cmd, Stage::TOP_OF_PIPE, Stage::TRANSFER, none, &[], &[], &[to_upload]);

@@ -567,7 +567,7 @@ impl VkState {
             d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.descriptors.set], &[]);
             if let Some((pool,offset))=timestamp {
                 d.cmd_reset_query_pool(cmd,pool,offset,2);
-                d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::TOP_OF_PIPE,pool,offset);
+                d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::BOTTOM_OF_PIPE,pool,offset);
             }
             d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
             if let Some((pool,offset))=timestamp {d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::BOTTOM_OF_PIPE,pool,offset+1);}

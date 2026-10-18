@@ -104,7 +104,7 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-raytraced.mp4" type="video/mp4"></video>
 
-*Ray-traced BoomBox: The glossy floor mirrors the red and green walls, the chrome sphere reflects the room, the glass sphere bends it, and the moving lights sweep soft shadows.*
+*Ray-traced BoomBox: The glossy floor mirrors the red and green walls, the chrome sphere reflects the room, the glass sphere bends it, and the moving lights sweep soft shadows. On this laptop the ray-traced scene renders slowly and this clip is the offline showcase; a lighter shader is for a later pod round.*
 
 <video controls muted loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-helmet.mp4" type="video/mp4"></video>
 
@@ -132,7 +132,7 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 *Raster is left. Ray queries are right. The right side traces every torch and the fire for softer shadows, contact under the bridge and rocks, reflected off-screen walls and torches, and darker rock crevices. The difference is small in this frame and clearest in the water.*
 
-The release clips contain 3840 unique frames and the same round-six mix at -16 LUFS and -1 dBTP. Native console cost remains unverified while this path uses its own GLSL shaders.
+The release clips contain 4320 unique frames and the same round-seven mix at -16 LUFS and -1 dBTP. Native console cost remains unverified while this path uses its own GLSL shaders.
 
 The scene uses one opaque batch, instanced formations and sprites, and a water
 draw; offscreen room batches and cave formations are culled. Realtime additionally

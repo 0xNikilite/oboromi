@@ -205,6 +205,7 @@ struct Parameters {
 
 pub struct Spatializer {
     rooms: Vec<Room>,
+    reveal_room: Option<usize>,
     mode: Mode,
     listener: V3,
     forward: V3,
@@ -220,8 +221,10 @@ pub struct Spatializer {
 
 impl Spatializer {
     pub fn new(rooms: &[Room], mode: Mode) -> Self {
+        let reveal_room = rooms.iter().enumerate().max_by(|(_, a), (_, b)| room_volume(a).total_cmp(&room_volume(b))).map(|(i, _)| i);
         Self {
             rooms: rooms.to_vec(),
+            reveal_room,
             mode,
             listener: [0.0; 3],
             forward: [0.0, 0.0, -1.0],
@@ -323,13 +326,19 @@ impl Spatializer {
     }
 
     fn direct_path(&self, source: V3) -> Path {
-        let direct_distance = length(sub(source, self.listener));
-        let (occlusion, absorption) = self.occlusion(source);
-        Path {
-            position: source,
-            gain: distance_gain(direct_distance) * occlusion,
-            absorption,
+        let listener_room = self.rooms.iter().position(|room| contains(room, self.listener));
+        let source_room = self.rooms.iter().position(|room| contains(room, source));
+        if self.rooms.is_empty() || listener_room == source_room && source_room.is_some() {
+            return Path { position: source, gain: distance_gain(length(sub(source, self.listener))), absorption: 0.0 };
         }
+        let Some(reveal) = self.reveal_room.filter(|&room| source_room == Some(room)) else { return Path::default() };
+        let Some((door, position, distance)) = self.rooms[reveal].doorways.iter().map(|door| {
+            let position = closest(door, self.listener);
+            (door, position, length(sub(position, self.listener)))
+        }).min_by(|a, b| a.2.total_cmp(&b.2)) else { return Path::default() };
+        let route = length(sub(source, position)) + distance;
+        let opening = 0.08 + 0.14 * (1.0 - distance / 10.0).clamp(0.0, 1.0).powi(2);
+        Path { position, gain: distance_gain(route) * opening, absorption: 0.8 + door.material.scattering * 0.1 }
     }
 
     fn image_paths(&self, source: V3) -> ([Path; IMAGE_PATHS], usize) {
@@ -384,31 +393,6 @@ impl Spatializer {
         let mut images = [Path::default(); IMAGE_PATHS];
         images[..count].copy_from_slice(&paths[..count]);
         (images, count)
-    }
-
-    fn occlusion(&self, source: V3) -> (f32, f32) {
-        if self
-            .rooms
-            .iter()
-            .any(|room| contains(room, source) && contains(room, self.listener))
-        {
-            return (1.0, 0.0);
-        }
-        let direct = length(sub(source, self.listener));
-        let around = self
-            .rooms
-            .iter()
-            .flat_map(|room| &room.doorways)
-            .map(|door| {
-                let edge = closest(door, midpoint(source, self.listener));
-                (length(sub(source, edge)) + length(sub(edge, self.listener)), door.material.scattering)
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((around, scattering)) = around {
-            (0.14 * direct.max(0.2) / around.max(direct), 0.76 + scattering * 0.1)
-        } else {
-            (0.035, 0.92)
-        }
     }
 
     fn room_weights(&self, listener: V3) -> Vec<f32> {
@@ -582,17 +566,14 @@ fn contains(room: &Room, point: V3) -> bool {
     (0..3).all(|i| point[i] >= room.min[i] && point[i] <= room.max[i])
 }
 
+fn room_volume(room: &Room) -> f32 {
+    (room.max[0] - room.min[0]) * (room.max[1] - room.min[1]) * (room.max[2] - room.min[2])
+}
+
 fn closest(door: &Doorway, point: V3) -> V3 {
     std::array::from_fn(|i| point[i].clamp(door.min[i], door.max[i]))
 }
 
-fn midpoint(a: V3, b: V3) -> V3 {
-    scale(add(a, b), 0.5)
-}
-
-fn add(a: V3, b: V3) -> V3 {
-    std::array::from_fn(|i| a[i] + b[i])
-}
 fn sub(a: V3, b: V3) -> V3 {
     std::array::from_fn(|i| a[i] - b[i])
 }
@@ -688,10 +669,9 @@ mod tests {
 
     #[test]
     fn wall_occlusion_lowers_rms_and_spectral_centroid() {
-        let rooms = [
-            room([-3.0, -2.0, -3.0], [0.0, 2.0, 3.0]),
-            room([0.2, -2.0, -3.0], [3.2, 2.0, 3.0]),
-        ];
+        let mut reveal = room([0.2, -2.0, -3.0], [3.4, 2.0, 3.0]);
+        reveal.doorways.push(Doorway { min: [0.15, -1.0, -0.8], max: [0.25, 1.5, 0.8], material: Material::OPEN });
+        let rooms = [room([-3.0, -2.0, -3.0], [0.0, 2.0, 3.0]), reveal];
         let measure = |position| {
             let mut spatial = Spatializer::new(&rooms, Mode::Headphones);
             spatial.set_listener([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
@@ -724,8 +704,24 @@ mod tests {
     }
 
     #[test]
+    fn only_the_reveal_carries_through_its_doorway() {
+        let hall = room([-8.0, -2.0, -3.0], [0.0, 2.0, 3.0]);
+        let mut reveal = room([0.0, -2.0, -4.0], [8.0, 3.0, 4.0]);
+        reveal.doorways.push(Doorway { min: [-0.05, -1.0, -0.8], max: [0.05, 1.5, 0.8], material: Material::OPEN });
+        let mut spatial = Spatializer::new(&[hall, reveal], Mode::Headphones);
+        spatial.set_listener([-7.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let far = spatial.direct_path([4.0, 0.0, 0.0]).gain;
+        spatial.set_listener([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let near = spatial.direct_path([4.0, 0.0, 0.0]).gain;
+        spatial.set_listener([4.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        assert!(far > 0.0 && far < near && near < spatial.direct_path([3.0, 0.0, 0.0]).gain);
+        assert_eq!(spatial.direct_path([-4.0, 0.0, 0.0]).gain, 0.0);
+    }
+
+    #[test]
     fn doorway_crossfade_changes_reverb_energy_monotonically() {
-        let reflective = room([-4.0, -2.0, -3.0], [0.0, 2.0, 3.0]);
+        let mut reflective = room([-4.2, -2.0, -3.0], [0.0, 2.0, 3.0]);
+        reflective.doorways.push(Doorway { min: [-0.05, -1.0, -0.8], max: [0.05, 1.5, 0.8], material: Material::OPEN });
         let mut dry = room([0.0, -2.0, -3.0], [4.0, 2.0, 3.0]);
         dry.walls = [Material::OPEN; 6];
         let energies: Vec<f32> = [-0.6, -0.3, 0.0, 0.3, 0.6]

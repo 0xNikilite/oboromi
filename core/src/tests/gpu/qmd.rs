@@ -1,13 +1,11 @@
 #![cfg(test)]
 
+use super::engine::bytes;
 use crate::gpu::{
-    compute_class::{ConstantBuffer, ReleaseSemaphore},
+    compute_class::{ConstantBuffer, ReleaseSemaphore, SEND_PCAS_A, SEND_SIGNALING_PCAS_B},
     fifo::{Event, Pusher},
 };
-
-const SET_OBJECT: u32 = 0x0000;
-const SEND_PCAS_A: u32 = 0x02b4;
-const SEND_SIGNALING_PCAS_B: u32 = 0x02bc;
+use scene::{entry, host::SET_OBJECT, inc};
 
 fn set(words: &mut [u32; 64], bit: usize, width: usize, value: u32) {
     let mask = if width == 32 {
@@ -48,19 +46,12 @@ fn qmd() -> [u32; 64] {
     words
 }
 
-fn bytes(words: &[u32]) -> Vec<u8> {
-    words.iter().flat_map(|word| word.to_le_bytes()).collect()
-}
-
 fn submit(qmd: [u32; 64]) -> Result<Vec<Event>, String> {
-    let pushbuffer = bytes(&[
-        1 << 29 | 1 << 16 | SET_OBJECT / 4,
-        0xc7c0,
-        1 << 29 | 1 << 16 | SEND_PCAS_A / 4,
-        0x20,
-        1 << 29 | 1 << 16 | SEND_SIGNALING_PCAS_B / 4,
-        2,
-    ]);
+    let mut words = Vec::new();
+    inc(SET_OBJECT, &[0xc7c0], &mut words);
+    inc(SEND_PCAS_A as usize, &[0x20], &mut words);
+    inc(SEND_SIGNALING_PCAS_B, &[2], &mut words);
+    let pushbuffer = bytes(&words);
     let qmd = bytes(&qmd);
     Pusher::default().submit(
         [entry(0x1000, pushbuffer.len() / 4)],
@@ -70,16 +61,6 @@ fn submit(qmd: [u32; 64]) -> Result<Vec<Event>, String> {
             _ => Err(format!("unknown address {address:#x}")),
         },
     )
-}
-
-fn entry(address: u64, words: usize) -> [u8; 8] {
-    let hi = ((address >> 32) as u32 & 0xff) | (words as u32) << 10;
-    [address as u32, hi]
-        .into_iter()
-        .flat_map(u32::to_le_bytes)
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap()
 }
 
 #[test]

@@ -3,28 +3,13 @@
 use crate::gpu::VkState;
 use crate::gpu::engine::Gpu;
 use crate::gpu::memory::{MemoryError, PAGE};
+use crate::tests::gpu_test::inst::{self, bra, exit, ipa, texture};
+use scene::{Addresses, Vertex};
+pub use scene::{frame_state, header};
+pub use scene::{entry, inc, non_inc, split};
+pub use scene::host::SET_OBJECT;
 use std::path::Path;
-use crate::tests::gpu_test::inst::{self, ald, ast, bra, exit, ffma, fmul, ipa, mov_cbuf, mov_imm, texture};
-
-pub const SET_OBJECT: u32 = 0x0000;
-pub const SET_VERTEX_STREAM_SIZE_A: u32 = 0x0600;
-pub const SET_COLOR_TARGET_A: u32 = 0x0800;
-pub const SET_VIEWPORT_SCALE_X: u32 = 0x0a00;
-pub const SET_VIEWPORT_CLIP_HORIZONTAL: u32 = 0x0c00;
-pub const SET_COLOR_CLEAR_VALUE: u32 = 0x0d80;
-pub const SET_SCISSOR_ENABLE: u32 = 0x0e00;
-pub const SET_VERTEX_ATTRIBUTE_A: u32 = 0x1160;
-pub const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST: u32 = 0x1214;
-pub const CLEAR_SURFACE: u32 = 0x19d0;
-pub const SET_CT_WRITE: u32 = 0x1a00;
-pub const SET_REPORT_SEMAPHORE_A: u32 = 0x1b00;
-pub const SET_VERTEX_STREAM_A_FORMAT: u32 = 0x1c00;
-pub const SET_PIPELINE_SHADER: u32 = 0x2000;
-pub const SET_CONSTANT_BUFFER_SELECTOR_A: u32 = 0x2380;
-pub const LOAD_CONSTANT_BUFFER: u32 = 0x2390;
-pub const BIND_GROUP_CONSTANT_BUFFER: u32 = 0x2410;
-pub const SET_TEX_SAMPLER_POOL_A: u32 = 0x155c;
-pub const SET_TEX_HEADER_POOL_A: u32 = 0x1574;
+pub use scene::threed::*;
 
 const PUSHBUFFER: u64 = 0x1_0000_0000;
 const VERTEX_PROGRAM: u64 = 0x1_0010_0000;
@@ -36,77 +21,27 @@ pub const REPORT: u64 = 0x1_0040_0000;
 pub const TARGET: u64 = 0x1_0100_0000;
 /// The TIC entry at +0, the TSC entry at +0x100, the handle word at +0x200 and room for texels from +0x1000.
 pub const TEXTURES: u64 = 0x1_0070_0000;
-
-pub type Vertex = ([f32; 2], [u8; 4]);
-
-pub fn header(op: u32, method: u32, count: u32) -> u32 {
-    op << 29 | count << 16 | method / 4
-}
-
-pub fn inc(method: u32, values: &[u32], words: &mut Vec<u32>) {
-    words.push(header(1, method, values.len() as u32));
-    words.extend(values);
-}
-
-pub fn non_inc(method: u32, values: &[u32], words: &mut Vec<u32>) {
-    words.push(header(3, method, values.len() as u32));
-    words.extend(values);
-}
-
-pub fn entry(address: u64, words: usize) -> [u8; 8] {
-    let lo = address as u32;
-    let hi = ((address >> 32) as u32 & 0xff) | (words as u32) << 10;
-    [lo.to_le_bytes(), hi.to_le_bytes()].concat().try_into().unwrap()
-}
+pub const ADDRESSES: Addresses = Addresses {
+    vertex_program: VERTEX_PROGRAM,
+    pixel_program: PIXEL_PROGRAM,
+    vertices: VERTICES,
+    cbuf: CBUF,
+    report: REPORT,
+    target: TARGET,
+};
 
 pub fn bytes(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_le_bytes()).collect()
 }
 
 pub fn vertex_bytes(vertices: &[Vertex]) -> Vec<u8> {
-    vertices.iter().flat_map(|([x, y], rgba)| [&x.to_le_bytes()[..], &y.to_le_bytes(), rgba].concat()).collect()
+    vertices.iter().flat_map(scene::vertex).collect()
 }
 
 fn program(header_bits: impl IntoIterator<Item = usize>, code: &[u128]) -> Vec<u8> {
-    let mut bytes = vec![0; 0x80];
-    for bit in header_bits {
-        bytes[bit / 8] |= 1 << (bit % 8);
-    }
-    bytes.extend(code.iter().flat_map(|inst| inst.to_le_bytes()));
+    let mut bytes = vec![0; scene::SPH_BYTES + 16 * code.len()];
+    scene::program(&mut bytes, header_bits, code);
     bytes
-}
-
-// The SPHV4 bits (clc797sph.h, version 4 at bit 7): type 1 vertex reading generics 0 and 1, writing position and generic 0; type 2 pixel
-// reading generic 0 perspective-correct and writing RGBA of target 0. Position is c[0][0x0..0x10] times (x, y) at
-// depth c[0][0x10].
-fn programs() -> [Vec<u8>; 2] {
-    let vertex = program([0, 7, 10].into_iter().chain(192..200).chain(428..436), &[
-        ald(0, 0x80, 2),
-        ald(4, 0x90, 4),
-        mov_cbuf(8, 0, 0),
-        mov_cbuf(9, 0, 4),
-        mov_cbuf(10, 0, 8),
-        mov_cbuf(11, 0, 12),
-        fmul(12, 0, 8),
-        ffma(12, 1, 9, 12),
-        fmul(13, 0, 10),
-        ffma(13, 1, 11, 13),
-        mov_cbuf(14, 0, 16),
-        mov_imm(15, 1.0f32.to_bits()),
-        ast(0x70, 12, 4),
-        ast(0x80, 4, 4),
-        exit(),
-        bra(-16),
-    ]);
-    let pixel = program([1, 7, 10, 12, 193, 195, 197, 199, 576, 577, 578, 579], &[
-        ipa(0, 0x80, 0),
-        ipa(1, 0x84, 0),
-        ipa(2, 0x88, 0),
-        ipa(3, 0x8c, 0),
-        exit(),
-        bra(-16),
-    ]);
-    [vertex, pixel]
 }
 
 // A type 2 pixel program reading generic 0 x and y perspective-correct and writing the texel there from the texture
@@ -119,9 +54,11 @@ pub fn triangle_guest(state: &'static VkState, cache: Option<(&Path, &str)>, wid
     let target_pages = (u64::from(width * height) * 4).div_ceil(PAGE);
     let mut gpu = Gpu::new(state, ((8 + target_pages) * PAGE) as usize, cache, Default::default())?;
     for (va, page, pages) in [(TEXTURES, 0, 1), (PUSHBUFFER, 3, 1), (VERTEX_PROGRAM, 1, 1), (VERTICES, 5, 1), (CBUF, 2, 1), (REPORT, 6, 1), (TARGET, 8, target_pages)] {
-        gpu.space.map(va, page * PAGE, pages * PAGE);
+        gpu.map(va, page * PAGE, pages * PAGE);
     }
-    let [vertex, pixel] = programs();
+    let (mut vertex, mut pixel) = ([0; scene::VERTEX_PROGRAM_BYTES], [0; scene::PIXEL_PROGRAM_BYTES]);
+    scene::vertex_program(&mut vertex);
+    scene::pixel_program(&mut pixel);
     gpu.write(VERTEX_PROGRAM, &vertex)?;
     gpu.write(PIXEL_PROGRAM, &pixel)?;
     gpu.write(TEXTURED_PROGRAM, &textured_program())?;
@@ -129,54 +66,15 @@ pub fn triangle_guest(state: &'static VkState, cache: Option<(&Path, &str)>, wid
     Ok(gpu)
 }
 
-fn split(va: u64) -> [u32; 2] {
-    [(va >> 32) as u32, va as u32]
-}
-
-/// The state every frame here starts from: both programs, one stream of `Vertex`, colour target 0 at `target`, a full
-/// viewport and scissor, and `matrix` inline in constant buffer 0 of the vertex stage.
-pub fn frame_state(width: u32, height: u32, target: u64, matrix: [f32; 4], words: &mut Vec<u32>) {
-    const R32_G32_FLOAT: u32 = 0x04 << 21 | 7 << 27;
-    const R8_G8_B8_A8_UNORM: u32 = 0x0a << 21 | 2 << 27;
-    const A8B8G8R8: u32 = 0xd5;
-    const PITCH: u32 = 0x1000;
-    let [vs, fs, vertices, cbuf, target] = [VERTEX_PROGRAM, PIXEL_PROGRAM, VERTICES, CBUF, target].map(split);
-    let (x, y) = (width as f32 / 2.0, height as f32 / 2.0);
-    inc(SET_OBJECT, &[0xc797], words);
-    inc(SET_VERTEX_STREAM_SIZE_A, &[0, 0x1000], words);
-    inc(SET_VERTEX_STREAM_A_FORMAT, &[0x1000 | 12, vertices[0], vertices[1]], words);
-    inc(SET_VERTEX_ATTRIBUTE_A, &[R32_G32_FLOAT, 8 << 7 | R8_G8_B8_A8_UNORM], words);
-    inc(SET_COLOR_TARGET_A, &[target[0], target[1], width * 4, height, A8B8G8R8, PITCH], words);
-    inc(SET_VIEWPORT_SCALE_X, &[x, y, 0.5, x, y, 0.5].map(f32::to_bits), words);
-    inc(SET_VIEWPORT_CLIP_HORIZONTAL, &[width << 16, height << 16, 0, 1.0f32.to_bits()], words);
-    inc(SET_SCISSOR_ENABLE, &[1, width << 16, height << 16], words);
-    inc(SET_PIPELINE_SHADER + 64, &[0x11], words);
-    inc(SET_PIPELINE_SHADER + 64 + 0x10, &[0, vs[0], vs[1]], words);
-    inc(SET_PIPELINE_SHADER + 5 * 64, &[0x51], words);
-    inc(SET_PIPELINE_SHADER + 5 * 64 + 0x10, &[4, fs[0], fs[1]], words);
-    inc(SET_CONSTANT_BUFFER_SELECTOR_A, &[32, cbuf[0], cbuf[1], 0], words);
-    non_inc(LOAD_CONSTANT_BUFFER, &matrix.map(f32::to_bits), words);
-    inc(BIND_GROUP_CONSTANT_BUFFER, &[1], words);
-    inc(SET_CT_WRITE, &[0x1111], words);
-}
-
 pub fn run(gpu: &mut Gpu, words: &[u32]) -> Result<(), String> {
     gpu.write(PUSHBUFFER, &bytes(words)).map_err(|e| format!("{e:?}"))?;
     gpu.submit(&[entry(PUSHBUFFER, words.len())])
 }
 
-/// Points texture 0 at a pitch-linear RGBA8 image and sampler 0 at nearest clamp-to-edge filtering (clc697tex.h).
+/// Points texture 0 at a pitch-linear RGBA8 image and sampler 0 at nearest clamp-to-edge filtering.
 pub fn texture_header(gpu: &mut Gpu, address: u64, width: u32, height: u32, pitch: u32) -> Result<(), MemoryError> {
-    const A8B8G8R8_UNORM: u32 = 8 | 0b010_010_010_010 << 7;
-    const IDENTITY_SWIZZLE: u32 = 0o5432 << 19;
-    const PITCH: u32 = 2 << 21;
-    const TWO_D: u32 = 1 << 23;
-    const NORMALIZED: u32 = 1 << 31;
-    let [hi, lo] = split(address);
-    gpu.write(TEXTURES, &bytes(&[A8B8G8R8_UNORM | IDENTITY_SWIZZLE, lo, hi | PITCH, pitch >> 5, (width - 1) | TWO_D, (height - 1) | NORMALIZED]))?;
-    const CLAMP_TO_EDGE: u32 = 2 | 2 << 3;
-    const NEAREST: u32 = 1 | 1 << 4;
-    gpu.write(TEXTURES + 0x100, &bytes(&[CLAMP_TO_EDGE, NEAREST]))?;
+    gpu.write(TEXTURES, &bytes(&scene::pitch_rgba8_tic(address, width, height, pitch)))?;
+    gpu.write(TEXTURES + 0x100, &bytes(&scene::NEAREST_CLAMP_TSC))?;
     gpu.write(TEXTURES + 0x200, &0u32.to_le_bytes())
 }
 
@@ -184,7 +82,7 @@ pub fn texture_header(gpu: &mut Gpu, address: u64, width: u32, height: u32, pitc
 pub fn textured_quad_frame(gpu: &mut Gpu, width: u32, height: u32, target: u64, first: u32) -> Result<(), String> {
     let [textures, program] = [TEXTURES, TEXTURED_PROGRAM].map(split);
     let mut words = Vec::new();
-    frame_state(width, height, target, [1.0, 0.0, 0.0, 1.0], &mut words);
+    frame_state(width, height, &Addresses { target, ..ADDRESSES }, [1.0, 0.0, 0.0, 1.0], &mut words);
     inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &program, &mut words);
     inc(SET_TEX_HEADER_POOL_A, &[textures[0], textures[1], 0], &mut words);
     inc(SET_TEX_SAMPLER_POOL_A, &[textures[0], textures[1] + 0x100, 0], &mut words);
@@ -196,16 +94,9 @@ pub fn textured_quad_frame(gpu: &mut Gpu, width: u32, height: u32, target: u64, 
     run(gpu, &words)
 }
 
-/// Clears the target to white, draws the triangle with `matrix` inline in the constant buffer, then releases `payload`.
 pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], payload: u32) -> Result<(), String> {
-    const ONE_WORD: u32 = 1 << 28;
-    let report = split(REPORT);
     let mut words = Vec::new();
-    frame_state(width, height, TARGET, matrix, &mut words);
-    inc(SET_COLOR_CLEAR_VALUE, &[1.0f32.to_bits(); 4], &mut words);
-    inc(CLEAR_SURFACE, &[0x3c], &mut words);
-    inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
-    inc(SET_REPORT_SEMAPHORE_A, &[report[0], report[1], payload, ONE_WORD], &mut words);
+    scene::triangle_frame(width, height, &ADDRESSES, matrix, payload, &mut words);
     run(gpu, &words)
 }
 
@@ -213,29 +104,19 @@ pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], 
 mod tests {
     use super::*;
     use crate::tests::gpu::harness::{sha256, shared_device};
-    use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f, stg};
+    use crate::tests::gpu_test::inst::{ald, ast, mov_imm, cvt, fadd, fmul_imm, i2f, stg};
+    use crate::cpu::UnicornCPU;
+    use crate::tests::run::arm64;
+    use crate::gpu::compute_class::{SEND_PCAS_A, SEND_SIGNALING_PCAS2_B};
 
-    const END: u32 = 0x1614;
-    const BEGIN: u32 = 0x1618;
-    const SET_INDEX_BUFFER_A: u32 = 0x17c8;
-    const SET_INDEX_BUFFER_E: u32 = 0x17d8;
-    const DRAW_INDEX_BUFFER: u32 = 0x17e0;
-    const SET_Z_CLEAR_VALUE: u32 = 0x0d90;
-    const SET_ZT_A: u32 = 0x0fe0;
-    const SET_DEPTH_TEST: u32 = 0x12cc;
-    const SET_DEPTH_WRITE: u32 = 0x12e8;
-    const SET_DEPTH_FUNC: u32 = 0x130c;
-    const SET_BLEND_COLOR_OP: u32 = 0x1340;
-    const SET_BLEND: u32 = 0x1360;
-    const SET_ZT_SELECT: u32 = 0x1538;
     const INDICES: u64 = 0x1_0050_0000;
     const DEPTH: u64 = 0x1_0060_0000;
     const TARGET_B: u64 = 0x1_0200_0000;
     const INSTANCED_PROGRAM: u64 = 0x1_0010_3000;
     const STORING_PROGRAM: u64 = 0x1_0010_4000;
-    const SEMAPHORE_A: u32 = 0x0010;
-    const SET_WINDOW_ORIGIN: u32 = 0x13ac;
-    const OGL_SET_CULL: u32 = 0x1918;
+    const SEMAPHORE_A: usize = 0x0010;
+    const SET_WINDOW_ORIGIN: usize = 0x13ac;
+    const OGL_SET_CULL: usize = 0x1918;
     // A four-vertex strip with uv in the colour attribute's red and green.
     fn quad(half: f32) -> [Vertex; 4] {
         [([-half, -half], [0, 0, 0, 0]), ([half, -half], [255, 0, 0, 0]), ([-half, half], [0, 255, 0, 0]), ([half, half], [255, 255, 0, 0])]
@@ -248,11 +129,35 @@ mod tests {
     const RED: [u8; 4] = [255, 0, 0, 255];
     const GREEN: [u8; 4] = [0, 255, 0, 255];
     const BLUE: [u8; 4] = [0, 0, 255, 255];
+    // On a page the GPU leaves unmapped, so only the guest's stores mark the vertex page.
+    const GUEST_CODE: u64 = 7 * PAGE;
+    const GUEST_LOAD: u64 = GUEST_CODE + 20;
 
     fn map(gpu: &mut Gpu, va: u64, len: u64) {
         let pa = gpu.ram_len() as u64;
         gpu.grow_ram((pa + len) as usize);
         gpu.space.map(va, pa, len);
+    }
+
+    fn physical(gpu: &Gpu, va: u64) -> u64 {
+        gpu.space.resolve(va, 1).unwrap().next().unwrap().start
+    }
+
+    /// A core on the GPU's RAM that has copied `vertices` over the vertex buffer word by word with guest stores.
+    fn guest_store_vertices(gpu: &Gpu, vertices: &[Vertex]) -> UnicornCPU {
+        let cpu = UnicornCPU::new_with_shared_mem(0, gpu.ram.clone()).unwrap();
+        let code = [arm64::ldr_post(3, 1, 4), arm64::str_post(3, 2, 4), arm64::subs_imm(0, 0, 1), arm64::b_ne(-3), arm64::brk(0), arm64::ldr(5, 4), arm64::brk(0)];
+        for (pc, word) in (GUEST_CODE..).step_by(4).zip(code) {
+            cpu.write_u32(pc, word);
+        }
+        let bytes = vertex_bytes(vertices);
+        gpu.ram.write(GUEST_CODE + 0x100, &bytes);
+        for (reg, value) in [(0, bytes.len() as u64 / 4), (1, GUEST_CODE + 0x100), (2, physical(gpu, VERTICES))] {
+            cpu.set_x(reg, value);
+        }
+        cpu.set_pc(GUEST_CODE);
+        assert_eq!(cpu.run(), 1);
+        cpu
     }
 
     fn pixel(gpu: &mut Gpu, target: u64, x: u32, y: u32) -> [u8; 4] {
@@ -285,11 +190,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_guest_triangle_scene_writes_the_bytes_the_host_triangle_draws() {
+        let (mut pushbuffer, mut vertices) = ([0; 256], [0; 36]);
+        let (mut vertex, mut pixel) = ([0; scene::VERTEX_PROGRAM_BYTES], [0; scene::PIXEL_PROGRAM_BYTES]);
+        let mut out = scene::Scene { pushbuffer: &mut pushbuffer, vertex_program: &mut vertex, pixel_program: &mut pixel, vertices: &mut vertices };
+        let len = scene::triangle_scene(&mut out, &ADDRESSES, [SIZE; 2], &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)], IDENTITY, 0x1234_5678);
+        let image = [&bytes(&pushbuffer[..len])[..], &vertex, &pixel, &vertices].concat();
+        assert_eq!(sha256(&image), "270bc71b1a547884e5218910d54fe52f835f6685e003d25287c2324ab44a775d");
+    }
+
     // QMDV03_00 fields from clc7c0qmd.h: grid in words 12-14, block in 18-19, release 0 in 24-26, program in 48-49.
     #[test]
     fn qmd_launch_writes_the_gradient_kernel_output_into_guest_memory_and_releases() {
-        const SEND_PCAS_A: u32 = 0x02b4;
-        const SEND_SIGNALING_PCAS2_B: u32 = 0x02c0;
         const INVALIDATE_COPY_SCHEDULE: u32 = 3;
         // The kernel stores its 1920x1080 RGBA8 frame at the address its MOV R4, 0x1000 and MOV R5, 0x2 build.
         const FRAME: u64 = 0x2_0000_1000;
@@ -313,8 +226,8 @@ mod tests {
         [qmd[48], qmd[49]] = [program_va as u32, 2];
         let mut words = Vec::new();
         inc(SET_OBJECT, &[0xc7c0], &mut words);
-        inc(SEND_PCAS_A, &[(qmd_va >> 8) as u32], &mut words);
-        inc(SEND_SIGNALING_PCAS2_B, &[INVALIDATE_COPY_SCHEDULE], &mut words);
+        inc(SEND_PCAS_A as usize, &[(qmd_va >> 8) as u32], &mut words);
+        inc(SEND_SIGNALING_PCAS2_B as usize, &[INVALIDATE_COPY_SCHEDULE], &mut words);
         gpu.write(program_va, &code).unwrap();
         gpu.write(qmd_va, &bytes(&qmd)).unwrap();
         gpu.write(CONTROL, &bytes(&words)).unwrap();
@@ -333,7 +246,7 @@ mod tests {
         let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
         draw_and_check(&mut gpu, 0x1234_5678, [RED, GREEN, BLUE]);
         gpu.space.unmap(VERTICES, PAGE);
-        gpu.space.map(VERTICES, 7 * PAGE, PAGE);
+        gpu.map(VERTICES, 7 * PAGE, PAGE);
         gpu.write(VERTICES, &vertex_bytes(&[(CORNERS[0], GREEN), (CORNERS[1], BLUE), (CORNERS[2], RED)])).unwrap();
         draw_and_check(&mut gpu, 0x9abc_def0, [GREEN, BLUE, RED]);
     }
@@ -372,7 +285,7 @@ mod tests {
         let code = [mov_imm(4, REPORT as u32), mov_imm(5, 0xfeed), stg(4, 0, 5), ipa(0, 0x80, 0), ipa(1, 0x84, 0), ipa(2, 0x88, 0), ipa(3, 0x8c, 0), exit(), bra(-16)];
         gpu.write(STORING_PROGRAM, &program([1, 7, 10, 12, 193, 195, 197, 199, 576, 577, 578, 579], &code)).unwrap();
         let mut words = Vec::new();
-        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
         inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &split(STORING_PROGRAM), &mut words);
         inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
         run(&mut gpu, &words).unwrap();
@@ -398,16 +311,39 @@ mod tests {
     }
 
     #[test]
+    fn a_core_stores_the_vertices_the_gpu_draws_and_loads_the_report_the_gpu_wrote() {
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], WHITE); 3]).unwrap();
+        let mapped = gpu.memory.generation(physical(&gpu, VERTICES), PAGE);
+        let cpu = guest_store_vertices(&gpu, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]);
+        draw_and_check(&mut gpu, 0x1234_5678, [RED, GREEN, BLUE]);
+        assert!(gpu.memory.generation(physical(&gpu, VERTICES), PAGE) > mapped);
+        cpu.set_x(4, physical(&gpu, REPORT));
+        cpu.set_pc(GUEST_LOAD);
+        assert_eq!(cpu.run(), 1);
+        assert_eq!(cpu.get_x(5), 0x1234_5678);
+    }
+
+    #[test]
+    fn a_second_frame_draws_the_vertices_a_core_stored_after_the_first() {
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        draw_and_check(&mut gpu, 1, [RED, GREEN, BLUE]);
+        guest_store_vertices(&gpu, &[(CORNERS[0], GREEN), (CORNERS[1], BLUE), (CORNERS[2], RED)]);
+        draw_and_check(&mut gpu, 2, [GREEN, BLUE, RED]);
+    }
+
+    #[test]
     fn begin_end_indexed_draw_builds_a_quad_from_two_triangles() {
         const TWO_BYTES: u32 = 1;
         const TRIANGLES: u32 = 4;
         let Some(state) = shared_device() else { return };
         let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         gpu.write(VERTICES, &vertex_bytes(&[[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].map(|corner| (corner, RED)))).unwrap();
-        map(&mut gpu, INDICES, PAGE);
+        gpu.map(INDICES, 4 * PAGE, PAGE);
         gpu.write(INDICES, &bytes(&[0 | 1 << 16, 2 | 2 << 16, 1 | 3 << 16])).unwrap();
         let mut words = Vec::new();
-        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
         clear_white(&mut words);
         inc(SET_INDEX_BUFFER_A, &split(INDICES), &mut words);
         inc(SET_INDEX_BUFFER_E, &[TWO_BYTES, 0], &mut words);
@@ -431,7 +367,7 @@ mod tests {
         gpu.write(VERTICES, &vertex_bytes(&[near, far].concat())).unwrap();
         for order in [[(0.25, 0), (0.75, 3)], [(0.75, 3), (0.25, 0)]] {
             let mut words = Vec::new();
-            frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+            frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
             inc(SET_ZT_A, &[split(DEPTH)[0], split(DEPTH)[1], ZF32], &mut words);
             inc(SET_ZT_SELECT, &[1], &mut words);
             inc(SET_DEPTH_TEST, &[1], &mut words);
@@ -459,7 +395,7 @@ mod tests {
         let [first, second] = [[100, 0, 0, 128], [0, 100, 0, 128]].map(|colour| CORNERS.map(|corner| (corner, colour)));
         gpu.write(VERTICES, &vertex_bytes(&[first, second].concat())).unwrap();
         let mut words = Vec::new();
-        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
         inc(SET_COLOR_CLEAR_VALUE, &[0; 4], &mut words);
         inc(CLEAR_SURFACE, &[0x3c], &mut words);
         inc(SET_BLEND_COLOR_OP, &[OGL_FUNC_ADD, OGL_ONE, OGL_ONE], &mut words);
@@ -523,8 +459,8 @@ mod tests {
     fn instanced_stream_places_and_colours_each_instance_from_unsigned_integer_attributes() {
         const R32_G32_FLOAT: u32 = 0x04 << 21 | 7 << 27;
         const R8_G8_B8_A8_UINT: u32 = 0x0a << 21 | 4 << 27;
-        const SET_VERTEX_STREAM_INSTANCE_A: u32 = 0x1880;
-        const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
+        const SET_VERTEX_STREAM_INSTANCE_A: usize = 0x1880;
+        const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x1218;
         let Some(state) = shared_device() else { return };
         let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         gpu.write(INSTANCED_PROGRAM, &instanced_program()).unwrap();
@@ -535,7 +471,7 @@ mod tests {
         gpu.write(VERTICES + 0x100, &instances).unwrap();
         let [vertices, program] = [VERTICES, INSTANCED_PROGRAM].map(split);
         let mut words = Vec::new();
-        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
         clear_white(&mut words);
         inc(SET_VERTEX_STREAM_SIZE_A + 8, &[0, 0x100], &mut words);
         inc(SET_VERTEX_STREAM_A_FORMAT, &[0x1000 | 8], &mut words);
@@ -556,13 +492,13 @@ mod tests {
         let Some(state) = shared_device() else { return };
         let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
         let mut words = Vec::new();
-        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
         inc(SET_COLOR_CLEAR_VALUE, &[0.0, 0.0, 1.0, 1.0].map(f32::to_bits), &mut words);
         inc(CLEAR_SURFACE, &[0x3c], &mut words);
         run(&mut gpu, &words).unwrap();
         assert_eq!([pixel(&mut gpu, TARGET, 20, 20), pixel(&mut gpu, TARGET, 40, 40)], [BLUE; 2]);
         words.clear();
-        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
         inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
         run(&mut gpu, &words).unwrap();
         assert_eq!([pixel(&mut gpu, TARGET, 20, 20), pixel(&mut gpu, TARGET, 40, 40)], [GREEN, BLUE]);
@@ -605,7 +541,7 @@ mod tests {
         let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
         for (scale_y, origin) in [(-32.0f32, UPPER_LEFT), (32.0, LOWER_LEFT)] {
             let mut words = Vec::new();
-            frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+            frame_state(SIZE, SIZE, &ADDRESSES, IDENTITY, &mut words);
             clear_white(&mut words);
             inc(SET_VIEWPORT_SCALE_X + 4, &[scale_y.to_bits()], &mut words);
             inc(SET_WINDOW_ORIGIN, &[origin], &mut words);

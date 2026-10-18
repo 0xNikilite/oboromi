@@ -1,7 +1,17 @@
 use crate::nn;
 use crate::sys;
 
+pub mod binder;
+pub mod fs;
+pub mod hid;
 pub mod hipc;
+pub mod nvdrv;
+pub mod sm;
+pub mod applet;
+pub use applet as applet_ae;
+pub use applet as applet_oe;
+pub mod time;
+pub mod vi;
 
 macro_rules! define_service {
     ($($name:ident),* $(,)?) => {
@@ -29,24 +39,24 @@ macro_rules! define_service {
 }
 
 define_service!(
-    acc, adraw, ahid, aoc, apm, applet_ae, applet_oe, arp,
+    acc, adraw, ahid, aoc, apm, arp,
     aud, audctl, auddebug, auddev, auddmg, audin, audout,
     audrec, audren, audsmx, avm, banana, batlog, bcat, bgtc,
     bpc, bpmpmr, bsd, bsdcfg, bt, btdrv, btm, btp, capmtp,
     caps, caps2, cec_mgr, chat, clkrst, codecctl, csrng,
     dauth, disp, dispdrv, dmnt, dns, dt, ectx, erpt, es,
-    eth, ethc, eupld, fan, fatal, fgm, file_io, friend, fs,
-    fsp_ldr, fsp_pr, fsp_srv, gds, gpio, gpuk, grc, gsv,
-    hdcp, hid, hidbus, host1x, hshl, htc, htcs, hwopus, i2c,
+    eth, ethc, eupld, fan, fatal, fgm, file_io, friend,
+    fsp_ldr, fsp_pr, gds, gpio, gpuk, grc, gsv,
+    hdcp, hidbus, host1x, hshl, htc, htcs, hwopus, i2c,
     idle, ifcfg, imf, ins, irs, jit, lbl, ldn, ldr, led, lm,
     lp2p, lr, manu, mig, mii, miiimg, mm, mnpp, ncm, nd, ndd,
     ndrm, news, nfc, nfp, ngc, ngct, nifm, nim, notif, npns,
-    ns, nsd, ntc, nvdbg, nvdrv, nvdrvdbg, nvgem, nvmemp,
+    ns, nsd, ntc, nvdbg, nvdrvdbg, nvgem, nvmemp,
     olsc, omm, ommdisp, ovln, pcie, pcm, pctl, pcv, pdm,
     pgl, pinmux, pl, pm, prepo, psc, psm, pwm, rgltr, ro,
     rtc, sasbus, set, sf_uds, sfdnsres, spbg, spi, spl,
-    sprof, spsm, srepo, ssl, syncpt, tc, tcap, time,
-    tma_log, tmagent, ts, tspm, uart, usb, vi, vi2, vic,
+    sprof, spsm, srepo, ssl, syncpt, tc, tcap,
+    tma_log, tmagent, ts, tspm, uart, usb, vi2, vic,
     wlan, xcd,
 );
 
@@ -57,7 +67,7 @@ pub trait ServiceTrait {
 }
 
 pub fn start_host_services(state: &mut sys::State) {
-    let entries: [(&str, fn(&mut sys::State)); 160] = [
+    let entries: [(&str, fn(&mut sys::State)); 157] = [
         ("acc", nn::acc::State::run),
         ("adraw", nn::adraw::State::run),
         ("ahid", nn::ahid::State::run),
@@ -114,10 +124,9 @@ pub fn start_host_services(state: &mut sys::State) {
         ("fgm", nn::fgm::State::run),
         ("file_io", nn::file_io::State::run),
         ("friend", nn::friend::State::run),
-        ("fs", nn::fs::State::run),
         ("fsp-ldr", nn::fsp_ldr::State::run),
         ("fsp-pr", nn::fsp_pr::State::run),
-        ("fsp-srv", nn::fsp_srv::State::run),
+        ("fsp-srv", nn::fs::State::run),
         ("gds", nn::gds::State::run),
         ("gpio", nn::gpio::State::run),
         ("gpuk", nn::gpuk::State::run),
@@ -168,7 +177,6 @@ pub fn start_host_services(state: &mut sys::State) {
         ("nsd", nn::nsd::State::run),
         ("ntc", nn::ntc::State::run),
         ("nvdbg", nn::nvdbg::State::run),
-        ("nvdrv", nn::nvdrv::State::run),
         ("nvdrvdbg", nn::nvdrvdbg::State::run),
         ("nvgem", nn::nvgem::State::run),
         ("nvmemp", nn::nvmemp::State::run),
@@ -213,7 +221,6 @@ pub fn start_host_services(state: &mut sys::State) {
         ("tspm", nn::tspm::State::run),
         ("uart", nn::uart::State::run),
         ("usb", nn::usb::State::run),
-        ("vi", nn::vi::State::run),
         ("vi2", nn::vi2::State::run),
         ("vic", nn::vic::State::run),
         ("wlan", nn::wlan::State::run),

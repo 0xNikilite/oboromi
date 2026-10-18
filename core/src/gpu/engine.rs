@@ -5,7 +5,7 @@ use super::compute::{AccelerationStructure, ComputePipeline, HostBuffer, HostIma
 use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
-use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Ram, Writer, ZeroCopy, within};
+use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PAGE, PageMap, Writer, ZeroCopy, within};
 use super::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy, hash};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, Hints, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, Translation, acceleration_structure_binding, branch_target, emit_module_hinted};
 use super::texture::TexturePool;
@@ -14,6 +14,8 @@ use super::{SpeedHacks, VkError, VkState};
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
 use std::path::Path;
+use std::sync::Arc;
+use crate::cpu::GuestRam;
 use std::time::Instant;
 
 // SM 7.3 and later lead each graphics program with the 32-word SPHV4 header (NAK sph.rs), not the 20-word SPHV3 one.
@@ -158,7 +160,7 @@ pub struct Gpu<'a> {
     /// The report timestamp counts nanoseconds from here.
     started: Instant,
     // Declared after every imported Vulkan resource so their memory is freed before its host allocation.
-    ram: Ram,
+    pub ram: Arc<GuestRam>,
 }
 
 fn named(e: impl std::fmt::Debug) -> String {
@@ -375,7 +377,10 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
 impl<'a> Gpu<'a> {
     /// Keeps translated programs and the pipeline cache under `cache`'s root and title when given.
     pub fn new(state: &'static VkState, ram_bytes: usize, cache: Option<(&Path, &str)>, hacks: SpeedHacks) -> Result<Self, VkError> {
-        let alignment = state.external_memory_host.as_ref().map_or(align_of::<u128>(), |(_, alignment)| *alignment as usize);
+        Self::with_ram(state, GuestRam::new(ram_bytes), cache, hacks)
+    }
+
+    pub fn with_ram(state: &'static VkState, ram: Arc<GuestRam>, cache: Option<(&Path, &str)>, hacks: SpeedHacks) -> Result<Self, VkError> {
         let policy = if hacks.skip_draw_while_compiling { PipelinePolicy::SkipDraw } else { PipelinePolicy::Wait };
         let disk = cache.and_then(|(root, title)| {
             let device = unsafe { state.instance.get_physical_device_properties(state.physical_device) };
@@ -402,7 +407,7 @@ impl<'a> Gpu<'a> {
             pending_depth_clear: None,
             pixels: Vec::new(),
             started: Instant::now(),
-            ram: Ram::new(ram_bytes, alignment),
+            ram,
         })
     }
 
@@ -413,12 +418,15 @@ impl<'a> Gpu<'a> {
     #[cfg(test)]
     pub(crate) fn grow_ram(&mut self, bytes: usize) {
         assert!(self.zero_copy.as_ref().is_none_or(|zero_copy| !zero_copy.imported()));
-        self.ram.resize(bytes);
+        assert_eq!(Arc::strong_count(&self.ram), 1);
+        let next = GuestRam::new(bytes);
+        next.write(0, unsafe { self.ram.slice(0, self.ram.size().min(bytes)) });
+        self.ram = next;
     }
 
     #[cfg(test)]
     pub(crate) fn ram_len(&self) -> usize {
-        self.ram.len()
+        self.ram.size()
     }
 
     /// Registers the acceleration structure the guest builds at `gpu_va` from `geometry`, one instance per entry, so a
@@ -447,8 +455,8 @@ impl<'a> Gpu<'a> {
         for g in &entry.geometry {
             let mut vertices = vec![0; (g.stride * g.vertex_count) as usize];
             let mut indices = vec![0; 4 * g.index_count as usize];
-            gather(&self.space, &self.ram, g.vertices, &mut vertices).map_err(named)?;
-            gather(&self.space, &self.ram, g.indices, &mut indices).map_err(named)?;
+            gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, g.vertices, &mut vertices).map_err(named)?;
+            gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, g.indices, &mut indices).map_err(named)?;
             let word = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
             let positions: Vec<[f32; 3]> = vertices.chunks(g.stride as usize).map(|v| [0, 4, 8].map(|at| f32::from_bits(word(v, at)))).collect();
             meshes.push((positions, indices.chunks(4).map(|i| word(i, 0)).collect::<Vec<_>>()));
@@ -459,24 +467,34 @@ impl<'a> Gpu<'a> {
         Ok(())
     }
 
+    pub fn map(&mut self, va: u64, pa: u64, len: u64) {
+        self.space.map(va, pa, len);
+        self.memory.mark_cpu_written(pa, len);
+        self.ram.watch(pa..pa + len);
+    }
+
     /// A CPU write of guest memory at `va`.
     pub fn write(&mut self, va: u64, bytes: &[u8]) -> Result<(), MemoryError> {
+        let ram = Arc::clone(&self.ram);
+        let _turn = ram.turn();
         self.store(va, bytes, Writer::Cpu)
     }
 
     pub fn read(&mut self, va: u64, out: &mut [u8]) -> Result<(), MemoryError> {
+        let ram = Arc::clone(&self.ram);
+        let _turn = ram.turn();
         self.settle(va, out.len() as u64)?;
-        gather(&self.space, &self.ram, va, out)
+        gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, va, out)
     }
 
     /// Stores what render targets drew over guest memory at `va` since it last received it.
     fn settle(&mut self, va: u64, len: u64) -> Result<(), MemoryError> {
         let ranges: Vec<_> = self.space.resolve(va, len)?.collect();
-        Ok(settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &ranges)?)
+        Ok(settle_ranges(&mut self.targets, &mut self.memory, unsafe { self.ram.slice_mut(0, self.ram.size()) }, &ranges)?)
     }
 
     fn settle_all(&mut self) -> Result<(), VkError> {
-        settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &[0..u64::MAX])
+        settle_ranges(&mut self.targets, &mut self.memory, unsafe { self.ram.slice_mut(0, self.ram.size()) }, &[0..u64::MAX])
     }
 
     fn store(&mut self, va: u64, bytes: &[u8], writer: Writer) -> Result<(), MemoryError> {
@@ -486,18 +504,23 @@ impl<'a> Gpu<'a> {
                 target.pending = None;
             }
         }
-        settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &ranges)?;
-        self.memory.store(&mut self.ram, &ranges, bytes, writer);
+        settle_ranges(&mut self.targets, &mut self.memory, unsafe { self.ram.slice_mut(0, self.ram.size()) }, &ranges)?;
+        self.memory.store(unsafe { self.ram.slice_mut(0, self.ram.size()) }, &ranges, bytes, writer);
         Ok(())
     }
 
     /// Runs GPFIFO entries to completion. A target reaches guest memory only when something touches its pages.
     pub fn submit(&mut self, entries: &[[u8; 8]]) -> Result<(), String> {
-        let (space, ram) = (&self.space, &self.ram);
+        let ram = Arc::clone(&self.ram);
+        let _turn = ram.turn();
+        for pa in ram.take_cpu_written() {
+            self.memory.mark_cpu_written(pa, PAGE);
+        }
+        let space = &self.space;
         let events = self.pusher.submit(entries.iter().copied(), |va, len| {
             let mut pieces = space.resolve(va, len as u64).map_err(named)?;
             match (pieces.next(), pieces.next()) {
-                (Some(range), None) => Ok(&ram[range.start as usize..range.end as usize]),
+                (Some(range), None) => Ok(unsafe { ram.slice(range.start, (range.end - range.start) as usize) }),
                 _ => Err(format!("pushbuffer at {va:#x} spans discontiguous pages")),
             }
         })?;
@@ -524,7 +547,7 @@ impl<'a> Gpu<'a> {
                 Event::Clear(clear) => return Err(format!("CLEAR_SURFACE {:#x} is not implemented, only Z and RGBA of target 0", clear.value)),
                 Event::SemaphoreAcquire { addr, payload, at_least } => {
                     let mut value = [0; 4];
-                    gather(&self.space, &self.ram, addr, &mut value).map_err(named)?;
+                    gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, addr, &mut value).map_err(named)?;
                     let value = u32::from_le_bytes(value);
                     if !(value == payload || at_least && value.wrapping_sub(payload) as i32 > 0) {
                         return Err(format!("semaphore acquire at {addr:#x} waits for {payload:#x} but memory holds {value:#x}, and nothing else runs to release it"));
@@ -534,6 +557,10 @@ impl<'a> Gpu<'a> {
         }
         if let Some((target, colour)) = self.pending_clear.take() {
             self.fill(target, colour)?;
+        }
+        // A CPU sharing this RAM may read the target as soon as the submission returns.
+        if Arc::strong_count(&ram) > 2 {
+            self.settle_all().map_err(named)?;
         }
         Ok(())
     }
@@ -548,6 +575,8 @@ impl<'a> Gpu<'a> {
 
     /// Presents a pitch-linear RGBA8 surface from guest memory, from the target that drew it unless the pages changed since.
     pub fn present(&mut self, va: u64, width: u32, height: u32) -> Result<(), String> {
+        let ram = Arc::clone(&self.ram);
+        let _turn = ram.turn();
         let len = u64::from(width * height * 4);
         let ranges: Vec<_> = self.space.resolve(va, len).map_err(named)?.collect();
         let current = generation(&self.memory, &ranges);
@@ -570,7 +599,7 @@ impl<'a> Gpu<'a> {
             inst >> 12 & 0xf == 7 && branch_target(pc, inst) == Some(pc)
         }) {
             let mut word = [0; 16];
-            gather(&self.space, &self.ram, address + 16 * code.len() as u64, &mut word).map_err(named)?;
+            gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, address + 16 * code.len() as u64, &mut word).map_err(named)?;
             code.push(u128::from_le_bytes(word));
         }
         Ok(code)
@@ -579,7 +608,7 @@ impl<'a> Gpu<'a> {
     /// Bit n of `integer[0]` or `[1]` is set when vertex attribute n is fetched as an unsigned or signed integer.
     fn module(&mut self, program: ShaderProgram, shader_type: u32, integer: [u32; 2]) -> Result<u64, String> {
         let mut sph = [0; SPH_BYTES];
-        gather(&self.space, &self.ram, program.address, &mut sph).map_err(named)?;
+        gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, program.address, &mut sph).map_err(named)?;
         let code = self.code(program.address + SPH_BYTES as u64)?;
         let header = ProgramHeader::new(&sph);
         let [uint, sint] = integer.map(|mask| mask & header.inputs);
@@ -642,7 +671,7 @@ impl<'a> Gpu<'a> {
             Some(window) if window.buffer.imported.is_none() && window.buffer.size >= len => window.retarget(ranges),
             window => {
                 let imported = match &mut self.zero_copy {
-                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    Some(zero_copy) => zero_copy.buffer(unsafe { self.ram.slice_mut(0, self.ram.size()) }, &ranges).map_err(named)?,
                     None => None,
                 };
                 let buffer = match imported {
@@ -652,7 +681,7 @@ impl<'a> Gpu<'a> {
                 *window = Some(Mapping::new(buffer, ranges));
             }
         }
-        self.memory.refresh(self.window.as_mut().unwrap(), &self.ram).map_err(named)
+        self.memory.refresh(self.window.as_mut().unwrap(), unsafe { self.ram.slice(0, self.ram.size()) }).map_err(named)
     }
 
     /// Runs a QMD launch over one global window spanning all mapped guest memory, then stores the pages it changed.
@@ -709,7 +738,7 @@ impl<'a> Gpu<'a> {
             Some((binding, bank, offset)) => {
                 let buffer = dispatch.constant_buffers[bank as usize].ok_or_else(|| format!("QMD constant buffer {bank} with the TLAS address is not valid"))?;
                 let mut va = [0; 8];
-                gather(&self.space, &self.ram, buffer.address + u64::from(offset), &mut va).map_err(named)?;
+                gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, buffer.address + u64::from(offset), &mut va).map_err(named)?;
                 let va = u64::from_le_bytes(va);
                 self.build_traversable(va)?;
                 Some((binding, va))
@@ -729,7 +758,7 @@ impl<'a> Gpu<'a> {
         pipeline.descriptors.bind(&bound);
         self.state.dispatch(pipeline, dispatch.grid).map_err(named)?;
         if global {
-            self.memory.download(self.window.as_mut().unwrap(), &mut self.ram).map_err(named)?;
+            self.memory.download(self.window.as_mut().unwrap(), unsafe { self.ram.slice_mut(0, self.ram.size()) }).map_err(named)?;
         }
         for release in dispatch.release_semaphores.iter().flatten() {
             self.store(release.address, &release.payload.to_le_bytes(), Writer::Gpu).map_err(named)?;
@@ -758,7 +787,7 @@ impl<'a> Gpu<'a> {
                 return Err(format!("{name} {index} is past its pool's maximum index {}", pool.maximum_index));
             }
             let mut entry = [0; 32];
-            gather(&self.space, &self.ram, pool.address + 32 * u64::from(index), &mut entry).map_err(named)?;
+            gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, pool.address + 32 * u64::from(index), &mut entry).map_err(named)?;
             Ok(entry)
         };
         let sampler_index = if draw.sampler_via_header { handle & 0xf_ffff } else { handle >> 20 };
@@ -771,7 +800,7 @@ impl<'a> Gpu<'a> {
         let current = generation(&self.memory, &key.0);
         if self.textures.get(&key).is_none_or(|(seen, _)| *seen != current) {
             let mut texels = vec![0; len as usize];
-            gather(&self.space, &self.ram, header.address, &mut texels).map_err(named)?;
+            gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, header.address, &mut texels).map_err(named)?;
             let image = HostImage::new(self.state, &header, &texels, &sampler).map_err(named)?;
             self.memory.uploaded += len;
             self.textures.insert(key.clone(), (current, image));
@@ -784,15 +813,15 @@ impl<'a> Gpu<'a> {
         self.settle(va, len).map_err(named)?;
         let ranges: Vec<_> = self.space.resolve(va, len).map_err(named)?.collect();
         match self.mirrors.get_mut(&ranges) {
-            Some(mapping) => self.memory.refresh(mapping, &self.ram).map_err(named)?,
+            Some(mapping) => self.memory.refresh(mapping, unsafe { self.ram.slice(0, self.ram.size()) }).map_err(named)?,
             None => {
                 let imported = match &mut self.zero_copy {
-                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    Some(zero_copy) => zero_copy.buffer(unsafe { self.ram.slice_mut(0, self.ram.size()) }, &ranges).map_err(named)?,
                     None => None,
                 };
                 let mapping = match imported {
                     Some(buffer) => Mapping::new(buffer, ranges.clone()),
-                    None => self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?,
+                    None => self.memory.upload(self.state, unsafe { self.ram.slice(0, self.ram.size()) }, ranges.clone()).map_err(named)?,
                 };
                 self.mirrors.insert(ranges.clone(), mapping);
             }
@@ -849,12 +878,12 @@ impl<'a> Gpu<'a> {
                     ResourceKind::Cbuf(slot) => cbufs[stage].push((CBUF_BINDING + slot, bound(slot)?)),
                     ResourceKind::Texture2D { cbuf_bank, byte_offset } if pipeline == PIXEL_PIPELINE => {
                         let mut handle = [0; 4];
-                        gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut handle).map_err(named)?;
+                        gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut handle).map_err(named)?;
                         textures.push((images.next().unwrap(), u32::from_le_bytes(handle)));
                     }
                     ResourceKind::AccelerationStructure { cbuf_bank, byte_offset } => {
                         let mut address = [0; 8];
-                        gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut address).map_err(named)?;
+                        gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut address).map_err(named)?;
                         traversables[stage] = Some((acceleration_structure_binding(&module.resources), u64::from_le_bytes(address)));
                     }
                     ResourceKind::Global | ResourceKind::GlobalVector(_) | ResourceKind::Support => windows[stage] = true,
@@ -957,14 +986,14 @@ impl<'a> Gpu<'a> {
         let depth = draw.depth_target.map(|target| target.address).zip(pipeline_depth);
         let target_key = TargetKey { ranges: ranges.clone(), format: ct.format, extent: (extent.width, extent.height), depth };
         if clear.is_none() && self.targets.get(&target_key).is_none_or(|target| target.generation != generation(&self.memory, &ranges)) {
-            settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &ranges).map_err(named)?;
+            settle_ranges(&mut self.targets, &mut self.memory, unsafe { self.ram.slice_mut(0, self.ram.size()) }, &ranges).map_err(named)?;
         }
         let current = generation(&self.memory, &ranges);
         let target = match self.targets.entry(target_key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
                 let staging = match &mut self.zero_copy {
-                    Some(zero_copy) => zero_copy.buffer(&mut self.ram, &ranges).map_err(named)?,
+                    Some(zero_copy) => zero_copy.buffer(unsafe { self.ram.slice_mut(0, self.ram.size()) }, &ranges).map_err(named)?,
                     None => None,
                 };
                 let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth, staging).map_err(named)?;
@@ -975,7 +1004,7 @@ impl<'a> Gpu<'a> {
         let imported = target.render_target.staging.imported.is_some();
         if load && !imported {
             self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
-            gather(&self.space, &self.ram, ct.address, &mut self.pixels).map_err(named)?;
+            gather(&self.space, unsafe { self.ram.slice(0, self.ram.size()) }, ct.address, &mut self.pixels).map_err(named)?;
             target.render_target.write(&self.pixels).map_err(named)?;
             self.memory.uploaded += self.pixels.len() as u64;
         }
@@ -1019,7 +1048,7 @@ impl<'a> Gpu<'a> {
         }
         target.generation = generation(&self.memory, &ranges);
         if stores_global {
-            self.memory.download(self.window.as_mut().unwrap(), &mut self.ram).map_err(named)?;
+            self.memory.download(self.window.as_mut().unwrap(), unsafe { self.ram.slice_mut(0, self.ram.size()) }).map_err(named)?;
         }
         Ok(())
     }

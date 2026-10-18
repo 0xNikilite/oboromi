@@ -36,14 +36,14 @@ const MAPPED: u64 = 0xc1_0000;
 
 // particles.vert loads its uniform block handle with `ULDC.64 UR4, c[0x1d][0x0]`.
 const POINTER_BANK: u32 = 0x1d;
-const WAIT_FOR_IDLE: u32 = 0x0110;
-const SEND_PCAS_A: u32 = 0x02b4;
-const SEND_SIGNALING_PCAS2_B: u32 = 0x02c0;
+const WAIT_FOR_IDLE: usize = 0x0110;
+const SEND_PCAS_A: usize = 0x02b4;
+const SEND_SIGNALING_PCAS2_B: usize = 0x02c0;
 const INVALIDATE_COPY_SCHEDULE: u32 = 3;
-const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
-const SET_BLEND_SEPARATE_FOR_ALPHA: u32 = 0x133c;
-const SET_BLEND: u32 = 0x1360;
-const SET_VERTEX_STREAM_INSTANCE_A: u32 = 0x1880;
+const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x1218;
+const SET_BLEND_SEPARATE_FOR_ALPHA: usize = 0x133c;
+const SET_BLEND: usize = 0x1360;
+const SET_VERTEX_STREAM_INSTANCE_A: usize = 0x1880;
 const STRIP_OF_FOUR: u32 = 5 << 28 | 4 << 16;
 const EMITTER_STRENGTH: f32 = -0.6;
 const VORTEX_STRENGTH: f32 = 3.0;
@@ -64,7 +64,7 @@ fn floats(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
-fn compute(method: u32, values: &[u32], words: &mut Vec<u32>) {
+fn compute(method: usize, values: &[u32], words: &mut Vec<u32>) {
     words.push(header(1, method, values.len() as u32) | 1 << 13);
     words.extend(values);
 }

@@ -1,11 +1,7 @@
 use super::compute_class::{CLASS_ID as COMPUTE_CLASS_ID, ComputeClass, DispatchSnapshot};
-use super::threed::{CLASS_ID as THREED_CLASS_ID, Clear, DrawSnapshot, ThreeD, ThreeDEvent};
-
-const SET_OBJECT: usize = 0x00;
-const SEMAPHORE_A: usize = 0x10;
-const SEMAPHORE_B: usize = 0x14;
-const SEMAPHORE_C: usize = 0x18;
-const SEMAPHORE_D: usize = 0x1c;
+use super::threed::{Clear, DrawSnapshot, ThreeD, ThreeDEvent};
+use scene::host::*;
+use scene::threed::CLASS_ID as THREED_CLASS_ID;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GpFifoEntry {

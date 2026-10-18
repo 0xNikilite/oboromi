@@ -70,7 +70,7 @@ impl From<VkError> for MemoryError {
     }
 }
 
-fn pages(start: u64, len: u64) -> Range<u64> {
+pub fn pages(start: u64, len: u64) -> Range<u64> {
     start / PAGE..(start + len).div_ceil(PAGE)
 }
 

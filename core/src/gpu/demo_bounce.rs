@@ -48,11 +48,11 @@ const RELEASE: u64 = BASE + 0xa0_0000;
 const MAPPED: u64 = 0xa1_0000;
 // particles.vert loads its uniform block handle with `ULDC.64 UR4, c[0x1d][0x0]`.
 const POINTER_BANK: u32 = 0x1d;
-const WAIT_FOR_IDLE: u32 = 0x0110;
-const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
-const SET_BLEND_SEPARATE_FOR_ALPHA: u32 = 0x133c;
-const SET_BLEND: u32 = 0x1360;
-const SET_VERTEX_STREAM_INSTANCE_A: u32 = 0x1880;
+const WAIT_FOR_IDLE: usize = 0x0110;
+const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: usize = 0x1218;
+const SET_BLEND_SEPARATE_FOR_ALPHA: usize = 0x133c;
+const SET_BLEND: usize = 0x1360;
+const SET_VERTEX_STREAM_INSTANCE_A: usize = 0x1880;
 const STRIP_OF_FOUR: u32 = 5 << 28 | 4 << 16;
 
 fn named(e: impl std::fmt::Debug) -> String {

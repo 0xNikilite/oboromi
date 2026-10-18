@@ -4,11 +4,16 @@ use super::{VkState, device};
 use super::demo_dungeon_sound::Sound;
 use std::f32::consts::{PI, TAU};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 #[path = "demo_dungeon_render.rs"]
 pub mod render;
 pub static VIEW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static CAPTURE_SOLO: AtomicU8 = AtomicU8::new(0);
+static CAPTURE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_dungeon_capture() {
+    CAPTURE.store(true, Ordering::Relaxed);
+}
 
 pub fn set_dungeon_audio_solo(name: &str) {
     CAPTURE_SOLO.store(match name { "torch" => 1, "river" => 2, "footsteps" => 3, "drips" => 4, _ => 0 }, Ordering::Relaxed);
@@ -356,6 +361,35 @@ impl World {
             }
         }
         world.furnish(&chambers, &corridors.iter().map(|&(c, axis, at, ..)| (c, axis, at)).collect::<Vec<_>>(), &mut r);
+        world.river.lo[0]-=4.;
+        world.river.hi[0]+=4.;
+        for i in 0..4 {
+            let x=cs.lo[0]+2.0+i as f32*(cs.hi[0]-cs.lo[0]-4.)/3.;
+            let z=world.river_bank(x,i%2)+if i%2==0 {-0.8}else{0.8};
+            world.lights.push(Light {pos:[x,1.8,z],colour:[6.8,2.9,0.85],flicker:1.,flame:0.58});
+        }
+        world.lights.retain(|l|l.flame!=0.32);
+        for i in 0..3 {
+            world.lights.push(Light {pos:[cs.lo[0]+2.+i as f32*(cs.hi[0]-cs.lo[0]-4.)/2.,2.4,river.centre()[2]],colour:[2.4,4.2,6.8],flicker:0.,flame:0.});
+        }
+        let mut formations=Rng(9173);
+        for i in 0..9 {
+            let x=cs.lo[0]+1.6+i as f32*(cs.hi[0]-cs.lo[0]-3.2)/8.;
+            let z=world.river_bank(x,i%2)+if i%2==0 {-1.2}else{1.2};
+            for _ in 0..4 {
+                let p=[x+formations.range(-0.65,0.65),0.,z+formations.range(-0.5,0.5)];
+                if (p[0]-bridge.centre()[0]).abs()<1.9 {continue;}
+                world.props.push(Prop::Stalagmite(p,formations.range(0.45,1.7),formations.range(0.18,0.43)));
+                let top=world.ceiling(p[0],p[2])+0.25;
+                world.props.push(Prop::Stalactite([p[0],top,p[2]],formations.range(0.6,2.3),formations.range(0.15,0.38)));
+            }
+        }
+        for _ in 0..12 {
+            let x=cs.hi[0]-1.8-formations.range(0.,4.5);
+            let z=river.centre()[2]+formations.range(-2.5,2.5);
+            let top=world.ceiling(x,z)+0.3;
+            world.props.push(Prop::Stalactite([x,top,z],formations.range(2.5,3.9),formations.range(0.22,0.5)));
+        }
         world
     }
 
@@ -645,6 +679,12 @@ impl World {
                 }
                 let mut holes: Vec<[f32; 3]> = self.doors.iter().filter(|d| d.zone == z && d.axis == axis && d.side == side)
                     .map(|d| { let [a, c] = d.span.map(|c| (c - start) * e[k]); [a.min(c), a.max(c), d.top] }).collect();
+                if cave && axis==0 {
+                    let x=if side==0 {s.lo[0]} else {s.hi[0]};
+                    let a=(self.river_bank(x,0)-0.65-start)*e[k];
+                    let c=(self.river_bank(x,1)+0.65-start)*e[k];
+                    holes.push([a.min(c),a.max(c),3.1]);
+                }
                 holes.sort_by(|a, c| a[0].total_cmp(&c[0]));
                 let mut pieces = Vec::new();
                 let mut at = 0.0;
@@ -693,26 +733,69 @@ impl World {
             let cells = if cave { [(d * 2.0) as usize, (w * 2.0) as usize] } else { [1, 1] };
             let f = |u: f32, v: f32| [s.lo[0] + w * u, ceiling(s.lo[0] + w * u, s.lo[2] + d * v), s.lo[2] + d * v];
             b.surface(&f, [w, d], [cells[1], cells[0]], &|u, v| [(s.lo[0] + w * u) / 4.0, (s.lo[2] + d * v) / 4.0], if cave { LIMESTONE } else { STONE });
-            let floors: Vec<[f32; 3]> = if cave {
-                vec![[s.lo[2], self.river.lo[2], 0.0], [self.river.lo[2], self.river.hi[2], BED], [self.river.hi[2], s.hi[2], 0.0]]
-            } else {
-                vec![[s.lo[2], s.hi[2], s.lo[1]]]
-            };
-            for [z0, z1, y] in floors {
-                let f = |u: f32, v: f32| [s.lo[0] + w * v, y, z0 + (z1 - z0) * u];
-                b.surface(&f, [z1 - z0, w], [1, 1], &|u, v| [(z0 + (z1 - z0) * u) / 4.0 + z as f32 * 0.37, (s.lo[0] + w * v) / 4.0], if y < 0.0 { [0.9, 0.95, 0.85] } else if cave { LIMESTONE } else { STONE });
-            }
             if cave {
+                for strip in 0..3 {
+                    let f=|u:f32,v:f32| {
+                        let x=s.lo[0]+w*v;
+                        let near=self.river_bank(x,0);let far=self.river_bank(x,1);
+                        let (z0,z1)=match strip {0=>(s.lo[2],near-0.5),1=>(near-0.5,far+0.5),_=>(far+0.5,s.hi[2])};
+                        let y=if strip==1 { BED+1.2*(2.*u-1.).abs().powf(3.) } else {0.};
+                        [x,y,z0+(z1-z0)*u]
+                    };
+                    let first=b.vertices.len();
+                    b.surface(&f,[d,w],[16,64],&|u,v|[u*d*0.35,v*w*0.35],LIMESTONE);
+                    for v in &mut b.vertices[first..] {v.material=1.;if strip==1 {v.tint=scale(LIMESTONE,0.45);}}
+                }
                 let mut pebbles=Rng(1751);
-                for _ in 0..240 {
-                    let p=[pebbles.range(s.lo[0]+0.5,s.hi[0]-0.5),BED+0.1,pebbles.range(self.river.lo[2]+0.05,self.river.hi[2]-0.05)];
-                    let radius=pebbles.range(0.06,0.23);
+                for _ in 0..420 {
+                    let x=pebbles.range(s.lo[0]+0.3,s.hi[0]-0.3);let u=pebbles.next();
+                    let near=self.river_bank(x,0)-0.5;let far=self.river_bank(x,1)+0.5;
+                    let p=[x,BED+1.2*(2.*u-1.).abs().powf(3.)+0.08,near+(far-near)*u];
+                    let radius=pebbles.range(0.06,0.25);
                     b.blob(p,[radius,radius*0.6,radius*0.8],pebbles.next()*TAU,&|a,t|1.+0.13*(a*3.+t*7.).sin(),[7,4],LIMESTONE);
                 }
-                for (zz, sign) in [(self.river.lo[2], 1.0), (self.river.hi[2], -1.0)] {
-                    let f = |u: f32, v: f32| { let x = if sign > 0.0 { s.lo[0] + w * u } else { s.hi[0] - w * u }; [x, BED - (BED * v), zz] };
-                    b.surface(&f, [w, -BED], [1, 1], &|u, v| [u * w / 4.0, (BED - BED * v) / 4.0], LIMESTONE);
+                for end in 0..2 {
+                    let x=if end==0 {s.lo[0]} else {s.hi[0]};let sign=if end==0 {-1.}else{1.};
+                    let near=self.river_bank(x,0)-0.65;let far=self.river_bank(x,1)+0.65;
+                    let centre=(near+far)*0.5;let radius=(far-near)*0.5;
+                    let f=|u:f32,v:f32|[x+sign*u*4.,0.35+2.9*(v*PI).sin(),centre+radius*(v*PI).cos()];
+                    b.surface(&f,[4.,radius*PI],[12,20],&|u,v|[u,v*2.],LIMESTONE);
+                    let f=|u:f32,v:f32| {
+                        let z=near+(far-near)*u;let arch=0.35+2.9*(1.-((z-centre)/radius).powi(2)).max(0.).sqrt();
+                        [x-sign*0.04,arch+(3.4-arch)*v,z]
+                    };
+                    b.surface(&f,[far-near,3.],[32,4],&|u,v|[u,v],LIMESTONE);
+                    for z in [near,far] {
+                        let f=|u:f32,v:f32|[x+sign*u*4.,BED+(0.35-BED)*v,z];
+                        b.surface(&f,[4.,2.35],[4,4],&|u,v|[u,v],LIMESTONE);
+                    }
+                    let f=|u:f32,v:f32|[x+sign*(3.8+0.25*(u*7.).sin()),BED+(3.3-BED)*v,near+(far-near)*u];
+                    b.surface(&f,[far-near,5.3],[12,12],&|u,v|[u,v],[0.06,0.07,0.08]);
+                    for depth in [0.,0.65,1.3] {for i in 0..15 {
+                        let a=(i as f32+0.5)/15.*PI;
+                        let p=[x+sign*depth,0.35+2.9*a.sin(),centre+radius*a.cos()];
+                        b.blob(p,[0.48,0.35,0.38],a,&|a,t|1.+0.18*(a*5.+t*3.).sin(),[8,5],LIMESTONE);
+                    }}
+                    let f=|u:f32,v:f32|[x+sign*v*4.,BED,near+(far-near)*u];
+                    b.surface(&f,[far-near,4.],[1,1],&|u,v|[u,v],LIMESTONE);
                 }
+                for side in 0..2 {
+                    let sign=if side==0 {-1.} else {1.};
+                    let f=|u:f32,v:f32| {
+                        let x=s.lo[0]+w*if side==0 {u} else {1.-u};
+                        [x,BED+(0.-BED)*v,self.river_bank(x,side)+sign*(0.1+0.4*v)]
+                    };
+                    b.surface(&f,[w,-BED],[64,5],&|u,v|[u*w*0.35,v*0.4],LIMESTONE);
+                    for i in 0..90 {
+                        let x=s.lo[0]+(i as f32+0.5)/90.*w;
+                        let radius=pebbles.range(0.12,0.38);
+                        let p=[x,-0.08,self.river_bank(x,side)+sign*0.45];
+                        b.blob(p,[radius,radius*0.7,radius*0.8],x,&|a,t|1.+0.2*(a*4.+t*6.).sin(),[8,5],LIMESTONE);
+                    }
+                }
+            } else {
+                let f=|u:f32,v:f32|[s.lo[0]+w*v,s.lo[1],s.lo[2]+d*u];
+                b.surface(&f,[d,w],[1,1],&|u,v|[(s.lo[2]+d*u)/4.+z as f32*0.37,(s.lo[0]+w*v)/4.],STONE);
             }
         }
         for door in &self.doors {
@@ -751,6 +834,11 @@ impl World {
             }}
         }
         self.bridge_and_props(b);
+    }
+
+    fn river_bank(&self, x:f32, side:usize) -> f32 {
+        let base=if side==0 {self.river.lo[2]} else {self.river.hi[2]};
+        base+0.52*(x*0.58).sin()+0.22*(x*1.31+0.8).sin()+0.12*(x*2.7+side as f32*2.).sin()
     }
 
     fn corridor_axis(&self, z: usize) -> usize {
@@ -828,7 +916,7 @@ impl World {
                 b.tube([x, y, g.lo[2]], [x, y, g.hi[2]], &|_| 0.02, 6, IRON);
             }
         }
-        for light in self.lights.iter().filter(|light|light.flame==0.32) {
+        for light in self.lights.iter().filter(|light|light.flame==0.58) {
             let p=light.pos;
             b.tube([p[0],0.,p[2]], add(p,[0.,-0.17,0.]), &|t| 0.06 - 0.02 * t, 8, WOOD);
         }
@@ -839,6 +927,14 @@ impl World {
                 let [x, z] = [r.lo[0] + (r.hi[0] - r.lo[0]) * t, r.lo[2] + (r.hi[2] - r.lo[2]) * t];
                 b.tube([x, r.lo[1], r.lo[2]], [x, r.lo[1], r.hi[2]], &|_| 0.03, 6, IRON);
                 b.tube([r.lo[0], r.lo[1] - 0.03, z], [r.hi[0], r.lo[1] - 0.03, z], &|_| 0.03, 6, IRON);
+            }
+        }
+        for prop in &self.props {
+            if let Prop::Stalagmite(p,_,radius)=*prop {
+                for i in 0..7 {
+                    let a=i as f32*2.39996;let r=radius*(0.9+0.25*(a*3.).sin());
+                    b.blob(add(p,[r*a.cos(),0.035,r*a.sin()]),[radius*0.5,0.12,radius*0.4],a,&|a,t|1.+0.15*(a*5.+t*4.).sin(),[7,4],LIMESTONE);
+                }
             }
         }
         let mut r = Rng(77);
@@ -939,9 +1035,10 @@ impl Dungeon {
     pub fn new(state: &'static VkState) -> Result<Self, String> { Self::with_state(Some(state)) }
     fn with_state(state:Option<&'static VkState>)->Result<Self,String> {
         let world=World::new(8);
+        let river=state.map(River::new).transpose()?;
         let renderer=state.map(|state| {
             let mut mesh=Builder::default();world.build(&mut mesh);
-            render::Renderer::new(state,&world,&mesh)
+            render::Renderer::new(state,&world,&mesh,&river.as_ref().unwrap().surface)
         }).transpose()?;
         let eye = add(world.path[0], [0., EYE, 0.]);
         let solo = if state.is_none() { CAPTURE_SOLO.load(Ordering::Relaxed) } else { 0 };
@@ -951,8 +1048,9 @@ impl Dungeon {
             3 | 4 => Vec::new(),
             _ => world.sources.clone(),
         };
-        let sound = Sound::new(&world, &sources);
-        Ok(Self { renderer, world, sound, eye, yaw: if solo == 1 { 0. } else { PI/2. }, pitch: 0., time: 0., idle: if solo == 1 { f32::NEG_INFINITY } else { 3. }, waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river: state.map(River::new).transpose()?, solo })
+        let yaw = if solo == 1 { 0. } else { PI/2. };
+        let sound = Sound::new(&world, &sources, state.is_some() && !CAPTURE.load(Ordering::Relaxed), eye, yaw);
+        Ok(Self { renderer, world, sound, eye, yaw, pitch: 0., time: 0., idle: if solo == 1 { f32::NEG_INFINITY } else { 3. }, waypoint: 1, foot_distance: 0., scream: false, audio_time: 0., river, solo })
     }
 
     pub fn frame(&mut self, seconds: f32) -> Result<Vec<i16>, String> {
@@ -964,7 +1062,7 @@ impl Dungeon {
             if renderer.showcase!=showcase || renderer.rays!=rays {
                 let mut mesh=Builder::default();self.world.build(&mut mesh);
                 self.river=Some(River::new(state)?);
-                *renderer=render::Renderer::new(state,&self.world,&mesh)?;
+                *renderer=render::Renderer::new(state,&self.world,&mesh,&self.river.as_ref().unwrap().surface)?;
             }
             renderer.rays=rays;
         }
@@ -981,7 +1079,7 @@ impl Dungeon {
             self.eye = self.world.clamp_walk(self.eye, add(self.eye, scale(unit(to), (dt*speed).min(d))));
             let fire=self.world.sources.iter().find(|s|s.0==Sfx::Fire).unwrap().1;
             let interest=if length(sub(fire,self.eye))<6. && self.world.walls_between(self.eye,fire)==0 { Some(add(fire,[0.,0.2,0.])) }
-                else if self.world.zones[self.world.cave].space.contains(self.eye) { Some([self.world.bridge.centre()[0]+1.7,WATER+0.2,self.world.river.centre()[2]]) }
+                else if self.world.zones[self.world.cave].space.contains(self.eye) { Some([self.world.river.hi[0]-0.7,WATER+0.35,self.world.river.centre()[2]]) }
                 else if length(sub(self.world.grate.centre(),self.eye))<5.5 { Some(add(self.world.grate.centre(),[0.,-2.,0.])) }
                 else {None};
             let look=interest.map_or(to,|p|sub(p,self.eye));
@@ -999,7 +1097,8 @@ impl Dungeon {
         }
         match VIEW.load(std::sync::atomic::Ordering::Relaxed) {
             1 => { let p = self.world.sources.iter().find(|s| s.0 == Sfx::Fire).unwrap().1; self.eye=add(p,[-3.2,1.1,2.8]); self.yaw=0.85; self.pitch=-0.18; }
-            2 => { self.eye=[self.world.river.lo[0]+2.,EYE,self.world.river.lo[2]-0.9]; let look=sub([self.world.bridge.centre()[0],EYE,self.world.river.centre()[2]],self.eye); self.yaw=look[0].atan2(-look[2]); self.pitch=0.06; }
+            2 => { self.eye=[self.world.zones[self.world.cave].space.lo[0]+2.,EYE,self.world.river.lo[2]-0.9]; let look=sub([self.world.bridge.centre()[0],EYE,self.world.river.centre()[2]],self.eye); self.yaw=look[0].atan2(-look[2]); self.pitch=-0.14; }
+            4 => { self.eye=[self.world.bridge.centre()[0],EYE,self.world.river.centre()[2]];let look=sub([self.world.river.hi[0],WATER+0.45,self.world.river.centre()[2]],self.eye);self.yaw=look[0].atan2(-look[2]);self.pitch=-0.12; }
             3 => { let p=self.world.grate.centre();self.eye=add(p,[-2.8,EYE-p[1],-3.]);self.yaw=2.4;self.pitch=0.12; }
             _ => {}
         }
@@ -1043,13 +1142,19 @@ impl Dungeon {
         let view: Matrix = std::array::from_fn(|column| std::array::from_fn(|row| if row == 3 { if column == 3 { 1.0 } else { 0.0 } } else if column == 3 { -dot(axes[row], self.eye) } else { axes[row][column] }));
         let focal = 1.0 / (PI / 6.0).tan();
         let projection = [[focal * HEIGHT as f32 / WIDTH as f32, 0.0, 0.0, 0.0], [0.0, -focal, 0.0, 0.0], [0.0, 0.0, -100.0 / 99.9, -1.0], [0.0, 0.0, -10.0 / 99.9, 0.0]];
+        super::compute::take_host_timings();
         let graphics_start=std::time::Instant::now();
         if let (Some(renderer),Some(river))=(&mut self.renderer,&mut self.river) {
-            let waves=river.step(self.world.river,dt,&impacts,renderer.query_pool())?;
+            river.step(self.world.river,dt,&impacts,renderer.query_pool())?;
             renderer.report("simulation")?;
-            renderer.frame(&self.world,self.eye,view,projection,seconds,right,up,&waves)?;
+            renderer.frame(&self.world,self.eye,view,projection,seconds,right,up,&river.surface)?;
         }
         if render::PROFILE.load(Ordering::Relaxed) {eprintln!("dungeon_cpu_pass,graphics,{:.4}",graphics_start.elapsed().as_secs_f64()*1000.);}
+        if render::PROFILE.load(Ordering::Relaxed) {
+            let timings=super::compute::take_host_timings();
+            for (name,ms) in ["encode","submit","wait","submissions"].into_iter().zip(timings) {eprintln!("dungeon_host,{name},{ms:.4}");}
+            eprintln!("dungeon_host,prepare,{:.4}",graphics_start.elapsed().as_secs_f64()*1000.-timings[..3].iter().sum::<f64>());
+        }
         let audio_start=std::time::Instant::now();
         self.sound.listen(&self.world, self.eye, self.yaw, dt);
         self.audio_time += dt;
@@ -1057,7 +1162,10 @@ impl Dungeon {
         self.audio_time -= periods as f32 * 0.005;
         self.time = seconds;
         let audio=self.sound.render(periods);
-        if render::PROFILE.load(Ordering::Relaxed) {eprintln!("dungeon_cpu_pass,audio,{:.4}",audio_start.elapsed().as_secs_f64()*1000.);}
+        if render::PROFILE.load(Ordering::Relaxed) {
+            eprintln!("dungeon_cpu_pass,audio,{:.4}",audio_start.elapsed().as_secs_f64()*1000.);
+            eprintln!("dungeon_cpu_pass,audio_worker,{:.4}",self.sound.worker_millis());
+        }
         Ok(audio)
     }
 }
@@ -1112,7 +1220,7 @@ impl River {
         Ok(Self { state, pipelines, _heights: heights, surface, uniforms, ping: 0, grid, time: 0. })
     }
 
-    fn step(&mut self, river: Box3, dt: f32, impacts: &[(V3, f32)], timestamp:Option<ash::vk::QueryPool>) -> Result<Vec<[f32; 4]>, String> {
+    fn step(&mut self, river: Box3, dt: f32, impacts: &[(V3, f32)], timestamp:Option<ash::vk::QueryPool>) -> Result<(), String> {
         let named = |e| format!("{e:?}");
         let grid=self.grid;self.time+=dt;
         let size = sub(river.hi, river.lo);
@@ -1123,9 +1231,7 @@ impl River {
         self.uniforms.write(&floats(&u)).map_err(named)?;
         self.state.dispatch_profiled(&self.pipelines[self.ping], [grid[0] as u32 / 8, grid[1] as u32 / 8, 1], timestamp).map_err(named)?;
         self.ping ^= 1;
-        let mut out = vec![0; grid[0] * grid[1] * 16];
-        self.surface.read(&mut out).map_err(named)?;
-        Ok(out.chunks_exact(16).map(|b| std::array::from_fn(|i| f32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap()))).collect())
+        Ok(())
     }
 }
 
@@ -1140,8 +1246,9 @@ mod tests {
         let mut foam = 0.;
         for frame in 0..1200 {
             let impacts = [(world.river.centre(), 0.55)];
-            let waves = river.step(world.river, 1. / 60., if frame % 20 == 0 { &impacts } else { &[] }, None).unwrap();
-            foam = waves.iter().filter(|p| p[3] > 0.5).count() as f32 / waves.len() as f32;
+            river.step(world.river, 1. / 60., if frame % 20 == 0 { &impacts } else { &[] }, None).unwrap();
+            let waves=river.surface.view(0..river.surface.size).unwrap();
+            foam=waves.chunks_exact(16).filter(|p|f32::from_le_bytes(p[12..16].try_into().unwrap())>0.5).count() as f32/(waves.len()/16) as f32;
         }
         assert!(foam < 0.05, "{foam}");
     }

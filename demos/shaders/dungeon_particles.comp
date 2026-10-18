@@ -26,10 +26,10 @@ void main(){
         size=vec2(.3,.46+hash(seed)*.28)*scale; colour.a=k<3?.8:.38;
     }else if(type==2.) {
         vec3 drift=vec3(hash(seed+17.)-.5,0,hash(seed+43.)-.5);
-        p+=drift*scale*(.3+age)+vec3(0,scale*(.65+age*2.6),0);
+        p+=drift*scale*(.3+age)+vec3(0,sqrt(scale)*(.55+age*3.6),0);
         p+=curl(p*.7+vec3(0,-time_count.x*.22,0))*age*scale*.18;
-        size=vec2(.12+age*.35)*sqrt(scale)*mix(.65,1.15,hash(seed+97.));
-        colour=vec4(mix(vec3(.3,.17,.09),vec3(.12,.14,.16),smoothstep(0.,.5,age)),sin(age*3.14159)*.15);
+        size=vec2(.13+age*.58,.17+age*.43)*sqrt(scale)*mix(.45,1.55,hash(seed+97.));
+        colour=vec4(mix(vec3(.3,.17,.09),vec3(.12,.14,.16),smoothstep(0.,.5,age)),smoothstep(0.,.12,age)*pow(1.-age,2.)*mix(.06,.17,hash(seed+137.)));
     }else {
         vec3 spawn=vec3(hash(seed+13.)-.5,hash(seed+23.)*.3,hash(seed+47.)-.5)*scale*.65;
         vec3 velocity=vec3(hash(seed+59.)-.5,.65+hash(seed+83.),hash(seed+101.)-.5);

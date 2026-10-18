@@ -45,6 +45,10 @@ const DEPTH: vk::Format = vk::Format::D32_SFLOAT;
 pub(super) struct Renderer {
     state: &'static VkState,
     timestamps: vk::QueryPool,
+    command_pool: vk::CommandPool,
+    command: vk::CommandBuffer,
+    recorded: Option<(u32,bool,u32,bool)>,
+    frame_uniforms: HostBuffer<'static>,
     cones: GraphicsPipeline<'static>,
     _cone_instances: HostBuffer<'static>,
     cone_count: u32,
@@ -79,30 +83,36 @@ pub(super) struct Renderer {
     visible_zones: Vec<bool>,
     batches: Vec<(Box3,Vec<u32>)>,
     water_indices: u32,
-    water_vertex: usize,
     grid: [usize; 2],
     emitter_count: usize,
     extra_particles: usize,
     water_dump: Option<std::path::PathBuf>,
+    refraction_dump: Option<HostBuffer<'static>>,
     pub showcase: bool,
     pub rays: bool,
 }
 impl Renderer {
-    pub(super) fn new(state: &'static VkState, world: &World, mesh: &Builder) -> Result<Self, String> {
+    pub(super) fn new(state: &'static VkState, world: &World, mesh: &Builder, waves: &HostBuffer) -> Result<Self, String> {
         use vk::DescriptorType as D;
         let timestamps = unsafe {
             state.device.create_query_pool(
-                &vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(2),
+                &vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(24),
                 None,
             )
         }
         .map_err(named)?;
+        let command_pool=unsafe {state.device.create_command_pool(&vk::CommandPoolCreateInfo::default().queue_family_index(state.queue_family).flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),None)}.map_err(named)?;
+        let command=unsafe {state.device.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(command_pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(1))}.map_err(named)?[0];
         let showcase = SHOWCASE.load(Ordering::Relaxed);
         let rays = RAYS.load(Ordering::Relaxed) && state.acceleration_structure.is_some();
         let mut vertices = mesh.vertices.clone();
         let water_vertex = vertices.len();
         let grid = water_grid();
-        vertices.resize(water_vertex + grid[0] * grid[1], Vertex::default());
+        for i in 0..grid[0]*grid[1] {
+            let uv=[(i%grid[0]) as f32/(grid[0]-1) as f32,(i/grid[0]) as f32/(grid[1]-1) as f32];
+            let x=world.river.lo[0]+uv[0]*(world.river.hi[0]-world.river.lo[0]);
+            vertices.push(Vertex {pos:[x,WATER,world.river_bank(x,0)+uv[1]*(world.river_bank(x,1)-world.river_bank(x,0))],normal:UP,uv,material:4.,..Default::default()});
+        }
         let mut batches:Vec<_>=world.zones.iter().map(|_|(Box3{lo:[f32::INFINITY;3],hi:[f32::NEG_INFINITY;3]},Vec::new())).collect();
         for tri in mesh.indices.chunks_exact(3) {
             let centre=scale(add(add(mesh.vertices[tri[0] as usize].pos,mesh.vertices[tri[1] as usize].pos),mesh.vertices[tri[2] as usize].pos),1./3.);
@@ -223,6 +233,7 @@ impl Renderer {
         let bounds: Vec<_> = world.zones.iter().flat_map(|z| [z.space.lo[0],z.space.lo[2],z.space.hi[0],z.space.hi[2]]).collect();
         let mut rooms=HostBuffer::new(state,(bounds.len()*4) as u64).map_err(named)?;
         rooms.write(&floats(&bounds)).map_err(named)?;
+        let frame_uniforms=HostBuffer::new(state,512).map_err(named)?;
         let uniforms = HostBuffer::new(state, 256).map_err(named)?;
         let particle_time = HostBuffer::new(state, 16).map_err(named)?;
         let per_emitter = if showcase { 96 } else { 24 };
@@ -299,13 +310,13 @@ impl Renderer {
             &code(include_bytes!("../../../demos/shaders/dungeon.vert.spv")),
             None,
             &code(shader),
-            [&[(0, D::UNIFORM_BUFFER)], &fragment],
+            [&[(0, D::UNIFORM_BUFFER), (1,D::STORAGE_BUFFER)], &fragment],
             &layout,
             &TargetState { blend, depth: Some(DEPTH) },
             HDR,
         )
         .map_err(named)?;
-        opaque.descriptors[0].bind(&[(0, &uniforms)]);
+        opaque.descriptors[0].bind(&[(0, &uniforms),(1,waves)]);
         opaque.descriptors[1].bind(&[
             (0, &uniforms),
             (1, &lights),
@@ -440,6 +451,7 @@ impl Renderer {
         let mut renderer = Self {
             state,
             timestamps,
+            command_pool, command, recorded:None, frame_uniforms,
             cones,
             _cone_instances: cone_instances,
             cone_count,
@@ -474,11 +486,11 @@ impl Renderer {
             visible_zones: vec![true;batches.len()],
             batches,
             water_indices,
-            water_vertex,
             grid,
             emitter_count: world.lights.len(),
             extra_particles,
             water_dump: std::env::var_os("DUNGEON_WATER_DUMP").map(std::path::PathBuf::from),
+            refraction_dump: if std::env::var_os("DUNGEON_WATER_DUMP").is_some() {Some(HostBuffer::new(state,u64::from(WIDTH*HEIGHT*8)).map_err(named)?)} else {None},
             showcase,
             rays,
         };
@@ -511,7 +523,7 @@ impl Renderer {
                     })
                 });
                 let vp = multiply(projection, view);
-                self.uniforms(vp, vp, light.pos, 0., right, up, world, true, 0.)?;
+                self.uniforms(vp, vp, light.pos, 0., right, up, world, true, 0., None)?;
                 self.uniforms.write_at(216, &2f32.to_le_bytes()).map_err(named)?;
                 self.draw(&target, 0, self.count, true, false)?;
                 self.draw(&target, u32::MAX, 24 * 12 * 6, false, false)?;
@@ -538,6 +550,7 @@ impl Renderer {
         world: &World,
         reflection: bool,
         plane: f32,
+        offset: Option<u64>,
     ) -> Result<(), String> {
         let mut u = vp.as_flattened().to_vec();
         u.extend(reflected.as_flattened());
@@ -570,9 +583,13 @@ impl Renderer {
             score(b).total_cmp(&score(a))
         });
         u.extend(nearest.iter().take(4).map(|&i| i as f32));
-        self.uniforms.write(&floats(&u)).map_err(named)
+        u.extend([self.grid[0] as f32,self.grid[1] as f32,0.,0.]);
+        match offset {Some(offset)=>self.frame_uniforms.write_at(offset,&floats(&u)),None=>self.uniforms.write(&floats(&u))}.map_err(named)
     }
     fn draw(&self, target: &RenderTarget, first: u32, count: u32, clear: bool, sprites: bool) -> Result<(), String> {
+        self.draw_commands(None,target,first,count,clear,sprites)
+    }
+    fn draw_commands(&self, command:Option<(vk::CommandBuffer,u32)>, target:&RenderTarget, first:u32,count:u32,clear:bool,sprites:bool)->Result<(),String> {
         let cones = first == u32::MAX;
         if cones && !self.cone_visible {return Ok(());}
         let disabled=DISABLED.load(Ordering::Relaxed);
@@ -604,17 +621,14 @@ impl Renderer {
             blend,
         };
         let vb = [(&self.vertices, 48)];
-        self.state
-            .draw_profiled(
-                if sprites {
+        let pipeline=if sprites {
                     &self.sprites
                 } else if cones {
                     &self.cones
                 } else {
                     &self.opaque
-                },
-                target,
-                &DrawState {
+                };
+        let draw=DrawState {
                     vertex_buffers: if sprites || cones { &[] } else { &vb },
                     index_buffer: if sprites || cones { None } else { Some((&self.indices, vk::IndexType::UINT32)) },
                     vertex_count: count,
@@ -635,10 +649,12 @@ impl Renderer {
                     clear_depth: clear.then_some(1.),
                     load: false,
                     raster,
-                },
-                (PROFILE.load(Ordering::Relaxed) && target.extent.width > self.shadow_size).then_some(self.timestamps),
-            )
-            .map_err(named)?;
+                };
+        if let Some((cmd,offset))=command {
+            self.state.record_draw(cmd,pipeline,target,&draw,PROFILE.load(Ordering::Relaxed).then_some((self.timestamps,offset)));
+            return Ok(());
+        }
+        self.state.draw_profiled(pipeline,target,&draw,(PROFILE.load(Ordering::Relaxed) && target.extent.width>self.shadow_size).then_some(self.timestamps)).map_err(named)?;
         if target.extent.width == self.shadow_size {
             return Ok(());
         }
@@ -654,14 +670,28 @@ impl Renderer {
             "opaque"
         })
     }
+    fn copy_uniforms(&self,cmd:vk::CommandBuffer,offset:u64) {
+        use vk::{PipelineStageFlags as S,AccessFlags as A};
+        unsafe {
+            let d=&self.state.device;
+            let before=vk::MemoryBarrier::default().src_access_mask(A::UNIFORM_READ).dst_access_mask(A::TRANSFER_WRITE);
+            d.cmd_pipeline_barrier(cmd,S::ALL_GRAPHICS|S::COMPUTE_SHADER,S::TRANSFER,Default::default(),&[before],&[],&[]);
+            d.cmd_copy_buffer(cmd,self.frame_uniforms.buffer,self.uniforms.buffer,&[vk::BufferCopy::default().src_offset(offset).size(256)]);
+            let after=vk::MemoryBarrier::default().src_access_mask(A::TRANSFER_WRITE).dst_access_mask(A::UNIFORM_READ);
+            d.cmd_pipeline_barrier(cmd,S::TRANSFER,S::ALL_GRAPHICS|S::COMPUTE_SHADER,Default::default(),&[after],&[],&[]);
+        }
+    }
     pub(super) fn query_pool(&self)->Option<vk::QueryPool> { PROFILE.load(Ordering::Relaxed).then_some(self.timestamps) }
     pub(super) fn report(&self, pass: &str) -> Result<(), String> {
+        self.report_at(pass,0)
+    }
+    fn report_at(&self, pass:&str, offset:u32)->Result<(),String> {
         if PROFILE.load(Ordering::Relaxed) {
             let mut ticks = [0u64; 2];
             unsafe {
                 self.state.device.get_query_pool_results(
                     self.timestamps,
-                    0,
+                    offset,
                     &mut ticks,
                     vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
                 )
@@ -683,47 +713,21 @@ impl Renderer {
         seconds: f32,
         right: V3,
         up: V3,
-        waves: &[[f32; 4]],
+        waves: &HostBuffer,
     ) -> Result<(), String> {
         if !self.rays && !self.shadows_ready {self.bake_shadows(world)?;}
         let grid = self.grid;
         if let Some(path) = &self.water_dump {
             std::fs::create_dir_all(path).map_err(named)?;
-            let heights: Vec<_> = waves.iter().map(|p| p[0]).collect();
+            let bytes=waves.view(0..waves.size).map_err(named)?;
+            let heights:Vec<_>=bytes.chunks_exact(16).map(|p|f32::from_le_bytes(p[..4].try_into().unwrap())).collect();
             let lo = heights.iter().copied().fold(f32::INFINITY, f32::min);
             let hi = heights.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let image: Vec<_> = heights.iter().map(|h| ((h-lo)/(hi-lo).max(1e-8)*255.) as u8).collect();
             std::fs::write(path.join("heightfield.pgm"), [format!("P5\n{} {}\n255\n",grid[0],grid[1]).as_bytes(), &image].concat()).map_err(named)?;
-            std::fs::write(path.join("surface.f32"), floats(waves.as_flattened())).map_err(named)?;
+            std::fs::write(path.join("surface.f32"), bytes).map_err(named)?;
             eprintln!("water_check,height_range,{lo},{hi},reflection,{}", if self.rays {"TLAS binding14"} else {"planar binding11"});
         }
-        let water: Vec<_> = waves
-            .iter()
-            .enumerate()
-            .map(|(i, &[h, sx, sz, foam])| {
-                let uv = [(i % grid[0]) as f32 / (grid[0] - 1) as f32, (i / grid[0]) as f32 / (grid[1] - 1) as f32];
-                let x = world.river.lo[0] + uv[0] * (world.river.hi[0] - world.river.lo[0]);
-                let z = world.river.lo[2] + uv[1] * (world.river.hi[2] - world.river.lo[2]);
-                let a = x * 3.2 + z * 1.3 - seconds * 1.4;
-                let b = x * 1.7 - z * 4.2 + seconds * 1.1;
-                let h = h + 0.055 * a.sin() + 0.025 * b.sin();
-                let sx = sx + 0.176 * a.cos() + 0.0425 * b.cos();
-                let sz = sz + 0.0715 * a.cos() - 0.105 * b.cos();
-                Vertex {
-                    pos: [
-                        world.river.lo[0] + uv[0] * (world.river.hi[0] - world.river.lo[0]),
-                        WATER + h,
-                        world.river.lo[2] + uv[1] * (world.river.hi[2] - world.river.lo[2]),
-                    ],
-                    normal: unit([-sx, 1., -sz]),
-                    uv,
-                    tint: [foam; 3],
-                    material: 4.,
-                    ..Default::default()
-                }
-            })
-            .collect();
-        self.vertices.write_at((self.water_vertex * 48) as u64, &pack(&water)).map_err(named)?;
         let light_data: Vec<_> = world.lights.iter().enumerate().flat_map(|(i,l)| {
             let phase=i as f32*2.3;
             let flicker=1.+l.flicker*(0.21*(seconds*11.7+phase).sin()+0.11*(seconds*23.1+phase*1.7).sin()+0.08*(seconds*4.3+phase).sin());
@@ -732,8 +736,7 @@ impl Renderer {
         self.lights.write(&floats(&light_data)).map_err(named)?;
         let per_emitter = if self.showcase { 96 } else { 24 };
         self.particle_time.write(&floats(&[seconds, per_emitter as f32, 0., 0.])).map_err(named)?;
-        self.state.dispatch_profiled(&self.particles_step, [(self.emitter_count * per_emitter).div_ceil(64) as u32, 1, 1],self.query_pool()).map_err(named)?;
-        self.report("particles")?;
+
         let mut extras = Vec::new();
         let mut particle = |p: V3, kind: f32, size: [f32; 2], seed: f32, colour: [f32; 4]| {
             extras.extend([
@@ -803,7 +806,7 @@ impl Renderer {
         for i in 0..16 {
             let x=world.river.lo[0]+(i as f32+0.5)/16.*(world.river.hi[0]-world.river.lo[0]);
             let z=world.river.lo[2]+(0.5+0.34*(i as f32*2.3+seconds*0.08).sin())*(world.river.hi[2]-world.river.lo[2]);
-            particle([x,WATER+0.18+0.04*(seconds*0.3+i as f32).sin(),z],11.,[1.1,0.14],i as f32,[0.28,0.33,0.36,0.18]);
+            particle([x,WATER+0.18+0.04*(seconds*0.3+i as f32).sin(),z],11.,[1.5,0.23],i as f32,[0.32,0.43,0.53,0.26]);
         }
         let chamber = world.zones[world.bats].space.centre();
         for i in 0..8 {
@@ -841,42 +844,54 @@ impl Renderer {
             self.indices.write_at(0,&indices.iter().flat_map(|i|i.to_le_bytes()).collect::<Vec<_>>()).map_err(named)?;
             self.visible_zones=zones;
         }
-        if !self.rays {
-            self.uniforms(reflected, reflected, reflected_eye, seconds, right, up, world, true, plane)?;
-            self.draw(&self.reflection, 0, self.visible_count, true, false)?;
-            self.draw(&self.reflection, u32::MAX, 24 * 12 * 6, false, false)?;
-            self.draw(&self.reflection, 0, 6, false, true)?;
-            self.reflection.readback().map_err(named)?;
-            if let Some(path) = &self.water_dump {
-                std::fs::write(path.join("reflection.rgba16f"), self.reflection.staging.view(0..self.reflection.staging.size).map_err(named)?).map_err(named)?;
+        self.uniforms(reflected,reflected,reflected_eye,seconds,right,up,world,true,plane,Some(0))?;
+        self.uniforms(vp,reflected,eye,seconds,right,up,world,false,plane,Some(256))?;
+        let key=(self.visible_count,self.cone_visible,DISABLED.load(Ordering::Relaxed),PROFILE.load(Ordering::Relaxed));
+        if self.recorded!=Some(key) {
+            let start=std::time::Instant::now();
+            let cmd=self.command;
+            unsafe {
+                self.state.device.reset_command_buffer(cmd,Default::default()).map_err(named)?;
+                self.state.device.begin_command_buffer(cmd,&vk::CommandBufferBeginInfo::default()).map_err(named)?;
             }
+            let stamp=|offset| PROFILE.load(Ordering::Relaxed).then_some((self.timestamps,offset));
+            self.state.record_dispatch(cmd,&self.particles_step,[(self.emitter_count*per_emitter).div_ceil(64) as u32,1,1],stamp(2));
+            if !self.rays {
+                self.copy_uniforms(cmd,0);
+                self.draw_commands(Some((cmd,4)),&self.reflection,0,self.visible_count,true,false)?;
+                self.draw_commands(Some((cmd,6)),&self.reflection,u32::MAX,24*12*6,false,false)?;
+                self.draw_commands(Some((cmd,8)),&self.reflection,0,6,false,true)?;
+                self.reflection.record_readback(cmd);
+            }
+            self.copy_uniforms(cmd,256);
+            self.draw_commands(Some((cmd,10)),&self.target,0,self.visible_count,true,false)?;
+            self.draw_commands(Some((cmd,12)),&self.target,u32::MAX,24*12*6,false,false)?;
+            self.target.record_readback(cmd);
+            if let Some(buffer)=&self.refraction_dump {unsafe {
+                let barrier=vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::TRANSFER_WRITE).dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+                self.state.device.cmd_pipeline_barrier(cmd,vk::PipelineStageFlags::TRANSFER,vk::PipelineStageFlags::TRANSFER,Default::default(),&[barrier],&[],&[]);
+                self.state.device.cmd_copy_buffer(cmd,self.target.staging.buffer,buffer.buffer,&[vk::BufferCopy::default().size(buffer.size)]);
+                let host=vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::TRANSFER_WRITE).dst_access_mask(vk::AccessFlags::HOST_READ);
+                self.state.device.cmd_pipeline_barrier(cmd,vk::PipelineStageFlags::TRANSFER,vk::PipelineStageFlags::HOST,Default::default(),&[host],&[],&[]);
+            }}
+            self.draw_commands(Some((cmd,14)),&self.target,self.count,self.water_indices,false,false)?;
+            self.draw_commands(Some((cmd,16)),&self.target,0,6,false,true)?;
+            self.target.record_readback(cmd);
+            self.state.record_dispatch(cmd,&self.fog,[(WIDTH/4).div_ceil(8),(HEIGHT/4).div_ceil(8),1],stamp(18));
+            self.state.record_dispatch(cmd,&self.post,[WIDTH.div_ceil(8),HEIGHT.div_ceil(8),1],stamp(20));
+            unsafe {self.state.device.end_command_buffer(cmd)}.map_err(named)?;
+            self.recorded=Some(key);
+            if PROFILE.load(Ordering::Relaxed) {eprintln!("dungeon_host,record_cached,{:.4}",start.elapsed().as_secs_f64()*1000.);}
         }
-        self.uniforms(vp, reflected, eye, seconds, right, up, world, false, plane)?;
-        self.draw(&self.target, 0, self.visible_count, true, false)?;
-        self.draw(&self.target, u32::MAX, 24 * 12 * 6, false, false)?;
-        self.target.readback().map_err(named)?;
-        if let Some(path) = &self.water_dump {
-            std::fs::write(path.join("refraction.rgba16f"),self.target.staging.view(0..self.target.staging.size).map_err(named)?).map_err(named)?;
+        self.state.submit_recorded(self.command).map_err(named)?;
+        for (offset,name) in [(2,"particles"),(4,"reflection"),(6,"cones"),(8,"sprites"),(10,"opaque"),(12,"cones"),(14,"water"),(16,"sprites"),(18,"fog"),(20,"post")] {
+            if (self.rays && (4..=8).contains(&offset)) || (!self.cone_visible && matches!(offset,6|12)) || (offset==14 && DISABLED.load(Ordering::Relaxed)&2!=0) {continue;}
+            self.report_at(name,offset)?;
         }
-        self.draw(&self.target, self.count, self.water_indices, false, false)?;
-        self.draw(&self.target, 0, 6, false, true)?;
-        self.target.readback().map_err(named)?;
-        self.state
-            .dispatch_profiled(
-                &self.fog,
-                [(WIDTH / 4).div_ceil(8), (HEIGHT / 4).div_ceil(8), 1],
-                PROFILE.load(Ordering::Relaxed).then_some(self.timestamps),
-            )
-            .map_err(named)?;
-        self.report("fog")?;
-        self.state
-            .dispatch_profiled(
-                &self.post,
-                [WIDTH.div_ceil(8), HEIGHT.div_ceil(8), 1],
-                PROFILE.load(Ordering::Relaxed).then_some(self.timestamps),
-            )
-            .map_err(named)?;
-        self.report("post")?;
+        if let Some(path)=&self.water_dump {
+            if !self.rays {std::fs::write(path.join("reflection.rgba16f"),self.reflection.staging.view(0..self.reflection.staging.size).map_err(named)?).map_err(named)?;}
+            if let Some(buffer)=&self.refraction_dump {std::fs::write(path.join("refraction.rgba16f"),buffer.view(0..buffer.size).map_err(named)?).map_err(named)?;}
+        }
         crate::display::present_buffer(&self.output, WIDTH, HEIGHT).map_err(named)
     }
 }
@@ -884,6 +899,7 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
+            self.state.device.destroy_command_pool(self.command_pool,None);
             self.state.device.destroy_query_pool(self.timestamps, None);
         }
     }

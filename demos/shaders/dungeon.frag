@@ -92,7 +92,7 @@ vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shad
     for(int i=0;i<lights.length();i++) {
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
         if(d2>min(180.,lights[i].colour.r*24.) || dot(n,to)<=0.)continue;
-        bool casts=right_quality.w>.5 || i==int(fog_lights.x) || i==int(fog_lights.y);
+        bool casts=lights[i].position.w>0. && (right_quality.w>.5 || i==int(fog_lights.x) || i==int(fog_lights.y));
         float vis=(shadow && casts && settings.z<.5)?(up_rt.w>.5?softVisibility(p,n,to):shadowMap(-to,i,n)):1.;
         c+=brdf(base,n,v,normalize(to),rough,metal)*lights[i].colour.rgb*vis*5./max(.22,d2);
     }
@@ -147,12 +147,12 @@ void main() {
         float bed_distance=unpackHalf2x16(refraction[pixel.y*int(settings.x)+pixel.x].y).y;
         float thickness=clamp(bed_distance-distance(world,eye_time.xyz),.05,3.);
         vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.18,.085,.055)*thickness)+vec3(.003,.008,.007);
-        float edge=min(abs(world.z-river.y),abs(world.z-river.w));
+        float edge=min(tex.y,1.-tex.y)*(river.w-river.y);
         float bank=(1.-smoothstep(.02,.24,edge));
         float crest=smoothstep(.05,.14,world.y+.7)*smoothstep(.28,.55,length(norm.xz))*smoothstep(.45,.75,noise(flow*2.));
         float foam=max(bank*.8, max(colour.x,crest)*.65);
         foam*=smoothstep(.45,.75,noise(vec2(world.x*3.-eye_time.w*.7,world.z*14.)));
-        vec3 c=mix(transmitted,reflected_colour,max(.32,fresnel))+illuminate(world,n,v,vec3(0),.14,0.,true)+foam*vec3(.28,.34,.32);
+        vec3 c=mix(transmitted,reflected_colour,max(.12,fresnel))+illuminate(world,n,v,vec3(0),.14,0.,true)+foam*vec3(.28,.34,.32);
         if((uint(moon.w)&16u)!=0u)c=n*.5+.5;
         if((uint(moon.w)&32u)!=0u)c=reflected_colour;
         if((uint(moon.w)&64u)!=0u)c=transmitted;

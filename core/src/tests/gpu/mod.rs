@@ -15,6 +15,7 @@ pub mod graphics;
 mod int_alu;
 mod memory;
 mod memory_map;
+mod pipeline_cache;
 mod program;
 mod qmd;
 mod shared;

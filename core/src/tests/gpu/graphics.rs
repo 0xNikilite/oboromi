@@ -9,6 +9,10 @@ pub const SIZE: u32 = 64;
 const VERTICES: [([f32; 2], [u8; 4]); 3] =
     [([-0.875, -0.875], [255, 0, 0, 255]), ([0.875, -0.875], [0, 255, 0, 255]), ([-0.875, 0.875], [0, 0, 255, 255])];
 
+pub fn opaque() -> vk::PipelineColorBlendAttachmentState {
+    vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA)
+}
+
 // Vertex: position (x, y, 0, 1) from location 0, colour from location 1 to 0. Fragment: colour from location 0 to 0.
 fn pass_through(stage: u32) -> Emitter {
     use storage_class::{INPUT, OUTPUT};
@@ -52,16 +56,19 @@ fn pass_through(stage: u32) -> Emitter {
     e
 }
 
-/// Draws the triangle over a white clear into a SIZE x SIZE target and reads it back, once per call.
-pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), VkError> + '_, VkError> {
+pub fn triangle_pipeline(state: &VkState) -> Result<GraphicsPipeline<'_>, VkError> {
     let [vertex, fragment] = [execution_model::VERTEX, execution_model::FRAGMENT].map(|stage| pass_through(stage).words());
     let bindings = [vk::VertexInputBindingDescription { binding: 0, stride: 12, input_rate: vk::VertexInputRate::VERTEX }];
     let attributes = [(0, vk::Format::R32G32_SFLOAT, 0), (1, vk::Format::R8G8B8A8_UNORM, 8)]
         .map(|(location, format, offset)| vk::VertexInputAttributeDescription { location, binding: 0, format, offset });
     let topology = vk::PrimitiveTopology::TRIANGLE_LIST;
     let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
-    let blend = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-    let pipeline = GraphicsPipeline::new(state, &vertex, &fragment, [&[], &[]], &layout, &TargetState { blend, depth: None })?;
+    GraphicsPipeline::new(state, &vertex, None, &fragment, [&[], &[]], &layout, &TargetState { blend: opaque(), depth: None })
+}
+
+/// Draws the triangle over a white clear into a SIZE x SIZE target and reads it back, once per call.
+pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), VkError> + '_, VkError> {
+    let pipeline = triangle_pipeline(state)?;
     let target = RenderTarget::new(state, SIZE, SIZE, None)?;
     let mut vertices = HostBuffer::new(state, 36)?;
     let data: Vec<u8> =
@@ -73,15 +80,16 @@ pub fn triangle(state: &VkState) -> Result<impl FnMut(&mut [u8]) -> Result<(), V
         scissor: target.extent.into(),
         cull_face: vk::CullModeFlags::NONE,
         front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-        topology,
+        topology: vk::PrimitiveTopology::TRIANGLE_LIST,
         depth_test: false,
         depth_write: false,
         depth_func: vk::CompareOp::ALWAYS,
         blend_const: [0.0; 4],
+        blend: opaque(),
     };
     Ok(move |out: &mut [u8]| {
         let draw = DrawState {
-            vertex_buffers: &[&vertices],
+            vertex_buffers: &[(&vertices, 12)],
             index_buffer: None,
             vertex_count: 3,
             first_vertex: 0,

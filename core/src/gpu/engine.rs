@@ -5,14 +5,15 @@ use super::compute::{ComputePipeline, HostBuffer, HostImage};
 use super::compute_class::{DescriptorPool, DispatchSnapshot};
 use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
-use super::memory::{Mapping, MemoryError, MemoryTracker, PAGE, PaRange, PageMap, Writer};
+use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Writer, within};
+use super::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy, hash};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, Hints, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, branch_target, emit_module};
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
-use super::VkState;
+use super::{SpeedHacks, VkError, VkState};
 use ash::vk;
 use std::collections::{HashMap, hash_map::Entry};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::Path;
 use std::time::Instant;
 
 // SM 7.3 and later lead each graphics program with the 32-word SPHV4 header (NAK sph.rs), not the 20-word SPHV3 one.
@@ -68,17 +69,26 @@ struct Module {
     header: ProgramHeader,
     words: Vec<u32>,
     resources: Vec<ResourceKind>,
+    stores_global: bool,
 }
 
-#[derive(PartialEq, Eq, Hash)]
-struct PipelineKey {
-    shaders: [u64; 2],
-    streams: Vec<(u32, u32, vk::VertexInputRate)>,
-    attributes: Vec<(u32, u32, vk::Format, u32)>,
-    topology: vk::PrimitiveTopology,
-    colour_write_mask: u8,
-    blend: Option<Blend>,
-    depth: Option<vk::Format>,
+#[derive(PartialEq, Eq, Hash, Clone)]
+enum PipelineKey {
+    Draw {
+        shaders: [u64; 2],
+        streams: Vec<vk::VertexInputRate>,
+        attributes: Vec<(u32, u32, vk::Format, u32)>,
+        topology: vk::PrimitiveTopology,
+        /// SET_BLEND, its equations and SET_CT_WRITE, unless VK_EXT_extended_dynamic_state3 makes them dynamic.
+        blend: Option<(Option<Blend>, u8)>,
+        depth: Option<vk::Format>,
+    },
+    Dispatch(u64),
+}
+
+enum Pipeline {
+    Draw(GraphicsPipeline<'static>),
+    Dispatch(ComputePipeline<'static>),
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -97,21 +107,26 @@ struct Target<'a> {
     render_target: RenderTarget<'a>,
     /// The generation of the target's pages when its image last matched them.
     generation: u64,
+    /// The bytes drawn since guest memory last received them.
+    pending: Option<std::ops::Range<u64>>,
     depth_cleared: bool,
 }
 
 pub struct Gpu<'a> {
-    state: &'a VkState,
+    state: &'static VkState,
     pub ram: Vec<u8>,
     pub space: PageMap,
     pub memory: MemoryTracker,
     pusher: Pusher,
     modules: HashMap<u64, Module>,
-    pipelines: HashMap<PipelineKey, GraphicsPipeline<'a>>,
-    kernels: HashMap<u64, (Vec<(u32, vk::DescriptorType)>, ComputePipeline<'a>)>,
+    pipelines: PipelineBuilder<'static, PipelineKey, Pipeline>,
+    kernels: HashMap<u64, Vec<(u32, vk::DescriptorType)>>,
+    /// Guest programs translated rather than read back from the disk cache.
+    pub translated: usize,
     support: Option<HostBuffer<'a>>,
     targets: HashMap<TargetKey, Target<'a>>,
-    mirrors: HashMap<Vec<PaRange>, (u64, Mapping<'a>)>,
+    mirrors: HashMap<Vec<PaRange>, Mapping<'a>>,
+    window: Option<Mapping<'a>>,
     textures: HashMap<TextureKey, (u64, HostImage<'a>)>,
     pending_clear: Option<(ColourTarget, [f32; 4])>,
     pending_depth_clear: Option<(DepthTarget, f32)>,
@@ -134,6 +149,18 @@ fn gather(space: &PageMap, ram: &[u8], va: u64, out: &mut [u8]) -> Result<(), Me
         let (head, tail) = rest.split_at_mut((range.end - range.start) as usize);
         head.copy_from_slice(&ram[range.start as usize..range.end as usize]);
         rest = tail;
+    }
+    Ok(())
+}
+
+/// Stores what render targets drew over `ranges` since guest memory last received it.
+fn settle_ranges(targets: &mut HashMap<TargetKey, Target>, memory: &mut MemoryTracker, ram: &mut [u8], ranges: &[PaRange]) -> Result<(), VkError> {
+    let overlaps = |piece: &PaRange| ranges.iter().any(|range| range.start < piece.end && piece.start < range.end);
+    for (key, target) in targets {
+        let Some(pending) = target.pending.take_if(|pending| within(&key.ranges, pending.clone()).any(|(_, piece)| overlaps(&piece))) else { continue };
+        let pieces: Vec<_> = within(&key.ranges, pending.clone()).map(|(_, piece)| piece).collect();
+        memory.store(ram, &pieces, target.render_target.staged(pending)?, Writer::Gpu);
+        target.generation = generation(memory, &key.ranges);
     }
     Ok(())
 }
@@ -265,7 +292,7 @@ fn colour_extent(ct: ColourTarget) -> Result<vk::Extent2D, String> {
     Ok(vk::Extent2D { width: ct.width / 4, height: ct.height })
 }
 
-fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::PrimitiveTopology) -> RasterState {
+fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::PrimitiveTopology, blend: vk::PipelineColorBlendAttachmentState) -> RasterState {
     let ([sx, mut sy, _], [ox, mut oy, _]) = (draw.viewport.scale, draw.viewport.offset);
     let s = draw.scissor;
     let [x_min, x_max, mut y_min, mut y_max] = match s.enabled {
@@ -310,29 +337,42 @@ fn raster_state(draw: &DrawSnapshot, extent: vk::Extent2D, topology: vk::Primiti
         depth_write: draw.depth_write_enabled && draw.depth_target.is_some(),
         depth_func,
         blend_const: draw.blend_constant,
+        blend,
     }
 }
 
 impl<'a> Gpu<'a> {
-    pub fn new(state: &'a VkState, ram_bytes: usize) -> Self {
-        Self {
+    /// Keeps translated programs and the pipeline cache under `cache`'s root and title when given.
+    pub fn new(state: &'static VkState, ram_bytes: usize, cache: Option<(&Path, &str)>, hacks: SpeedHacks) -> Result<Self, VkError> {
+        let policy = if hacks.skip_draw_while_compiling { PipelinePolicy::SkipDraw } else { PipelinePolicy::Wait };
+        let disk = cache.and_then(|(root, title)| {
+            let device = unsafe { state.instance.get_physical_device_properties(state.physical_device) };
+            Disk::open(root, title, &device).ok()
+        });
+        Ok(Self {
             state,
             ram: vec![0; ram_bytes],
             space: PageMap::default(),
             memory: MemoryTracker::default(),
             pusher: Pusher::default(),
             modules: HashMap::new(),
-            pipelines: HashMap::new(),
+            pipelines: PipelineBuilder::new(state, policy, disk)?,
             kernels: HashMap::new(),
+            translated: 0,
             support: None,
             targets: HashMap::new(),
             mirrors: HashMap::new(),
+            window: None,
             textures: HashMap::new(),
             pending_clear: None,
             pending_depth_clear: None,
             pixels: Vec::new(),
             started: Instant::now(),
-        }
+        })
+    }
+
+    pub fn flush_caches(&self) -> std::io::Result<()> {
+        self.pipelines.flush()
     }
 
     /// A CPU write of guest memory at `va`.
@@ -344,13 +384,25 @@ impl<'a> Gpu<'a> {
         gather(&self.space, &self.ram, va, out)
     }
 
+    /// Stores what render targets drew over guest memory at `va` since it last received it.
+    fn settle(&mut self, va: u64, len: u64) -> Result<(), MemoryError> {
+        let ranges: Vec<_> = self.space.resolve(va, len)?.collect();
+        Ok(settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &ranges)?)
+    }
+
+    fn settle_all(&mut self) -> Result<(), VkError> {
+        settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &[0..u64::MAX])
+    }
+
     fn store(&mut self, va: u64, bytes: &[u8], writer: Writer) -> Result<(), MemoryError> {
+        self.settle(va, bytes.len() as u64)?;
         let ranges: Vec<_> = self.space.resolve(va, bytes.len() as u64)?.collect();
         self.memory.store(&mut self.ram, &ranges, bytes, writer);
         Ok(())
     }
 
-    /// Runs GPFIFO entries to completion: every draw has landed in guest memory when this returns.
+    /// Runs GPFIFO entries to completion: every draw has landed in guest memory when this returns. Inside a submit a
+    /// target reaches guest memory only when something touches its pages, so many draws read it back once.
     pub fn submit(&mut self, entries: &[[u8; 8]]) -> Result<(), String> {
         let (space, ram) = (&self.space, &self.ram);
         let events = self.pusher.submit(entries.iter().copied(), |va, len| {
@@ -391,10 +443,10 @@ impl<'a> Gpu<'a> {
                 }
             }
         }
-        match self.pending_clear.take() {
-            Some((target, colour)) => self.fill(target, colour),
-            None => Ok(()),
+        if let Some((target, colour)) = self.pending_clear.take() {
+            self.fill(target, colour)?;
         }
+        self.settle_all().map_err(named)
     }
 
     /// Writes a clear no draw consumed into the target's guest memory, where the target's next draw loads it from.
@@ -434,9 +486,7 @@ impl<'a> Gpu<'a> {
         let code = self.code(program.address + SPH_BYTES as u64)?;
         let header = ProgramHeader::new(&sph);
         let [uint, sint] = integer.map(|mask| mask & header.inputs);
-        let mut hasher = DefaultHasher::new();
-        (sph, &code, uint, sint).hash(&mut hasher);
-        let key = hasher.finish();
+        let key = hash((sph, &code, uint, sint));
         if self.modules.contains_key(&key) {
             return Ok(key);
         }
@@ -450,27 +500,60 @@ impl<'a> Gpu<'a> {
             }
             _ => return Err(format!("shader program at {:#x} with {header:?} is not implemented for shader type {shader_type}", program.address)),
         };
-        let mut resources = Vec::new();
-        let module = emit_module(Some(self.state), stage, Hints::default(), |decoder| {
-            decoder.translate_program(&code);
-            resources = decoder.resources.iter().map(|r| r.kind).collect();
-        });
-        self.modules.insert(key, Module { header, words: module.words(), resources });
+        let (words, resources, stores_global) = self.translate(key, stage, &code);
+        self.modules.insert(key, Module { header, words, resources, stores_global });
         Ok(key)
+    }
+
+    /// The SPIR-V, resources and whether it stores global memory, of `code` translated for `stage`.
+    fn translate(&mut self, key: u64, stage: Stage, code: &[u128]) -> (Vec<u32>, Vec<ResourceKind>, bool) {
+        let disk = self.pipelines.disk.as_ref();
+        if let Some(saved) = disk.and_then(|disk| disk.spirv(key)) {
+            return saved;
+        }
+        self.translated += 1;
+        let (mut resources, mut stores_global) = (Vec::new(), false);
+        let words = emit_module(Some(self.state), stage, Hints::default(), |decoder| {
+            decoder.translate_program(code);
+            resources = decoder.resources.iter().map(|r| r.kind).collect();
+            stores_global = decoder.stores_global;
+        })
+        .words();
+        if let Some(disk) = disk {
+            let _ = disk.store_spirv(key, &words, &resources, stores_global);
+        }
+        (words, resources, stores_global)
+    }
+
+    /// Mirrors all mapped guest memory into the global window, with its first VA in the support UBO for the window's
+    /// addressing; the window's buffer grows by doubling, so a growing span keeps the pages it already holds.
+    fn window(&mut self) -> Result<(), String> {
+        let span = self.space.span().ok_or("a global window needs mapped guest memory")?;
+        let len = span.end - span.start;
+        if len > 1 << 32 {
+            return Err(format!("mapped guest memory {span:#x?} spans more than the 4 GiB a global window addresses"));
+        }
+        if self.support.is_none() {
+            self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
+        }
+        self.support.as_mut().unwrap().write(&span.start.to_le_bytes()).map_err(named)?;
+        let ranges = self.space.resolve(span.start, len).map_err(|e| format!("the global window over all mapped guest memory: {e:?}"))?.collect();
+        match &mut self.window {
+            Some(window) if window.buffer.size >= len => window.retarget(ranges),
+            window => *window = Some(Mapping::new(HostBuffer::new(self.state, len.next_power_of_two()).map_err(named)?, ranges)),
+        }
+        self.memory.refresh(self.window.as_mut().unwrap(), &self.ram).map_err(named)
     }
 
     /// Runs a QMD launch over one global window spanning all mapped guest memory, then stores the pages it changed.
     fn dispatch(&mut self, dispatch: &DispatchSnapshot) -> Result<(), String> {
+        self.settle_all().map_err(named)?;
         let code = self.code(dispatch.program_address)?;
-        let mut hasher = DefaultHasher::new();
-        (&code, dispatch.block).hash(&mut hasher);
-        let key = hasher.finish();
+        let key = hash((&code, dispatch.block));
+        let mut words = Vec::new();
         if !self.kernels.contains_key(&key) {
-            let mut resources = Vec::new();
-            let module = emit_module(Some(self.state), Stage::Compute { local_size: dispatch.block }, Hints::default(), |decoder| {
-                decoder.translate_program(&code);
-                resources = decoder.resources.iter().map(|r| r.kind).collect();
-            });
+            let resources;
+            (words, resources, _) = self.translate(key, Stage::Compute { local_size: dispatch.block }, &code);
             let (ubo, ssbo) = (vk::DescriptorType::UNIFORM_BUFFER, vk::DescriptorType::STORAGE_BUFFER);
             let mut bindings = Vec::new();
             for kind in resources {
@@ -485,54 +568,38 @@ impl<'a> Gpu<'a> {
                     bindings.push(binding);
                 }
             }
-            let pipeline = ComputePipeline::new(self.state, &module.words(), &bindings).map_err(named)?;
-            self.kernels.insert(key, (bindings, pipeline));
+            self.kernels.insert(key, bindings);
         }
-        let span = self.space.span().ok_or("a compute dispatch needs mapped guest memory")?;
-        if span.end - span.start > 1 << 32 {
-            return Err(format!("mapped guest memory {span:#x?} spans more than the 4 GiB a global window addresses"));
-        }
+        let (state, pipeline_key) = (self.state, PipelineKey::Dispatch(key));
+        self.pipelines
+            .get_or_request(&pipeline_key, || {
+                let bindings = self.kernels[&key].clone();
+                move || ComputePipeline::new(state, &words, &bindings).map(Pipeline::Dispatch)
+            })
+            .map_err(named)?;
         let mut buffers = Vec::new();
-        for (binding, _) in self.kernels[&key].0.clone() {
-            let ranges = match binding {
-                GLOBAL_BINDING => self.mirror(span.start, span.end - span.start).map_err(|e| format!("the global window over all mapped guest memory: {e}"))?,
-                SUPPORT_BINDING => continue,
+        for (binding, _) in self.kernels[&key].clone() {
+            match binding {
+                GLOBAL_BINDING => self.window()?,
+                SUPPORT_BINDING => {}
                 slot => {
                     let slot = slot - CBUF_BINDING;
                     let buffer = dispatch.constant_buffers[slot as usize].ok_or_else(|| format!("QMD constant buffer {slot} is not valid"))?;
-                    self.mirror(buffer.address, buffer.size.into())?
+                    buffers.push((binding, self.mirror(buffer.address, buffer.size.into())?));
                 }
-            };
-            buffers.push((binding, ranges));
+            }
         }
-        if self.support.is_none() {
-            self.support = Some(HostBuffer::new(self.state, 16).map_err(named)?);
-        }
-        let support = self.support.as_mut().unwrap();
-        support.write(&span.start.to_le_bytes()).map_err(named)?;
-        let (bindings, pipeline) = self.kernels.get_mut(&key).unwrap();
-        let mut bound: Vec<_> = buffers.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect();
-        if bindings.iter().any(|&(binding, _)| binding == SUPPORT_BINDING) {
-            bound.push((SUPPORT_BINDING, support));
+        let Lookup::Ready(Pipeline::Dispatch(pipeline)) = self.pipelines.wait(&pipeline_key).map_err(named)? else { unreachable!() };
+        let bindings = &self.kernels[&key];
+        let mut bound: Vec<_> = buffers.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].buffer)).collect();
+        let global = bindings.iter().any(|&(binding, _)| binding == GLOBAL_BINDING);
+        if global {
+            bound.extend([(GLOBAL_BINDING, &self.window.as_ref().unwrap().buffer), (SUPPORT_BINDING, self.support.as_ref().unwrap())]);
         }
         pipeline.descriptors.bind(&bound);
         self.state.dispatch(pipeline, dispatch.grid).map_err(named)?;
-        if let Some((_, window)) = buffers.iter().find(|&&(binding, _)| binding == GLOBAL_BINDING) {
-            let (seen, mapping) = self.mirrors.get_mut(window).unwrap();
-            self.pixels.resize((span.end - span.start) as usize, 0);
-            mapping.buffer.read(&mut self.pixels).map_err(named)?;
-            let mut bytes = &self.pixels[..];
-            for range in window {
-                for start in (range.start..range.end).step_by(PAGE as usize) {
-                    let page = start..range.end.min(start + PAGE);
-                    let (written, rest) = bytes.split_at((page.end - page.start) as usize);
-                    if self.ram[page.start as usize..page.end as usize] != *written {
-                        self.memory.store(&mut self.ram, &[page], written, Writer::Gpu);
-                    }
-                    bytes = rest;
-                }
-            }
-            *seen = generation(&self.memory, window);
+        if global {
+            self.memory.download(self.window.as_mut().unwrap(), &mut self.ram).map_err(named)?;
         }
         for release in dispatch.release_semaphores.iter().flatten() {
             self.store(release.address, &release.payload.to_le_bytes(), Writer::Gpu).map_err(named)?;
@@ -570,29 +637,27 @@ impl<'a> Gpu<'a> {
         let (header, sampler) = (pool.texture(0)?, pool.sampler(0)?);
         let len = header.guest_bytes() as u64;
         let key = (self.space.resolve(header.address, len).map_err(named)?.collect::<Vec<_>>(), tic, tsc);
+        self.settle(header.address, len).map_err(named)?;
         let current = generation(&self.memory, &key.0);
         if self.textures.get(&key).is_none_or(|(seen, _)| *seen != current) {
             let mut texels = vec![0; len as usize];
             gather(&self.space, &self.ram, header.address, &mut texels).map_err(named)?;
             let image = HostImage::new(self.state, &header, &texels, &sampler).map_err(named)?;
+            self.memory.uploaded += len;
             self.textures.insert(key.clone(), (current, image));
         }
         Ok(key)
     }
 
-    /// Mirrors guest memory at `va` into a host buffer, rewritten when any of its pages changed, keyed by its ranges.
+    /// Mirrors guest memory at `va` into a host buffer keyed by its ranges, rewriting the pages that changed.
     fn mirror(&mut self, va: u64, len: u64) -> Result<Vec<PaRange>, String> {
+        self.settle(va, len).map_err(named)?;
         let ranges: Vec<_> = self.space.resolve(va, len).map_err(named)?.collect();
-        let generation = generation(&self.memory, &ranges);
         match self.mirrors.get_mut(&ranges) {
-            Some((seen, _)) if *seen == generation => {}
-            Some((seen, mapping)) => {
-                mapping.refresh(&self.ram).map_err(named)?;
-                *seen = generation;
-            }
+            Some(mapping) => self.memory.refresh(mapping, &self.ram).map_err(named)?,
             None => {
                 let mapping = self.memory.upload(self.state, &self.ram, ranges.clone()).map_err(named)?;
-                self.mirrors.insert(ranges.clone(), (generation, mapping));
+                self.mirrors.insert(ranges.clone(), mapping);
             }
         }
         Ok(ranges)
@@ -608,6 +673,7 @@ impl<'a> Gpu<'a> {
             self.module(draw.shader_programs[PIXEL_PIPELINE], SHADER_TYPE_PIXEL, [0; 2])?,
         ];
         let [vs, fs] = shaders.map(|key| &self.modules[&key]);
+        let stores_global = vs.stores_global || fs.stores_global;
         if fs.header.inputs & !vs.header.outputs != 0 {
             return Err(format!("pixel shader reads attributes {:#x} the vertex shader does not write", fs.header.inputs & !vs.header.outputs));
         }
@@ -634,6 +700,7 @@ impl<'a> Gpu<'a> {
             attributes.push((location, binding as u32, vertex_format(attribute)?, attribute.offset.into()));
         }
         let mut cbufs: [Vec<(u32, ConstantBuffer)>; 2] = Default::default();
+        let mut windows = [false; 2];
         let mut textures = Vec::new();
         for (stage, (module, pipeline)) in [(vs, VERTEX_PIPELINE), (fs, PIXEL_PIPELINE)].into_iter().enumerate() {
             let group = draw.shader_programs[pipeline].binding_group as usize;
@@ -647,6 +714,7 @@ impl<'a> Gpu<'a> {
                         gather(&self.space, &self.ram, bound(cbuf_bank)?.address + u64::from(byte_offset), &mut handle).map_err(named)?;
                         textures.push((images.next().unwrap(), u32::from_le_bytes(handle)));
                     }
+                    ResourceKind::Global | ResourceKind::Support => windows[stage] = true,
                     ResourceKind::BuiltIn(_) | ResourceKind::VertexInput { .. } | ResourceKind::Varying { .. } | ResourceKind::FragmentOutput { .. } => {}
                     kind => return Err(format!("{kind:?} in shader pipeline {pipeline} is not implemented")),
                 }
@@ -657,13 +725,12 @@ impl<'a> Gpu<'a> {
         let extent = colour_extent(ct)?;
         let topology = topology(draw.topology)?;
         let pipeline_depth = draw.depth_target.map(|target| self.depth_format(target)).transpose()?;
-        let key = PipelineKey {
+        let key = PipelineKey::Draw {
             shaders,
-            streams: streams.iter().enumerate().map(|(binding, &(_, stride, rate))| (binding as u32, stride, rate)).collect(),
+            streams: streams.iter().map(|&(.., rate)| rate).collect(),
             attributes,
             topology,
-            colour_write_mask: draw.colour_write_mask,
-            blend: draw.blend,
+            blend: self.state.extended_dynamic_state3.is_none().then_some((draw.blend, draw.colour_write_mask)),
             depth: pipeline_depth,
         };
 
@@ -689,47 +756,57 @@ impl<'a> Gpu<'a> {
                 ranges.push((binding, self.mirror(buffer.address, buffer.size.into())?));
             }
         }
+        if windows.contains(&true) {
+            self.window()?;
+        }
         let textures = textures.into_iter().map(|(binding, handle)| Ok((binding, self.texture(draw, handle)?))).collect::<Result<Vec<_>, String>>()?;
 
-        let pipeline = match self.pipelines.entry(key) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let key = entry.key();
-                let bindings: Vec<_> = key
-                    .streams
-                    .iter()
-                    .map(|&(binding, stride, input_rate)| vk::VertexInputBindingDescription { binding, stride, input_rate })
-                    .collect();
-                let attributes: Vec<_> = key
-                    .attributes
-                    .iter()
-                    .map(|&(location, binding, format, offset)| vk::VertexInputAttributeDescription { location, binding, format, offset })
-                    .collect();
-                let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology: key.topology };
-                let target = TargetState { blend: blend_state(key.blend, key.colour_write_mask)?, depth: key.depth };
-                let ubo = vk::DescriptorType::UNIFORM_BUFFER;
-                let [vs_bindings, mut fs_bindings] = cbuf_ranges.each_ref().map(|stage| stage.iter().map(|&(binding, _)| (binding, ubo)).collect::<Vec<_>>());
-                fs_bindings.extend(textures.iter().map(|&(binding, _)| (binding, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)));
-                let [vs, fs] = key.shaders.map(|key| &self.modules[&key].words);
-                entry.insert(GraphicsPipeline::new(self.state, vs, fs, [&vs_bindings, &fs_bindings], &layout, &target).map_err(named)?)
+        let PipelineKey::Draw { streams: rates, attributes, .. } = &key else { unreachable!() };
+        let (state, blend) = (self.state, blend_state(draw.blend, draw.colour_write_mask)?);
+        let lookup = self.pipelines.get_or_request(&key, || {
+            let bindings: Vec<_> = (0..).zip(rates).map(|(binding, &input_rate)| vk::VertexInputBindingDescription { binding, stride: 0, input_rate }).collect();
+            let attributes: Vec<_> = attributes
+                .iter()
+                .map(|&(location, binding, format, offset)| vk::VertexInputAttributeDescription { location, binding, format, offset })
+                .collect();
+            let ubo = vk::DescriptorType::UNIFORM_BUFFER;
+            let [mut vs_bindings, mut fs_bindings] = cbuf_ranges.each_ref().map(|stage| stage.iter().map(|&(binding, _)| (binding, ubo)).collect::<Vec<_>>());
+            for (bindings, _) in [&mut vs_bindings, &mut fs_bindings].into_iter().zip(windows).filter(|&(_, window)| window) {
+                bindings.extend([(GLOBAL_BINDING, vk::DescriptorType::STORAGE_BUFFER), (SUPPORT_BINDING, ubo)]);
             }
-        };
-        for (descriptors, ranges) in pipeline.descriptors.iter_mut().zip(&cbuf_ranges) {
-            descriptors.bind(&ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].1.buffer)).collect::<Vec<_>>());
+            fs_bindings.extend(textures.iter().map(|&(binding, _)| (binding, vk::DescriptorType::COMBINED_IMAGE_SAMPLER)));
+            let [vs, fs] = shaders.map(|key| self.modules[&key].words.clone());
+            move || {
+                let layout = VertexLayout { bindings: &bindings, attributes: &attributes, topology };
+                let target = TargetState { blend, depth: pipeline_depth };
+                GraphicsPipeline::new(state, &vs, None, &fs, [&vs_bindings, &fs_bindings], &layout, &target).map(Pipeline::Draw)
+            }
+        });
+        let Lookup::Ready(Pipeline::Draw(pipeline)) = lookup.map_err(named)? else { return Ok(()) };
+        for ((descriptors, ranges), stage_window) in pipeline.descriptors.iter_mut().zip(&cbuf_ranges).zip(windows) {
+            let mut buffers: Vec<_> = ranges.iter().map(|(binding, ranges)| (*binding, &self.mirrors[ranges].buffer)).collect();
+            if stage_window {
+                buffers.extend([(GLOBAL_BINDING, &self.window.as_ref().unwrap().buffer), (SUPPORT_BINDING, self.support.as_ref().unwrap())]);
+            }
+            descriptors.bind(&buffers);
         }
         pipeline.descriptors[1].bind_images(&textures.iter().map(|(binding, key)| (*binding, &self.textures[key].1)).collect::<Vec<_>>());
 
-        let ranges: Vec<_> = self.space.resolve(ct.address, u64::from(extent.width * extent.height * 4)).map_err(named)?.collect();
-        let current = generation(&self.memory, &ranges);
+        let len = u64::from(extent.width * extent.height * 4);
+        let ranges: Vec<_> = self.space.resolve(ct.address, len).map_err(named)?.collect();
         let clear = self.pending_clear.take_if(|(target, _)| *target == ct).map(|(_, colour)| colour);
         let clear_depth = self.pending_depth_clear.take_if(|(target, _)| Some(*target) == draw.depth_target).map(|(_, depth)| depth);
         let depth = draw.depth_target.map(|target| target.address).zip(pipeline_depth);
         let target_key = TargetKey { ranges: ranges.clone(), format: ct.format, extent: (extent.width, extent.height), depth };
+        if clear.is_none() && self.targets.get(&target_key).is_none_or(|target| target.generation != generation(&self.memory, &ranges)) {
+            settle_ranges(&mut self.targets, &mut self.memory, &mut self.ram, &ranges).map_err(named)?;
+        }
+        let current = generation(&self.memory, &ranges);
         let target = match self.targets.entry(target_key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
                 let render_target = RenderTarget::new(self.state, extent.width, extent.height, pipeline_depth).map_err(named)?;
-                entry.insert(Target { render_target, generation: u64::MAX, depth_cleared: false })
+                entry.insert(Target { render_target, generation: u64::MAX, pending: None, depth_cleared: false })
             }
         };
         let load = clear.is_none() && target.generation != current;
@@ -737,15 +814,17 @@ impl<'a> Gpu<'a> {
             self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
             gather(&self.space, &self.ram, ct.address, &mut self.pixels).map_err(named)?;
             target.render_target.write(&self.pixels).map_err(named)?;
+            self.memory.uploaded += self.pixels.len() as u64;
         }
         target.depth_cleared |= clear_depth.is_some();
         if let Some((address, _)) = depth.filter(|_| !target.depth_cleared) {
             return Err(format!("depth target at {address:#x} is drawn before any clear, and its contents only live on the host"));
         }
-        let vertex_buffers: Vec<&HostBuffer> = vertex_ranges.iter().map(|ranges| &self.mirrors[ranges].1.buffer).collect();
+        let vertex_buffers: Vec<(&HostBuffer, u32)> =
+            vertex_ranges.iter().zip(&streams).map(|(ranges, &(_, stride, _))| (&self.mirrors[ranges].buffer, stride)).collect();
         let draw_state = DrawState {
             vertex_buffers: &vertex_buffers,
-            index_buffer: index_buffer.as_ref().map(|(ranges, index_type)| (&self.mirrors[ranges].1.buffer, *index_type)),
+            index_buffer: index_buffer.as_ref().map(|(ranges, index_type)| (&self.mirrors[ranges].buffer, *index_type)),
             vertex_count: draw.vertex_count,
             first_vertex: draw.first_vertex,
             first_instance: draw.first_instance,
@@ -753,13 +832,18 @@ impl<'a> Gpu<'a> {
             clear,
             clear_depth,
             load,
-            raster: raster_state(draw, extent, topology),
+            raster: raster_state(draw, extent, topology, blend),
         };
         self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
-        self.pixels.resize((extent.width * extent.height * 4) as usize, 0);
-        target.render_target.read(&mut self.pixels).map_err(named)?;
-        self.memory.store(&mut self.ram, &ranges, &self.pixels, Writer::Gpu);
+        let rows = draw_state.rows(extent.height);
+        let drawn = u64::from(rows.start * extent.width * 4)..u64::from(rows.end * extent.width * 4);
+        if !drawn.is_empty() {
+            target.pending = Some(target.pending.take().map_or(drawn.clone(), |pending| pending.start.min(drawn.start)..pending.end.max(drawn.end)));
+        }
         target.generation = generation(&self.memory, &ranges);
+        if stores_global {
+            self.memory.download(self.window.as_mut().unwrap(), &mut self.ram).map_err(named)?;
+        }
         Ok(())
     }
 }

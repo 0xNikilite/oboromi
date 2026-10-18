@@ -3,6 +3,7 @@
 use crate::gpu::VkState;
 use crate::gpu::engine::Gpu;
 use crate::gpu::memory::{MemoryError, PAGE};
+use std::path::Path;
 use crate::tests::gpu_test::inst::{self, ald, ast, bra, exit, ffma, fmul, ipa, mov_cbuf, mov_imm, texture};
 
 pub const SET_OBJECT: u32 = 0x0000;
@@ -10,20 +11,20 @@ pub const SET_VERTEX_STREAM_SIZE_A: u32 = 0x0600;
 pub const SET_COLOR_TARGET_A: u32 = 0x0800;
 pub const SET_VIEWPORT_SCALE_X: u32 = 0x0a00;
 pub const SET_VIEWPORT_CLIP_HORIZONTAL: u32 = 0x0c00;
-const SET_COLOR_CLEAR_VALUE: u32 = 0x0d80;
+pub const SET_COLOR_CLEAR_VALUE: u32 = 0x0d80;
 pub const SET_SCISSOR_ENABLE: u32 = 0x0e00;
 pub const SET_VERTEX_ATTRIBUTE_A: u32 = 0x1160;
 pub const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST: u32 = 0x1214;
-const CLEAR_SURFACE: u32 = 0x19d0;
+pub const CLEAR_SURFACE: u32 = 0x19d0;
 pub const SET_CT_WRITE: u32 = 0x1a00;
-const SET_REPORT_SEMAPHORE_A: u32 = 0x1b00;
+pub const SET_REPORT_SEMAPHORE_A: u32 = 0x1b00;
 pub const SET_VERTEX_STREAM_A_FORMAT: u32 = 0x1c00;
 pub const SET_PIPELINE_SHADER: u32 = 0x2000;
-const SET_CONSTANT_BUFFER_SELECTOR_A: u32 = 0x2380;
-const LOAD_CONSTANT_BUFFER: u32 = 0x2390;
-const BIND_GROUP_CONSTANT_BUFFER: u32 = 0x2410;
-const SET_TEX_SAMPLER_POOL_A: u32 = 0x155c;
-const SET_TEX_HEADER_POOL_A: u32 = 0x1574;
+pub const SET_CONSTANT_BUFFER_SELECTOR_A: u32 = 0x2380;
+pub const LOAD_CONSTANT_BUFFER: u32 = 0x2390;
+pub const BIND_GROUP_CONSTANT_BUFFER: u32 = 0x2410;
+pub const SET_TEX_SAMPLER_POOL_A: u32 = 0x155c;
+pub const SET_TEX_HEADER_POOL_A: u32 = 0x1574;
 
 const PUSHBUFFER: u64 = 0x1_0000_0000;
 const VERTEX_PROGRAM: u64 = 0x1_0010_0000;
@@ -114,9 +115,9 @@ fn textured_program() -> Vec<u8> {
     program([1, 7, 10, 12, 193, 195, 576, 577, 578, 579], &[ipa(0, 0x80, 0), ipa(1, 0x84, 0), texture(inst::TEX_LZ_2D, 0, 2, 0, 2, 0, 0xf), exit(), bra(-16)])
 }
 
-pub fn triangle_guest<'a>(state: &'a VkState, width: u32, height: u32, vertices: &[Vertex; 3]) -> Result<Gpu<'a>, MemoryError> {
+pub fn triangle_guest(state: &'static VkState, cache: Option<(&Path, &str)>, width: u32, height: u32, vertices: &[Vertex; 3]) -> Result<Gpu<'static>, MemoryError> {
     let target_pages = (u64::from(width * height) * 4).div_ceil(PAGE);
-    let mut gpu = Gpu::new(state, ((8 + target_pages) * PAGE) as usize);
+    let mut gpu = Gpu::new(state, ((8 + target_pages) * PAGE) as usize, cache, Default::default())?;
     for (va, page, pages) in [(TEXTURES, 0, 1), (PUSHBUFFER, 3, 1), (VERTEX_PROGRAM, 1, 1), (VERTICES, 5, 1), (CBUF, 2, 1), (REPORT, 6, 1), (TARGET, 8, target_pages)] {
         gpu.space.map(va, page * PAGE, pages * PAGE);
     }
@@ -211,10 +212,8 @@ pub fn triangle_frame(gpu: &mut Gpu, width: u32, height: u32, matrix: [f32; 4], 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::gpu::harness::vk_state;
-    use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f};
-    use std::io::Write;
-    use std::process::{Command, Stdio};
+    use crate::tests::gpu::harness::{sha256, shared_device};
+    use crate::tests::gpu_test::inst::{cvt, fadd, fmul_imm, i2f, stg};
 
     const END: u32 = 0x1614;
     const BEGIN: u32 = 0x1618;
@@ -233,6 +232,7 @@ mod tests {
     const DEPTH: u64 = 0x1_0060_0000;
     const TARGET_B: u64 = 0x1_0200_0000;
     const INSTANCED_PROGRAM: u64 = 0x1_0010_3000;
+    const STORING_PROGRAM: u64 = 0x1_0010_4000;
     const SEMAPHORE_A: u32 = 0x0010;
     const SET_WINDOW_ORIGIN: u32 = 0x13ac;
     const OGL_SET_CULL: u32 = 0x1918;
@@ -294,7 +294,7 @@ mod tests {
         const FRAME: u64 = 0x2_0000_1000;
         const CONTROL: u64 = 0x2_007f_0000;
         let [qmd_va, program_va, release_va] = [CONTROL + 0x100, CONTROL + 0x200, CONTROL + 0xf000];
-        let Some(state) = vk_state() else { return };
+        let Some(state) = shared_device() else { return };
         let json = include_str!("../../../tests/fixtures/gradient-sm86.json");
         let field = |key: &str, open: char, close: char| json.split_once(&format!("\"{key}\":{open}")).unwrap().1.split_once(close).unwrap().0;
         let code: Vec<u8> = field("words", '[', ']')
@@ -303,7 +303,7 @@ mod tests {
             .chain([bra(-16)])
             .flat_map(u128::to_le_bytes)
             .collect();
-        let mut gpu = Gpu::new(&state, (128 * PAGE) as usize);
+        let mut gpu = Gpu::new(state, (128 * PAGE) as usize, None, Default::default()).unwrap();
         gpu.space.map(0x2_0000_0000, 0, 128 * PAGE);
         let mut qmd = [0; 64];
         [qmd[12], qmd[13], qmd[14]] = [120, 68, 1];
@@ -320,10 +320,7 @@ mod tests {
         gpu.submit(&[entry(CONTROL, words.len())]).unwrap();
         let mut frame = vec![0; 1920 * 1080 * 4];
         gpu.read(FRAME, &mut frame).unwrap();
-        let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-        sha256sum.stdin.take().unwrap().write_all(&frame).unwrap();
-        let digest = String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap();
-        assert_eq!(&digest[..64], field("sha256", '"', '"'));
+        assert_eq!(sha256(&frame), field("sha256", '"', '"'));
         let mut release = [0; 4];
         gpu.read(release_va, &mut release).unwrap();
         assert_eq!(u32::from_le_bytes(release), 0xfeed_beef);
@@ -331,8 +328,8 @@ mod tests {
 
     #[test]
     fn pushbuffer_triangle_lands_in_guest_memory_and_follows_vertex_remaps() {
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
         draw_and_check(&mut gpu, 0x1234_5678, [RED, GREEN, BLUE]);
         gpu.space.unmap(VERTICES, PAGE);
         gpu.space.map(VERTICES, 7 * PAGE, PAGE);
@@ -341,11 +338,54 @@ mod tests {
     }
 
     #[test]
+    fn second_run_draws_the_triangle_from_programs_translated_by_the_first() {
+        let Some(state) = shared_device() else { return };
+        let root = std::env::temp_dir().join(format!("oboromi-engine-cache-{}", std::process::id()));
+        for translated in [2, 0] {
+            let mut gpu = triangle_guest(state, Some((&root, "test")), SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+            draw_and_check(&mut gpu, 0x1234_5678, [RED, GREEN, BLUE]);
+            assert_eq!(gpu.translated, translated);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_frame_repeated_over_unchanged_pages_uploads_nothing() {
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
+        let uploaded = gpu.memory.uploaded;
+        triangle_frame(&mut gpu, SIZE, SIZE, IDENTITY, 0).unwrap();
+        assert_eq!(gpu.memory.uploaded, uploaded);
+    }
+
+    #[test]
+    fn a_pixel_program_store_lands_in_guest_memory() {
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED), (CORNERS[1], GREEN), (CORNERS[2], BLUE)]).unwrap();
+        for va in (PUSHBUFFER..TARGET).step_by(PAGE as usize) {
+            if gpu.space.resolve(va, 1).is_err() {
+                map(&mut gpu, va, PAGE);
+            }
+        }
+        let code = [mov_imm(4, REPORT as u32), mov_imm(5, 0xfeed), stg(4, 0, 5), ipa(0, 0x80, 0), ipa(1, 0x84, 0), ipa(2, 0x88, 0), ipa(3, 0x8c, 0), exit(), bra(-16)];
+        gpu.write(STORING_PROGRAM, &program([1, 7, 10, 12, 193, 195, 197, 199, 576, 577, 578, 579], &code)).unwrap();
+        let mut words = Vec::new();
+        frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
+        inc(SET_PIPELINE_SHADER + 5 * 64 + 0x14, &split(STORING_PROGRAM), &mut words);
+        inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, &[4 << 28 | 3 << 16], &mut words);
+        run(&mut gpu, &words).unwrap();
+        let mut stored = [0; 4];
+        gpu.read(REPORT, &mut stored).unwrap();
+        assert_eq!(u32::from_le_bytes(stored), 0xfeed);
+    }
+
+    #[test]
     fn begin_end_indexed_draw_builds_a_quad_from_two_triangles() {
         const TWO_BYTES: u32 = 1;
         const TRIANGLES: u32 = 4;
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         gpu.write(VERTICES, &vertex_bytes(&[[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].map(|corner| (corner, RED)))).unwrap();
         map(&mut gpu, INDICES, PAGE);
         gpu.write(INDICES, &bytes(&[0 | 1 << 16, 2 | 2 << 16, 1 | 3 << 16])).unwrap();
@@ -368,8 +408,8 @@ mod tests {
         const ZF32: u32 = 0x0a;
         const OGL_LESS: u32 = 0x201;
         const CLEAR_Z_AND_RGBA: u32 = 0x3d;
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         let [near, far] = [RED, GREEN].map(|colour| CORNERS.map(|corner| (corner, colour)));
         gpu.write(VERTICES, &vertex_bytes(&[near, far].concat())).unwrap();
         for order in [[(0.25, 0), (0.75, 3)], [(0.75, 3), (0.25, 0)]] {
@@ -397,8 +437,8 @@ mod tests {
     fn additive_blend_sums_two_translucent_triangles() {
         const OGL_FUNC_ADD: u32 = 0x8006;
         const OGL_ONE: u32 = 0x4001;
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         let [first, second] = [[100, 0, 0, 128], [0, 100, 0, 128]].map(|colour| CORNERS.map(|corner| (corner, colour)));
         gpu.write(VERTICES, &vertex_bytes(&[first, second].concat())).unwrap();
         let mut words = Vec::new();
@@ -416,8 +456,8 @@ mod tests {
 
     #[test]
     fn textured_quad_shows_each_texel_of_a_two_by_two_texture_with_nearest_sampling() {
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         gpu.write(VERTICES, &vertex_bytes(&quad(0.5))).unwrap();
         let texels = [[RED, GREEN], [BLUE, WHITE]];
         for (row, texels) in (0..).zip(texels) {
@@ -432,8 +472,8 @@ mod tests {
 
     #[test]
     fn a_target_sampled_as_a_texture_shows_its_latest_draw() {
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         map(&mut gpu, TARGET_B, PAGE);
         texture_header(&mut gpu, TARGET, SIZE, SIZE, SIZE * 4).unwrap();
         let mut previous = Vec::new();
@@ -468,8 +508,8 @@ mod tests {
         const R8_G8_B8_A8_UINT: u32 = 0x0a << 21 | 4 << 27;
         const SET_VERTEX_STREAM_INSTANCE_A: u32 = 0x1880;
         const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         gpu.write(INSTANCED_PROGRAM, &instanced_program()).unwrap();
         let corners = [[-0.25f32, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]];
         gpu.write(VERTICES, &corners.iter().flatten().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>()).unwrap();
@@ -496,8 +536,8 @@ mod tests {
 
     #[test]
     fn a_clear_no_draw_consumes_lands_in_guest_memory_and_the_next_draw_loads_it() {
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
         let mut words = Vec::new();
         frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);
         inc(SET_COLOR_CLEAR_VALUE, &[0.0, 0.0, 1.0, 1.0].map(f32::to_bits), &mut words);
@@ -516,8 +556,8 @@ mod tests {
         const FOUR_WORDS: u32 = 0;
         const ONE_WORD: u32 = 1 << 28;
         const ACQUIRE: u32 = 1;
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], RED); 3]).unwrap();
         let [hi, lo] = split(REPORT);
         let mut report = [0xff; 16];
         gpu.write(REPORT, &report).unwrap();
@@ -544,8 +584,8 @@ mod tests {
         const LOWER_LEFT: u32 = 1;
         const OGL_CCW: u32 = 0x901;
         const OGL_BACK: u32 = 0x405;
-        let Some(state) = vk_state() else { return };
-        let mut gpu = triangle_guest(&state, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
+        let Some(state) = shared_device() else { return };
+        let mut gpu = triangle_guest(state, None, SIZE, SIZE, &[(CORNERS[0], GREEN), (CORNERS[1], GREEN), (CORNERS[2], GREEN)]).unwrap();
         for (scale_y, origin) in [(-32.0f32, UPPER_LEFT), (32.0, LOWER_LEFT)] {
             let mut words = Vec::new();
             frame_state(SIZE, SIZE, TARGET, IDENTITY, &mut words);

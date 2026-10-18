@@ -28,9 +28,11 @@ const MAX_REG_COUNT: usize = 254;
 const MAX_UNIFORM_REG_COUNT: usize = 63;
 pub const STATE_WORDS: usize = MAX_REG_COUNT + 1 + MAX_UNIFORM_REG_COUNT + 1 + 1;
 pub const SUPPORT_BINDING: u32 = 0;
+// Bank n of the 32 a stage has (BIND_GROUP_CONSTANT_BUFFER SHADER_SLOT is 5 bits in clc797.h) is binding 1 + n.
 pub const CBUF_BINDING: u32 = 1;
-pub const GLOBAL_BINDING: u32 = 9;
-pub const TEXTURE_BINDING: u32 = 12;
+pub const CBUF_BANKS: u32 = 32;
+pub const GLOBAL_BINDING: u32 = CBUF_BINDING + CBUF_BANKS;
+pub const TEXTURE_BINDING: u32 = GLOBAL_BINDING + 3;
 pub const PMTRIG_WORDS: usize = 1 << 16;
 const RZ: u32 = 255;
 const URZ: u32 = 63;
@@ -158,6 +160,7 @@ pub struct Decoder<'a> {
     invocations: u32,
     glsl_ext: u32,
     pub resources: Vec<Resource>,
+    pub stores_global: bool,
     // Cache for emitted u32 constants to avoid duplicate OpConstant
     const_cache: HashMap<u32, u32>,
     timing: Timing,
@@ -301,6 +304,7 @@ impl<'a> Decoder<'a> {
             invocations: 0,
             glsl_ext: 0,
             resources: Vec::new(),
+            stores_global: false,
             const_cache: HashMap::new(),
             timing: if !hints.timing { Timing::Off } else if let Some(device) = device.filter(|d| d.shader_device_clock) {
                 Timing::Clock { period: device.timestamp_period, emitted: false }

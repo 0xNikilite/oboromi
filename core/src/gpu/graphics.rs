@@ -1,5 +1,6 @@
 //! Graphics pipelines drawing with dynamic rendering into an offscreen RGBA8 target that is read back after each draw.
 use super::compute::{Descriptors, HostBuffer};
+use super::pipeline_cache::hash;
 use super::{VkError, VkState};
 use ash::vk;
 
@@ -13,6 +14,7 @@ pub struct VertexLayout<'a> {
 }
 
 pub struct TargetState {
+    /// Baked only without VK_EXT_extended_dynamic_state3, which takes `RasterState::blend` instead.
     pub blend: vk::PipelineColorBlendAttachmentState,
     pub depth: Option<vk::Format>,
 }
@@ -29,10 +31,13 @@ pub struct RasterState {
     pub depth_write: bool,
     pub depth_func: vk::CompareOp,
     pub blend_const: [f32; 4],
+    /// SET_BLEND, its equations and SET_CT_WRITE, dynamic with VK_EXT_extended_dynamic_state3.
+    pub blend: vk::PipelineColorBlendAttachmentState,
 }
 
 pub struct DrawState<'a> {
-    pub vertex_buffers: &'a [&'a HostBuffer<'a>],
+    /// Each with its SET_VERTEX_STREAM_A_FORMAT stride.
+    pub vertex_buffers: &'a [(&'a HostBuffer<'a>, u32)],
     /// With an index buffer, `vertex_count` and `first_vertex` count indices.
     pub index_buffer: Option<(&'a HostBuffer<'a>, vk::IndexType)>,
     pub vertex_count: u32,
@@ -47,11 +52,26 @@ pub struct DrawState<'a> {
     pub raster: RasterState,
 }
 
+impl DrawState<'_> {
+    /// The rows of a target `height` rows high the draw can write: all of them after a clear, else the scissor's rows
+    /// within the viewport.
+    pub fn rows(&self, height: u32) -> std::ops::Range<u32> {
+        let (viewport, scissor) = (self.raster.viewport, self.raster.scissor);
+        if self.clear.is_some() {
+            return 0..height;
+        }
+        let [top, bottom] = [viewport.y, viewport.y + viewport.height];
+        let start = (scissor.offset.y as u32).max(top.min(bottom).floor() as u32);
+        let end = (scissor.offset.y as u32 + scissor.extent.height).min(top.max(bottom).ceil() as u32).min(height);
+        start.min(end)..end
+    }
+}
+
 pub struct GraphicsPipeline<'a> {
     device: &'a ash::Device,
     /// The vertex stage's resources in set 0, the fragment stage's in set 1.
     pub descriptors: [Descriptors<'a>; 2],
-    shaders: [vk::ShaderModule; 2],
+    shaders: Vec<vk::ShaderModule>,
     pub layout: vk::PipelineLayout,
     pub pipeline: vk::Pipeline,
 }
@@ -60,6 +80,7 @@ impl<'a> GraphicsPipeline<'a> {
     pub fn new(
         state: &'a VkState,
         vertex_spirv: &[u32],
+        geometry_spirv: Option<&[u32]>,
         fragment_spirv: &[u32],
         bindings: [&[(u32, vk::DescriptorType)]; 2],
         vertex_layout: &VertexLayout,
@@ -69,19 +90,24 @@ impl<'a> GraphicsPipeline<'a> {
         let d = &state.device;
         let mut p = Self {
             device: d,
-            descriptors: [Descriptors::new(d, bindings[0], Stage::VERTEX)?, Descriptors::new(d, bindings[1], Stage::FRAGMENT)?],
-            shaders: Default::default(),
+            descriptors: [
+                Descriptors::new(d, bindings[0], Stage::VERTEX | geometry_spirv.map_or(Stage::empty(), |_| Stage::GEOMETRY))?,
+                Descriptors::new(d, bindings[1], Stage::FRAGMENT)?,
+            ],
+            shaders: Vec::new(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
         };
-        for (shader, code) in p.shaders.iter_mut().zip([vertex_spirv, fragment_spirv]) {
-            *shader = unsafe { d.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(code), None)? };
+        let mut stages = Vec::new();
+        for (stage, code) in [(Stage::VERTEX, Some(vertex_spirv)), (Stage::GEOMETRY, geometry_spirv), (Stage::FRAGMENT, Some(fragment_spirv))] {
+            let Some(code) = code else { continue };
+            let module = unsafe { d.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(code), None)? };
+            p.shaders.push(module);
+            stages.push(vk::PipelineShaderStageCreateInfo::default().stage(stage).module(module).name(c"main"));
         }
         let set_layouts = p.descriptors.each_ref().map(|descriptors| descriptors.set_layout);
         let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
         p.layout = unsafe { d.create_pipeline_layout(&layout_info, None)? };
-        let stages = [(Stage::VERTEX, p.shaders[0]), (Stage::FRAGMENT, p.shaders[1])]
-            .map(|(stage, module)| vk::PipelineShaderStageCreateInfo::default().stage(stage).module(module).name(c"main"));
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(vertex_layout.bindings)
             .vertex_attribute_descriptions(vertex_layout.attributes);
@@ -104,14 +130,19 @@ impl<'a> GraphicsPipeline<'a> {
             Dynamic::DEPTH_WRITE_ENABLE,
             Dynamic::DEPTH_COMPARE_OP,
             Dynamic::BLEND_CONSTANTS,
+            Dynamic::VERTEX_INPUT_BINDING_STRIDE,
+            Dynamic::COLOR_BLEND_ENABLE_EXT,
+            Dynamic::COLOR_BLEND_EQUATION_EXT,
+            Dynamic::COLOR_WRITE_MASK_EXT,
         ];
-        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let dynamic3 = state.extended_dynamic_state3.is_some();
+        let dynamic_states = &dynamic_states[..dynamic_states.len() - if dynamic3 { 0 } else { 3 }];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(dynamic_states);
         let color_formats = [COLOR_FORMAT];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
             .depth_attachment_format(target.depth.unwrap_or_default());
-        let info = [vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
+        let info = vk::GraphicsPipelineCreateInfo::default()
             .vertex_input_state(&vertex_input)
             .input_assembly_state(&input_assembly)
             .viewport_state(&viewport)
@@ -121,9 +152,23 @@ impl<'a> GraphicsPipeline<'a> {
             .color_blend_state(&blend)
             .dynamic_state(&dynamic)
             .layout(p.layout)
-            .push_next(&mut rendering)];
-        p.pipeline = unsafe { d.create_graphics_pipelines(vk::PipelineCache::null(), &info, None) }
-            .map_err(|(_, e)| e)?[0];
+            .push_next(&mut rendering);
+        p.pipeline = if state.graphics_pipeline_library {
+            let streams: Vec<_> = vertex_layout.bindings.iter().map(|b| (b.binding, b.input_rate)).collect();
+            let attributes: Vec<_> = vertex_layout.attributes.iter().map(|a| (a.location, a.binding, a.format, a.offset)).collect();
+            let b = target.blend;
+            let blend = (!dynamic3).then_some((b.blend_enable, b.src_color_blend_factor, b.dst_color_blend_factor, b.color_blend_op));
+            let alpha = (!dynamic3).then_some((b.src_alpha_blend_factor, b.dst_alpha_blend_factor, b.alpha_blend_op, b.color_write_mask));
+            let keys = [
+                hash((streams, attributes, vertex_layout.topology)),
+                hash((vertex_spirv, geometry_spirv, bindings)),
+                hash((fragment_spirv, bindings, target.depth)),
+                hash((target.depth, blend, alpha)),
+            ];
+            state.link(info, &stages, keys)?
+        } else {
+            state.create_graphics_pipeline(info.stages(&stages))?
+        };
         Ok(p)
     }
 }
@@ -223,8 +268,17 @@ impl<'a> RenderTarget<'a> {
         })
     }
 
+    pub fn color_image(&self) -> vk::Image {
+        self.color.image
+    }
+
     pub fn read(&self, out: &mut [u8]) -> Result<(), VkError> {
         self.staging.read(out)
+    }
+
+    /// `bytes` of the target as its last draw left it, row by row.
+    pub fn staged(&self, bytes: std::ops::Range<u64>) -> Result<&[u8], VkError> {
+        self.staging.view(bytes)
     }
 
     pub fn write(&mut self, pixels: &[u8]) -> Result<(), VkError> {
@@ -287,6 +341,11 @@ impl VkState {
         let copy = [vk::BufferImageCopy::default()
             .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
             .image_extent(target.extent.into())];
+        let rows = draw.rows(target.extent.height);
+        let readback = [copy[0]
+            .buffer_offset(u64::from(rows.start * target.extent.width * 4))
+            .image_offset(vk::Offset3D { y: rows.start as i32, ..Default::default() })
+            .image_extent(vk::Extent3D { height: rows.len() as u32, ..target.extent.into() })];
         let to_host = vk::MemoryBarrier::default().src_access_mask(Access::TRANSFER_WRITE).dst_access_mask(Access::HOST_READ);
         let fragment_tests = Stage::EARLY_FRAGMENT_TESTS | Stage::LATE_FRAGMENT_TESTS;
         let none = vk::DependencyFlags::empty();
@@ -317,8 +376,21 @@ impl VkState {
             d.cmd_set_depth_write_enable(cmd, r.depth_write);
             d.cmd_set_depth_compare_op(cmd, r.depth_func);
             d.cmd_set_blend_constants(cmd, &r.blend_const);
-            for (binding, buffer) in (0..).zip(draw.vertex_buffers) {
-                d.cmd_bind_vertex_buffers(cmd, binding, &[buffer.buffer], &[0]);
+            if let Some(dynamic3) = &self.extended_dynamic_state3 {
+                let b = r.blend;
+                let equation = vk::ColorBlendEquationEXT::default()
+                    .src_color_blend_factor(b.src_color_blend_factor)
+                    .dst_color_blend_factor(b.dst_color_blend_factor)
+                    .color_blend_op(b.color_blend_op)
+                    .src_alpha_blend_factor(b.src_alpha_blend_factor)
+                    .dst_alpha_blend_factor(b.dst_alpha_blend_factor)
+                    .alpha_blend_op(b.alpha_blend_op);
+                dynamic3.cmd_set_color_blend_enable(cmd, 0, &[b.blend_enable]);
+                dynamic3.cmd_set_color_blend_equation(cmd, 0, &[equation]);
+                dynamic3.cmd_set_color_write_mask(cmd, 0, &[b.color_write_mask]);
+            }
+            for (binding, (buffer, stride)) in (0..).zip(draw.vertex_buffers) {
+                d.cmd_bind_vertex_buffers2(cmd, binding, &[buffer.buffer], &[0], None, Some(&[(*stride).into()]));
             }
             match draw.index_buffer {
                 Some((buffer, ty)) => {
@@ -329,7 +401,9 @@ impl VkState {
             }
             d.cmd_end_rendering(cmd);
             d.cmd_pipeline_barrier(cmd, Stage::COLOR_ATTACHMENT_OUTPUT, Stage::TRANSFER, none, &[], &[], &[to_transfer]);
-            d.cmd_copy_image_to_buffer(cmd, target.color.image, Layout::TRANSFER_SRC_OPTIMAL, target.staging.buffer, &copy);
+            if !rows.is_empty() {
+                d.cmd_copy_image_to_buffer(cmd, target.color.image, Layout::TRANSFER_SRC_OPTIMAL, target.staging.buffer, &readback);
+            }
             d.cmd_pipeline_barrier(cmd, Stage::TRANSFER, Stage::HOST, none, &[to_host], &[], &[]);
         })
     }

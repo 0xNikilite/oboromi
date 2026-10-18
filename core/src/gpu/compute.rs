@@ -17,6 +17,7 @@ pub struct HostBuffer<'a> {
     pub memory: vk::DeviceMemory,
     pub size: u64,
     ptr: *mut u8,
+    non_coherent_atom: u64,
 }
 
 impl<'a> HostBuffer<'a> {
@@ -36,6 +37,7 @@ impl<'a> HostBuffer<'a> {
             memory: vk::DeviceMemory::null(),
             size,
             ptr: std::ptr::null_mut(),
+            non_coherent_atom: unsafe { state.instance.get_physical_device_properties(state.physical_device) }.limits.non_coherent_atom_size,
         };
         let req = unsafe { d.get_buffer_memory_requirements(buf.buffer) };
         let instance = &state.instance;
@@ -69,17 +71,31 @@ impl<'a> HostBuffer<'a> {
         Ok(buf)
     }
 
-    fn mapped(&self) -> [vk::MappedMemoryRange<'_>; 1] {
+    fn mapped(&self, bytes: std::ops::Range<u64>) -> [vk::MappedMemoryRange<'_>; 1] {
+        let (start, end) = (bytes.start / self.non_coherent_atom * self.non_coherent_atom, bytes.end.next_multiple_of(self.non_coherent_atom));
         [vk::MappedMemoryRange::default()
             .memory(self.memory)
-            .size(vk::WHOLE_SIZE)]
+            .offset(start)
+            .size(if end >= self.size { vk::WHOLE_SIZE } else { end - start })]
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<(), VkError> {
-        assert!(data.len() as u64 <= self.size);
+        self.write_at(0, data)
+    }
+
+    pub fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<(), VkError> {
+        assert!(offset + data.len() as u64 <= self.size);
         unsafe {
-            self.ptr.copy_from_nonoverlapping(data.as_ptr(), data.len());
-            Ok(self.device.flush_mapped_memory_ranges(&self.mapped())?)
+            self.ptr.add(offset as usize).copy_from_nonoverlapping(data.as_ptr(), data.len());
+            Ok(self.device.flush_mapped_memory_ranges(&self.mapped(offset..offset + data.len() as u64))?)
+        }
+    }
+
+    pub fn view(&self, bytes: std::ops::Range<u64>) -> Result<&[u8], VkError> {
+        assert!(bytes.end <= self.size);
+        unsafe {
+            self.device.invalidate_mapped_memory_ranges(&self.mapped(bytes.clone()))?;
+            Ok(std::slice::from_raw_parts(self.ptr.add(bytes.start as usize), (bytes.end - bytes.start) as usize))
         }
     }
 
@@ -87,7 +103,7 @@ impl<'a> HostBuffer<'a> {
         assert!(out.len() as u64 <= self.size);
         unsafe {
             self.device
-                .invalidate_mapped_memory_ranges(&self.mapped())?;
+                .invalidate_mapped_memory_ranges(&self.mapped(0..out.len() as u64))?;
             self.ptr.copy_to_nonoverlapping(out.as_mut_ptr(), out.len());
         }
         Ok(())

@@ -16,6 +16,7 @@ mod tests {
     const IDP2A_HI_S16_S8: u128 = 0x004fc800000036040000000302017226;
     const IADD3_CBUF: u128 = 0x004fc80007ffe0030000000002017a10;
     const IADD3_UREG: u128 = 0x004fc8000fffe0030000000402057c10;
+    const IADD3_NEG_CBUF: u128 = 0x004fc80007ffe0038000000002067a10;
     const VABSDIFF_S32: u128 = 0x004fc800000e02040000000302017214;
     const VABSDIFF4_S8: u128 = 0x004fc800000e00040000000302017215;
     const VABSDIFF4_S8_ACC: u128 = 0x004fc800000e08040000000302017215;
@@ -38,8 +39,22 @@ mod tests {
 
     #[test]
     fn mov_cx_validates_dynamic_constant_bank() {
-        let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None);
+        let module = translate_module(&[inst::mov_cbuf_ureg(7, 4, 0x10)], true, None, false);
         spirv_val(&module);
+    }
+
+    #[test]
+    fn mov_indexes_register_file_with_uniform_register() {
+        let mut seed = vec![0; UREG + 5];
+        seed[2] = 0x1234_5678;
+        seed[UREG + 4] = 7;
+        let program = [inst::W6_MOV_IRF_R, inst::W6_MOV_R_IRF];
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
+        assert_eq!([regs[5], regs[7]], [0x1234_5678; 2]);
+
+        seed[UREG + 4] = 255;
+        let Some((regs, _)) = run_regs(&program, &seed, &[], &[]) else { return };
+        assert_eq!(regs[5], 0);
     }
 
     #[test]
@@ -176,8 +191,9 @@ mod tests {
         let high = 0x004fc800078e02060000000302017227;
         seed[2] = u32::MAX - 1;
         seed[3] = 3;
+        seed[7] = 5;
         let Some((regs, _)) = run_regs(&[high], &seed, &[], &[]) else { return };
-        assert_eq!(regs[1], 0);
+        assert_eq!(regs[1], 4);
 
         let x = 0x004fc800000e06060000000302017224;
         seed.resize(255, 0);
@@ -249,10 +265,10 @@ mod tests {
         seed[2] = 3;
         seed[3] = 5;
         seed[ur4] = 7;
-        let Some((regs, _)) = run_regs(&[IADD3_CBUF, IADD3_UREG], &seed, &[11], &[]) else {
+        let Some((regs, _)) = run_regs(&[IADD3_CBUF, IADD3_UREG, IADD3_NEG_CBUF], &seed, &[11], &[]) else {
             return;
         };
-        assert_eq!([regs[1], regs[5]], [19, 15]);
+        assert_eq!([regs[1], regs[5], regs[6]], [19, 15, -3i32 as u32]);
     }
 
     #[test]

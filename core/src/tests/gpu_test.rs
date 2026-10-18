@@ -20,6 +20,10 @@ pub mod inst {
     const MOV_RC: u128 = 0xa02;
     const MOV_RCX: u128 = 0xa02 | 1 << 91;
     const MOV_RU: u128 = 0xc02 | 1 << 91;
+    const MOV_IRF_R: u128 = 0x478 | 1 << 91;
+    const MOV_IRF_I: u128 = 0x878 | 1 << 91;
+    const MOV_IRF_C: u128 = 0xa78 | 1 << 91;
+    const MOV_R_IRF: u128 = 0xc78 | 1 << 91;
     const KILL: u128 = 0x95b;
     const GUARD: u128 = 0xf << 12;
     const S2R: u128 = 0x919;
@@ -45,6 +49,7 @@ pub mod inst {
     const AST: u128 = 0x322 | 0xff << 24 | RC_RZ | NO_WRITE_SCOREBOARD;
     const IPA: u128 = 0x326 | 0xff << 32 | 7 << 81;
     pub const IPA_CONSTANT: u128 = 1 << 78;
+    pub const FSETP_GT: u128 = 0x20b | 4 << 76 | 7 << 84 | PP_PT;
     pub const FP_ABS_B: u128 = 1 << 62;
     pub const FP_NEG_B: u128 = 1 << 63;
     pub const FP_NEG_A: u128 = 1 << 72;
@@ -61,11 +66,19 @@ pub mod inst {
     pub const MMA_16816: u128 = 1 << 75;
     pub const MMA_F32: u128 = 1 << 76;
     pub const MMA_BF16: u128 = 1 << 82;
+    pub const MMA_1684: u128 = 1 << 78;
+    pub const MMA_TF32: u128 = 2 << 82;
+    pub const MMA_SP: u128 = 1 << 73;
+    pub const MMA_SP_16832: u128 = MMA_SP | 9 << 75;
     pub const IMMA: u128 = 0x237 | 1 << 74;
     pub const IMMA_16816: u128 = 1 << 86;
     pub const IMMA_16832: u128 = IMMA_16816 | 1 << 75;
     pub const IMMA_S8_A: u128 = 1 << 76;
     pub const IMMA_S8_B: u128 = 1 << 78;
+    pub const IMMA_8832: u128 = 1 << 85;
+    pub const IMMA_16864: u128 = IMMA_16816 | IMMA_8832;
+    pub const IMMA_4_BIT: u128 = 1 << 83 | 1 << 84;
+    pub const IMMA_SAT: u128 = 1 << 82;
     pub const LDSM: u128 = 0x83b;
     pub const LDSM_X4: u128 = 2 << 72;
     pub const LDSM_MT88: u128 = 1 << 78;
@@ -137,6 +150,12 @@ pub mod inst {
     const LZ: u128 = 1 << 87;
     pub const TLD_LZ_2D: u128 = 0xb66 | TEX_2D | LZ;
     pub const TEX_LZ_2D: u128 = 0xb60 | TEX_2D | LZ;
+    pub const TEX_LB_2D: u128 = 0xb60 | TEX_2D | 2 << 87;
+    pub const TEX_LL_2D: u128 = 0xb60 | TEX_2D | 3 << 87;
+    pub const TEX_LC_2D: u128 = 0xb60 | TEX_2D | 4 << 87;
+    pub const TEX_LB_LC_2D: u128 = 0xb60 | TEX_2D | 5 << 87;
+    pub const TEX_LC_FDV_2D: u128 = 0xb60 | TEX_2D | 6 << 87;
+    pub const TEX_DC: u128 = 1 << 78;
     pub const TXQ_DIMENSION: u128 = 0xb6f;
     const SU_2D_NEAR: u128 = 3 << 61 | 1 << 59;
     const SU_RGBA: u128 = 0xf << 72;
@@ -145,6 +164,7 @@ pub mod inst {
     pub const SUST_D_32: u128 = 0xb9d | SZ_32;
     pub const SUST_P_RGBA: u128 = 0xb9b | SU_RGBA;
     pub const SU_BA: u128 = 1 << 72;
+    pub const SUQUERY: u128 = 0xbb3;
     pub const SURED_ADD: u128 = 0x59f;
     pub const SUATOM_ADD: u128 = 0x593;
     pub const SUATOM_CAS: u128 = 0x595;
@@ -156,6 +176,7 @@ pub mod inst {
     const STS: u128 = 0x388;
     const ATOMS_ADD: u128 = 0x38c;
     const ATOMS_CAS: u128 = 0x38d;
+    const ATOMS_CAST: u128 = ATOMS_CAS | 1 << 87;
     const BAR_SYNC: u128 = 0xb1d;
     pub const BAR_RED_POPC: u128 = 2 << 77;
     pub const BAR_RED_AND: u128 = BAR_RED_POPC | 1 << 74;
@@ -179,7 +200,8 @@ pub mod inst {
     const COND_CONV: u128 = 3 << 32;
     const URB_INVERT: u128 = 1 << 30;
     const URZ: u32 = 63;
-    const F2F: u128 = 0x310;
+    const F2F: u128 = 0x304;
+    const F2F_64: u128 = 0x310;
     const F2I: u128 = 0x305;
     const F2I_64: u128 = 0x311;
     const FRND: u128 = 0x307;
@@ -216,6 +238,21 @@ pub mod inst {
     pub const W2J_BAR_ARV: u128 = 0x0001c000000020000000000000007b1d;
     pub const W2J_ATOMG_U64_ADD: u128 = 0x0001c000001ee50000000006020473a8;
     pub const W2J_ATOMS_U64_ADD: u128 = 0x000000000000040000000006ff04738c;
+    pub const W6_MOV_IRF_R: u128 = MOV_IRF_R | PT_GUARD | PIXMASK_ALL | 4 << 16 | 2 << 32;
+    pub const W6_MOV_IRF_I: u128 = MOV_IRF_I | PT_GUARD | PIXMASK_ALL | 4 << 16 | 0x1234 << 32;
+    pub const W6_MOV_IRF_C: u128 = MOV_IRF_C | PT_GUARD | PIXMASK_ALL | 4 << 16 | 1 << 54 | 4 << 40;
+    pub const W6_MOV_R_IRF: u128 = MOV_R_IRF | PT_GUARD | PIXMASK_ALL | 5 << 16 | 4 << 32;
+    pub const W6_F2F_F32_F16_H1: u128 = 0x00000000001010001000000200017304;
+    pub const W6_F2F_F16_F32_RP: u128 = 0x00000000002088000000000400037304;
+    pub const W6_F2F_F16_F64_RZ: u128 = 0x000000000030c8000000000600057310;
+    pub const W6_F2F_F64_F16_H1: u128 = 0x00000000001018001000000a00087310;
+    pub const W6_F2F_F16_F16_FLOOR: u128 = 0x00000000001048000000000d000c7304;
+    pub const W6_F2F_F16_F16_SAT: u128 = 0x00000000001028000000000f000e7304;
+    pub const W6_F2I_F16_H1: u128 = 0x000000000010d1001000001100107305;
+    pub const W6_I2F_F16_RP: u128 = 0x00000000002088000000001300127306;
+    pub const W6_FRND_F16_H1: u128 = 0x00000000001048001000001500147307;
+    pub const CVT_H1: u128 = 1 << 60;
+    pub const CVT_SAT: u128 = 1 << 77;
 
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst = IADD3_IMM | PT_GUARD | IADD3_NO_CARRY | RC_RZ;
@@ -352,6 +389,14 @@ pub mod inst {
         shared(ATOMS_CAS, rd, ra, rb, rc)
     }
 
+    pub fn atoms_cast(rd: u32, ra: u32, rb: u32, rc: u32, wide: bool) -> u128 {
+        shared(ATOMS_CAST | (wide as u128) << 74, rd, ra, rb, rc)
+    }
+
+    pub fn atoms_add_f32(rd: u32, ra: u32, rb: u32) -> u128 {
+        shared(ATOMS_ADD | 3 << 73, rd, ra, rb, 0)
+    }
+
     pub fn bar_sync() -> u128 {
         BAR_SYNC | PT_GUARD | NO_WRITE_SCOREBOARD
     }
@@ -395,6 +440,10 @@ pub mod inst {
 
     pub fn bra(offset: i64) -> u128 {
         control(BRA, 0, offset)
+    }
+
+    pub fn bra_pp(pp: u32, offset: i64) -> u128 {
+        bra(offset) & !PP_PT | (pp as u128) << 87
     }
 
     pub fn bra_upred(upq: u32, invert: bool, offset: i64) -> u128 {
@@ -498,6 +547,7 @@ pub mod inst {
     }
 
     pub mod cvt {
+        pub const F16: u32 = 1;
         pub const F32: u32 = 2;
         pub const F64: u32 = 3;
         pub const U8: u32 = 0;
@@ -513,7 +563,8 @@ pub mod inst {
     }
 
     pub fn f2f(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32, ftz: bool) -> u128 {
-        alu(F2F, rd, 0, rb) | (dst as u128) << 75 | (src as u128) << 84 | (rnd as u128) << 78 | (ftz as u128) << 80
+        let op = if dst == cvt::F64 || src == cvt::F64 { F2F_64 } else { F2F };
+        alu(op, rd, 0, rb) | (dst as u128) << 75 | (src as u128) << 84 | (rnd as u128) << 78 | (ftz as u128) << 80
     }
 
     pub fn f2i(rd: u32, rb: u32, dst: u32, src: u32, rnd: u32) -> u128 {
@@ -523,6 +574,10 @@ pub mod inst {
 
     pub fn frnd(rd: u32, rb: u32, rnd: u32) -> u128 {
         alu(FRND, rd, 0, rb) | (cvt::F32 as u128) << 75 | (cvt::F32 as u128) << 84 | (rnd as u128) << 78
+    }
+
+    pub fn frnd_f16(rd: u32, rb: u32, rnd: u32, h1: bool) -> u128 {
+        alu(FRND, rd, 0, rb) | (cvt::F16 as u128) << 75 | (cvt::F16 as u128) << 84 | (rnd as u128) << 78 | (h1 as u128) << 60
     }
 
     pub fn i2f(rd: u32, rb: u32, dst: u32, src: u32) -> u128 {
@@ -573,6 +628,12 @@ pub mod inst {
     const STRONG_GPU: u128 = 7 << 77;
     const ATOMIC: u128 = ADDR_64 | STRONG_GPU | PU_PT | COP_EN | NO_WRITE_SCOREBOARD;
     pub const ATOM: u128 = 0x38a | ATOMIC;
+    pub const ATOM_CAST: u128 = 0x38b | ATOMIC | 1 << 87;
+    pub const ATOM_CAST_64: u128 = ATOM_CAST | 2 << 73;
+    pub const ATOM_ADD_F32: u128 = ATOM | 3 << 73;
+    pub const ATOM_ADD_F16X2: u128 = ATOM | 4 << 73;
+    pub const ATOM_MIN_F16X2: u128 = ATOM_ADD_F16X2 | 1 << 87;
+    pub const ATOM_MAX_F16X2: u128 = ATOM_ADD_F16X2 | 2 << 87;
     pub const ATOMG: u128 = 0x3a8 | ATOMIC;
     pub const ATOMG_CAS: u128 = 0x3a9 | ATOMIC;
     pub const RED: u128 = 0x98e | ATOMIC;
@@ -600,6 +661,7 @@ pub mod inst {
     pub const UIMAD_WIDE: u128 = 0x2a5 | UNIFORM;
     pub const UISETP: u128 = 0x28c | UNIFORM;
     pub const ULEA: u128 = 0x291 | UNIFORM;
+    pub const UCLEA: u128 = 0x8bc | UNIFORM;
     pub const USEL: u128 = 0x287 | UNIFORM;
     pub const UMOV: u128 = 0xc82 | UNIFORM;
     pub const UMOV_IMM: u128 = 0x882;
@@ -657,7 +719,7 @@ fn run_translation_test(name: &str, instructions: &[u128]) -> TestResult {
     let start = Instant::now();
     println!("Running test: {} ({} instructions)", name, instructions.len());
     let result = catch_unwind(AssertUnwindSafe(|| {
-        translate_module(instructions, false, None).validate()
+        translate_module(instructions, false, None, false).validate()
     }));
 
     let duration = start.elapsed();
@@ -773,10 +835,15 @@ fn fixtures_match_nvdisasm() {
         (inst::mov_cbuf(5, 0, 0x10), "MOV R5, c[0x0][0x10];"),
         (inst::mov_ureg(6, 4), "MOV R6, UR4;"),
         (inst::W2J_MOV_CX, "MOV R5, cx[UR4][0x10];"),
+        (inst::W6_MOV_IRF_R, ""),
+        (inst::W6_MOV_IRF_I, ""),
+        (inst::W6_MOV_IRF_C, ""),
+        (inst::W6_MOV_R_IRF, ""),
         (inst::kill(7, false), "KILL;"),
         (inst::guard(inst::mov_imm(1, 5), 0, false), "@P0 MOV R1, 0x5;"),
         (inst::guard(inst::bra(16), 0, true), "@!P0 BRA 0x20;"),
         (inst::bra(-80), "BRA -0x40;"),
+        (inst::guard(inst::bra_pp(1, 16), 0, false), "@P0 BRA P1, 0x20;"),
         (inst::exit(), "EXIT;"),
         (inst::bssy(0, 0x40), "BSSY B0, 0x50;"),
         (inst::bsync(0), "BSYNC B0;"),
@@ -799,7 +866,9 @@ fn fixtures_match_nvdisasm() {
         (inst::W2I_DEPBAR, "DEPBAR;"),
         (inst::W2I_YIELD, "YIELD;"),
         (inst::W2I_NANOSLEEP, "NANOSLEEP 0x0;"),
+        (inst::W2I_NANOSLEEP | (1_000_000u128 << 32), "NANOSLEEP 0xf4240;"),
         (inst::W2I_PMTRIG, "PMTRIG 0x0;"),
+        (inst::W2I_PMTRIG | (17u128 << 32), "PMTRIG 0x11;"),
         (inst::W2I_ERRBAR, "ERRBAR;"),
         (inst::W2I_CSMTEST, "CSMTEST.INVALID0.F.AND P0, P0, 0x0, PT;"),
         (inst::W2I_CCTLT, "CCTLT.IVALL;"),
@@ -826,6 +895,10 @@ fn fixtures_match_nvdisasm() {
         (inst::fmnmx(1, 2, 3, 0, true) | inst::FP_NEG_A | inst::FP_ABS_B, "FMNMX R1, -R2, |R3|, !P0;"),
         (inst::mufu(1, inst::MUFU_RCP, 3), "MUFU.RCP R1, R3 ;"),
         (inst::mufu(1, inst::MUFU_TANH, 3), "MUFU.TANH R1, R3 ;"),
+        (inst::mufu(8, inst::MUFU_COS, 11), "MUFU.COS R8, R11 ;"),
+        (inst::mufu(9, inst::MUFU_SIN, 11), "MUFU.SIN R9, R11 ;"),
+        (inst::mufu(13, inst::MUFU_LG2, 13), "MUFU.LG2 R13, R13 ;"),
+        (inst::alu(inst::FSETP_GT ^ inst::IMM_B, 0, 13, 256.0f32.to_bits()), "FSETP.GT.AND P0, PT, R13, 256, PT;"),
         (0x004fc800078e02090000000700077224, "IMAD R7, R0, R7, R9 ;"),
         (0x004fc800078e18ff0000000302017211, "LEA R1, R2, R3, 0x3 ;"),
         (0x004fc80003906270000000030200720c, "ISETP.GE.AND P0, P1, R2, R3, PT ;"),
@@ -903,6 +976,8 @@ fn fixtures_match_nvdisasm() {
         (inst::alu(inst::R2UR_OR, 3, 5, 0), "R2UR.OR PT, UR3, R5 ;"),
         (inst::alu(inst::USEL ^ inst::IMM_B | inst::preds(0, 0, 1, 0), 4, 3, 7), "USEL UR4, UR3, 0x7, UP1;"),
         (inst::alu3(inst::ULEA | inst::lea_shift(3) | inst::preds(7, 0, 0, 0), 6, 3, 1, 63), "ULEA UR6, UR3, UR1, 0x3;"),
+        (inst::alu(inst::UCLEA | 4 << 73, 14, 10, 0x30), "UCLEA UR14, UP0, UR10, 0x30, 0x4;"),
+        (inst::alu(inst::UCLEA | 0x400 | 2 << 73 | inst::preds(7, 0, 0, 0), 14, 10, 8), "UCLEA UR14, UPT, UR10, UR8, 0x2;"),
         (inst::alu3(inst::UIMAD_WIDE ^ inst::IMM_B | inst::preds(7, 0, 0, 0), 8, 3, 0x10, 10), "UIMAD.WIDE.U32 UR8, UR3, 0x10, UR10;"),
         (inst::alu3(inst::UIADD3_64 ^ inst::IMM_B | inst::preds(7, 7, 7, 7), 12, 10, u32::MAX, 63), "UIADD3.64 UR12, UR10, -0x1, URZ;"),
         (inst::alu(inst::UISETP | inst::ICMP_LT | inst::preds(0, 1, 7, 0), 0, 5, 6), "UISETP.LT.U32.AND UP0, UP1, UR5, UR6, UPT;"),
@@ -920,6 +995,9 @@ fn fixtures_match_nvdisasm() {
         (inst::lds(6, 255), "LDS R6, [RZ] ;"),
         (inst::atoms_add(4, 255, 5), "ATOMS.ADD R4, [RZ], R5 ;"),
         (inst::atoms_cas(7, 255, 8, 9), "ATOMS.CAS R7, [RZ], R8, R9 ;"),
+        (inst::atoms_cast(4, 255, 5, 6, false), "ATOMS.CAST R4, [RZ], R5, R6 ;"),
+        (inst::atoms_cast(4, 255, 6, 8, true), "ATOMS.CAST.64 R4, [RZ], R6, R8 ;"),
+        (inst::atoms_add_f32(4, 255, 5), "ATOMS.ADD.INVALID3 R4, [RZ], R5 ;"),
         (inst::bar_sync(), "BAR.SYNC 0x0 ;"),
         (inst::W2J_BAR_RED_POPC, "BAR.RED.POPC R2, R2, P0 ;"),
         (inst::W2J_BAR_SCAN, "BAR.SCAN R2, R2, P0 ;"),
@@ -940,14 +1018,33 @@ fn fixtures_match_nvdisasm() {
         (inst::frnd(4, 5, inst::cvt::RN), "FRND R4, R5 ;"),
         (inst::i2f(6, 7, inst::cvt::F32, inst::cvt::S32), "I2F R6, R7 ;"),
         (inst::i2f(11, 12, inst::cvt::F32, inst::cvt::U64), "I2F.U64 R11, R12 ;"),
+        (inst::i2f(17, 0, inst::cvt::F32, inst::cvt::U32) | (inst::cvt::RP as u128) << 78, "I2F.U32.RP R17, R0 ;"),
+        (inst::W6_F2F_F32_F16_H1, "F2F.F32.F16 R1, R2.H1 ;"),
+        (inst::W6_F2F_F16_F32_RP, "F2F.F16.F32.RP R3, R4 ;"),
+        (inst::W6_F2F_F16_F64_RZ, "F2F.F16.F64.RZ R5, R6 ;"),
+        (inst::W6_F2F_F64_F16_H1, "F2F.F64.F16 R8, R10.H1 ;"),
+        (inst::W6_F2F_F16_F16_FLOOR, ""),
+        (inst::W6_F2F_F16_F16_SAT, ""),
+        (inst::W6_F2I_F16_H1, "F2I.F16.TRUNC R16, R17.H1 ;"),
+        (inst::W6_I2F_F16_RP, "I2F.F16.U32.RP R18, R19 ;"),
+        (inst::W6_FRND_F16_H1, "FRND.F16.FLOOR R20, R21.H1 ;"),
         (inst::i2i(8, 9, inst::cvt::U8), "I2I.U8.S32.SAT R8, R9;"),
         (inst::alu(inst::ATOM, 4, 2, 5), "ATOM.E.ADD.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::stg(10, 0, 6) ^ inst::SZ_32, "STG.E.U8 [R10], R6 ;"),
         (inst::alu(inst::ATOMG | inst::ATOM_MAX, 4, 2, 5), "ATOMG.E.MAX.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::alu(inst::ATOMG | inst::ATOM_MIN | inst::S32, 6, 8, 5), "ATOMG.E.MIN.S32.STRONG.GPU PT, R6, [R8], R5 ;"),
         (inst::alu3(inst::ATOMG_CAS, 4, 2, 5, 6), "ATOMG.E.CAS.STRONG.GPU PT, R4, [R2], R5, R6 ;"),
+        (inst::alu3(inst::ATOM_CAST, 4, 2, 5, 6), "ATOM.E.CAST.STRONG.GPU PT, R4, [R2], R5, R6 ;"),
+        (inst::alu3(inst::ATOM_CAST_64, 4, 2, 6, 8), "ATOM.E.CAST.64.STRONG.GPU PT, R4, [R2], R6, R8 ;"),
+        (inst::alu(inst::ATOM_ADD_F32, 4, 2, 5), "ATOM.E.ADD.F32.FTZ.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOM_ADD_F16X2, 4, 2, 5), "ATOM.E.ADD.F16x2.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOM_MIN_F16X2, 4, 2, 5), "ATOM.E.MIN.F16x2.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
+        (inst::alu(inst::ATOM_MAX_F16X2, 4, 2, 5), "ATOM.E.MAX.F16x2.RN.STRONG.GPU PT, R4, [R2], R5 ;"),
         (inst::W2J_ATOMG_U64_ADD, "ATOMG.E.ADD.64.STRONG.GPU PT, R4, [R2], R6 ;"),
         (inst::W2J_ATOMS_U64_ADD, "ATOMS.ADD.64 R4, [RZ], R6 ;"),
+        (0x003e22000c80043f00000000ff027f8c, "ATOMS.ARRIVE.64 R2, [URZ] ;"),
+        (0x000fe2000d00003f00000000ffff7f8c, "ATOMS.POPC.INC.32 RZ, [URZ] ;"),
+        (0x000f62000c9ea54400000000ff047f8a, "ATOM.E.ARRIVE.64.STRONG.SM PT, R4, [UR4] ;"),
         (inst::W2J_F2FP_RZ_RELU_SATFINITE, "F2FP.SATFINITE.RELU.PACK_AB.RZ R20, R6, R7;"),
         (inst::W2J_I2FP_RZ, "I2FP.F32.U32.RZ R23, R11;"),
         (inst::W2J_UF2FP, "UF2FP.PACK_AB UR10, UR6, UR7;"),
@@ -970,12 +1067,19 @@ fn fixtures_match_nvdisasm() {
         (inst::texture(inst::TLD_LZ_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD.LZ R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TLD_LZ_2D, 8, 0xff, 2, 3, 0x10, 0xa), "TLD.LZ RZ, R8, R2, 0x3, 0x4, 2D, 0xa ;"),
         (inst::texture(inst::TEX_LZ_2D, 8, 10, 2, 3, 0x10, 0xf), "TEX.LZ R10, R8, R2, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LB_2D, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LB R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LL_2D, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LL R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TEX_LC_2D, 8, 12, 4, 3, 0x10, 0xf), "TEX.LC R12, R8, R4, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LB_LC_2D, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LB.LC R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
+        (inst::texture(inst::TEX_LC_FDV_2D, 8, 12, 4, 3, 0x10, 0xf), "TEX.LC.FDV R12, R8, R4, 0x3, 0x4, 2D ;"),
+        (inst::with_rb(inst::texture(inst::TEX_LZ_2D | inst::TEX_DC, 8, 12, 4, 3, 0x10, 0xf), 6), "TEX.LZ.DC R12, R8, R4, R6, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TXQ_DIMENSION, 4, 6, 0xff, 3, 0x10, 0xb), "TXQ R6, R4, RZ, TEX_HEADER_DIMENSION, 0x3, 0x4, 0xb ;"),
         (inst::surface(inst::SUST_P_RGBA, 0xff, 2, 8, 3, 0x10), "SUST.P.2D [R2], R8, 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_D_32, 4, 2, 0xff, 3, 0x10), "SULD.D.2D R4, [R2], 0x3, 0x4 ;"),
         (inst::surface(inst::SUST_D_32, 0xff, 2, 5, 3, 0x10), "SUST.D.2D [R2], R5, 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_P_RGBA, 12, 2, 0xff, 3, 0x10), "SULD.P.2D R12, [R2], 0x3, 0x4 ;"),
         (inst::surface(inst::SULD_D_32 | inst::SU_BA, 8, 6, 0xff, 0, 0x178), "SULD.D.BA.2D R8, [R6], 0x0, 0x5e ;"),
+        (inst::alu(inst::SUQUERY, 4, 2, 0) | 1 << 81 | 0x10 << 40, "SUQUERY.1D P1, R4, [R2], COMP_STATUS, 0x0, 0x10 ;"),
         (inst::texture(inst::TLD4_R_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.R R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::texture(inst::TLD4_G_2D, 4, 6, 2, 3, 0x10, 0xf), "TLD4.G R6, R4, R2, 0x3, 0x4, 2D ;"),
         (inst::with_rb(inst::texture(inst::TXD_2D, 12, 14, 2, 3, 0x10, 0xf), 4), "TXD R14, R12, R2, R4, 0x3, 0x4, 2D ;"),
@@ -990,6 +1094,12 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::HMMA | inst::MMA_16816, 4, 8, 12, 16), "HMMA.16816.F16 R4, R8, R12, R16 ;"),
         (inst::alu3(inst::IMMA | inst::IMMA_16816, 4, 8, 12, 16), "IMMA.16816.U8.U8 R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S8.S8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_1684 | inst::MMA_F32 | inst::MMA_TF32, 4, 8, 12, 16), "HMMA.1684.F32.TF32 R4, R8, R12, R16 ;"),
+        (inst::alu3(inst::IMMA, 4, 8, 12, 16), "IMMA.8816.U8.U8 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_8832 | inst::IMMA_4_BIT, 4, 8, 12, 16), "IMMA.8832.U4.U4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_4_BIT | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16832.S4.S4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16864 | inst::IMMA_4_BIT | inst::IMMA_S8_A | inst::IMMA_S8_B, 4, 8, 12, 16), "IMMA.16864.S4.S4 R4, R8.ROW, R12.COL, R16 ;"),
+        (inst::alu3(inst::IMMA | inst::IMMA_16832 | inst::IMMA_S8_A | inst::IMMA_S8_B | inst::IMMA_SAT, 4, 8, 12, 16), "IMMA.16832.S8.S8.SAT R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4, 4, 2, 0), "LDSM.16.M88.4 R4, [R2] ;"),
         (inst::alu(inst::LDSM | inst::LDSM_X4 | inst::LDSM_MT88, 12, 2, 0), "LDSM.16.MT88.4 R12, [R2] ;"),
         (inst::alu3(inst::DMMA, 4, 8, 12, 16), "DMMA.884 R4, R8, R12, R16 ;"),
@@ -1002,6 +1112,9 @@ fn fixtures_match_nvdisasm() {
         (inst::ast(0x70, 0, 4), "AST.128 a[0x70], R0 ;"),
         (inst::ipa(1, 0x84, 0), "IPA.PASS R1, a[0x84] ;"),
         (inst::ipa(3, 0x3fc, inst::IPA_CONSTANT), "IPA.CONSTANT R3, a[0x3fc] ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 3 << 48, "HMMA.SP.16816.F32 R4, R8, R12, R16, R20, 0x3 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 1 << 48, "HMMA.SP.16832.F32 R4, R8, R12, R16, R20, 0x1 ;"),
+        (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32 | inst::MMA_BF16, 4, 8, 12, 16) | 20 << 40, "HMMA.SP.16832.F32.BF16 R4, R8, R12, R16, R20, 0x0 ;"),
     ];
     use crate::tests::gpu::fp::fp16::tests as fp16;
     for (word, expected) in fixtures.iter().copied().chain(fp16::arith()).chain(fp16::compare()).chain(fp16::convert()) {
@@ -1024,6 +1137,6 @@ fn fixtures_match_nvdisasm() {
 #[test]
 fn mov_immediate_passes_spirv_val() {
     use crate::tests::gpu::harness::spirv_val;
-    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None);
+    let module = translate_module(&[inst::mov_imm(1, 0xCAFEBABE)], false, None, false);
     spirv_val(&module);
 }

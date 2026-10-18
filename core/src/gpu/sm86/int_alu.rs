@@ -12,7 +12,7 @@ impl<'a> Decoder<'a> {
         if is_uniform(inst) { self.load_ureg_pair(index & 0x3f) } else { self.load_pair(index & 0xff) }
     }
 
-    fn store_alu_pair(&mut self, inst: u128, val: u32) {
+    pub(super) fn store_alu_pair(&mut self, inst: u128, val: u32) {
         let rd = (inst >> 16) as u32;
         if !is_uniform(inst) {
             return self.store_pair(rd & 0xff, val);
@@ -39,27 +39,8 @@ impl<'a> Decoder<'a> {
         if neg { self.ir.emit_isub(self.type_u32[1], self.const_u32_0, val) } else { val }
     }
 
-    pub fn bitextract(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _num = (((inst >> 53) & 0x3) << 0);
-        let _srchalf = (((inst >> 56) & 0x1) << 0);
-        let _dstbyte = (((inst >> 57) & 0x3) << 0);
-        let _datasize = (((inst >> 61) & 0x3) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _e = (((inst >> 72) & 0x1) << 0);
-        let _sz = (((inst >> 73) & 0x1) << 0);
-        let _size = (((inst >> 75) & 0x3) << 0);
-        let _mdidx = (((inst >> 78) & 0xf) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("BITEXTRACT");
+    pub fn bitextract(&mut self, _inst: u128) {
+        panic!("BITEXTRACT is masked on SM86 (class gather_bitextract_ MASK_INSTR_PREDICATE = (1)): nvdisasm does not decode it and ptxas feeds mma.sp metadata to HMMA.SP as a register");
     }
     pub fn bmsk(&mut self, inst: u128) {
         let ty = self.type_u32[1];
@@ -191,14 +172,6 @@ impl<'a> Decoder<'a> {
             let ty = self.type_u64();
             let [a, b] = [a, b].map(|x| if signed { self.ir.emit_s_convert(ty, x) } else { self.ir.emit_u_convert(ty, x) });
             let product = self.ir.emit_imul(ty, a, b);
-            if mode == 7 {
-                let shift = self.ir.emit_constant_typed(ty, 32u64);
-                let hi = self.ir.emit_shift_right_logical(ty, product, shift);
-                let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
-                let result = self.ir.emit_iadd(self.type_u32[1], hi, c32);
-                let result = self.ir.emit_iadd(self.type_u32[1], result, carry);
-                return self.store_alu(inst, result);
-            }
             let c = match form {
                 2 => self.ir.emit_s_convert(ty, c32),
                 3 | 7 => self.alu_src_pair(inst),
@@ -215,6 +188,12 @@ impl<'a> Decoder<'a> {
             let carry = self.ir.emit_u_convert(ty, carry);
             let result = self.ir.emit_iadd(ty, product, c);
             let result = self.ir.emit_iadd(ty, result, carry);
+            if mode == 7 {
+                let shift = self.ir.emit_constant_typed(ty, 32u64);
+                let hi = self.ir.emit_shift_right_logical(ty, result, shift);
+                let hi = self.ir.emit_u_convert(self.type_u32[1], hi);
+                return self.store_alu(inst, hi);
+            }
             self.store_alu_pair(inst, result);
         } else {
             let product = self.ir.emit_imul(self.type_u32[1], a, b);
@@ -300,6 +279,19 @@ impl<'a> Decoder<'a> {
         const MOV_RC: u32 = 0xa02;
         const MOV_RCX: u32 = 0x1a02;
         const MOV_RU: u32 = 0x1c02;
+        const MOV_IRF_R: u32 = 0x1478;
+        const MOV_IRF_I: u32 = 0x1878;
+        const MOV_IRF_C: u32 = 0x1a78;
+        const MOV_R_IRF: u32 = 0x1c78;
+        let indexed_ptr = |this: &mut Self, ur| {
+            let index = this.load_ureg(ur);
+            let limit = this.cached_const_u32(MAX_REG_COUNT as u32);
+            let valid = this.ir.emit_uless_than(this.type_bool[1], index, limit);
+            let index = this.ir.emit_select(this.type_u32[1], valid, index, this.const_u32_0);
+            let array = this.ir.emit_access_chain(this.type_ptr_abstract_state_regs, this.var_abstract_state, &[this.const_u32_0]);
+            let ptr = this.ir.emit_access_chain(this.type_ptr_u32[1], array, &[index]);
+            (ptr, valid)
+        };
         let val = match opcode(inst) {
             MOV_RR | MOV_RI | MOV_RC | MOV_RU => self.alu_src(inst),
             MOV_RCX => {
@@ -307,7 +299,27 @@ impl<'a> Decoder<'a> {
                 let offset = self.cached_const_u32(((inst >> 40 & 0x3fff) << 2) as u32);
                 self.load_dynamic_cbuf(bank, offset)
             }
-            _ => todo!("MOV indexed register-file forms are not constant-buffer moves"),
+            MOV_IRF_R | MOV_IRF_I | MOV_IRF_C => {
+                let field = (inst >> 32) as u32;
+                let val = match opcode(inst) {
+                    MOV_IRF_R => self.load_register(field & 0xff),
+                    MOV_IRF_I => self.cached_const_u32(field),
+                    _ => {
+                        let offset = self.cached_const_u32((field >> 8 & 0x3fff) << 2);
+                        self.load_cbuf(ResourceKind::Cbuf(field >> 22 & 0x1f), offset)
+                    }
+                };
+                let (ptr, valid) = indexed_ptr(self, (inst >> 16 & 0x3f) as u32);
+                let old = self.ir.emit_load(self.type_u32[1], ptr);
+                let val = self.ir.emit_select(self.type_u32[1], valid, val, old);
+                return self.ir.emit_store(ptr, val);
+            }
+            MOV_R_IRF => {
+                let (ptr, valid) = indexed_ptr(self, (inst >> 32 & 0x3f) as u32);
+                let val = self.ir.emit_load(self.type_u32[1], ptr);
+                self.ir.emit_select(self.type_u32[1], valid, val, self.const_u32_0)
+            }
+            op => panic!("invalid MOV opcode {op:#x}"),
         };
         self.store_register((inst >> 16 & 0xff) as u32, val);
     }
@@ -411,7 +423,7 @@ impl<'a> Decoder<'a> {
             let (b, c) = self.srcs_bc(inst);
             [self.alu_reg(inst, 24), b, c]
         };
-        let negated = [inst >> 72 & 1 != 0, inst >> 9 & 7 == 1 && inst >> 63 & 1 != 0, inst >> 75 & 1 != 0];
+        let negated = [inst >> 72 & 1 != 0, inst >> 9 & 7 != 4 && inst >> 63 & 1 != 0, inst >> 75 & 1 != 0];
         let [a, b, c] = [0, 1, 2].map(|i| if negated[i] { self.ir.emit_not(ty, srcs[i]) } else { srcs[i] });
         // -x is ~x + 1, so without .X every negated operand adds one; .X adds the carry predicates instead.
         let carry_in = if inst >> 74 & 1 != 0 {

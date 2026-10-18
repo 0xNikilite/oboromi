@@ -1,7 +1,8 @@
 //! ffi bridge for the qt/c++ gui. panics are caught and forwarded to the
 //! log callback to avoid unwinding across the c boundary.
 
-use crate::display::{CALLBACK, DISPLAY, FrameCallback};
+use crate::display::{CALLBACK, DISPLAY, FrameCallback, attach_surface};
+use ash::vk;
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -74,6 +75,16 @@ pub extern "C" fn oboromi_render_test_frame() -> bool {
     )
 }
 
+/// renders the julia set demo at `seconds` and presents it, false if vulkan
+/// is missing or the dispatch fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_demo_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::frame::render_demo_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
 /// generation of the last presented frame, 0 until the guest presents one.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_generation() -> u64 {
@@ -94,14 +105,15 @@ pub unsafe extern "C" fn oboromi_frame_read(
     width: *mut u32,
     height: *mut u32,
 ) -> usize {
-    let frame = DISPLAY.lock().unwrap();
-    let len = frame.pixels.len();
+    let mut frame = DISPLAY.lock().unwrap();
     unsafe {
-        if !dst.is_null() && len <= cap {
-            std::ptr::copy_nonoverlapping(frame.pixels.as_ptr(), dst, len);
-        }
         *width = frame.width;
         *height = frame.height;
+    }
+    let pixels = frame.pixels();
+    let len = pixels.len();
+    if !dst.is_null() && len <= cap {
+        unsafe { std::ptr::copy_nonoverlapping(pixels.as_ptr(), dst, len) };
     }
     len
 }
@@ -110,4 +122,25 @@ pub unsafe extern "C" fn oboromi_frame_read(
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_set_callback(callback: FrameCallback, user: *mut c_void) {
     *CALLBACK.lock().unwrap() = (callback, user as usize);
+}
+
+/// creates the vulkan device with window surface support and returns its VkInstance for the gui to
+/// create surfaces with, null if vulkan or its surface extensions are missing.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_vk_instance() -> vk::Instance {
+    match crate::gpu::surface_device() {
+        Ok(state) if state.surface.is_some() => state.instance.handle(),
+        _ => vk::Instance::null(),
+    }
+}
+
+/// presents every frame into `surface`, a VkSurfaceKHR of that instance, sized `width` x `height`
+/// pixels. call it again on resize and expose, and with a null surface before destroying it.
+/// false if the device cannot present to it.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_display_surface(surface: vk::SurfaceKHR, width: u32, height: u32) -> bool {
+    matches!(
+        catch_unwind(|| attach_surface(surface, width, height)),
+        Ok(Ok(()))
+    )
 }

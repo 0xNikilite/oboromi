@@ -195,6 +195,10 @@ void oboromi_run_gpu_tests(LineCallback cb);
 /// or the dispatch fails. blocks, so call it from a worker thread.
 bool oboromi_render_test_frame();
 
+/// renders the julia set demo at `seconds` and presents it, false if vulkan
+/// is missing or the dispatch fails. blocks, so call it from a worker thread.
+bool oboromi_render_demo_frame(float seconds);
+
 /// generation of the last presented frame, 0 until the guest presents one.
 uint64_t oboromi_frame_generation();
 
@@ -209,5 +213,14 @@ uintptr_t oboromi_frame_read(uint8_t *dst, uintptr_t cap, uint32_t *width, uint3
 
 /// `callback` runs on the presenting thread after every frame, null clears it.
 void oboromi_frame_set_callback(FrameCallback callback, void *user);
+
+/// creates the vulkan device with window surface support and returns its VkInstance for the gui to
+/// create surfaces with, null if vulkan or its surface extensions are missing.
+void *oboromi_vk_instance();
+
+/// presents every frame into `surface`, a VkSurfaceKHR of that instance, sized `width` x `height`
+/// pixels. call it again on resize and expose, and with a null surface before destroying it.
+/// false if the device cannot present to it.
+bool oboromi_display_surface(uint64_t surface, uint32_t width, uint32_t height);
 
 }  // extern "C"

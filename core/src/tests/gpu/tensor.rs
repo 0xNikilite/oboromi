@@ -18,6 +18,8 @@ mod tests {
     const F16: Sources = Sources { per_reg: 2, pack: h };
     const BF16: Sources = Sources { per_reg: 2, pack: |x| x.to_bits() >> 16 };
     const INT8: Sources = Sources { per_reg: 4, pack: |x| x as i32 as u32 & 0xff };
+    const INT4: Sources = Sources { per_reg: 8, pack: |x| x as i32 as u32 & 0xf };
+    const TF32: Sources = Sources { per_reg: 1, pack: f32::to_bits };
 
     // Lane 4g + t holds A rows g and g + 8 and B column g at the per_reg consecutive k from per_reg * t, 4 * per_reg further
     // in every second A register and in every B register, and C/D rows g and g + 8 at columns 2t, 2t + 1.
@@ -99,6 +101,12 @@ mod tests {
         assert_d(HMMA | MMA_F32, 8, &F16, SMALL_INTS, f32::to_bits);
     }
 
+    #[test]
+    fn hmma_tf32_reduces_over_four_and_eight_k() {
+        assert_d(HMMA | MMA_1684 | MMA_F32 | MMA_TF32, 4, &TF32, SMALL_INTS, f32::to_bits);
+        assert_d(HMMA | MMA_F32 | MMA_TF32, 8, &TF32, SMALL_INTS, f32::to_bits);
+    }
+
     // 2048 + 8 * 17/32 rounds to 2052 and 2052 + 8 * 17/32 to 2056, so D is rounded per group of eight k; rounding after
     // every product would stay at 2048.
     #[test]
@@ -115,6 +123,51 @@ mod tests {
         let unsigned: [Matrix; 3] = [|row, k| ((row * 37 + k * 11) % 256) as f32, |k, col| ((k * 13 + col * 71) % 256) as f32, |row, col| (row * 8 + col) as f32];
         assert_d(IMMA | IMMA_16816, 16, &INT8, unsigned, |x| x as i32 as u32);
         assert_d(IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B, 32, &INT8, SMALL_INTS, |x| x as i32 as u32);
+    }
+
+    // An 8-row tile holds A row g in RA and D row g in RD, RD + 1, so it is the top half of the 16-row layout.
+    #[test]
+    fn imma_sums_nibbles_and_8_row_tiles() {
+        let unsigned: [Matrix; 3] = [|row, k| ((row * 7 + k * 3) % 16) as f32, |k, col| ((k * 5 + col * 11) % 16) as f32, |row, col| (row * 8 + col) as f32];
+        for (word, k, sources, matrices, d_regs) in [
+            (IMMA | IMMA_S8_A | IMMA_S8_B, 16, &INT8, SMALL_INTS, 2),
+            (IMMA | IMMA_8832 | IMMA_4_BIT, 32, &INT4, unsigned, 2),
+            (IMMA | IMMA_16832 | IMMA_4_BIT | IMMA_S8_A | IMMA_S8_B, 32, &INT4, SMALL_INTS, 4),
+            (IMMA | IMMA_16864 | IMMA_4_BIT | IMMA_S8_A | IMMA_S8_B, 64, &INT4, SMALL_INTS, 4),
+        ] {
+            let Some(lanes) = mma(word, k, sources, matrices, Some(|x| x as i32 as u32)) else { return };
+            for (lane, (got, want)) in lanes.iter().enumerate() {
+                assert_eq!(got[..d_regs], want.map(|x| x as i32 as u32)[..d_regs], "lane {lane} {word:#x}");
+            }
+        }
+    }
+
+    // Rows 0 mod 3 start at 2^31 - 128 and rows 1 mod 3 at its negation, and add at least 1600 of their sign; f32 to i32 saturates.
+    #[test]
+    fn imma_sat_clamps_overflow_to_s32() {
+        let matrices: [Matrix; 3] = [
+            |row, _| if row % 3 == 1 { -100.0 } else { 100.0 },
+            |k, col| ((k + col) % 5 + 1) as f32,
+            |row, col| [2147483520.0, -2147483520.0, (row * 8 + col) as f32][row % 3],
+        ];
+        assert_d(IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT, 32, &INT8, matrices, |x| x as i32 as u32);
+    }
+
+    #[test]
+    fn imma_sat_clamps_after_each_half_of_the_products() {
+        let seeds: Vec<Vec<u32>> = (0..32).map(|_| {
+            let mut regs = vec![0; RC + 4];
+            regs[RA..RA + 4].fill(u32::from_le_bytes([100; 4]));
+            regs[RB] = u32::from_le_bytes([1; 4]);
+            regs[RB + 1] = u32::from_le_bytes([u8::MAX; 4]);
+            regs[RC..RC + 4].fill((i32::MAX - 100) as u32);
+            regs
+        }).collect();
+        let word = IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT;
+        let Some(lanes) = run(&[alu3(word, RD as u32, RA as u32, RB as u32, RC as u32)], &seeds) else { return };
+        for (lane, regs) in lanes.iter().enumerate() {
+            assert_eq!(regs[RD..RD + 4], [(i32::MAX - 1600) as u32; 4], "lane {lane}");
+        }
     }
 
     // Lane L stores row L of the four 8x8 tiles at row slot 5L mod 32 and hands that address to LDSM, so a lane reading
@@ -224,6 +277,20 @@ mod tests {
         for (lane, regs) in (0..32).zip(lanes) {
             let (g, t) = quad(lane);
             assert_eq!(regs[RD], half(2 * t + 1, g) << 16 | half(2 * t, g), "lane {lane}");
+        }
+    }
+
+    // Small integers sum exactly in any order, so both paths agree exactly when the fragment-to-tile mapping is right.
+    #[test]
+    fn cooperative_hmma_matches_loops_on_exact_sums() {
+        use crate::tests::gpu::silicon::{replay_tensor, tensor_fixtures, tensor_program};
+        let Some(state) = crate::gpu::device().ok().filter(|d| !d.cooperative_f16_tiles.is_empty()) else {
+            return eprintln!("skipping: no VK_KHR_cooperative_matrix f16 tiles");
+        };
+        let fixtures = tensor_fixtures().into_iter().filter(|f| f.id.contains("/small-integers/") && crate::gpu::sm86::f16_hmma_shape(*tensor_program(f).last().unwrap()).is_some());
+        for fixture in fixtures {
+            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force)));
+            assert_eq!(cooperative, loops, "{}", fixture.id);
         }
     }
 }

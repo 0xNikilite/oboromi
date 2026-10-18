@@ -1,6 +1,9 @@
 #include "DisplayWidget.h"
 
 #include <QPainter>
+#include <QPlatformSurfaceEvent>
+#include <QVulkanInstance>
+#include <QWindow>
 
 #include "oboromi_core.h"
 
@@ -11,6 +14,50 @@ extern "C" void postFrameReady(void *widget) {
     QMetaObject::invokeMethod(static_cast<DisplayWidget *>(widget), "frameReady", Qt::QueuedConnection);
 }
 
+class VulkanDisplay : public QWindow {
+public:
+    explicit VulkanDisplay(QVulkanInstance *instance) {
+        setSurfaceType(VulkanSurface);
+        setVulkanInstance(instance);
+    }
+
+protected:
+    void exposeEvent(QExposeEvent *) override { attach(); }
+    void resizeEvent(QResizeEvent *) override { attach(); }
+
+    bool event(QEvent *event) override {
+        if (event->type() == QEvent::PlatformSurface &&
+            static_cast<QPlatformSurfaceEvent *>(event)->surfaceEventType() ==
+                QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed)
+            oboromi_display_surface(0, 0, 0);
+        return QWindow::event(event);
+    }
+
+private:
+    void attach() {
+        if (!isExposed()) return;
+        const QSize pixels = size() * devicePixelRatio();
+        const auto surface = uint64_t(QVulkanInstance::surfaceForWindow(this));
+        if (!oboromi_display_surface(surface, pixels.width(), pixels.height()))
+            qWarning("cannot present into the vulkan surface");
+    }
+};
+
+}
+
+QWidget *createDisplay(QWidget *parent) {
+    // adopts the core's instance and outlives every window, so it is never destroyed
+    static QVulkanInstance *instance = []() -> QVulkanInstance * {
+        const auto handle = static_cast<VkInstance>(oboromi_vk_instance());
+        if (!handle) return nullptr;
+        auto *vulkan = new QVulkanInstance;
+        vulkan->setVkInstance(handle);
+        if (vulkan->create()) return vulkan;
+        delete vulkan;
+        return nullptr;
+    }();
+    if (!instance) return new DisplayWidget(parent);
+    return QWidget::createWindowContainer(new VulkanDisplay(instance), parent);
 }
 
 DisplayWidget::DisplayWidget(QWidget *parent) : QWidget(parent) {

@@ -77,15 +77,21 @@ impl<'a> Decoder<'a> {
         let rd = (((inst >> 16) & 0xff) << 0);
         let rnd = ((inst >> 78) & 3) as u32;
         let ftz = ((inst >> 80) & 1) != 0;
-        let fmt = (((inst >> 84) & 0x7) << 3) | (((inst >> 75) & 0x7) << 0);
-        let f64_ty = self.type_f64();
-        let val = match fmt {
-            19 => {
+        let dstfmt = ((inst >> 75) & 3) as u32;
+        let srcfmt = ((inst >> 84) & 3) as u32;
+        let sat = inst >> 77 & 1 != 0;
+        if dstfmt == 1 && srcfmt == 1 && (rnd == 1 || sat) {
+            panic!("F2F.F16.F16 modifier is illegal instruction on silicon");
+        }
+        let val = match (dstfmt, srcfmt) {
+            (3, 2) => {
                 let val = self.fp_alu_src(inst, ftz);
+                let f64_ty = self.type_f64();
                 self.ir.emit_f_convert(f64_ty, val)
             }
-            26 => {
+            (2, 3) => {
                 let val = self.fp64_alu_src(inst);
+                let f64_ty = self.type_f64();
                 let nearest = self.ir.emit_f_convert(self.type_f32[1], val);
                 self.ir.emit_decorate(nearest, spirv::decoration::NO_CONTRACTION, &[]);
                 let mut bits = self.bitcast_u32(nearest);
@@ -122,7 +128,46 @@ impl<'a> Decoder<'a> {
                 self.store_register(rd as u32, bits);
                 return;
             }
-            _ => todo!("F2F format {fmt} requires f16 support"),
+            (2, 1) => {
+                let val = self.f16_alu_src(inst, ftz);
+                let bits = self.canonical_nan_bits(val);
+                self.store_register(rd as u32, bits);
+                return;
+            }
+            (3, 1) => {
+                let val = self.f16_alu_src(inst, ftz);
+                let f64_ty = self.type_f64();
+                let converted = self.ir.emit_f_convert(f64_ty, val);
+                let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+                let u64_ty = self.type_u64();
+                let canonical = self.ir.emit_constant_typed(u64_ty, 0x7fff_ffff_ffff_ffffu64);
+                let bits = self.ir.emit_bitcast(u64_ty, converted);
+                let bits = self.ir.emit_select(u64_ty, nan, canonical, bits);
+                self.store_pair(rd as u32, bits);
+                return;
+            }
+            (1, src) => {
+                let (mut val, src_f64) = match src {
+                    1 => {
+                        let val = self.f16_alu_src(inst, ftz);
+                        let val = self.glsl(ROUNDING[rnd as usize], self.type_f32[1], &[val]);
+                        (val, false)
+                    }
+                    2 => (self.fp_alu_src(inst, ftz), false),
+                    3 => (self.fp64_alu_src(inst), true),
+                    _ => panic!("invalid F2F source format {src}"),
+                };
+                if sat {
+                    let ty = if src_f64 { self.type_f64() } else { self.type_f32[1] };
+                    let zero = if src_f64 { self.ir.emit_constant_typed(ty, 0.0f64) } else { self.ir.emit_constant_typed(ty, 0.0f32) };
+                    let one = if src_f64 { self.ir.emit_constant_typed(ty, 1.0f64) } else { self.ir.emit_constant_typed(ty, 1.0f32) };
+                    val = self.glsl(spirv::glsl::N_CLAMP, ty, &[val, zero, one]);
+                }
+                let bits = self.pack_f16_round(val, src_f64, if src == 1 { 0 } else { rnd }, ftz);
+                self.store_register(rd as u32, bits);
+                return;
+            }
+            _ => panic!("invalid F2F format {dstfmt}.{srcfmt}"),
         };
         let u64_ty = self.type_u64();
         let bits = self.ir.emit_bitcast(u64_ty, val);
@@ -162,14 +207,15 @@ impl<'a> Decoder<'a> {
             _ => (-2f64.powi(width - 1), 2f64.powi(width - 1)),
         };
         let (val, [min, max]) = match srcfmt {
+            1 => (self.f16_alu_src(inst, ftz), [min, max].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c as f32))),
             2 => (self.fp_alu_src(inst, ftz), [min, max].map(|c| self.ir.emit_constant_typed(self.type_f32[1], c as f32))),
             3 => {
                 let ty = self.type_f64();
                 (self.fp64_alu_src(inst), [min, max].map(|c| self.ir.emit_constant_typed(ty, c)))
             }
-            _ => todo!("F2I source format {srcfmt} is not implemented"),
+            _ => panic!("invalid F2I source format {srcfmt}"),
         };
-        let ty = if srcfmt == 2 { self.type_f32[1] } else { self.type_f64() };
+        let ty = if srcfmt == 3 { self.type_f64() } else { self.type_f32[1] };
         let rounded = self.glsl(ROUNDING[rnd], ty, &[val]);
         self.store_f2i(rd, dstfmt, val, rounded, min, max);
     }
@@ -200,8 +246,9 @@ impl<'a> Decoder<'a> {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
         let extract = ((inst >> 60) & 3) as u32;
         let size = ((inst >> 75) & 3) as u32;
-        assert_round_to_nearest(inst);
+        let rnd = ((inst >> 78) & 3) as u32;
         let srcfmt = ((((inst >> 84) & 0x3) << 1) | (((inst >> 74) & 0x1) << 0)) as u32;
+        if size == 3 || size == 2 && srcfmt >= 6 { assert_round_to_nearest(inst); }
         let signed = srcfmt & 1 != 0;
         let mut val = if srcfmt >= 6 {
             self.alu_src_pair(inst)
@@ -224,6 +271,17 @@ impl<'a> Decoder<'a> {
             val = self.ir.emit_bitcast(ty, val);
         }
         let result = match size {
+            1 => {
+                let val = if signed { self.ir.emit_convert_s_to_f(self.type_f32[1], val) } else { self.ir.emit_convert_u_to_f(self.type_f32[1], val) };
+                let result = self.pack_f16_round(val, false, rnd, false);
+                self.store_register(rd, result);
+                return;
+            }
+            2 if srcfmt < 6 => {
+                let bits = self.i32_to_f32(val, signed, rnd);
+                self.store_register(rd, bits);
+                return;
+            }
             2 => if signed {
                 self.ir.emit_convert_s_to_f(self.type_f32[1], val)
             } else {
@@ -233,7 +291,7 @@ impl<'a> Decoder<'a> {
                 let ty = self.type_f64();
                 if signed { self.ir.emit_convert_s_to_f(ty, val) } else { self.ir.emit_convert_u_to_f(ty, val) }
             }
-            _ => todo!("I2F destination format {size} requires f16 support"),
+            _ => panic!("invalid I2F destination format {size}"),
         };
         if size == 3 {
             let u64_ty = self.type_u64();
@@ -250,34 +308,57 @@ impl<'a> Decoder<'a> {
         let b = self.alu_src(inst);
         let signed = inst >> 74 & 1 != 0;
         let integer = if signed { self.ir.emit_bitcast(self.type_s32[1], b) } else { b };
+        let bits = self.i32_to_f32(integer, signed, rnd as u32);
+        self.store_register((inst >> 16 & 0xff) as u32, bits);
+    }
+
+    // The nearest f32 of a 32-bit integer stepped one ulp toward zero (RZ, RP below zero, RM above) where it rounded
+    // the magnitude up, or away from zero (RP above zero, RM below) where it rounded the magnitude down.
+    fn i32_to_f32(&mut self, integer: u32, signed: bool, rnd: u32) -> u32 {
+        let (ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
         let val = if signed {
             self.ir.emit_convert_s_to_f(self.type_f32[1], integer)
         } else {
             self.ir.emit_convert_u_to_f(self.type_f32[1], integer)
         };
-        let mut bits = self.bitcast_u32(val);
-        if rnd == 3 {
-            let negative = self.ir.emit_sless_than(self.type_bool[1], integer, self.const_u32_0);
-            let magnitude = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, integer);
-            let magnitude = if signed { self.ir.emit_select(self.type_u32[1], negative, magnitude, integer) } else { integer };
-            let [sign_mask, mantissa_mask, hidden, twenty_three, one_fifty, one_fifty_nine] =
-                [0x7fff_ffff, 0x7f_ffff, 0x80_0000, 23, 150, 159].map(|c| self.cached_const_u32(c));
-            let signless = self.ir.emit_bitwise_and(self.type_u32[1], bits, sign_mask);
-            let exponent = self.ir.emit_shift_right_logical(self.type_u32[1], signless, twenty_three);
-            let significand = self.ir.emit_bitwise_and(self.type_u32[1], signless, mantissa_mask);
-            let significand = self.ir.emit_bitwise_or(self.type_u32[1], significand, hidden);
-            let inexact_range = self.ir.emit_ugreater_than(self.type_bool[1], exponent, one_fifty);
-            let shift = self.ir.emit_isub(self.type_u32[1], exponent, one_fifty);
-            let shift = self.ir.emit_select(self.type_u32[1], inexact_range, shift, self.const_u32_0);
-            let represented = self.ir.emit_shift_left_logical(self.type_u32[1], significand, shift);
-            let rounded_up = self.ir.emit_ugreater_than(self.type_bool[1], represented, magnitude);
-            let overflow = self.ir.emit_ugreater_than_equal(self.type_bool[1], exponent, one_fifty_nine);
-            let rounded_up = self.ir.emit_logical_or(self.type_bool[1], rounded_up, overflow);
-            let above = self.ir.emit_logical_and(self.type_bool[1], inexact_range, rounded_up);
-            let down = self.ir.emit_isub(self.type_u32[1], bits, self.const_u32_1);
-            bits = self.ir.emit_select(self.type_u32[1], above, down, bits);
+        let bits = self.bitcast_u32(val);
+        if rnd == 0 {
+            return bits;
         }
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        let negative = if signed { self.ir.emit_sless_than(bool_ty, integer, self.const_u32_0) } else { self.ir.emit_constant_false(bool_ty) };
+        let positive = self.ir.emit_logical_not(bool_ty, negative);
+        let unsigned = self.ir.emit_bitcast(ty, integer);
+        let magnitude = self.ir.emit_isub(ty, self.const_u32_0, unsigned);
+        let magnitude = self.ir.emit_select(ty, negative, magnitude, unsigned);
+        let [sign_mask, mantissa_mask, hidden, twenty_three, one_fifty, one_fifty_nine] =
+            [0x7fff_ffff, 0x7f_ffff, 0x80_0000, 23, 150, 159].map(|c| self.cached_const_u32(c));
+        let signless = self.ir.emit_bitwise_and(ty, bits, sign_mask);
+        let exponent = self.ir.emit_shift_right_logical(ty, signless, twenty_three);
+        let significand = self.ir.emit_bitwise_and(ty, signless, mantissa_mask);
+        let significand = self.ir.emit_bitwise_or(ty, significand, hidden);
+        let inexact_range = self.ir.emit_ugreater_than(bool_ty, exponent, one_fifty);
+        let shift = self.ir.emit_isub(ty, exponent, one_fifty);
+        let shift = self.ir.emit_select(ty, inexact_range, shift, self.const_u32_0);
+        let represented = self.ir.emit_shift_left_logical(ty, significand, shift);
+        let overflow = self.ir.emit_ugreater_than_equal(bool_ty, exponent, one_fifty_nine);
+        let rounded_up = self.ir.emit_ugreater_than(bool_ty, represented, magnitude);
+        let rounded_up = self.ir.emit_logical_or(bool_ty, rounded_up, overflow);
+        let above = self.ir.emit_logical_and(bool_ty, inexact_range, rounded_up);
+        let rounded_down = self.ir.emit_uless_than(bool_ty, represented, magnitude);
+        let fits = self.ir.emit_logical_not(bool_ty, overflow);
+        let below = self.ir.emit_logical_and(bool_ty, rounded_down, fits);
+        let below = self.ir.emit_logical_and(bool_ty, inexact_range, below);
+        let (shrink, grow) = match rnd {
+            1 => (positive, negative),
+            2 => (negative, positive),
+            _ => (self.ir.emit_constant_true(bool_ty), self.ir.emit_constant_false(bool_ty)),
+        };
+        let shrink = self.ir.emit_logical_and(bool_ty, above, shrink);
+        let grow = self.ir.emit_logical_and(bool_ty, below, grow);
+        let down = self.ir.emit_isub(ty, bits, self.const_u32_1);
+        let up = self.ir.emit_iadd(ty, bits, self.const_u32_1);
+        let bits = self.ir.emit_select(ty, shrink, down, bits);
+        self.ir.emit_select(ty, grow, up, bits)
     }
     pub fn i2i(&mut self, inst: u128) {
         let rd = (((inst >> 16) & 0xff) << 0) as u32;

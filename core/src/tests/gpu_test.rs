@@ -45,6 +45,10 @@ pub mod inst {
     const FFMA_RIR: u128 = 0x823;
     const FMNMX_RR: u128 = 0x209;
     const MUFU_R: u128 = 0x308;
+    const ALD: u128 = 0x321 | 0xff << 24 | 0xff << 32;
+    const AST: u128 = 0x322 | 0xff << 24 | RC_RZ | NO_WRITE_SCOREBOARD;
+    const IPA: u128 = 0x326 | 0xff << 32 | 7 << 81;
+    pub const IPA_CONSTANT: u128 = 1 << 78;
     pub const FSETP_GT: u128 = 0x20b | 4 << 76 | 7 << 84 | PP_PT;
     pub const FP_ABS_B: u128 = 1 << 62;
     pub const FP_NEG_B: u128 = 1 << 63;
@@ -528,6 +532,18 @@ pub mod inst {
 
     pub fn mufu(rd: u32, op: u32, rb: u32) -> u128 {
         alu(MUFU_R, rd, 0, rb) | (op as u128) << 74
+    }
+
+    pub fn ald(rd: u32, attr: u32, words: u32) -> u128 {
+        ALD | PT_GUARD | (rd as u128) << 16 | (attr as u128) << 40 | (words as u128 - 1) << 74
+    }
+
+    pub fn ast(attr: u32, rb: u32, words: u32) -> u128 {
+        AST | PT_GUARD | (rb as u128) << 32 | (attr as u128) << 40 | (words as u128 - 1) << 74
+    }
+
+    pub fn ipa(rd: u32, attr: u32, mode: u128) -> u128 {
+        IPA | PT_GUARD | mode | (rd as u128) << 16 | (attr as u128 >> 2) << 64
     }
 
     pub mod cvt {
@@ -1091,6 +1107,11 @@ fn fixtures_match_nvdisasm() {
         (inst::alu3(inst::BMMA | inst::BMMA_168128 | inst::BMMA_AND, 4, 8, 12, 16), "BMMA.168128.AND.POPC R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu3(inst::BMMA | inst::BMMA_168256, 4, 8, 12, 16), "BMMA.168256.XOR.POPC R4, R8.ROW, R12.COL, R16 ;"),
         (inst::alu(inst::MOVM, 4, 8, 0), "MOVM.16.MT88 R4, R8 ;"),
+        (inst::ald(4, 0x90, 4), "ALD.128 R4, a[0x90] ;"),
+        (inst::ald(8, 0x2fc, 1), "ALD R8, a[0x2fc] ;"),
+        (inst::ast(0x70, 0, 4), "AST.128 a[0x70], R0 ;"),
+        (inst::ipa(1, 0x84, 0), "IPA.PASS R1, a[0x84] ;"),
+        (inst::ipa(3, 0x3fc, inst::IPA_CONSTANT), "IPA.CONSTANT R3, a[0x3fc] ;"),
         (inst::alu3(inst::HMMA | inst::MMA_SP | inst::MMA_16816 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 3 << 48, "HMMA.SP.16816.F32 R4, R8, R12, R16, R20, 0x3 ;"),
         (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32, 4, 8, 12, 16) | 20 << 40 | 1 << 48, "HMMA.SP.16832.F32 R4, R8, R12, R16, R20, 0x1 ;"),
         (inst::alu3(inst::HMMA | inst::MMA_SP_16832 | inst::MMA_F32 | inst::MMA_BF16, 4, 8, 12, 16) | 20 << 40, "HMMA.SP.16832.F32.BF16 R4, R8, R12, R16, R20, 0x0 ;"),

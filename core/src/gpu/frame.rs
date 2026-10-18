@@ -1,6 +1,6 @@
 //! Frames drawn by translated SASS programs that write RGBA8 pixels into global memory, presented as is.
 use super::compute::{ComputePipeline, HostBuffer};
-use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, SUPPORT_BINDING, emit_module};
+use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, SUPPORT_BINDING, Stage, emit_module};
 use super::{VkError, device};
 use crate::tests::gpu_test::inst::{cvt, *};
 use ash::vk::DescriptorType;
@@ -122,7 +122,7 @@ impl Frame {
     fn new(program: &[u128]) -> Result<Self, VkError> {
         let state = device()?;
         let size = u64::from(WIDTH * HEIGHT * 4);
-        let module = emit_module(Some(state), [GROUP, GROUP, 1], Default::default(), |decoder| decoder.translate_program(program));
+        let module = emit_module(Some(state), Stage::Compute { local_size: [GROUP, GROUP, 1] }, Default::default(), |decoder| decoder.translate_program(program));
         let pixels_buffer = HostBuffer::new(state, size)?;
         let cbuf0 = HostBuffer::new(state, 16)?;
         let mut support = HostBuffer::new(state, 16)?;

@@ -205,7 +205,7 @@ vec3 diffuseBounce(vec3 p,vec3 n,vec3 base) {
         vec3 hitBase=albedo(uv,m)*triangles[i].tint.rgb;if(m==1 || m>=6)hitBase=stoneMaterial(hitBase,hit,hitNormal,m,uv).rgb;
         c+=illuminate(hit,hitNormal,-direction,hitBase,.72,0.,false)*max(dot(n,direction),0.);
     }
-    return base*c*.22;
+    return base*c*.48;
 }
 #endif
 vec3 reflectedFlames(vec3 p,vec3 direction,float limit) {
@@ -321,6 +321,12 @@ void main() {
     if(m==5){base=colour;rough=.2;metal=1.;}
     vec3 c=illuminate(world,n,v,base,max(.065,rough),metal,true)*ao;
     if(m==7)c+=base*calciteTransmission(world,n,v,smoothstep(.62,.98,tex.y));
+#ifdef RAY_QUERY
+    if(up_rt.w>.5 && m==7 && rough<.45 && settings.z<.5) {
+        float f=.06+.94*pow(1.-max(dot(n,v),0.),5.);
+        c=mix(c,reflected(world+n*.03,reflect(-v,n),vec3(0)),f*(1.-smoothstep(.08,.45,rough))*.58);
+    }
+#endif
     if(m==0 && wet>.05 && settings.z<.5) {
         vec4 r=reflected_vp*vec4(world,1);vec2 refl=r.xy/r.w*.5+.5;
         float f=.035+.965*pow(1.-max(dot(n,v),0.),5.);

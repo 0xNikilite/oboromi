@@ -256,7 +256,6 @@ pub enum Sfx {
     Wind,
     Heart,
     Creak,
-    Bats,
 }
 
 pub struct Light {
@@ -300,8 +299,6 @@ pub struct World {
     pub river: Box3,
     pub bridge: Box3,
     pub grate: Box3,
-    /// the corridor the bats circle in, and the room the scream comes from.
-    pub bats: usize,
     pub last: usize,
 }
 
@@ -453,7 +450,6 @@ impl World {
             river,
             bridge,
             grate: Box3 { lo: [0.0; 3], hi: [0.0; 3] },
-            bats: chambers.len() + 1,
             last: chambers[4],
         };
         for (i, &(c, axis, at, ..)) in corridors.iter().enumerate() {
@@ -503,14 +499,14 @@ impl World {
             world.props.push(Prop::Rock(add(pit, [0.75 * a.cos(), 0.0, 0.75 * a.sin()]), r.range(0.16, 0.24)));
         }
         for i in 0..4 { world.props.push(Prop::Log(add(pit, [0.0, 0.1 + 0.05 * i as f32, 0.0]), i as f32 * 0.8 + 0.3)); }
-        world.lights.push(Light { pos: add(pit, [0.0, 0.8, 0.0]), colour: [7.5, 3.1, 0.9], flicker: 1.0, flame: 1.4 });
+        world.lights.push(Light { pos: add(pit, [0.0, 0.8, 0.0]), colour: [8.6, 3.7, 1.0], flicker: 1.0, flame: 1.8 });
         world.sources.push((Sfx::Fire, add(pit, [0.0, 0.6, 0.0]), 2.2));
         for i in 0..4 {
             let x = cs.lo[0] + (cs.hi[0] - cs.lo[0]) * (0.12 + 0.25 * i as f32);
             world.sources.push((Sfx::River, [x, WATER, world.river.centre()[2]], 1.3));
         }
         let doorway = [cs.lo[0] + 0.2, 1.0, corridors[1].2];
-        world.sources.extend([(Sfx::Wind, doorway, 0.9), (Sfx::Creak, doorway, 0.9), (Sfx::Heart, doorway, 1.4), (Sfx::Bats, doorway, 0.0)]);
+        world.sources.extend([(Sfx::Wind, doorway, 0.9), (Sfx::Creak, doorway, 0.9), (Sfx::Heart, doorway, 1.4)]);
         let mut formations=Rng(9173);
         for i in 0..9 {
             let x=cs.lo[0]+1.6+i as f32*(cs.hi[0]-cs.lo[0]-3.2)/8.+formations.range(-0.6,0.6);
@@ -672,8 +668,6 @@ impl World {
                 }
             }
         }
-        let bats = corridors[1].0.centre();
-        self.sources.push((Sfx::Bats, bats, 0.7));
         self.path_through(chambers, corridors);
     }
 
@@ -1249,11 +1243,6 @@ impl Dungeon {
         let right = [self.yaw.cos(), 0.0, self.yaw.sin()];
         let forward = [self.yaw.sin() * self.pitch.cos(), self.pitch.sin(), -self.yaw.cos() * self.pitch.cos()];
         let up = cross(right, forward);
-        if self.solo == 0 {
-            let bat_source=self.world.sources.iter().position(|s|s.0==Sfx::Bats).unwrap();
-            let t=seconds*1.8;
-            self.sound.move_source(bat_source,add(self.world.zones[self.world.bats].space.centre(),[0.7*t.cos(),0.5+0.2*t.sin(),0.7*(t*1.2).sin()]));
-        }
         if matches!(self.solo, 0 | 4) { for (i, &(tip, floor)) in self.world.drips.iter().enumerate() {
             let period = 2.4 + (i % 5) as f32 * 0.3;
             let fall = ((tip[1] - floor) / 4.9).sqrt();

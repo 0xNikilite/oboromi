@@ -247,7 +247,7 @@ impl Renderer {
         let per_emitter = if showcase { 96 } else { 24 };
         let extra_particles = (world.drips.len()+Self::hanging_drips(world).count()) * 2
             + world.props.iter().filter(|p| matches!(p, Prop::Web(..) | Prop::Lantern(..))).count()
-            + 220;
+            + 212;
         let particles = HostBuffer::new(state, ((world.lights.len() * per_emitter + extra_particles) * 48) as u64)
             .map_err(named)?;
         let target = RenderTarget::with_format(state, WIDTH, HEIGHT, Some(DEPTH), None, HDR).map_err(named)?;
@@ -744,7 +744,8 @@ impl Renderer {
             let phase=i as f32*2.3;
             let flicker=1.+l.flicker*(0.21*(seconds*11.7+phase).sin()+0.11*(seconds*23.1+phase*1.7).sin()+0.08*(seconds*4.3+phase).sin());
             let reveal=if world.zones[world.cave].space.contains(l.pos) {0.04+0.96*smoother((seconds-36.)/6.)} else {1.};
-            [l.pos[0],l.pos[1],l.pos[2],l.flame*reveal,l.colour[0]*flicker*reveal,l.colour[1]*flicker*reveal,l.colour[2]*flicker*reveal,self.shadow_slots[i].map_or(0.,|slot|slot as f32+1.)]
+            let dance=if self.rays {l.flame*0.08}else{0.};
+            [l.pos[0]+dance*(seconds*13.1+phase).sin(),l.pos[1]+dance*0.55*(seconds*17.3+phase).sin(),l.pos[2]+dance*(seconds*11.3+phase*1.7).cos(),l.flame*reveal,l.colour[0]*flicker*reveal,l.colour[1]*flicker*reveal,l.colour[2]*flicker*reveal,self.shadow_slots[i].map_or(0.,|slot|slot as f32+1.)]
         }).collect();
         self.lights.write(&floats(&light_data)).map_err(named)?;
         let per_emitter = if self.showcase { 96 } else { 24 };
@@ -826,18 +827,6 @@ impl Renderer {
         for i in 0..8 {
             let seed=i as f32*2.39996;let age=(seconds*0.16+i as f32*0.127).fract();
             particle([world.bridge.centre()[0]+0.5*seed.sin(),WATER+0.2+age*0.9,world.river.centre()[2]+seed.cos()],11.,[0.35+age*0.35,0.3+age*0.25],seed,[0.28,0.34,0.4,0.3*(PI*age).sin()]);
-        }
-        let chamber = world.zones[world.bats].space.centre();
-        for i in 0..8 {
-            let t = seconds * 1.8 + i as f32;
-            let p = add(chamber, [0.7 * t.cos(), 0.5 + 0.2 * t.sin(), 0.7 * (t * 1.2).sin()]);
-            particle(
-                p,
-                10.,
-                [0.22, 0.025 + 0.1 * (seconds * 69. + i as f32).sin().abs()],
-                i as f32,
-                [0.008, 0.006, 0.004, 1.],
-            );
         }
         debug_assert_eq!(extras.len(), self.extra_particles * 12);
         self.particles.write_at((self.emitter_count * per_emitter * 48) as u64, &floats(&extras)).map_err(named)?;

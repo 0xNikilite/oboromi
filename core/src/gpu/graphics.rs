@@ -303,20 +303,26 @@ impl<'a> RenderTarget<'a> {
     }
 
     pub fn readback(&self) -> Result<(), VkError> {
-        let Some((start, end)) = self.pending_rows.get() else { return Ok(()) };
+        if self.pending_rows.get().is_none() {return Ok(());}
+        self.state.submit_and_wait(|cmd| self.record_readback(cmd))
+    }
+
+    pub(super) fn record_readback(&self, cmd: vk::CommandBuffer) {
+        let Some((start, end)) = self.pending_rows.get() else { return };
         let copy = [vk::BufferImageCopy::default()
             .buffer_offset(u64::from(start * self.extent.width * self.pixel_bytes))
             .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
             .image_offset(vk::Offset3D { y: start as i32, ..Default::default() })
             .image_extent(vk::Extent3D { width: self.extent.width, height: end - start, depth: 1 })];
         let barrier = vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::TRANSFER_WRITE).dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::SHADER_READ);
-        self.state.submit_and_wait(|cmd| unsafe {
+        unsafe {
             let d = &self.state.device;
+            let before=vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::SHADER_READ).dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+            d.cmd_pipeline_barrier(cmd,vk::PipelineStageFlags::FRAGMENT_SHADER|vk::PipelineStageFlags::COMPUTE_SHADER,vk::PipelineStageFlags::TRANSFER,Default::default(),&[before],&[],&[]);
             d.cmd_copy_image_to_buffer(cmd, self.color.image, vk::ImageLayout::TRANSFER_SRC_OPTIMAL, self.staging.buffer, &copy);
             d.cmd_pipeline_barrier(cmd, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER, Default::default(), &[barrier], &[], &[]);
-        })?;
+        }
         self.pending_rows.set(None);
-        Ok(())
     }
 
     pub fn write(&mut self, pixels: &[u8]) -> Result<(), VkError> {
@@ -331,6 +337,10 @@ impl VkState {
     }
 
     pub fn draw_profiled(&self, pipeline: &GraphicsPipeline, target: &RenderTarget, draw: &DrawState, timestamp: Option<vk::QueryPool>) -> Result<(), VkError> {
+        self.submit_and_wait(|cmd| self.record_draw(cmd, pipeline, target, draw, timestamp.map(|p|(p,0))))
+    }
+
+    pub(super) fn record_draw(&self, cmd: vk::CommandBuffer, pipeline: &GraphicsPipeline, target: &RenderTarget, draw: &DrawState, timestamp: Option<(vk::QueryPool,u32)>) {
         use vk::{AccessFlags as Access, ImageLayout as Layout, PipelineStageFlags as Stage};
         let d = &self.device;
         let graphics = vk::PipelineBindPoint::GRAPHICS;
@@ -388,10 +398,10 @@ impl VkState {
         let fragment_tests = Stage::EARLY_FRAGMENT_TESTS | Stage::LATE_FRAGMENT_TESTS;
         let none = vk::DependencyFlags::empty();
         let r = &draw.raster;
-        self.submit_and_wait(|cmd| unsafe {
-            if let Some(pool)=timestamp {
-                d.cmd_reset_query_pool(cmd,pool,0,2);
-                d.cmd_write_timestamp(cmd,Stage::TOP_OF_PIPE,pool,0);
+        unsafe {
+            if let Some((pool,offset))=timestamp {
+                d.cmd_reset_query_pool(cmd,pool,offset,2);
+                d.cmd_write_timestamp(cmd,Stage::TOP_OF_PIPE,pool,offset);
             }
             if draw.load {
                 d.cmd_pipeline_barrier(cmd, Stage::TOP_OF_PIPE, Stage::TRANSFER, none, &[], &[], &[to_upload]);
@@ -442,13 +452,49 @@ impl VkState {
                 None => d.cmd_draw(cmd, draw.vertex_count, draw.instance_count, draw.first_vertex, draw.first_instance),
             }
             d.cmd_end_rendering(cmd);
-            if let Some(pool)=timestamp {d.cmd_write_timestamp(cmd,Stage::BOTTOM_OF_PIPE,pool,1);}
+            if let Some((pool,offset))=timestamp {d.cmd_write_timestamp(cmd,Stage::BOTTOM_OF_PIPE,pool,offset+1);}
             d.cmd_pipeline_barrier(cmd, Stage::COLOR_ATTACHMENT_OUTPUT, Stage::TRANSFER, none, &[], &[], &[to_transfer]);
-        })?;
+        }
         if !rows.is_empty() {
             let (start, end) = target.pending_rows.get().unwrap_or((rows.start, rows.end));
             target.pending_rows.set(Some((start.min(rows.start), end.max(rows.end))));
         }
-        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::gpu::{graphics::{opaque, triangle_pipeline}, harness::vk_state};
+
+    #[test]
+    fn recorded_draws_read_updated_vertices_on_replay() {
+        let Some(state)=vk_state() else {return};
+        let pipeline=triangle_pipeline(&state).unwrap();
+        let target=RenderTarget::new(&state,16,16,None,None).unwrap();
+        let mut vertices=HostBuffer::new(&state,36).unwrap();
+        let raster=RasterState {
+            viewport:vk::Viewport{x:0.,y:0.,width:16.,height:16.,min_depth:0.,max_depth:1.},
+            scissor:target.extent.into(),cull_face:vk::CullModeFlags::NONE,front_face:vk::FrontFace::COUNTER_CLOCKWISE,
+            topology:vk::PrimitiveTopology::TRIANGLE_LIST,depth_test:false,depth_write:false,
+            depth_func:vk::CompareOp::ALWAYS,blend_const:[0.;4],blend:opaque(),
+        };
+        let command=unsafe {state.device.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default()
+            .command_pool(state.command_pool).level(vk::CommandBufferLevel::PRIMARY).command_buffer_count(1))}.unwrap()[0];
+        unsafe {state.device.begin_command_buffer(command,&vk::CommandBufferBeginInfo::default())}.unwrap();
+        state.record_draw(command,&pipeline,&target,&DrawState {
+            vertex_buffers:&[(&vertices,12)],index_buffer:None,vertex_count:3,first_vertex:0,first_instance:0,instance_count:1,
+            clear:Some([0.;4]),clear_depth:None,load:false,raster,
+        },None);
+        target.record_readback(command);
+        unsafe {state.device.end_command_buffer(command)}.unwrap();
+        for colour in [[255,0,0,255],[0,0,255,255]] {
+            let data:Vec<u8>=[[-1f32,-1.],[3.,-1.],[-1.,3.]].into_iter()
+                .flat_map(|p|[p[0].to_le_bytes(),p[1].to_le_bytes(),colour].concat()).collect();
+            vertices.write(&data).unwrap();
+            state.submit_recorded(command).unwrap();
+            for pixel in target.staging.view(0..16*16*4).unwrap().chunks_exact(4) {assert_eq!(pixel,colour);}
+        }
+        unsafe {state.device.free_command_buffers(state.command_pool,&[command]);}
     }
 }

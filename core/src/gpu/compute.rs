@@ -5,6 +5,12 @@ use super::{VkError, VkState};
 use ash::vk;
 use std::sync::Arc;
 
+thread_local! {
+    static HOST_TIMINGS: std::cell::Cell<[f64; 4]> = const { std::cell::Cell::new([0.; 4]) };
+}
+
+pub fn take_host_timings() -> [f64; 4] { HOST_TIMINGS.with(|t| t.replace([0.; 4])) }
+
 #[derive(Default)]
 pub struct Submit {
     pub command_buffer: vk::CommandBuffer,
@@ -544,6 +550,10 @@ impl VkState {
     }
 
     pub fn dispatch_profiled(&self, pipeline: &ComputePipeline, groups: [u32; 3], timestamp: Option<vk::QueryPool>) -> Result<(), VkError> {
+        self.submit_and_wait(|cmd| self.record_dispatch(cmd,pipeline,groups,timestamp.map(|p|(p,0))))
+    }
+
+    pub(super) fn record_dispatch(&self, cmd: vk::CommandBuffer, pipeline: &ComputePipeline, groups: [u32;3], timestamp: Option<(vk::QueryPool,u32)>) {
         let compute = vk::PipelineBindPoint::COMPUTE;
         let src = vk::PipelineStageFlags::COMPUTE_SHADER;
         let dst = vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::ALL_GRAPHICS;
@@ -552,21 +562,35 @@ impl VkState {
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::SHADER_READ);
         let d = &self.device;
-        self.submit_and_wait(|cmd| unsafe {
+        unsafe {
             d.cmd_bind_pipeline(cmd, compute, pipeline.pipeline);
             d.cmd_bind_descriptor_sets(cmd, compute, pipeline.layout, 0, &[pipeline.descriptors.set], &[]);
-            if let Some(pool)=timestamp {
-                d.cmd_reset_query_pool(cmd,pool,0,2);
-                d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::TOP_OF_PIPE,pool,0);
+            if let Some((pool,offset))=timestamp {
+                d.cmd_reset_query_pool(cmd,pool,offset,2);
+                d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::TOP_OF_PIPE,pool,offset);
             }
             d.cmd_dispatch(cmd, groups[0], groups[1], groups[2]);
-            if let Some(pool)=timestamp {d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::BOTTOM_OF_PIPE,pool,1);}
+            if let Some((pool,offset))=timestamp {d.cmd_write_timestamp(cmd,vk::PipelineStageFlags::BOTTOM_OF_PIPE,pool,offset+1);}
             d.cmd_pipeline_barrier(cmd, src, dst, Default::default(), &[barrier], &[], &[]);
-        })
+        }
     }
 
     pub fn last_gpu_time_ns(&self) -> u64 {
         self.submit.lock().unwrap_or_else(|e| e.into_inner()).gpu_time_ns
+    }
+
+    pub(super) fn submit_recorded(&self, command: vk::CommandBuffer) -> Result<(), VkError> {
+        let submit=self.submit.lock().unwrap_or_else(|e|e.into_inner());
+        let start=std::time::Instant::now();
+        let submitted;
+        unsafe {
+            self.device.reset_fences(&[submit.fence])?;
+            self.device.queue_submit(self.queue,&[vk::SubmitInfo::default().command_buffers(&[command])],submit.fence)?;
+            submitted=start.elapsed().as_secs_f64()*1000.;
+            self.device.wait_for_fences(&[submit.fence],true,u64::MAX)?;
+        }
+        HOST_TIMINGS.with(|t| {let mut v=t.get();v[1]+=submitted;v[2]+=start.elapsed().as_secs_f64()*1000.-submitted;v[3]+=1.;t.set(v);});
+        Ok(())
     }
 
     // The command pool, its buffer and the queue are externally synchronized; the lock is that sync.
@@ -578,6 +602,8 @@ impl VkState {
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         let cmds = [cmd];
         let submit_info = [vk::SubmitInfo::default().command_buffers(&cmds)];
+        let start = std::time::Instant::now();
+        let (encoded, submitted);
         unsafe {
             d.reset_fences(&[fence])?;
             d.begin_command_buffer(cmd, &begin)?;
@@ -586,10 +612,13 @@ impl VkState {
             record(cmd);
             d.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, queries, 1);
             d.end_command_buffer(cmd)?;
+            encoded = start.elapsed().as_secs_f64() * 1000.;
             d.queue_submit(self.queue, &submit_info, fence)?;
+            submitted = start.elapsed().as_secs_f64() * 1000.;
             d.wait_for_fences(&[fence], true, u64::MAX)?;
             d.get_query_pool_results(queries, 0, &mut ticks, vk::QueryResultFlags::TYPE_64)?;
         }
+        HOST_TIMINGS.with(|t| { let mut v=t.get(); v[0]+=encoded; v[1]+=submitted-encoded; v[2]+=start.elapsed().as_secs_f64()*1000.-submitted; v[3]+=1.; t.set(v); });
         submit.gpu_time_ns = (ticks[1].wrapping_sub(ticks[0]) as f64 * f64::from(self.timestamp_period)) as u64;
         Ok(())
     }

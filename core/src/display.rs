@@ -98,9 +98,18 @@ pub fn present(width: u32, height: u32, pixels: &[u8]) {
 
 /// presents the linear rgba8 frame in `buffer` without reading it back to the host.
 pub fn present_buffer(buffer: &HostBuffer, width: u32, height: u32) -> Result<(), VkError> {
+    present_device(width, height, |frame| frame.upload(buffer.buffer))
+}
+
+/// presents the rgba8 `image` of `width` x `height`, left in TRANSFER_SRC_OPTIMAL, without reading it back.
+pub(crate) fn present_image(image: vk::Image, width: u32, height: u32) -> Result<(), VkError> {
+    present_device(width, height, |frame| frame.copy(image))
+}
+
+fn present_device(width: u32, height: u32, fill: impl FnOnce(&FrameImage) -> Result<(), VkError>) -> Result<(), VkError> {
     {
         let mut display = DISPLAY.lock().unwrap();
-        display.image(width, height)?.upload(buffer.buffer)?;
+        fill(display.image(width, height)?)?;
         display.presented(width, height, true);
         display.show()?;
     }

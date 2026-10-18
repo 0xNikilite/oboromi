@@ -48,6 +48,7 @@ fn update_moves_every_particle_one_integrator_step() {
 
 #[test]
 fn particles_frame_glows_where_the_particles_cluster() {
+    let _exact = crate::gpu::ExactSpeedHacks::new();
     let Some(state) = shared_device() else { return };
     let mut scene = Particles::new(state).unwrap();
     scene.update(0.0).unwrap();

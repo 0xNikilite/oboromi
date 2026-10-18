@@ -12,6 +12,7 @@ mod tests {
 
     // Hardware rounds interpolation and filtering its own way, so the frame's digest is pinned on lavapipe, which CI runs.
     fn check_first_frame(asset: &str, lavapipe_sha256: &str) {
+        let _exact = crate::gpu::ExactSpeedHacks::new();
         if !asset_dir(asset).exists() {
             return eprintln!("skipped: run demos/assets/fetch.sh for {asset}");
         }
@@ -42,6 +43,7 @@ mod tests {
 
     #[test]
     fn nak_compiled_boombox_matches_driver() {
+        let _exact = crate::gpu::ExactSpeedHacks::new();
         if !asset_dir("boombox").exists() { return eprintln!("skipped: run demos/assets/fetch.sh for boombox"); }
         let Some(state) = shared_device() else { return };
         let frames = [None, Some([

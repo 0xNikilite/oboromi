@@ -160,7 +160,7 @@ fn main() {
         let mut grid = Grid::new(state, &hmma_program, block, &[], &[(GLOBAL_BASE, &[0; 16])]);
         bench(if fast { "hmma fast" } else { "hmma exact" }, 2, 20, Some(state), || drop(black_box(grid.run(groups))))[1]
     });
-    oboromi_set_tensor_mode(false);
+    oboromi_set_tensor_mode(oboromi_core::gpu::SpeedHacks::default().fast_tensor);
     println!("hmma 16816.F32 gpu ns per warp op: exact {:.0}, fast {:.0}", exact * 1e3 / ops, fast * 1e3 / ops);
     let program = [inst::mov_imm(0, 42), inst::iadd_reg(1, 2, 3)];
     let words = translate_module(&program, true, Some(state), false).words();

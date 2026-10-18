@@ -3,6 +3,7 @@ use oboromi_core::gpu::{VkError, frame::render_test_frame};
 
 #[test]
 fn test_frame_reads_back_as_gradient() {
+    *oboromi_core::gpu::SPEED_HACKS.lock().unwrap() = oboromi_core::gpu::SpeedHacks::none();
     match render_test_frame() {
         Ok(()) => {}
         Err(e @ (VkError::Loader | VkError::NoDevice)) => return eprintln!("skipping: {e:?}"),

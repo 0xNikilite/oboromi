@@ -9,6 +9,7 @@ mod tests {
     // scene. post.frag keeps green unshifted, dims odd rows (scanlines, sin((y + 0.5) * pi) = -1) and fades corners.
     #[test]
     fn post_pass_darkens_odd_rows_and_corners_of_the_scene_it_samples() {
+        let _exact = crate::gpu::ExactSpeedHacks::new();
         let Some(state) = shared_device() else { return };
         let mut post = Post::new(state, None, SIZE, SIZE).unwrap();
         post.frame(0.0).unwrap();

@@ -76,7 +76,7 @@ mod tests {
             eprintln!("skipping: device has no ray queries");
             return;
         }
-        let mut gpu = Gpu::new(Box::leak(Box::new(state)), (2 * PAGE) as usize, None, Default::default()).unwrap();
+        let mut gpu = Gpu::new(Box::leak(Box::new(state)), (2 * PAGE) as usize, None, crate::gpu::SpeedHacks::none()).unwrap();
         gpu.space.map(GUEST, 0, 2 * PAGE);
         let code = include_bytes!("../../../tests/fixtures/driver-shaders/query-candidates.comp.bin");
         gpu.write(PROGRAM, &[&code[..], &bra(-16).to_le_bytes()].concat()).unwrap();

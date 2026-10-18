@@ -17,6 +17,7 @@ mod tests {
     // the sky clear colour by the instance's alpha.
     #[test]
     fn nak_compiled_sprites_match_driver_within_unorm_rounding() {
+        let _exact = crate::gpu::ExactSpeedHacks::new();
         let Some(state) = shared_device() else { return };
         let programs = [
             [include_bytes!("../../../tests/fixtures/driver-shaders/sprite2d.vert.bin").as_slice(), include_bytes!("../../../tests/fixtures/driver-shaders/sprite2d.frag.bin").as_slice()],

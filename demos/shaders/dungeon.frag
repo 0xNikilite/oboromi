@@ -147,8 +147,7 @@ void main() {
         float bed_distance=unpackHalf2x16(refraction[pixel.y*int(settings.x)+pixel.x].y).y;
         float thickness=clamp(bed_distance-distance(world,eye_time.xyz),.05,3.);
         vec3 transmitted=screenSample(screen+n.xz*.018,false)*exp(-vec3(.18,.085,.055)*thickness)+vec3(.003,.008,.007);
-        float bend=.52*sin(world.x*.58)+.22*sin(world.x*1.31+.8);
-        float edge=min(abs(world.z-river.y-bend-.12*sin(world.x*2.7)),abs(world.z-river.w-bend-.12*sin(world.x*2.7+2.)));
+        float edge=min(tex.y,1.-tex.y)*(river.w-river.y);
         float bank=(1.-smoothstep(.02,.24,edge));
         float crest=smoothstep(.05,.14,world.y+.7)*smoothstep(.28,.55,length(norm.xz))*smoothstep(.45,.75,noise(flow*2.));
         float foam=max(bank*.8, max(colour.x,crest)*.65);

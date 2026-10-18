@@ -358,10 +358,9 @@ impl World {
         world.furnish(&chambers, &corridors.iter().map(|&(c, axis, at, ..)| (c, axis, at)).collect::<Vec<_>>(), &mut r);
         world.river.lo[0]-=4.;
         world.river.hi[0]+=4.;
-        let bank = |x:f32| 0.52*(x*0.58).sin()+0.22*(x*1.31+0.8).sin();
         for i in 0..4 {
             let x=cs.lo[0]+2.0+i as f32*(cs.hi[0]-cs.lo[0]-4.)/3.;
-            let z=if i%2==0 {river.lo[2]-0.8+bank(x)} else {river.hi[2]+0.8+bank(x)};
+            let z=world.river_bank(x,i%2)+if i%2==0 {-0.8}else{0.8};
             world.lights.push(Light {pos:[x,1.8,z],colour:[6.8,2.9,0.85],flicker:1.,flame:0.58});
         }
         world.lights.retain(|l|l.flame!=0.32);
@@ -371,7 +370,7 @@ impl World {
         let mut formations=Rng(9173);
         for i in 0..9 {
             let x=cs.lo[0]+1.6+i as f32*(cs.hi[0]-cs.lo[0]-3.2)/8.;
-            let z=if i%2==0 {river.lo[2]-1.2+bank(x)} else {river.hi[2]+1.2+bank(x)};
+            let z=world.river_bank(x,i%2)+if i%2==0 {-1.2}else{1.2};
             for _ in 0..4 {
                 let p=[x+formations.range(-0.65,0.65),0.,z+formations.range(-0.5,0.5)];
                 if (p[0]-bridge.centre()[0]).abs()<1.9 {continue;}

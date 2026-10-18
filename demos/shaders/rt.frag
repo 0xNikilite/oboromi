@@ -15,6 +15,7 @@ const int RAYS=8,GLOSSY=4;
 vec3 srgb_to_linear(vec3 c){return pow(c,vec3(2.2));}
 vec3 aces(vec3 x){return clamp(x*(2.51*x+0.03)/(x*(2.43*x+0.59)+0.14),0.0,1.0);}
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float falloff(vec3 p,vec3 light){vec3 delta=light-p;return 1.0/max(dot(delta,delta),0.16);}
 
 bool trace(vec3 origin,vec3 dir,float t_max,out float distance,out uint instance){
  rayQueryEXT q; rayQueryInitializeEXT(q,scene,gl_RayFlagsOpaqueEXT,0xff,origin,sky.w,dir,t_max);
@@ -38,7 +39,7 @@ vec3 room_colour(vec3 p,uint instance){
 vec3 hit_colour(vec3 origin,vec3 dir){
  float distance; uint instance; if(!trace(origin,dir,20.0,distance,instance))return sky.rgb;
  vec3 p=origin+dir*distance,n=room_normal(p,instance),key=normalize(light_dir.xyz-p),cool=normalize(ambient.xyz-p);
- return room_colour(p,instance)*(0.12+light_colour.rgb*max(dot(n,key),0.0)*0.85+vec3(0.18,0.35,0.7)*max(dot(n,cool),0.0)*0.22);
+ return room_colour(p,instance)*(0.015+light_colour.rgb*max(dot(n,key),0.0)*falloff(p,light_dir.xyz)*0.85+vec3(0.18,0.35,0.7)*max(dot(n,cool),0.0)*falloff(p,ambient.xyz)*0.08);
 }
 vec3 tangent_ray(vec3 axis,float spread,int index,float seed){
  vec3 t=normalize(cross(abs(axis.x)<0.8?vec3(1,0,0):vec3(0,1,0),axis)),b=cross(axis,t);
@@ -47,7 +48,7 @@ vec3 tangent_ray(vec3 axis,float spread,int index,float seed){
 }
 vec3 bounce_light(vec3 p,uint instance,bool key){
  vec4 light=key?light_dir:ambient; vec3 n=room_normal(p,instance),l=light.xyz-p; float distance=length(l),hit; uint id; l/=distance;
- return trace(p+n*sky.w,l,distance-light.w,hit,id)?vec3(0):room_colour(p,instance)*(key?light_colour.rgb/PI:vec3(0.18,0.35,0.8)*0.45)*max(dot(n,l),0.0);
+ return trace(p+n*sky.w,l,distance-light.w,hit,id)?vec3(0):room_colour(p,instance)*(key?light_colour.rgb/PI:vec3(0.18,0.35,0.8)*0.08)*max(dot(n,l),0.0)*falloff(p,light.xyz);
 }
 float visibility(vec3 p,vec3 n,vec4 light,float seed){
  vec3 centre=light.xyz-p; float distance=length(centre),open=0.0; vec3 axis=centre/distance;
@@ -75,15 +76,15 @@ void main(){
  vec3 v=normalize(camera_pos.xyz-in_world),key=normalize(light_dir.xyz-in_world),cool=normalize(ambient.xyz-in_world),h=normalize(v+key);
  float nl=max(dot(n,key),0.0),nv=max(dot(n,v),1e-4),nh=max(dot(n,h),0.0),a2=pow(roughness,4.0),d=nh*nh*(a2-1.0)+1.0,k=pow(roughness+1.0,2.0)/8.0;
  vec3 f0=mix(vec3(0.04),albedo,metallic),fresnel=f0+(1.0-f0)*pow(1.0-max(dot(v,h),0.0),5.0);
- vec3 direct=((1.0-fresnel)*(1.0-metallic)*albedo/PI+fresnel*a2/(PI*d*d)/((nl*(1.0-k)+k)*(nv*(1.0-k)+k)*4.0))*light_colour.rgb*nl*(nl>0?visibility(in_world,geometric,light_dir,1.3):0.0);
- direct+=albedo*vec3(0.18,0.35,0.8)*max(dot(n,cool),0.0)*visibility(in_world,geometric,ambient,8.9)*0.45;
+ vec3 direct=((1.0-fresnel)*(1.0-metallic)*albedo/PI+fresnel*a2/(PI*d*d)/((nl*(1.0-k)+k)*(nv*(1.0-k)+k)*4.0))*light_colour.rgb*nl*falloff(in_world,light_dir.xyz)*(nl>0?visibility(in_world,geometric,light_dir,1.3):0.0);
+ direct+=albedo*vec3(0.18,0.35,0.8)*max(dot(n,cool),0.0)*falloff(in_world,ambient.xyz)*visibility(in_world,geometric,ambient,8.9)*0.08;
  vec3 origin=in_world+geometric*sky.w,indirect=vec3(0);
  bool floor=in_world.y< -0.95&&geometric.y>0.8,chrome=length(in_world-vec3(-1.65,-0.35,-0.55))<0.72,glass_sphere=length(in_world-vec3(1.65,-0.35,-0.45))<0.72;
  if(floor)indirect+=reflected(origin,reflect(-v,n),0.15)*0.72;else if(chrome)indirect=hit_colour(origin,reflect(-v,n));else if(glass_sphere)indirect=glass(in_world,n,v);else if(metallic>0.45)indirect+=reflected(origin,reflect(-v,n),roughness*0.35)*fresnel;
  if(!chrome&&!glass_sphere){vec3 bounce=vec3(0);float ao=0.0;
   // Each direction is traced once per light: shading both lights in one iteration spills registers on SM86.
   for(int i=0;i<RAYS*2;i++){vec3 ray=hemisphere(geometric,i/2,12.1);float distance;uint instance;bool hit=trace(origin,ray,20.0,distance,instance);ao+=hit&&distance<1.0?0.0:1.0;if(hit)bounce+=bounce_light(origin+ray*distance,instance,i%2==0);}
-  indirect+=albedo*(vec3(0.045)*ao/2.0+bounce)/float(RAYS);}
+  indirect+=albedo*(vec3(0.006)*ao/2.0+bounce)/float(RAYS);}
  vec3 emissive=srgb_to_linear(texture(emissive_map,in_uv).rgb)*emissive_factor.rgb;
  out_colour=vec4(pow(aces((direct+indirect+emissive)*0.72),vec3(1.0/2.2)),1.0);
 }

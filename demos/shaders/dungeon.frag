@@ -11,7 +11,7 @@ layout(location=4) flat in int kind;
 layout(location=0) out vec4 output_colour;
 layout(set=1,binding=0,std140) uniform Frame {
     mat4 vp; mat4 reflected_vp; vec4 eye_time; vec4 right_quality; vec4 up_rt;
-    vec4 river; vec4 moon; vec4 settings; vec4 fog_lights;
+    vec4 river; vec4 moon; vec4 settings; vec4 fog_lights; vec4 grid;
 };
 struct Light { vec4 position; vec4 colour; };
 layout(set=1,binding=1,std430) readonly buffer Lights { Light lights[]; };
@@ -105,8 +105,8 @@ vec3 brdf(vec3 base,vec3 n,vec3 v,vec3 l,float rough,float metal) {
 }
 vec3 illuminate(vec3 p,vec3 n,vec3 v,vec3 base,float rough,float metal,bool shadow) {
     vec3 c=base*vec3(.045,.055,.065);
-    for(int j=0;j<(right_quality.w>.5?lights.length():4);j++) {
-        int i=right_quality.w>.5?j:int(fog_lights[j]);
+    for(int j=0;j<(right_quality.w>.5?lights.length():6);j++) {
+        int i=right_quality.w>.5?j:int(j<4?fog_lights[j]:grid[j-2]);
         vec3 to=lights[i].position.xyz-p; float d2=dot(to,to);
         if(d2>min(180.,lights[i].colour.r*24.) || dot(n,to)<=0.)continue;
         bool casts=lights[i].position.w>0. && (right_quality.w>.5 || i==int(fog_lights.x) || i==int(fog_lights.y));

@@ -584,15 +584,16 @@ impl Renderer {
         u.extend(world.grate.centre());
         u.push(DISABLED.load(Ordering::Relaxed) as f32);
         u.extend([WIDTH as f32, HEIGHT as f32, reflection as u8 as f32, plane]);
+        let focus=sub(eye,scale(cross(right,up),4.));
         let mut nearest: Vec<_> = (0..world.lights.len()).collect();
         nearest.sort_by(|&a, &b| {
             let score = |i: usize| {
-                world.lights[i].colour[0] / (1. + dot(sub(world.lights[i].pos, eye), sub(world.lights[i].pos, eye)))
+                world.lights[i].colour[0] / (1. + dot(sub(world.lights[i].pos, focus), sub(world.lights[i].pos, focus)))
             };
             score(b).total_cmp(&score(a))
         });
         u.extend(nearest.iter().take(4).map(|&i| i as f32));
-        u.extend([self.grid[0] as f32,self.grid[1] as f32,0.,0.]);
+        u.extend([self.grid[0] as f32,self.grid[1] as f32,nearest[4] as f32,nearest[5] as f32]);
         match offset {Some(offset)=>self.frame_uniforms.write_at(offset,&floats(&u)),None=>self.uniforms.write(&floats(&u))}.map_err(named)
     }
     fn draw(&self, target: &RenderTarget, first: u32, count: u32, clear: bool, sprites: bool) -> Result<(), String> {

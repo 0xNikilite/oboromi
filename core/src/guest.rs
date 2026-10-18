@@ -22,7 +22,7 @@ pub fn load_segments(ram: &GuestRam, base: u64, segments: &[(u64, &[u8])]) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cpu::cpu_manager::CpuManager;
+    use crate::cpu::cpu_manager::{CpuBackend, CpuManager};
     use crate::gpu::engine::Gpu;
     use crate::input::InputState;
     use crate::kernel::Kernel;
@@ -38,7 +38,7 @@ mod tests {
     fn the_guest_image_initializes_services_draws_and_presents() {
         let _display = DISPLAY_TEST.lock().unwrap();
         let Some(state) = vk_state() else { return };
-        let cpu = CpuManager::new();
+        let cpu = CpuManager::new_with_backend(CpuBackend::Unicorn);
         let image = include_bytes!("../tests/fixtures/guest/guest.bin");
         let entry = load_flat_image(&cpu.ram, image, BASE).unwrap();
         let core = cpu.get_core(0).unwrap();
@@ -73,7 +73,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("triangle.nro");
         std::fs::write(&path, include_bytes!("../tests/fixtures/guest/triangle.nro")).unwrap();
-        let cpus = CpuManager::new();
+        let cpus = CpuManager::new_with_backend(CpuBackend::Unicorn);
         let cpu = cpus.get_core(0).unwrap();
         let mut kernel = Kernel::default();
         let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::with_ram(state, cpus.ram.clone(), None, Default::default()).unwrap())));

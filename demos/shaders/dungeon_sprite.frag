@@ -3,6 +3,8 @@ layout(location=0) in vec2 uv;
 layout(location=1) in vec4 colour;
 layout(location=2) flat in vec2 kind_seed;
 layout(location=3) in vec3 world;
+layout(location=4) flat in vec4 volume;
+layout(location=5) flat in float volume_height;
 layout(location=0) out vec4 output_colour;
 layout(set=1,binding=0,std140) uniform Frame {
     mat4 vp; mat4 reflected_vp; vec4 eye_time; vec4 right_quality; vec4 up_rt;
@@ -38,14 +40,32 @@ void main(){
     else if(kind<7.5) { a=(1.-smoothstep(.65,.85,abs(uv.x)+abs(uv.y)*.5))*colour.a;c*=.5+.5*cos(uv.y*10.); }
     else if(kind<8.5) {a=texture(web_alpha,uv*.5+.5).r*colour.a;c*=1.2+pow(1.-abs(dot(normalize(eye_time.xyz-world),normalize(cross(dFdx(world),dFdy(world))))),3.);}
     else if(kind<9.5) { vec2 q=vec2(abs(uv.x)-.43,uv.y-.25);float eye=1.-smoothstep(.1,.2,abs(q.x)+abs(q.y)*.6);float mouth=(1.-smoothstep(.09,.15,abs(uv.y+.35+.15*cos(uv.x*5.))))*(1.-smoothstep(.6,.8,abs(uv.x)));a=max(eye,mouth); }
-    else if(kind>10.5) {a=texture(web_alpha,uv*.5+.5).g*colour.a;}
+    else if(kind>10.5) {
+        vec3 radii=vec3(volume.w,volume_height,volume.w*.65);
+        vec3 direction=normalize(world-eye_time.xyz), origin=(eye_time.xyz-volume.xyz)/radii, ray=direction/radii;
+        float b=dot(origin,ray), d=b*b-dot(ray,ray)*(dot(origin,origin)-1.);
+        if(d<=0.)discard;
+        float near=max(0.,(-b-sqrt(d))/dot(ray,ray)), far=(-b+sqrt(d))/dot(ray,ray);
+        if(settings.z<.5) {
+            ivec2 pixel=ivec2(gl_FragCoord.xy);
+            far=min(far,unpackHalf2x16(background[pixel.y*int(settings.x)+pixel.x].y).y);
+        }
+        float density=0.;int steps=right_quality.w>.5?8:4;
+        for(int i=0;i<steps;i++) {
+            vec3 p=eye_time.xyz+direction*mix(near,far,(float(i)+.5)/float(steps));
+            vec3 q=(p-volume.xyz)/radii;
+            float cloud=noise(p.xz*2.+vec2(-eye_time.w*.09,seed)+p.y)*.65+noise(p.xz*4.-eye_time.w*.05)*.35;
+            density+=pow(max(0.,1.-dot(q,q)),2.)*smoothstep(.2,.8,cloud);
+        }
+        a=(1.-exp(-density*max(0.,far-near)*colour.a/float(steps)))*(1.-smoothstep(.65,1.,max(abs(uv.x),abs(uv.y))));
+    }
     else { a=float(abs(uv.x)<.9 && uv.y>-.35+abs(uv.x)*.4 && uv.y<.32-abs(uv.x)*.25+.12*abs(sin(uv.x*16.))); }
     if((kind>=2. && kind<9.) || kind>10.5) {
         vec3 illumination=vec3(.1,.13,.16);
         for(int i=0;i<lights.length();i++) {vec3 to=lights[i].position.xyz-world;illumination+=lights[i].colour.rgb*1.4/max(1.,dot(to,to));}
         c*=kind==2.?mix(illumination,vec3(.65),smoothstep(0.,.03,c.b-c.r)*.85):illumination;
     }
-    if(settings.z<.5) {
+    if(settings.z<.5 && kind<10.5) {
         ivec2 pixel=ivec2(gl_FragCoord.xy);float depth=unpackHalf2x16(background[pixel.y*int(settings.x)+pixel.x].y).y;
         a*=clamp((depth-distance(world,eye_time.xyz))*(kind==2.?2.:30.),0.,1.);
     }

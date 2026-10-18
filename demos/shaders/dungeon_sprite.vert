@@ -9,6 +9,8 @@ layout(location=0) out vec2 uv;
 layout(location=1) out vec4 colour;
 layout(location=2) flat out vec2 kind_seed;
 layout(location=3) out vec3 world;
+layout(location=4) flat out vec4 volume;
+layout(location=5) flat out float volume_height;
 void main(){
     const vec2 corners[6]=vec2[](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(-1,1),vec2(1,-1),vec2(1,1));
     Particle p=particles[gl_InstanceIndex]; vec2 c=corners[gl_VertexIndex];
@@ -19,8 +21,14 @@ void main(){
     if(p.position.w==5. || p.position.w==7.) { horizontal=vec3(1,0,0);vertical=vec3(0,0,1); }
     if(p.position.w==8. || p.position.w==9.) {horizontal=vec3(sin(p.size.z),0,cos(p.size.z));vertical=vec3(0,1,0);}
     if(p.position.w==2.){float a=p.size.z+eye_time.w*.09;mat2 rotation=mat2(cos(a),sin(a),-sin(a),cos(a));c=rotation*c;}
-    world=p.position.xyz+horizontal*c.x*p.size.x+vertical*c.y*p.size.y;
+    vec2 size=p.size.xy;
+    if(p.position.w>10.5) {
+        vec3 radii=vec3(p.size.x,p.size.y,p.size.x*.65);
+        size=vec2(length(horizontal*radii),length(vertical*radii))*1.4;
+    }
+    world=p.position.xyz+horizontal*c.x*size.x+vertical*c.y*size.y;
     gl_Position=vp*vec4(world,1);uv=corners[gl_VertexIndex];colour=p.colour;
     if(p.position.w==0.)colour.a*=smoothstep(.12,.45,abs(dot(cross(horizontal,vertical),normalize(eye_time.xyz-p.position.xyz))));
+    volume=vec4(p.position.xyz,p.size.x);volume_height=p.size.y;
     kind_seed=vec2(p.position.w,p.size.z);
 }

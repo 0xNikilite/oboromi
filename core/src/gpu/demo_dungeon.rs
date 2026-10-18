@@ -374,21 +374,21 @@ impl World {
         }
         let mut formations=Rng(9173);
         for i in 0..9 {
-            let x=cs.lo[0]+1.6+i as f32*(cs.hi[0]-cs.lo[0]-3.2)/8.;
+            let x=cs.lo[0]+1.6+i as f32*(cs.hi[0]-cs.lo[0]-3.2)/8.+formations.range(-0.6,0.6);
             let z=world.river_bank(x,i%2)+if i%2==0 {-1.2}else{1.2};
-            for _ in 0..4 {
-                let p=[x+formations.range(-0.65,0.65),0.,z+formations.range(-0.5,0.5)];
+            for _ in 0..(2+i%4) {
+                let p=[x+formations.range(-0.85,0.85),-0.04,z+formations.range(-0.7,0.7)];
                 if (p[0]-bridge.centre()[0]).abs()<1.9 {continue;}
-                world.props.push(Prop::Stalagmite(p,formations.range(0.45,1.7),formations.range(0.18,0.43)));
+                world.props.push(Prop::Stalagmite(p,formations.range(0.25,1.85),formations.range(0.2,0.62)));
                 let top=world.ceiling(p[0],p[2])+0.25;
                 world.props.push(Prop::Stalactite([p[0],top,p[2]],formations.range(0.6,2.3),formations.range(0.15,0.38)));
             }
         }
         for _ in 0..12 {
-            let x=cs.hi[0]-1.8-formations.range(0.,4.5);
+            let x=cs.hi[0]-2.0-formations.range(0.,3.5);
             let z=river.centre()[2]+formations.range(-2.5,2.5);
             let top=world.ceiling(x,z)+0.3;
-            world.props.push(Prop::Stalactite([x,top,z],formations.range(2.5,3.9),formations.range(0.22,0.5)));
+            world.props.push(Prop::Stalactite([x,top,z],formations.range(3.8,5.2),formations.range(0.3,0.65)));
         }
         world
     }

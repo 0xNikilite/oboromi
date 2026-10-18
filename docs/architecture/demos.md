@@ -122,61 +122,62 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon.mp4" type="video/mp4"></video>
 
-*Showcase: rendered offline at 1080p60 and sized for the console; native Switch 2 performance remains unverified. An irregular river runs through the cave, with torch reflections, shallow pebbles, bank foam and mist. Clustered wet stone formations, drips, layered flames and dispersing smoke accompany the approved audren mix. Measured offline median frame time on Intel Arc MTL is 98.5 ms. The dungeon's shaders are compiled from GLSL for now.*
+*Showcase: rendered offline at 1080p60 with ray-query shadows, reflections and ambient occlusion ON. Sized for the console; native Switch 2 performance remains unverified. Gentle river waves reveal the pebble bed, with filtered torch reflections, drifting volumetric mist, rounded wet formations and hanging stalactites with drips. Measured offline median frame time on Intel Arc MTL is 100.1 ms. The dungeon's shaders are compiled from GLSL for now.*
 
 Console cost estimate: translated/twin efficiency cannot be measured while these shaders use native GLSL. Only raw Intel GPU measurements are available; a native console total below 16.7 ms has not been established.
 
 | Pass | Realtime GPU ms | Showcase GPU ms | Translated/twin ratio | Native Switch 2 ms |
 |---|---:|---:|---|---|
 | Heightfield | 0.021 | 0.020 | N/A: native GLSL | unverified |
-| Particle simulation | 0.043 | 0.037 | N/A: native GLSL | unverified |
-| Planar reflection | 1.024 | 0.000 | N/A: native GLSL | unverified |
-| Instanced cave formations | 0.402 | 0.154 | N/A: native GLSL | unverified |
-| PBR, shadows and wet reflections | 9.403 | 87.338 | N/A: native GLSL | unverified |
-| River surface | 0.014 | 0.053 | N/A: native GLSL | unverified |
-| Flames, smoke and other sprites | 0.248 | 0.636 | N/A: native GLSL | unverified |
-| Height fog, moon shaft and bloom prefilter | 0.293 | 0.476 | N/A: native GLSL | unverified |
-| Bloom reconstruction, heat haze and tonemap | 1.717 | 1.288 | N/A: native GLSL | unverified |
+| Particle simulation | 0.043 | 0.036 | N/A: native GLSL | unverified |
+| Planar reflection | 0.480 | 0.000 | N/A: native GLSL | unverified |
+| Instanced cave formations | 0.148 | 0.141 | N/A: native GLSL | unverified |
+| PBR, shadows and wet reflections | 4.803 | 88.338 | N/A: native GLSL | unverified |
+| River surface | 0.015 | 0.056 | N/A: native GLSL | unverified |
+| Flames, smoke and other sprites | 0.311 | 0.717 | N/A: native GLSL | unverified |
+| Height fog, moon shaft and bloom prefilter | 0.298 | 0.472 | N/A: native GLSL | unverified |
+| Bloom reconstruction, heat haze and tonemap | 1.875 | 1.308 | N/A: native GLSL | unverified |
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
 
-*Realtime preset: recorded offline at 1080p60, with baked shadows, planar reflections and reduced particle, water and fog budgets. The standalone live-audio tour measures 14.40 ms median and 21.67 ms p95 on Intel Arc MTL; stable 60 fps is not established. The dungeon's shaders are compiled from GLSL for now.*
+*Realtime preset: recorded offline at 1080p60, with baked shadows, filtered planar reflections and reduced particle, water, formation and fog budgets. Six selected lamps light each view. The standalone live-audio tour measures 9.67 ms median and 13.50 ms p95 on Intel Arc MTL. The dungeon's shaders are compiled from GLSL for now.*
 
-Full-tour release measurements, 1200 frames per run with the first three excluded.
-GPU times are Vulkan timestamp medians, summed within each frame across main and
-reflection draws. Per-pass medians need not sum to the median total. Frame wall
-times include GPU waits and audio but exclude PPM file writes. Offline capture uses
-deterministic synchronous audio; the standalone live harness drains the audio ring
-on a separate clock, without a window or audio device. Measurements share the laptop
-with other work. Both published clips retain the approved round-three WAV and normalization.
+Release measurements use 1200 frames per run, excluding the first three. GPU times
+are Vulkan timestamp medians, summed within each frame across main and reflection
+draws. Per-pass medians need not sum to the median total. Frame times include GPU
+waits and audio but exclude PPM writes. Offline capture uses synchronous audio;
+the live harness drains the audio ring on a separate clock without a window or audio
+device. Both clips retain the approved round-three WAV and normalization.
 
 | Run | Median frame ms | p95 frame ms | Median summed GPU ms |
 |---|---:|---:|---:|
-| Realtime, live audio worker | 14.40 | 21.67 | 10.39 |
-| Realtime, offline capture | 23.74 | 39.67 | 13.23 |
-| Showcase, offline capture | 98.54 | 188.21 | 90.20 |
+| Realtime live tour | 9.67 | 13.50 | 5.81 |
+| Realtime cave entrance | 14.49 | 15.08 | 10.73 |
+| Realtime cave downstream | 13.15 | 13.70 | 9.43 |
+| Realtime offline capture | 18.38 | 34.90 | 8.04 |
+| Showcase offline capture | 100.14 | 211.66 | 91.10 |
 
-| Graphics host stage | Before ms | After ms |
+Cave GPU timings, realtime preset:
+
+| Pass | Entrance ms | Downstream ms |
 |---|---:|---:|
-| Preparation and uploads | 0.863 | 0.263 |
-| Command encoding and draw state | 0.458 | 0.081 |
-| Queue submission | 2.557 | 0.171 |
-| Active host total | 3.856 | 0.457 |
-| GPU fence wait | 22.832 | 13.694 |
+| Heightfield | 0.016 | 0.016 |
+| Particle simulation | 0.035 | 0.035 |
+| Planar reflection | 0.643 | 0.510 |
+| Instanced cave formations | 0.836 | 1.042 |
+| PBR, shadows and wet reflections | 6.450 | 5.000 |
+| River surface | 0.248 | 0.455 |
+| Flames, smoke and other sprites | 0.879 | 0.737 |
+| Height fog, moon shaft and bloom prefilter | 0.279 | 0.280 |
+| Bloom reconstruction, heat haze and tonemap | 1.326 | 1.341 |
 
-The earlier graphics timer included GPU waits. Active host work is now
-0.457 ms median (0.619 ms p95), below the 8 ms CPU target;
-blocking graphics wall time is 14.32 ms. The scene already batches opaque
-materials and instances formations and sprites. It now reuses recorded Vulkan
-commands, with 49 recordings over the tour and three submissions per frame instead
-of fifteen. Heightfield results remain on the GPU. No guest pushbuffer or FIFO decode
-is involved in this native GLSL path. The audio worker keeps mixing off the frame thread.
+Active graphics CPU in the live tour is 0.454 ms median. Recorded Vulkan commands are reused, heightfield vertices stay on the GPU, and the audio worker keeps mixing off the frame thread. No guest pushbuffer or FIFO decode is involved in this native GLSL path. These measurements do not establish stable 60 fps on other hardware.
 
 The scene uses one opaque batch, instanced formations and sprites, and a water
 draw; offscreen room batches and cave formations are culled. Realtime additionally
 renders the reflected scene. Showcase uses 96 particles per light, a 256x64 water
 grid, 24 quarter-resolution fog steps, four shadow rays per contributing flame,
-one AO ray and one reflection ray on wet surfaces. Realtime uses 24 particles per
+one AO ray, one reflection ray on wet floors and three nearby rays on the river. Realtime uses 24 particles per
 light, a 96x24 water grid, four fog steps and a 480x270 planar reflection. Ten
 128px shadow cubemaps are baked, with at most two nearby lights
 casting shadows; rock textures use the dominant face projection.

@@ -19,10 +19,10 @@ void main() {
     if(kind==4) {
         ivec2 cell=ivec2(round(uv*(grid.xy-1.)));
         vec4 wave=waves[cell.y*int(grid.x)+cell.x];
-        float a=world.x*3.2+world.z*1.3-eye_time.w*1.4;
-        float b=world.x*1.7-world.z*4.2+eye_time.w*1.1;
-        world.y+=wave.x+.055*sin(a)+.025*sin(b);
-        norm=normalize(vec3(-wave.y-.176*cos(a)-.0425*cos(b),1.,-wave.z-.0715*cos(a)+.105*cos(b)));
+        float a=world.x*1.25+world.z*.55-eye_time.w*.8;
+        float b=world.x*.7-world.z*1.8+eye_time.w*.65;
+        world.y+=wave.x*.35+.025*sin(a)+.012*sin(b);
+        norm=normalize(vec3(-wave.y*.25-.03125*cos(a)-.0084*cos(b),1.,-wave.z*.25-.01375*cos(a)+.0216*cos(b)));
         colour=vec3(wave.w);
     }
     gl_Position=vp*vec4(world,1);

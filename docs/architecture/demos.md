@@ -132,7 +132,7 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 *Raster is left. Ray queries are right. The right side traces every torch and the fire for softer shadows, contact under the bridge and rocks, reflected off-screen walls and torches, and darker rock crevices. The difference is small in this frame and clearest in the water.*
 
-The release clips contain 3840 unique frames and the same round-six mix at -16 LUFS and -1 dBTP. Native console cost remains unverified while this path uses its own GLSL shaders.
+The release clips contain 4320 unique frames and the same round-seven mix at -16 LUFS and -1 dBTP. Native console cost remains unverified while this path uses its own GLSL shaders.
 
 The scene uses one opaque batch, instanced formations and sprites, and a water
 draw; offscreen room batches and cave formations are culled. Realtime additionally

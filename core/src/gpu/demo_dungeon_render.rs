@@ -743,8 +743,8 @@ impl Renderer {
         let light_data: Vec<_> = world.lights.iter().enumerate().flat_map(|(i,l)| {
             let phase=i as f32*2.3;
             let flicker=1.+l.flicker*(0.21*(seconds*11.7+phase).sin()+0.11*(seconds*23.1+phase*1.7).sin()+0.08*(seconds*4.3+phase).sin());
-            let reveal=if world.zones[world.cave].space.contains(l.pos) {0.04+0.96*smoother((seconds-26.)/6.)} else {1.};
-            [l.pos[0],l.pos[1],l.pos[2],l.flame,l.colour[0]*flicker*reveal,l.colour[1]*flicker*reveal,l.colour[2]*flicker*reveal,self.shadow_slots[i].map_or(0.,|slot|slot as f32+1.)]
+            let reveal=if world.zones[world.cave].space.contains(l.pos) {0.04+0.96*smoother((seconds-36.)/6.)} else {1.};
+            [l.pos[0],l.pos[1],l.pos[2],l.flame*reveal,l.colour[0]*flicker*reveal,l.colour[1]*flicker*reveal,l.colour[2]*flicker*reveal,self.shadow_slots[i].map_or(0.,|slot|slot as f32+1.)]
         }).collect();
         self.lights.write(&floats(&light_data)).map_err(named)?;
         let per_emitter = if self.showcase { 96 } else { 24 };

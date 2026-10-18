@@ -95,18 +95,18 @@ float softVisibility(vec3 p,vec3 n,vec3 to,float radius) {
     vec3 direction=normalize(to);
     vec3 axis=normalize(cross(direction,abs(direction.y)>.9?vec3(1,0,0):vec3(0,1,0)))*radius;
     vec3 other=cross(direction,axis);
-    const vec2 disk[12]=vec2[](vec2(0),vec2(.43,.12),vec2(-.38,.31),vec2(.14,-.48),vec2(.68,.54),vec2(-.72,.45),vec2(.58,-.65),vec2(-.51,-.71),vec2(.95,.05),vec2(-.08,.92),vec2(-.91,-.18),vec2(.12,-.97));
+    const vec2 disk[5]=vec2[](vec2(0),vec2(.92,.18),vec2(-.24,.95),vec2(-.88,-.32),vec2(.31,-.9));
     float open=0.;
-    for(int i=0;i<12;i++)open+=visibility(p,n,to+axis*disk[i].x+other*disk[i].y);
-    return open/12.;
+    for(int i=0;i<5;i++)open+=visibility(p,n,to+axis*disk[i].x+other*disk[i].y);
+    return open/5.;
 }
 float ambientVisibility(vec3 p,vec3 n) {
 #ifdef RAY_QUERY
     vec3 tangent=normalize(cross(n,abs(n.y)>.8?vec3(1,0,0):vec3(0,1,0))),bitangent=cross(n,tangent);
-    const vec3 rays[6]=vec3[](vec3(.18,.12,.98),vec3(-.57,.21,.79),vec3(.42,-.61,.67),vec3(-.24,-.73,.64),vec3(.79,.36,.49),vec3(-.82,.41,.40));
+    const vec3 rays[3]=vec3[](vec3(.18,.12,.98),vec3(-.57,.21,.79),vec3(.42,-.61,.67));
     float open=0.;
-    for(int i=0;i<6;i++){vec3 d=normalize(tangent*rays[i].x+bitangent*rays[i].y+n*rays[i].z);open+=visibility(p,n,d*(i<2?.38:1.15));}
-    return .32+.68*open/6.;
+    for(int i=0;i<3;i++){vec3 d=normalize(tangent*rays[i].x+bitangent*rays[i].y+n*rays[i].z);open+=visibility(p,n,d*(i==0?.38:1.15));}
+    return .32+.68*open/3.;
 #else
     return 1.;
 #endif

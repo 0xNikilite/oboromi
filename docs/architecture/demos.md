@@ -144,7 +144,7 @@ Console cost estimate: translated/twin efficiency cannot be measured while these
 
 ![Raster and ray-query dungeon frame](https://raw.githubusercontent.com/jopdorp/oboromi/assets/dungeon-v6-rt-compare.png)
 
-*Raster is left. Ray queries are right. The right side traces every torch and the fire for softer shadows, contact under the bridge and rocks, reflected off-screen walls and torches, and darker rock crevices. The difference is moderate in this frame and clearest in the water.*
+*Raster is left. Ray queries are right. The right side traces every torch and the fire for softer shadows, contact under the bridge and rocks, reflected off-screen walls and torches, and darker rock crevices. The difference is small in this frame and clearest in the water.*
 
 Release measurements use 3840 frames per run, excluding the first three. GPU times
 are Vulkan timestamp medians, summed within each frame across main and reflection
@@ -180,8 +180,8 @@ Active graphics CPU in the live tour is 0.454 ms median. Recorded Vulkan command
 The scene uses one opaque batch, instanced formations and sprites, and a water
 draw; offscreen room batches and cave formations are culled. Realtime additionally
 renders the reflected scene. Showcase uses 96 particles per light, a 256x64 water
-grid, 24 quarter-resolution fog steps, twelve shadow rays per contributing flame,
-six occlusion rays, one reflection ray on wet floors and three nearby rays on the river. Realtime uses 24 particles per
+grid, 24 quarter-resolution fog steps, five shadow rays per contributing flame,
+three occlusion rays, one reflection ray on wet floors and three nearby rays on the river. Realtime uses 24 particles per
 light, a 96x24 water grid, four fog steps and a 480x270 planar reflection. Ten
 128px shadow cubemaps are baked, with at most two nearby lights
 casting shadows; rock textures use the dominant face projection.

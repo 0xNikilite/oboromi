@@ -56,6 +56,15 @@ impl Decoder<'_> {
     }
 
     pub fn ttugo(&mut self, _inst: u128) {
+        self.ray_queries += 1;
+        if self.ray_queries > self.ray_budget {
+            self.store_ttu(ROOT + 4, self.const_u32_0);
+            self.store_ttu(CONTINUATION + 8, self.const_u32_0);
+            self.store_ttu(CONTINUATION + 12, self.const_u32_0);
+            let done = self.cached_const_u32(DONE);
+            self.store_ttu(HIT + 4, done);
+            return;
+        }
         let (u32_ty, bool_ty) = (self.type_u32[1], self.type_bool[1]);
         let query = self.ray_query();
         // The driver stages the TLAS root only to start a traversal.

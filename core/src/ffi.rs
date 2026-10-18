@@ -235,6 +235,13 @@ pub extern "C" fn oboromi_set_tensor_mode(fast: bool) {
     crate::gpu::SPEED_HACKS.lock().unwrap().fast_tensor = fast;
 }
 
+/// Keeps at most `sites` ray-query sites per shader in engines created from now on.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_ray_budget(sites: u32) {
+    crate::gpu::SPEED_HACKS.lock().unwrap().ray_budget = sites;
+    crate::gpu::demo::reset_scene();
+}
+
 /// skips draws while their pipelines compile in engines created from now on.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_set_skip_draw_while_compiling(skip: bool) {

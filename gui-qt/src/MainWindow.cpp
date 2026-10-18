@@ -118,6 +118,12 @@ void MainWindow::buildUi() {
     rayTracing->setChecked(true);
     connect(rayTracing, &QCheckBox::toggled, this, RustBridge::setRaytracingEnabled);
     buttons->addWidget(rayTracing);
+    auto *fastTensors = new QCheckBox("Fast tensors", central);
+    connect(fastTensors, &QCheckBox::toggled, this, oboromi_set_tensor_mode);
+    buttons->addWidget(fastTensors);
+    auto *rayBudget = new QCheckBox("Ray budget", central);
+    connect(rayBudget, &QCheckBox::toggled, this, [](bool enabled) { oboromi_set_ray_budget(enabled ? 1 : UINT32_MAX); });
+    buttons->addWidget(rayBudget);
     auto *quality = new QComboBox(central);
     quality->addItems({"Dungeon: showcase", "Dungeon: realtime"});
     auto *rays = new QCheckBox("Ray tracing", central);

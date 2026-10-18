@@ -80,7 +80,7 @@ flowchart LR
 | particles | Particles moved by a compute shader, drawn as glowing instanced squares | particles_update.comp, particles.vert, particles.frag |
 | sprites2d | Scrolling hill layers and floating sprites, blended over a sky | sprite2d.vert, sprite2d.frag |
 | pbr-flighthelmet | The FlightHelmet model through the same PBR shaders, one draw per material | pbr.vert, pbr.frag |
-| raytraced | BoomBox in a red and green room with two moving lights, soft ray-query shadows, mirror, glass and glossy floor reflections, ambient occlusion and one bounce of wall colour | pbr.vert, rt.frag |
+| raytraced | BoomBox in a red and green room with two moving lights, soft ray-query shadows, mirror, glass and glossy floor reflections, ambient occlusion and one bounce of both lights off the walls | pbr.vert, rt.frag |
 
 The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture` example with `raytraced`. It requires ray queries and fragment subgroup operations.
 

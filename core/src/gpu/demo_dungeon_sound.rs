@@ -56,18 +56,19 @@ fn recording(name: &str) -> Vec<f32> {
 }
 
 fn sample(kind: Sample) -> Vec<f32> {
-    recording(match kind {
+    let name = match kind {
         Sample::Torch => "torch",
         Sample::Fire => "fire",
         Sample::River => "river",
         Sample::Wind => "wind",
         Sample::Heart => "heart",
         Sample::Creak => "creak",
-        Sample::Bats | Sample::Scream => "bats",
+        Sample::Bats | Sample::Scream => return vec![0.0],
         Sample::Room => "room",
         Sample::Drip => "drip0",
         Sample::Step | Sample::WetStep | Sample::GravelStep => "stone0",
-    })
+    };
+    recording(name)
 }
 
 const SAMPLES: [Sample; 13] = [Sample::Torch, Sample::Fire, Sample::River, Sample::Wind, Sample::Heart, Sample::Creak, Sample::Bats, Sample::Room, Sample::Drip, Sample::Scream, Sample::Step, Sample::WetStep, Sample::GravelStep];

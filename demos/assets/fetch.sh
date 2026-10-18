@@ -26,8 +26,8 @@ fetch_dungeon_audio() {
     dir=$(dirname "$0")/dungeon-audio
     [ -f "$dir/SOURCES" ] && return
     mkdir -p "$dir"
-    curl -fL https://raw.githubusercontent.com/jopdorp/oboromi/0a0fed7aa8769da0ff28d1e529201bd7087fd49a/dungeon-audio.tar.xz -o "$dir/audio.tar.xz"
-    echo "1e426c7c3a0f307bc55a2b9dd9a42dbddb0c02a78df7f8a81c1f8ac84dd6b0d6  $dir/audio.tar.xz" | sha256sum -c -
+    curl -fL https://raw.githubusercontent.com/jopdorp/oboromi/f42255ba079ee4bf82f4686957f9b175c932a7a2/dungeon-audio.tar.xz -o "$dir/audio.tar.xz"
+    echo "ac6b6157c7a2f8016da6b3434d80e653f47345a9e86c4884a0e78a7e041a688d  $dir/audio.tar.xz" | sha256sum -c -
     tar -xJf "$dir/audio.tar.xz" -C "$dir" && rm "$dir/audio.tar.xz"
 }
 fetch_dungeon_audio

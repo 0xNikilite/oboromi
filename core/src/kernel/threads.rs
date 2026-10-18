@@ -2,12 +2,10 @@
 // SVC arguments deliberately narrow X registers to Horizon's signed and unsigned W-register types.
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 use super::{Error, HandleTable, Kernel, MAIN_STACK, Object, TLS};
-use crate::cpu::UnicornCPU;
-use crate::cpu::{cpu_manager::CORE_COUNT, unicorn_interface::TICK_HZ};
+use crate::cpu::{Cpu, CpuContext, TICK_HZ, cpu_manager::CORE_COUNT};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use unicorn_engine::Context;
 
 const CURRENT_THREAD: u32 = 0xffff_8000;
 const LISTENERS: u32 = 0x4000_0000;
@@ -36,7 +34,7 @@ enum State {
 }
 
 struct Thread {
-    context: Context,
+    context: CpuContext,
     state: State,
     priority: u8,
     effective: u8,
@@ -104,10 +102,10 @@ impl Default for Scheduler {
 fn ticks(ns: u64) -> u64 {
     (u128::from(ns) * u128::from(TICK_HZ)).div_ceil(1_000_000_000) as u64
 }
-fn deadline(cpu: &UnicornCPU, ns: i64) -> Option<u64> {
+fn deadline(cpu: &dyn Cpu, ns: i64) -> Option<u64> {
     (ns > 0).then(|| cpu.ticks().saturating_add(ticks(ns as u64)))
 }
-fn word(cpu: &UnicornCPU, addr: u64) -> Result<u32, Error> {
+fn word(cpu: &dyn Cpu, addr: u64) -> Result<u32, Error> {
     if addr & 3 != 0 {
         return Err(Error::InvalidAddress);
     }
@@ -115,12 +113,12 @@ fn word(cpu: &UnicornCPU, addr: u64) -> Result<u32, Error> {
     cpu.read_mem(addr, &mut bytes).map_err(|_| Error::InvalidCurrentMemory)?;
     Ok(u32::from_le_bytes(bytes))
 }
-fn put_word(cpu: &UnicornCPU, addr: u64, value: u32) -> Result<(), Error> {
+fn put_word(cpu: &dyn Cpu, addr: u64, value: u32) -> Result<(), Error> {
     cpu.write_mem(addr, &value.to_le_bytes()).map_err(|_| Error::InvalidCurrentMemory)
 }
 
 impl Scheduler {
-    fn add(&mut self, id: usize, context: Context, priority: u8, core: usize) {
+    fn add(&mut self, id: usize, context: CpuContext, priority: u8, core: usize) {
         let thread = Thread {
             context,
             state: State::Dormant,
@@ -226,7 +224,7 @@ impl Scheduler {
         })
     }
 
-    fn poll(&mut self, cpu: &UnicornCPU) {
+    fn poll(&mut self, cpu: &dyn Cpu) {
         let now = cpu.ticks();
         for timer in &mut self.timers {
             if timer.deadline <= now {
@@ -309,7 +307,7 @@ impl Scheduler {
         ids
     }
 
-    fn unlock(&mut self, cpu: &UnicornCPU, owner: usize, addr: u64) -> Result<(), Error> {
+    fn unlock(&mut self, cpu: &dyn Cpu, owner: usize, addr: u64) -> Result<(), Error> {
         word(cpu, addr)?;
         let waiters = self.waiters(|w| matches!(w, Wait::Mutex { owner: o, addr: a, .. } if *o == owner && *a == addr), 0);
         let mut value = 0;
@@ -341,7 +339,7 @@ impl Kernel {
         self
     }
 
-    pub(super) fn start_threads(&mut self, cpu: &UnicornCPU) -> u32 {
+    pub(super) fn start_threads(&mut self, cpu: &dyn Cpu) -> u32 {
         cpu.set_virtual_time(self.scheduler.virtual_time);
         let id = 0;
         self.scheduler.add(id, cpu.context().expect("main context"), 44, 0);
@@ -352,7 +350,7 @@ impl Kernel {
         handle
     }
 
-    pub(super) fn run_threads(&mut self, cpu: &UnicornCPU, mut stop: impl FnMut() -> bool) -> bool {
+    pub(super) fn run_threads(&mut self, cpu: &dyn Cpu, mut stop: impl FnMut() -> bool) -> bool {
         // Loaders set the entry ABI registers after Kernel::start.
         if self.scheduler.switches == 0 && cpu.save(&mut self.scheduler.threads[0].context).is_err() {
             return false;
@@ -456,7 +454,7 @@ impl Kernel {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn thread_svc(&mut self, cpu: &UnicornCPU, nr: u32, x: &mut [u64; 8]) -> Result<(), Error> {
+    pub(super) fn thread_svc(&mut self, cpu: &dyn Cpu, nr: u32, x: &mut [u64; 8]) -> Result<(), Error> {
         let current = self.scheduler.current;
         match nr {
             0x08 => {

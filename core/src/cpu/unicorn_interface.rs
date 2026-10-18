@@ -1,4 +1,4 @@
-use super::GuestRam;
+use super::{Cpu, CpuContext, CpuError, GuestRam};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 
 const EXCP_SWI: u32 = 2;
 
-pub const TICK_HZ: u64 = 19_200_000;
+pub use super::TICK_HZ;
 const CLREX: u64 = 0xffff_0000_0000;
 
 struct Clock {
@@ -467,4 +467,39 @@ impl UnicornCPU {
             0
         }
     }
+}
+
+impl Cpu for UnicornCPU {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn run(&self) -> u64 { UnicornCPU::run(self) }
+    fn step(&self) -> u64 { UnicornCPU::step(self) }
+    fn halt(&self) { UnicornCPU::halt(self) }
+    fn get_x(&self, index: u32) -> u64 { UnicornCPU::get_x(self, index) }
+    fn set_x(&self, index: u32, value: u64) { UnicornCPU::set_x(self, index, value) }
+    fn get_sp(&self) -> u64 { UnicornCPU::get_sp(self) }
+    fn set_sp(&self, value: u64) { UnicornCPU::set_sp(self, value) }
+    fn get_pc(&self) -> u64 { UnicornCPU::get_pc(self) }
+    fn set_pc(&self, value: u64) { UnicornCPU::set_pc(self, value) }
+    fn svc_pending(&self) -> Option<u32> { UnicornCPU::svc_pending(self) }
+    fn set_tls(&self, value: u64) { UnicornCPU::set_tls(self, value) }
+    fn tls(&self) -> u64 { UnicornCPU::tls(self) }
+    fn read_mem(&self, address: u64, bytes: &mut [u8]) -> Result<(), CpuError> { UnicornCPU::read_mem(self, address, bytes).map_err(|_| CpuError) }
+    fn write_mem(&self, address: u64, bytes: &[u8]) -> Result<(), CpuError> { UnicornCPU::write_mem(self, address, bytes).map_err(|_| CpuError) }
+    fn ticks(&self) -> u64 { UnicornCPU::ticks(self) }
+    fn idle_until(&self, deadline: u64) { UnicornCPU::idle_until(self, deadline) }
+    fn run_slice(&self, deadline: u64, core: usize) -> Result<bool, CpuError> { UnicornCPU::run_slice(self, deadline, core).map_err(|_| CpuError) }
+    fn context(&self) -> Result<CpuContext, CpuError> { UnicornCPU::context(self).map(CpuContext::Unicorn).map_err(|_| CpuError) }
+    fn save(&self, context: &mut CpuContext) -> Result<(), CpuError> {
+        let CpuContext::Unicorn(context) = context else { return Err(CpuError) };
+        UnicornCPU::save(self, context).map_err(|_| CpuError)
+    }
+    fn restore(&self, context: &CpuContext) -> Result<(), CpuError> {
+        let CpuContext::Unicorn(context) = context else { return Err(CpuError) };
+        UnicornCPU::restore(self, context).map_err(|_| CpuError)
+    }
+    fn thread_context(&self, entry: u64, arg: u64, stack: u64, tls: u64, handle: u32) -> Result<CpuContext, CpuError> {
+        UnicornCPU::thread_context(self, entry, arg, stack, tls, handle).map(CpuContext::Unicorn).map_err(|_| CpuError)
+    }
+    fn set_virtual_time(&self, enabled: bool) { UnicornCPU::set_virtual_time(self, enabled) }
+    fn set_block_ticks(&self, ticks: u64) { UnicornCPU::set_block_ticks(self, ticks) }
 }

@@ -1,6 +1,6 @@
 //! Homebrew NRO executables (switchbrew NRO) started with the loader config of switchbrew Homebrew_ABI, with an
 //! fsp-srv whose SD card is the `sdmc` directory next to the file.
-use crate::cpu::{GuestRam, UnicornCPU};
+use crate::cpu::{Cpu, GuestRam};
 use crate::guest::load_segments;
 use crate::kernel::{CODE, Kernel};
 use crate::nn::fs::FileSystemProxy;
@@ -52,8 +52,11 @@ fn romfs(nro: &[u8], size: usize) -> Rc<[u8]> {
 }
 
 /// Loads the NRO at `path` at the start of the code region and points the kernel's thread at it.
-pub fn load(ram: &GuestRam, cpu: &UnicornCPU, kernel: &mut Kernel, path: &Path) -> Result<()> {
-    let nro = fs::read(path)?;
+pub fn load(ram: &GuestRam, cpu: &dyn Cpu, kernel: &mut Kernel, path: &Path) -> Result<()> {
+    load_bytes(ram, cpu, kernel, path, &fs::read(path)?)
+}
+
+pub fn load_bytes(ram: &GuestRam, cpu: &dyn Cpu, kernel: &mut Kernel, path: &Path, nro: &[u8]) -> Result<()> {
     if nro.get(0x10..0x14) != Some(b"NRO0") {
         return Err(invalid());
     }

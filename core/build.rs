@@ -1,3 +1,43 @@
+use std::{env, fs, path::{Path, PathBuf}, process::Command};
+
+const REVISION: &str = "cad1e2c0921110e34661b9b0a4ed20d06290434b";
+
+fn run(command: &mut Command) {
+    let status = command.status().expect("run Dynarmic build command");
+    assert!(status.success(), "Dynarmic build command failed: {command:?}");
+}
+
+fn build_dynarmic() {
+    println!("cargo:rerun-if-changed=dynarmic/CMakeLists.txt");
+    println!("cargo:rerun-if-changed=dynarmic/bridge.cpp");
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let source = out.join("dynarmic-src");
+    if !source.join(".git").exists() {
+        run(Command::new("git").args(["clone", "--recursive", "https://codeberg.org/yuzu-emu/dynarmic.git"]).arg(&source));
+    }
+    let head = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&source).output().expect("read Dynarmic revision");
+    if String::from_utf8_lossy(&head.stdout).trim() != REVISION {
+        run(Command::new("git").args(["fetch", "origin", REVISION]).current_dir(&source));
+        run(Command::new("git").args(["checkout", "--detach", REVISION]).current_dir(&source));
+        run(Command::new("git").args(["submodule", "update", "--init", "--recursive"]).current_dir(&source));
+    }
+    let build = out.join("dynarmic-build");
+    let lib = out.join("dynarmic-lib");
+    fs::create_dir_all(&lib).unwrap();
+    run(Command::new("cmake")
+        .args(["-S", "dynarmic", "-B"]).arg(&build)
+        .arg(format!("-DDYNARMIC_SOURCE={}", source.display()))
+        .arg(format!("-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY={}", lib.display()))
+        .args(["-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5", "-DDYNARMIC_FRONTENDS=A64", "-DDYNARMIC_TESTS=OFF", "-DDYNARMIC_USE_LLVM=OFF", "-DBUILD_TESTING=OFF"])
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR"))));
+    run(Command::new("cmake").args(["--build"]).arg(&build).args(["--target", "oboromi_dynarmic", "--parallel"]));
+    println!("cargo:rustc-link-search=native={}", lib.display());
+    for name in ["oboromi_dynarmic", "dynarmic", "mcl", "fmt", "Zydis", "Zycore"] {
+        println!("cargo:rustc-link-lib=static={name}");
+    }
+    println!("cargo:rustc-link-lib=dylib=stdc++");
+}
+
 #[allow(dead_code)]
 struct IpcMethod {
     pub index: u32,
@@ -146,6 +186,7 @@ fn generate<W: std::fmt::Write>(w: &mut W, data: &str) -> Result<(), Box<dyn std
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    build_dynarmic();
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/nn/auto.defs");
     let mut translator = vec![std::path::PathBuf::from("src/gpu/spirv.rs"), "src/gpu/sm86_decoder_generated.rs".into()];

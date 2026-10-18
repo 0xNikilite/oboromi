@@ -2,7 +2,7 @@
 //! buffer_producer,native_window}.c drive them: transaction codes, parcel layouts and slot states follow Ryujinx
 //! Services/SurfaceFlinger (IHOSBinderDriver.cs, IGraphicBufferProducer.cs, BufferQueueProducer.cs, Types/).
 
-use crate::cpu::UnicornCPU;
+use crate::cpu::Cpu;
 use crate::cpu::cpu_manager::MEMORY_SIZE;
 use crate::gpu::texture::block_linear_to_pitch;
 use crate::kernel::Object;
@@ -64,7 +64,7 @@ impl HosBinderDriver {
     }
 
     /// The reply payload of IGraphicBufferProducer transaction `code`, its status last.
-    fn transact(&mut self, mem: &UnicornCPU, code: u32, payload: &[u32]) -> Vec<u32> {
+    fn transact(&mut self, mem: &dyn Cpu, code: u32, payload: &[u32]) -> Vec<u32> {
         let args = payload.get(2 + (word(payload, 1) as usize + 1).div_ceil(2)..).unwrap_or_default();
         let slot = word(args, 0) as usize;
         let dequeued = self.slots.get(slot).is_some_and(|s| s.state == State::Dequeued);
@@ -129,7 +129,7 @@ impl HosBinderDriver {
     }
 
     /// Shows the slot's RGBA8 surface, then frees the slot it replaces on screen.
-    fn present(&mut self, mem: &UnicornCPU, slot: usize) -> Option<()> {
+    fn present(&mut self, mem: &dyn Cpu, slot: usize) -> Option<()> {
         let buffer = &self.slots[slot].buffer;
         let field = |at: usize| buffer.get(at / 4).map(|&w| w as usize);
         let (width, height, pitch, gobs) = (field(4)?, field(8)?, field(SURFACE + 0x14)?, field(SURFACE + 0x24)?);

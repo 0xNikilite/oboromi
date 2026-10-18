@@ -1,6 +1,6 @@
 //! HIPC messages with CMIF payloads following switchbrew IPC_Marshalling.
 
-use crate::cpu::UnicornCPU;
+use crate::cpu::Cpu;
 use crate::kernel::Object;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -37,9 +37,10 @@ pub struct Buffer {
 }
 
 pub struct Request<'a> {
-    pub mem: &'a UnicornCPU,
+    pub mem: &'a dyn Cpu,
     pub send_pid: bool,
     pub copy_handles: Vec<u32>,
+    pub transfers: Vec<(u64, u64, u32)>,
     pub move_handles: Vec<u32>,
     pub x: Vec<Buffer>,
     pub a: Vec<Buffer>,
@@ -81,6 +82,8 @@ impl Response {
 
 pub trait Service {
     fn dispatch(&mut self, cmd: u32, request: &mut Request) -> Response;
+    fn deadline(&self) -> Option<u64> { None }
+    fn advance(&mut self, _cpu: &dyn Cpu) {}
     /// Periodic device signals use guest ticks, so waits can shorten CPU slices.
     fn event_period(&self, _event: &Rc<Cell<bool>>) -> Option<u64> { None }
 }
@@ -131,7 +134,7 @@ fn receive_buffer(d: &[u32]) -> Buffer {
 
 impl<'a> Request<'a> {
     /// Decodes a CMIF request into its command id and arguments.
-    pub fn parse(message: &[u8; MESSAGE_SIZE], mem: &'a UnicornCPU, domain: bool) -> Result<ParsedRequest<'a>, SfError> {
+    pub fn parse(message: &[u8; MESSAGE_SIZE], mem: &'a dyn Cpu, domain: bool) -> Result<ParsedRequest<'a>, SfError> {
         let words: Vec<u32> = message.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
         let (h0, h1) = (words[0], words[1]);
         let mut r = Words { words: &words, at: 2 };
@@ -176,7 +179,7 @@ impl<'a> Request<'a> {
             return Err(SfError::InvalidInHeader);
         }
         let args = cmif[4..].iter().flat_map(|w| w.to_le_bytes()).collect();
-        Ok(ParsedRequest::Invoke { command: cmif[2], object, request: Self { mem, send_pid, copy_handles, move_handles, x, a, b, w, c, objects, args } })
+        Ok(ParsedRequest::Invoke { command: cmif[2], object, request: Self { mem, send_pid, transfers: Vec::new(), copy_handles, move_handles, x, a, b, w, c, objects, args } })
     }
 }
 

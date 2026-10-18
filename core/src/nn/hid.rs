@@ -3,7 +3,7 @@
 //! Ryujinx HidDevices/NpadDevices.cs. Switchbrew documents no Switch 2 Npad revision, so the host
 //! pad is a wired FullKey controller on Npad No1.
 
-use crate::cpu::UnicornCPU;
+use crate::cpu::Cpu;
 use crate::input::{self, InputState};
 use crate::kernel::Object;
 use crate::nn::hipc::{Request, Response, Service};
@@ -45,13 +45,13 @@ impl ServiceTrait for State {
 }
 
 impl State {
-    pub fn tick(&mut self, cpu: &UnicornCPU) {
+    pub fn tick(&mut self, cpu: &dyn Cpu) {
         let input = (self.input)();
         self.write(cpu, input);
     }
 
     /// Appends one record to every Npad lifo, the input to No1's FullKey and zero states elsewhere.
-    fn write(&mut self, cpu: &UnicornCPU, input: InputState) {
+    fn write(&mut self, cpu: &dyn Cpu, input: InputState) {
         let Some(base) = self.shared.get() else { return };
         let connected = input.connected && self.style_set & FULL_KEY != 0 && self.ids.contains(&0);
         self.sampling += 1;

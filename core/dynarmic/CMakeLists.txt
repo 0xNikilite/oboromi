@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.15)
+project(oboromi_dynarmic LANGUAGES CXX)
+add_subdirectory(${DYNARMIC_SOURCE} dynarmic)
+add_library(oboromi_dynarmic STATIC bridge.cpp)
+target_compile_features(oboromi_dynarmic PRIVATE cxx_std_20)
+target_link_libraries(oboromi_dynarmic PRIVATE dynarmic)

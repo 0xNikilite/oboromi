@@ -23,7 +23,12 @@ unsafe impl Sync for GuestRam {}
 
 impl GuestRam {
     pub fn new(bytes: usize) -> Arc<Self> {
-        let mut map = MmapMut::map_anon(bytes).expect("guest RAM mapping");
+        let mut map = MmapMut::map_anon(bytes.next_power_of_two()).expect("guest RAM mapping");
+        let protected = bytes.next_multiple_of(PAGE as usize);
+        if map.len() > protected {
+            let tail = unsafe { map.as_mut_ptr().add(protected) };
+            assert_eq!(unsafe { libc::mprotect(tail.cast(), map.len() - protected, libc::PROT_NONE) }, 0, "protect guest RAM tail");
+        }
         let cpu_written = (0..(bytes as u64).div_ceil(64 * PAGE)).map(|_| AtomicU64::new(0)).collect();
         Arc::new(Self { base: map.as_mut_ptr(), len: bytes, _map: map, turn: Mutex::default(), cpu_written, watched: Mutex::default() })
     }

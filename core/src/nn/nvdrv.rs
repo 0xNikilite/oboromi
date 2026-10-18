@@ -2,7 +2,7 @@
 //! Services/Nv. nvmap handles name guest buffers, an address space maps them at GPU virtual addresses in the engine's
 //! page map, ctrl keeps the syncpoints and a channel hands its GPFIFO entries to the engine. Submits run to
 //! completion, so every fence a channel returns is already reached.
-use crate::cpu::UnicornCPU;
+use crate::cpu::Cpu;
 use crate::gpu::compute_class::CLASS_ID as COMPUTE;
 use crate::gpu::engine::Gpu;
 use crate::gpu::memory::PAGE;
@@ -131,7 +131,7 @@ fn pick<'r>(mapped: &'r [Buffer], pointer: &'r [Buffer], i: usize) -> Option<&'r
     mapped.get(i).filter(|b| b.size != 0).or(pointer.get(i))
 }
 
-fn read(mem: &UnicornCPU, buffer: Option<&Buffer>, len: usize) -> Result<Vec<u8>, NvError> {
+fn read(mem: &dyn Cpu, buffer: Option<&Buffer>, len: usize) -> Result<Vec<u8>, NvError> {
     let mut bytes = vec![0; len];
     if let Some(b) = buffer.filter(|b| b.size != 0) {
         let n = len.min(b.size as usize);
@@ -140,7 +140,7 @@ fn read(mem: &UnicornCPU, buffer: Option<&Buffer>, len: usize) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-fn write(mem: &UnicornCPU, buffer: Option<&Buffer>, bytes: &[u8]) -> Result<(), NvError> {
+fn write(mem: &dyn Cpu, buffer: Option<&Buffer>, bytes: &[u8]) -> Result<(), NvError> {
     match buffer.filter(|b| b.size != 0) {
         Some(b) => mem.write_mem(b.addr, &bytes[..bytes.len().min(b.size as usize)]).map_err(|_| NvError::BadParameter),
         None => Ok(()),
@@ -166,7 +166,7 @@ impl Nvdrv {
 
     /// Ioctl, Ioctl2 and Ioctl3: the argument struct is in and out through the first buffers, Ioctl2 adds a second
     /// input and Ioctl3 a second output.
-    fn ioctls(&mut self, mem: &UnicornCPU, [fd, code]: [u32; 2], inputs: [Option<&Buffer>; 2], outputs: [Option<&Buffer>; 2]) -> Result<(), NvError> {
+    fn ioctls(&mut self, mem: &dyn Cpu, [fd, code]: [u32; 2], inputs: [Option<&Buffer>; 2], outputs: [Option<&Buffer>; 2]) -> Result<(), NvError> {
         let mut args = read(mem, inputs[0], (code >> 16 & 0x3fff) as usize)?;
         let extra_len = inputs[1].or(outputs[1]).map_or(0, |b| b.size as usize);
         let mut extra = read(mem, inputs[1], extra_len)?;

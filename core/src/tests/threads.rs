@@ -1,4 +1,4 @@
-use crate::cpu::UnicornCPU;
+use crate::cpu::{Cpu, UnicornCPU};
 use crate::cpu::cpu_manager::CpuManager;
 use crate::kernel::{CODE, Error, Kernel, Object, TLS, Timer};
 use std::time::Instant;
@@ -15,7 +15,7 @@ fn setup(entry: u64) -> (CpuManager, Kernel) {
     (cpus, kernel)
 }
 
-fn call(kernel: &mut Kernel, cpu: &UnicornCPU, nr: u32, args: &[u64]) -> [u64; 8] {
+fn call(kernel: &mut Kernel, cpu: &dyn Cpu, nr: u32, args: &[u64]) -> [u64; 8] {
     let mut x = [0; 8];
     x[..args.len()].copy_from_slice(args);
     let result = kernel.svc(cpu, nr, x).unwrap();
@@ -23,7 +23,7 @@ fn call(kernel: &mut Kernel, cpu: &UnicornCPU, nr: u32, args: &[u64]) -> [u64; 8
     result
 }
 
-fn thread(kernel: &mut Kernel, cpu: &UnicornCPU, entry: u64, arg: u64, priority: u64) -> u64 {
+fn thread(kernel: &mut Kernel, cpu: &dyn Cpu, entry: u64, arg: u64, priority: u64) -> u64 {
     call(kernel, cpu, 0x08, &[0, CODE.base + entry, arg, 0x2020_0000, priority, 0])[1]
 }
 
@@ -62,6 +62,7 @@ fn mutex_condvar_ping_pong_is_exact_after_ten_thousand_rounds() {
     ping_pong(0, false);
     let (cpus, _) = setup(0x1200);
     let cpu = cpus.get_core(0).unwrap();
+    let Some(cpu) = cpu.as_any().downcast_ref::<UnicornCPU>() else { return };
     cpu.set_virtual_time(false);
     let mut context = cpu.context().unwrap();
     let mut measurements = Vec::new();

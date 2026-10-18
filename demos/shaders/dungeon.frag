@@ -76,9 +76,9 @@ vec4 stoneMaterial(vec3 texel,vec3 p,vec3 n,int m,vec2 uv) {
     float zone=fbmNoise(p.xz*.13+vec2(p.y*.07,-p.y*.05));
     if(m==1) {
         float along=abs(n.x)>abs(n.z)?p.z:p.x,row=floor(p.y/.42);
-        vec2 joint=abs(fract(vec2(along/.88+mod(row,2.)*.5,p.y/.42))-.5);
+        vec2 joint=abs((abs(n.y)>.7?fract(p.xz/vec2(.88,.52)):fract(vec2(along/.88+mod(row,2.)*.5,p.y/.42)))-.5);
         float mortar=smoothstep(.455,.49,max(joint.x,joint.y)),wear=1.-smoothstep(0.,.58,p.y);
-        vec3 dressed=mix(vec3(.052,.06,.066),texel*vec3(.48,.52,.56),.42);
+        vec3 dressed=mix(vec3(.052,.06,.066),texel*vec3(.4,.43,.47),.22);
         dressed=mix(dressed,vec3(.018,.021,.022),mortar);dressed*=1.-wear*.24;
         return vec4(dressed,mix(.82,.58,wear));
     }
@@ -309,7 +309,7 @@ void main() {
             wet=smoothstep(.53,.64,noise(world.xz*.43)+noise(world.xz*1.7)*.13-grime*.22);
         }else if(m==1 || m>=6){vec4 stone=stoneMaterial(base,world,n,m,uv);base=stone.rgb;rough=stone.a;}
         base*=1.-wet*.38; rough=mix(rough,.055,wet);
-        vec3 nt=normalTex(uv,m);nt.xy*=1.-wet*.93;
+        vec3 nt=normalTex(uv,m);nt.xy*=m==1?.35:1.-wet*.93;
         if(projected && right_quality.w<.5){
             n=normalize(abs(n.x)>max(abs(n.y),abs(n.z))?vec3(nt.z*sign(n.x),nt.y,nt.x):abs(n.y)>abs(n.z)?vec3(nt.x,nt.z*sign(n.y),nt.y):vec3(nt.x,nt.y,nt.z*sign(n.z)));
         }else if(projected){

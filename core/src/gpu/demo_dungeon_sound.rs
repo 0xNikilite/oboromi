@@ -78,7 +78,16 @@ fn looping(kind: Sample) -> bool {
 }
 
 fn drip_timing(rng: &mut Rng) -> (f32, u64) {
-    (0.97 + rng.next() * 0.06, ((1.5 + rng.next() * 4.5) * RATE) as u64)
+    (0.97 + rng.next() * 0.06, ((2.0 + rng.next() * 3.0) * RATE) as u64)
+}
+
+fn far_drip_delay(rng: &mut Rng) -> u64 {
+    ((10.0 + rng.next() * 10.0) * RATE) as u64
+}
+
+#[allow(dead_code)]
+pub fn step_cadence(walk_speed: f32) -> f32 {
+    walk_speed.max(0.0) / 0.54
 }
 
 fn limit(sample: f32) -> f32 {
@@ -98,7 +107,7 @@ struct Voice {
     step_set: usize,
 }
 
-pub const DRIPS: usize = 6;
+pub const DRIPS: usize = 4;
 
 struct Engine {
     renderer: Renderer,
@@ -109,8 +118,14 @@ struct Engine {
     voices: Vec<Voice>,
     spatial: Spatializer,
     bridge: Box3,
+    reveal: Box3,
     rng: Rng,
-    drip_at: [u64; DRIPS],
+    drip_at: u64,
+    next_drip: usize,
+    in_reveal: bool,
+    reveal_at: u64,
+    last_eye: V3,
+    mix_gain: f32,
     rendered: u64,
     creak: Option<usize>,
     creak_played: bool,
@@ -132,26 +147,32 @@ impl Engine {
         let samples = SAMPLES.map(sample).into();
         let drips = (0..3).map(|i| recording(&format!("drip{i}"))).collect();
         let steps = ["stone", "wet", "gravel", "wood"].into_iter().flat_map(|name| (0..6).map(move |i| recording(&format!("{name}{i}")))).collect();
-        let ambient = sources.len() > 4;
+        let ambient = sources == world.sources;
         let creak = sources.iter().position(|source| source.0 == Sfx::Creak);
-        let mut voices: Vec<Voice> = sources.iter().enumerate().map(|(i, &(sfx, pos, gain))| Voice { sample: sfx.into(), pos, gain: gain * if sfx == Sfx::Heart { 0.12 } else { 1.2 }, pitch: 0.99 + 0.02 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active: sfx != Sfx::Creak, tail: usize::MAX, variation: 0, step_set: 0 }).collect();
+        let mut voices: Vec<Voice> = sources.iter().enumerate().map(|(i, &(sfx, pos, gain))| {
+            let active = sfx != Sfx::Creak && (!ambient || !matches!(sfx, Sfx::Torch | Sfx::Fire | Sfx::River));
+            Voice { sample: sfx.into(), pos, gain: gain * if sfx == Sfx::Heart { 0.12 } else { 1.2 }, pitch: 0.99 + 0.02 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active, tail: if active { usize::MAX } else { 0 }, variation: 0, step_set: 0 }
+        }).collect();
         if ambient {
-            let cave = world.zones[world.cave].space;
-            voices.push(Voice { sample: Sample::Room, pos: std::array::from_fn(|i| (cave.lo[i] + cave.hi[i]) * 0.5), gain: 0.28, pitch: 1.0, cursor: 0.0, active: true, tail: usize::MAX, variation: 0, step_set: 0 });
+            voices.extend(world.lights.iter().filter(|light| light.flame >= 0.3).enumerate().map(|(i, light)| Voice { sample: if light.flame > 1.0 { Sample::Fire } else { Sample::Torch }, pos: light.pos, gain: if light.flame > 1.0 { 2.64 } else { 0.66 }, pitch: 0.99 + 0.02 * ((i * 7) % 11) as f32 / 10.0, cursor: 0.0, active: true, tail: usize::MAX, variation: 0, step_set: 0 }));
+            voices.extend((0..4).map(|i| Voice { sample: Sample::River, pos: [world.river.lo[0] + (i as f32 + 0.5) / 4.0 * (world.river.hi[0] - world.river.lo[0]), world.river.hi[1], (world.river.lo[2] + world.river.hi[2]) * 0.5], gain: 1.56, pitch: 0.99 + i as f32 * 0.006, cursor: 0.0, active: true, tail: usize::MAX, variation: 0, step_set: 0 }));
         }
+        if ambient { for (i, room) in world.acoustic_rooms().into_iter().enumerate() {
+            voices.push(Voice { sample: Sample::Room, pos: std::array::from_fn(|axis| (room.min[axis] + room.max[axis]) * 0.5), gain: if i == world.cave { 0.28 } else { 0.08 }, pitch: 1.0, cursor: 0.0, active: true, tail: usize::MAX, variation: 0, step_set: 0 });
+        } }
         let cave = world.zones[world.cave].space;
         let centre: V3 = std::array::from_fn(|i| (cave.lo[i] + cave.hi[i]) * 0.5);
         let mut positions: Vec<_> = world.drips.iter().map(|&(tip, floor)| [tip[0], floor, tip[2]]).collect();
         positions.sort_by(|a, b| super::demo_dungeon::length(super::demo_dungeon::sub(*a, centre)).total_cmp(&super::demo_dungeon::length(super::demo_dungeon::sub(*b, centre))));
-        for sample in [[Sample::Drip; DRIPS].as_slice(), &[Sample::Scream, Sample::Step, Sample::Step]].concat() {
-            let position = positions.get(voices.len().saturating_sub(sources.len() + usize::from(ambient))).copied().unwrap_or([0.0; 3]);
+        for (i, sample) in [[Sample::Drip; DRIPS].as_slice(), &[Sample::Scream, Sample::Step, Sample::Step]].concat().into_iter().enumerate() {
+            let position = positions.get(i).copied().unwrap_or(centre);
             voices.push(Voice { sample, pos: position, gain: 0.0, pitch: 1.0, cursor: 0.0, active: false, tail: 0, variation: 0, step_set: 0 });
         }
         let parameter = AudioRendererParameter { sample_rate: 48_000, sample_count: BLOCK as u32, mix_buffer_count: 2, voice_count: 2, sink_count: 1, revision: MAGIC, ..Default::default() };
         let mut work = vec![0; work_buffer_size(&parameter).unwrap() as usize];
         let mut renderer = Renderer::open(parameter, &mut work).unwrap();
         renderer.start();
-        Engine { renderer, memory: HostMemory { base: BASE, bytes: vec![0; 0x1000] }, samples, drips, steps, voices, spatial: Spatializer::new(&world.acoustic_rooms(), Mode::Headphones), bridge: world.bridge, rng: Rng(0xd21f_740b), drip_at: std::array::from_fn(|i| ((1.5 + i as f32 * 0.73) * RATE) as u64), rendered: 0, creak, creak_played: false, ambient, configured: false, next_step: 0, output: vec![0; 0x2_0000] }
+        Engine { renderer, memory: HostMemory { base: BASE, bytes: vec![0; 0x1000] }, samples, drips, steps, voices, spatial: Spatializer::new(&world.acoustic_rooms(), Mode::Headphones), bridge: world.bridge, reveal: world.zones[world.cave].space, rng: Rng(0xd21f_740b), drip_at: (12.0 * RATE) as u64, next_drip: 0, in_reveal: false, reveal_at: 0, last_eye: [0.0; 3], mix_gain: 0.46, rendered: 0, creak, creak_played: false, ambient, configured: false, next_step: 0, output: vec![0; 0x2_0000] }
     }
 
     pub fn move_source(&mut self, i: usize, pos: V3) {
@@ -164,7 +185,11 @@ impl Engine {
         if sample == Sample::Scream || self.ambient && sample == Sample::Drip { return; }
         let slot = match sample {
             Sample::Drip => {
-                first
+                if self.rendered < self.drip_at { return; }
+                let slot = first + self.next_drip;
+                self.next_drip = (self.next_drip + 1) % DRIPS;
+                self.drip_at = self.rendered + drip_timing(&mut self.rng).1;
+                slot
             }
             _ => {
                 self.next_step += 1;
@@ -175,10 +200,22 @@ impl Engine {
         let decibels = [-2.0, 1.0, -1.0, 2.0, 0.0, 0.5][variation];
         let step = matches!(sample, Sample::Step | Sample::WetStep | Sample::GravelStep);
         let step_set = if self.bridge.contains(pos) { 3 } else { match sample { Sample::WetStep => 1, Sample::GravelStep => 2, _ => 0 } };
+        let pos = if sample == Sample::Drip { self.voices[slot].pos } else { pos };
         self.voices[slot] = Voice { sample, pos, gain: gain * if step { 10.0f32.powf(decibels / 20.0) } else { 1.0 }, pitch: if step { 1.0 } else { pitch }, cursor: 0.0, active: true, tail: 800, variation, step_set };
     }
 
-    fn listen(&mut self, eye: V3, yaw: f32) {
+    fn listen(&mut self, eye: V3, yaw: f32, dt: f32) {
+        let in_reveal = self.reveal.contains(eye);
+        if in_reveal != self.in_reveal {
+            self.in_reveal = in_reveal;
+            if in_reveal { self.reveal_at = self.rendered; }
+            self.drip_at = self.rendered + if in_reveal { (2.0 * RATE) as u64 } else { far_drip_delay(&mut self.rng) };
+        }
+        let reveal_age = (self.rendered - self.reveal_at) as f32 / RATE;
+        let moving = dt > 0.0 && super::demo_dungeon::length(super::demo_dungeon::sub(eye, self.last_eye)) / dt > 0.1;
+        let target = if !in_reveal { 0.46 } else if reveal_age < 6.0 { 0.46 + reveal_age / 6.0 * 0.54 } else if moving { 1.0 } else { 0.58 };
+        self.mix_gain += (target - self.mix_gain) * (dt / 2.0).min(1.0);
+        self.last_eye = eye;
         self.spatial.set_mode(if MODE.load(Ordering::Relaxed) == 0 { Mode::Headphones } else { Mode::Speakers });
         self.spatial.set_listener(eye, [yaw.sin(), 0.0, -yaw.cos()], [0.0, 1.0, 0.0]);
     }
@@ -194,20 +231,19 @@ impl Engine {
         for _ in 0..periods {
             let first = self.voices.len() - DRIPS - 3;
             if self.ambient {
-                for i in 0..DRIPS {
-                    if self.rendered >= self.drip_at[i] {
-                        let voice = &mut self.voices[first + i];
-                        voice.gain = 0.34;
-                        let (pitch, delay) = drip_timing(&mut self.rng);
-                        voice.pitch = pitch;
-                        voice.cursor = 0.0;
-                        voice.active = true;
-                        voice.tail = 800;
-                        voice.variation = i % 3;
-                        self.drip_at[i] += delay;
-                    }
+                if self.rendered >= self.drip_at {
+                    let voice = &mut self.voices[first + self.next_drip];
+                    voice.gain = if self.in_reveal { 0.34 } else { 0.055 };
+                    let (pitch, delay) = drip_timing(&mut self.rng);
+                    voice.pitch = pitch;
+                    voice.cursor = 0.0;
+                    voice.active = true;
+                    voice.tail = 800;
+                    voice.variation = self.next_drip % 3;
+                    self.next_drip = (self.next_drip + 1) % DRIPS;
+                    self.drip_at = self.rendered + if self.in_reveal { delay } else { far_drip_delay(&mut self.rng) };
                 }
-                if !self.creak_played && self.rendered >= (21.8 * RATE) as u64 {
+                if !self.creak_played && self.rendered >= (32.5 * RATE) as u64 {
                     if let Some(creak) = self.creak { self.voices[creak].active = true; }
                     self.creak_played = true;
                 }
@@ -235,7 +271,7 @@ impl Engine {
                 }
                 if !voice.active { voice.tail = voice.tail.saturating_sub(1); }
                 let mut stereo = [[0.0; 2]; BLOCK];
-                let suspense = self.rendered >= (18.0 * RATE) as u64 && self.rendered < (26.0 * RATE) as u64;
+                let suspense = self.rendered >= (30.0 * RATE) as u64 && self.rendered < (36.0 * RATE) as u64;
                 let gain = if voice.sample == Sample::Heart && !suspense { 0.0 } else { voice.gain };
                 self.spatial.render(&Source { id, position: voice.pos, gain }, &mono, &mut stereo);
                 mix.add(&stereo);
@@ -246,7 +282,7 @@ impl Engine {
             for (frame, samples) in mix.finish().iter().enumerate() {
                 for channel in 0..2 {
                     let at = channel * 0x400 + frame * 2;
-                    self.memory.bytes[at..at + 2].copy_from_slice(&(limit(samples[channel] * 45.0).mul_add(32767.0, 0.0) as i16).to_le_bytes());
+                    self.memory.bytes[at..at + 2].copy_from_slice(&(limit(samples[channel] * 45.0 * self.mix_gain).mul_add(32767.0, 0.0) as i16).to_le_bytes());
                 }
             }
             output.extend(self.renderer.step(&mut self.memory));
@@ -293,7 +329,7 @@ static WORKER_NANOS: AtomicU64 = AtomicU64::new(0);
 enum Command {
     Move { source: usize, pos: V3 },
     Play { sample: Sample, pos: V3, gain: f32, pitch: f32 },
-    Listen { eye: V3, yaw: f32 },
+    Listen { eye: V3, yaw: f32, dt: f32 },
 }
 
 struct CommandRing {
@@ -344,11 +380,25 @@ mod tests {
     #[test]
     fn drips_stay_sparse_and_natural() {
         let mut rng = Rng(7);
-        for _ in 0..1000 {
+        let mut cycle = 0;
+        for i in 0..1000 {
             let (pitch, delay) = drip_timing(&mut rng);
             assert!((0.97..=1.03).contains(&pitch));
-            assert!(((1.5 * RATE) as u64..=(6.0 * RATE) as u64).contains(&delay));
+            assert!(((2.0 * RATE) as u64..=(5.0 * RATE) as u64).contains(&delay));
+            cycle += delay;
+            if i % DRIPS == DRIPS - 1 {
+                assert!(((8.0 * RATE) as u64..=(20.0 * RATE) as u64).contains(&cycle));
+                cycle = 0;
+            }
         }
+        for _ in 0..1000 { assert!(((10.0 * RATE) as u64..=(20.0 * RATE) as u64).contains(&far_drip_delay(&mut rng))); }
+    }
+
+    #[test]
+    fn walking_speed_sets_step_cadence() {
+        assert!((step_cadence(0.7) - 1.3).abs() < 0.01);
+        assert!(step_cadence(0.6) < step_cadence(0.7));
+        assert_eq!(step_cadence(0.0), 0.0);
     }
 
     #[test]
@@ -396,7 +446,7 @@ impl Worker {
                     match command {
                         Command::Move { source, pos } => engine.move_source(source, pos),
                         Command::Play { sample, pos, gain, pitch } => engine.play(sample, pos, gain, pitch),
-                        Command::Listen { eye, yaw } => engine.listen(eye, yaw),
+                        Command::Listen { eye, yaw, dt } => engine.listen(eye, yaw, dt),
                     }
                 }
                 if crate::audio::queued() <= 3 * BLOCK {
@@ -439,7 +489,7 @@ pub struct Sound {
 impl Sound {
     pub fn new(world: &World, sources: &[(Sfx, V3, f32)], threaded: bool, eye: V3, yaw: f32) -> Self {
         let mut engine = Engine::new(world, sources);
-        engine.listen(eye, yaw);
+        engine.listen(eye, yaw, 0.0);
         if threaded {
             Self { engine: None, worker: Some(Worker::new(engine)) }
         } else {
@@ -457,9 +507,9 @@ impl Sound {
         else { self.engine.as_mut().unwrap().play(sample, pos, gain, pitch); }
     }
 
-    pub fn listen(&mut self, _world: &World, eye: V3, yaw: f32, _dt: f32) {
-        if let Some(worker) = &self.worker { worker.send(Command::Listen { eye, yaw }); }
-        else { self.engine.as_mut().unwrap().listen(eye, yaw); }
+    pub fn listen(&mut self, _world: &World, eye: V3, yaw: f32, dt: f32) {
+        if let Some(worker) = &self.worker { worker.send(Command::Listen { eye, yaw, dt }); }
+        else { self.engine.as_mut().unwrap().listen(eye, yaw, dt); }
     }
 
     pub fn render(&mut self, periods: usize) -> Vec<i16> {

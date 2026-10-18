@@ -532,7 +532,7 @@ impl Renderer {
                     })
                 });
                 let vp = multiply(projection, view);
-                self.uniforms(vp, vp, light.pos, 0., right, up, world, true, 0., None)?;
+                self.uniforms(vp, vp, light.pos, 0., right, up, 1., world, true, 0., None)?;
                 self.uniforms.write_at(216, &2f32.to_le_bytes()).map_err(named)?;
                 self.draw(&target, 0, self.count, true, false)?;
                 self.draw(&target, u32::MAX, 24 * 12 * 6, false, false)?;
@@ -556,6 +556,7 @@ impl Renderer {
         seconds: f32,
         right: V3,
         up: V3,
+        fade: f32,
         world: &World,
         reflection: bool,
         plane: f32,
@@ -582,7 +583,7 @@ impl Renderer {
             world.river.hi[2],
         ]);
         u.extend(world.grate.centre());
-        u.push(DISABLED.load(Ordering::Relaxed) as f32);
+        u.push(DISABLED.load(Ordering::Relaxed) as f32 + fade.min(0.999) * 0.5);
         u.extend([WIDTH as f32, HEIGHT as f32, reflection as u8 as f32, plane]);
         let focus=sub(eye,scale(cross(right,up),4.));
         let mut nearest: Vec<_> = (0..world.lights.len()).collect();
@@ -723,6 +724,7 @@ impl Renderer {
         seconds: f32,
         right: V3,
         up: V3,
+        fade: f32,
         waves: &HostBuffer,
     ) -> Result<(), String> {
         if !self.rays && !self.shadows_ready {self.bake_shadows(world)?;}
@@ -741,7 +743,8 @@ impl Renderer {
         let light_data: Vec<_> = world.lights.iter().enumerate().flat_map(|(i,l)| {
             let phase=i as f32*2.3;
             let flicker=1.+l.flicker*(0.21*(seconds*11.7+phase).sin()+0.11*(seconds*23.1+phase*1.7).sin()+0.08*(seconds*4.3+phase).sin());
-            [l.pos[0],l.pos[1],l.pos[2],l.flame,l.colour[0]*flicker,l.colour[1]*flicker,l.colour[2]*flicker,self.shadow_slots[i].map_or(0.,|slot|slot as f32+1.)]
+            let reveal=if world.zones[world.cave].space.contains(l.pos) {0.04+0.96*smoother((seconds-26.)/6.)} else {1.};
+            [l.pos[0],l.pos[1],l.pos[2],l.flame,l.colour[0]*flicker*reveal,l.colour[1]*flicker*reveal,l.colour[2]*flicker*reveal,self.shadow_slots[i].map_or(0.,|slot|slot as f32+1.)]
         }).collect();
         self.lights.write(&floats(&light_data)).map_err(named)?;
         let per_emitter = if self.showcase { 96 } else { 24 };
@@ -860,8 +863,8 @@ impl Renderer {
             self.indices.write_at(0,&indices.iter().flat_map(|i|i.to_le_bytes()).collect::<Vec<_>>()).map_err(named)?;
             self.visible_zones=zones;
         }
-        self.uniforms(reflected,reflected,reflected_eye,seconds,right,up,world,true,plane,Some(0))?;
-        self.uniforms(vp,reflected,eye,seconds,right,up,world,false,plane,Some(256))?;
+        self.uniforms(reflected,reflected,reflected_eye,seconds,right,up,fade,world,true,plane,Some(0))?;
+        self.uniforms(vp,reflected,eye,seconds,right,up,fade,world,false,plane,Some(256))?;
         let key=(self.visible_count,self.cone_visible,DISABLED.load(Ordering::Relaxed),PROFILE.load(Ordering::Relaxed));
         if self.recorded!=Some(key) {
             let start=std::time::Instant::now();

@@ -76,6 +76,7 @@ fn main() {
             .map(|i| args[i + 1].clone())
     };
     if args[0] == "dungeon" {
+        demo_dungeon::set_dungeon_capture();
         demo_dungeon::render::PROFILE.store(args.iter().any(|a|a=="--profile"), std::sync::atomic::Ordering::Relaxed);
         if let Some(debug) = flag("--water-debug") {
             let bit=match debug.as_str(){"normal"=>16,"reflection"=>32,"refraction"=>64,_=>panic!("--water-debug normal|reflection|refraction")};

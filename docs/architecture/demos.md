@@ -122,7 +122,7 @@ The ray-traced scene runs through `demo::render_raytraced_frame` or the `capture
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon.mp4" type="video/mp4"></video>
 
-*Showcase: rendered offline at 1080p60 with ray-query shadows, reflections and ambient occlusion ON. Sized for the console; native Switch 2 performance remains unverified. Gentle river waves reveal the pebble bed, with filtered torch reflections, drifting volumetric mist, rounded wet formations and hanging stalactites with drips. Measured offline median frame time on Intel Arc MTL is 100.1 ms. The dungeon's shaders are compiled from GLSL for now.*
+*Showcase: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. Ray queries add flame-sized soft shadows, contact shadows, off-screen reflections and crevice occlusion.*
 
 Console cost estimate: translated/twin efficiency cannot be measured while these shaders use native GLSL. Only raw Intel GPU measurements are available; a native console total below 16.7 ms has not been established.
 
@@ -140,14 +140,18 @@ Console cost estimate: translated/twin efficiency cannot be measured while these
 
 <video controls loop playsinline poster="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime-poster.png" style="width:100%"><source src="https://raw.githubusercontent.com/jopdorp/oboromi/assets/demo-dungeon-realtime.mp4" type="video/mp4"></video>
 
-*Realtime preset: recorded offline at 1080p60, with baked shadows, filtered planar reflections and reduced particle, water, formation and fog budgets. Six selected lamps light each view. The standalone live-audio tour measures 9.67 ms median and 13.50 ms p95 on Intel Arc MTL. The dungeon's shaders are compiled from GLSL for now.*
+*Realtime: This tech demo renders through Vulkan directly with its own GLSL shaders. It does not run on the emulated GPU or CPU yet. It drives the audio renderer and sets the bar for the guest version. This version uses baked shadows and planar reflections.*
 
-Release measurements use 1200 frames per run, excluding the first three. GPU times
+![Raster and ray-query dungeon frame](https://raw.githubusercontent.com/jopdorp/oboromi/assets/dungeon-v6-rt-compare.png)
+
+*Raster is left. Ray queries are right. The right side traces every torch and the fire for softer shadows, contact under the bridge and rocks, reflected off-screen walls and torches, and darker rock crevices. The difference is moderate in this frame and clearest in the water.*
+
+Release measurements use 3840 frames per run, excluding the first three. GPU times
 are Vulkan timestamp medians, summed within each frame across main and reflection
 draws. Per-pass medians need not sum to the median total. Frame times include GPU
 waits and audio but exclude PPM writes. Offline capture uses synchronous audio;
 the live harness drains the audio ring on a separate clock without a window or audio
-device. Both clips retain the approved round-three WAV and normalization.
+device. Both clips use the same round-six mix at -16 LUFS and -1 dBTP.
 
 | Run | Median frame ms | p95 frame ms | Median summed GPU ms |
 |---|---:|---:|---:|
@@ -176,8 +180,8 @@ Active graphics CPU in the live tour is 0.454 ms median. Recorded Vulkan command
 The scene uses one opaque batch, instanced formations and sprites, and a water
 draw; offscreen room batches and cave formations are culled. Realtime additionally
 renders the reflected scene. Showcase uses 96 particles per light, a 256x64 water
-grid, 24 quarter-resolution fog steps, four shadow rays per contributing flame,
-one AO ray, one reflection ray on wet floors and three nearby rays on the river. Realtime uses 24 particles per
+grid, 24 quarter-resolution fog steps, twelve shadow rays per contributing flame,
+six occlusion rays, one reflection ray on wet floors and three nearby rays on the river. Realtime uses 24 particles per
 light, a 96x24 water grid, four fog steps and a 480x270 planar reflection. Ten
 128px shadow cubemaps are baked, with at most two nearby lights
 casting shadows; rock textures use the dominant face projection.

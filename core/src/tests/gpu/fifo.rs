@@ -1,35 +1,14 @@
 #![cfg(test)]
 
+use super::engine::{
+    bytes, entry, header, inc, non_inc, DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST, SET_COLOR_TARGET_A, SET_CT_WRITE, SET_OBJECT,
+    SET_PIPELINE_SHADER, SET_SCISSOR_ENABLE, SET_VERTEX_ATTRIBUTE_A, SET_VERTEX_STREAM_A_FORMAT, SET_VERTEX_STREAM_SIZE_A,
+    SET_VIEWPORT_CLIP_HORIZONTAL, SET_VIEWPORT_SCALE_X,
+};
 use crate::gpu::{
     fifo::{Event, Pusher},
     threed::{MemoryLayout, PrimitiveTopology},
 };
-
-const SET_OBJECT: u32 = 0x0000;
-const SET_VERTEX_STREAM_SIZE_A: u32 = 0x0600;
-const SET_COLOR_TARGET_A: u32 = 0x0800;
-const SET_VIEWPORT_SCALE_X: u32 = 0x0a00;
-const SET_VIEWPORT_CLIP_HORIZONTAL: u32 = 0x0c00;
-const SET_SCISSOR_ENABLE: u32 = 0x0e00;
-const SET_VERTEX_ATTRIBUTE_A: u32 = 0x1160;
-const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST: u32 = 0x1214;
-const SET_CT_WRITE: u32 = 0x1a00;
-const SET_VERTEX_STREAM_A_FORMAT: u32 = 0x1c00;
-const SET_PIPELINE_SHADER: u32 = 0x2000;
-
-fn header(op: u32, method: u32, count: u32) -> u32 {
-    op << 29 | count << 16 | method / 4
-}
-
-fn inc(method: u32, values: &[u32], words: &mut Vec<u32>) {
-    words.push(header(1, method, values.len() as u32));
-    words.extend(values);
-}
-
-fn non_inc(method: u32, values: &[u32], words: &mut Vec<u32>) {
-    words.push(header(3, method, values.len() as u32));
-    words.extend(values);
-}
 
 fn immediate(method: u32, value: u32, words: &mut Vec<u32>) {
     words.push(header(4, method, value));
@@ -38,19 +17,6 @@ fn immediate(method: u32, value: u32, words: &mut Vec<u32>) {
 fn one_inc(method: u32, values: &[u32], words: &mut Vec<u32>) {
     words.push(header(5, method, values.len() as u32));
     words.extend(values);
-}
-
-fn entry(address: u64, words: usize) -> [u8; 8] {
-    let lo = address as u32;
-    let hi = ((address >> 32) as u32 & 0xff) | (words as u32) << 10;
-    [lo.to_le_bytes(), hi.to_le_bytes()]
-        .concat()
-        .try_into()
-        .unwrap()
-}
-
-fn bytes(words: &[u32]) -> Vec<u8> {
-    words.iter().flat_map(|word| word.to_le_bytes()).collect()
 }
 
 fn submit(words: &[u32], split: Option<usize>) -> Vec<Event> {
@@ -69,7 +35,6 @@ fn submit(words: &[u32], split: Option<usize>) -> Vec<Event> {
                 let start = (address - 0x1000) as usize;
                 Ok(&memory[start..start + len])
             },
-            |_, _| Ok(()),
         )
         .unwrap()
 }
@@ -226,24 +191,22 @@ fn names_unbound_subchannel_and_unsupported_class() {
         .submit(
             [entry(0x1000, words.len())],
             |_, _| Ok(memory.as_slice()),
-            |_, _| Ok(()),
         )
         .unwrap_err();
     assert!(error.contains("unbound subchannel 0"), "{error}");
 
     words.clear();
-    inc(SET_OBJECT, &[0xc7c0], &mut words);
+    inc(SET_OBJECT, &[0xdead], &mut words);
     immediate(0x100, 1, &mut words);
     let memory = bytes(&words);
     let error = Pusher::default()
         .submit(
             [entry(0x1000, words.len())],
             |_, _| Ok(memory.as_slice()),
-            |_, _| Ok(()),
         )
         .unwrap_err();
     assert!(
-        error.contains("unsupported class method: class 0xc7c0, method 0x0100"),
+        error.contains("unsupported class method: class 0xdead, method 0x0100"),
         "{error}"
     );
 }
@@ -260,7 +223,6 @@ fn one_increment_advances_only_first_word() {
         .submit(
             [entry(0x1000, words.len())],
             |_, _| Ok(memory.as_slice()),
-            |_, _| Ok(()),
         )
         .unwrap();
     assert_eq!(pusher.threed().raw((SET_VERTEX_ATTRIBUTE_A / 4) as u16), 1);
@@ -268,4 +230,14 @@ fn one_increment_advances_only_first_word() {
         pusher.threed().raw((SET_VERTEX_ATTRIBUTE_A / 4 + 1) as u16),
         3
     );
+}
+
+#[test]
+fn subsequent_instances_of_one_draw_merge_into_an_instanced_draw() {
+    const DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT: u32 = 0x1218;
+    let mut words = triangle_pushbuffer();
+    non_inc(DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT, &[(4 << 28) | (3 << 16) | 2; 2], &mut words);
+    let events = submit(&words, None);
+    let [Event::Draw(draw)] = events.as_slice() else { panic!("{events:?}") };
+    assert_eq!((draw.first_instance, draw.instance_count), (0, 3));
 }

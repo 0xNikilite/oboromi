@@ -117,6 +117,7 @@ pub mod execution_model {
 }
 
 pub mod execution_mode {
+    pub const DEPTH_REPLACING: u32 = 12;
     pub const LOCAL_SIZE: u32 = 17;
     pub const ORIGIN_UPPER_LEFT: u32 = 7;
     pub const DENORM_PRESERVE: u32 = 4459;

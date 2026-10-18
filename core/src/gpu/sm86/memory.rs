@@ -21,35 +21,48 @@ impl<'a> Decoder<'a> {
         self.store_register(rd, dst_val);
     }
     pub fn ald(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _rd = (((inst >> 16) & 0xff) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _op = (((inst >> 79) & 0x1) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        use spirv::{BuiltIn, storage_class::INPUT};
+        let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
+        let words = (((inst >> 74) & 0x3) << 0) as u32 + 1;
+        assert!(opcode(inst) == 0x321 && inst >> 24 & 0xff == RZ as u128 && inst >> 76 & 0xf == 0, "only ALD of an input at an immediate attribute address is implemented");
+        assert!(matches!(self.stage, Stage::Vertex { .. }), "ALD in a {:?} module is not implemented", self.stage);
+        for i in 0..words {
+            let attr = ra_offset + 4 * i;
+            let val = match attr {
+                0x80..0x280 => {
+                    let kind = ResourceKind::VertexInput { location: (attr - 0x80) / 16 };
+                    let ptr = self.interface_component(kind, INPUT, attr);
+                    let ty = self.interface_type(kind, 1);
+                    let val = self.ir.emit_load(ty, ptr);
+                    if ty == self.type_u32[1] { val } else { self.bitcast_u32(val) }
+                }
+                0x2f8 => self.builtin(BuiltIn::InstanceIndex),
+                0x2fc => self.builtin(BuiltIn::VertexIndex),
+                _ => panic!("ALD a[{attr:#x}] is not implemented"),
+            };
+            self.store_register(nth_reg(rd, RZ, i), val);
+        }
     }
     pub fn ast(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _ra = (((inst >> 24) & 0xff) << 0);
-        let _rb = (((inst >> 32) & 0xff) << 0);
-        let _rc = (((inst >> 64) & 0xff) << 0);
-        let _bop = (((inst >> 74) & 0x3) << 0);
-        let _dstfmt = (((inst >> 76) & 0x3) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!();
+        use spirv::storage_class::OUTPUT;
+        let rb = (((inst >> 32) & 0xff) << 0) as u32;
+        let ra_offset = (((inst >> 40) & 0x3ff) << 0) as u32;
+        let words = (((inst >> 74) & 0x3) << 0) as u32 + 1;
+        assert!(opcode(inst) == 0x322 && inst >> 24 & 0xff == RZ as u128 && inst >> 76 & 3 == 0, "only AST at an immediate attribute address is implemented");
+        assert!(matches!(self.stage, Stage::Vertex { .. }), "AST in a {:?} module is not implemented", self.stage);
+        for i in 0..words {
+            let attr = ra_offset + 4 * i;
+            let kind = match attr {
+                0x70..0x80 => ResourceKind::BuiltIn(spirv::BuiltIn::Position as u32),
+                0x80..0x280 => ResourceKind::Varying { location: (attr - 0x80) / 16, flat: false },
+                _ => panic!("AST a[{attr:#x}] is not implemented"),
+            };
+            let ptr = self.interface_component(kind, OUTPUT, attr);
+            let val = self.load_register(nth_reg(rb, RZ, i));
+            let val = self.bitcast_f32(val);
+            self.ir.emit_store(ptr, val);
+        }
     }
     pub fn cctl(&mut self, _inst: u128) {
         // Vulkan buffers are coherent without guest cache control.

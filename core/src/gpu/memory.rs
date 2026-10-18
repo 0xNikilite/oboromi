@@ -45,6 +45,12 @@ impl PageMap {
         }
     }
 
+    /// From the lowest mapped page to the end of the highest.
+    pub fn span(&self) -> Option<Range<u64>> {
+        let pages = self.pa_by_va_page.keys();
+        Some(pages.clone().min()? * PAGE..(pages.max()? + 1) * PAGE)
+    }
+
     pub fn resolve(&self, va: u64, len: u64) -> Result<impl Iterator<Item = PaRange> + '_, MemoryError> {
         let end = va + len;
         if let Some(page) = pages(va, len).find(|page| !self.pa_by_va_page.contains_key(page)) {
@@ -84,7 +90,14 @@ pub struct MemoryTracker {
 /// A host-visible copy of guest-physical ranges, gathered in order into one buffer.
 pub struct Mapping<'a> {
     pub buffer: HostBuffer<'a>,
-    ranges: Vec<PaRange>,
+    pub ranges: Vec<PaRange>,
+}
+
+impl Mapping<'_> {
+    pub fn refresh(&mut self, ram: &[u8]) -> Result<(), VkError> {
+        let bytes = self.ranges.iter().map(|range| &ram[range.start as usize..range.end as usize]).collect::<Vec<_>>().concat();
+        self.buffer.write(&bytes)
+    }
 }
 
 impl MemoryTracker {
@@ -113,23 +126,28 @@ impl MemoryTracker {
 
     pub fn upload<'a>(&self, state: &'a VkState, ram: &[u8], ranges: impl IntoIterator<Item = PaRange>) -> Result<Mapping<'a>, VkError> {
         let ranges: Vec<_> = ranges.into_iter().collect();
-        let bytes = ranges.iter().map(|range| &ram[range.start as usize..range.end as usize]).collect::<Vec<_>>().concat();
-        let mut buffer = HostBuffer::new(state, bytes.len().max(1) as u64)?;
-        buffer.write(&bytes)?;
-        Ok(Mapping { buffer, ranges })
+        let len = ranges.iter().map(|range| range.end - range.start).sum::<u64>();
+        let mut mapping = Mapping { buffer: HostBuffer::new(state, len.max(1))?, ranges };
+        mapping.refresh(ram)?;
+        Ok(mapping)
     }
 
     pub fn download(&mut self, mapping: &Mapping, ram: &mut [u8]) -> Result<(), VkError> {
         let mut bytes = vec![0; mapping.ranges.iter().map(|range| (range.end - range.start) as usize).sum()];
         mapping.buffer.read(&mut bytes)?;
-        let mut rest = &bytes[..];
-        for range in &mapping.ranges {
+        self.store(ram, &mapping.ranges, &bytes, Writer::Gpu);
+        Ok(())
+    }
+
+    /// Scatters `bytes` over `ranges` in order.
+    pub fn store(&mut self, ram: &mut [u8], ranges: &[PaRange], bytes: &[u8], writer: Writer) {
+        let mut rest = bytes;
+        for range in ranges {
             let (head, tail) = rest.split_at((range.end - range.start) as usize);
             ram[range.start as usize..range.end as usize].copy_from_slice(head);
-            self.mark_gpu_written(range.start, range.end - range.start);
+            self.mark(range.start, range.end - range.start, writer);
             rest = tail;
         }
-        Ok(())
     }
 
     /// The global-memory SSBO window for `va..va + len` and the VA its first byte holds, aligned down for 128-bit

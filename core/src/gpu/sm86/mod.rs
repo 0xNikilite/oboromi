@@ -97,8 +97,10 @@ pub enum ResourceKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Stage {
     Compute { local_size: [u32; 3] },
-    Vertex,
-    Fragment,
+    /// Bit n of `uint` and `sint` is set when generic attribute n is fetched as an unsigned or signed integer.
+    Vertex { uint: u32, sint: u32 },
+    /// Bit n of `flat` and `screen_linear` is the interpolation of generic attribute n; `depth` writes FragDepth.
+    Fragment { flat: u32, screen_linear: u32, depth: bool },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -181,7 +183,7 @@ fn branch_offset(inst: u128) -> i64 {
     ((inst >> 34) as i64) << 16 >> 18
 }
 
-fn branch_target(pc: u32, inst: u128) -> Option<u32> {
+pub fn branch_target(pc: u32, inst: u128) -> Option<u32> {
     let offset = branch_offset(inst);
     match opcode(inst) {
         BRA | BRA_UREG | BRA_UPRED | CALL_REL => Some((pc as i64 + 1 + offset) as u32),
@@ -323,14 +325,19 @@ impl<'a> Decoder<'a> {
         use spirv::{capability as cap, execution_mode as mode, execution_model as model};
         let execution_model = match self.stage {
             Stage::Compute { .. } => model::GLCOMPUTE,
-            Stage::Vertex => model::VERTEX,
-            Stage::Fragment => model::FRAGMENT,
+            Stage::Vertex { .. } => model::VERTEX,
+            Stage::Fragment { .. } => model::FRAGMENT,
         };
         self.ir.emit_entry_point(execution_model, func, "main", &interface);
         match self.stage {
             Stage::Compute { local_size } => self.ir.emit_execution_mode(func, mode::LOCAL_SIZE, &local_size),
-            Stage::Vertex => {}
-            Stage::Fragment => self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]),
+            Stage::Vertex { .. } => {}
+            Stage::Fragment { depth, .. } => {
+                self.ir.emit_execution_mode(func, mode::ORIGIN_UPPER_LEFT, &[]);
+                if depth {
+                    self.ir.emit_execution_mode(func, mode::DEPTH_REPLACING, &[]);
+                }
+            }
         }
         let Some(device) = device else { return };
         for (capability, execution_mode, widths) in [
@@ -516,7 +523,7 @@ impl<'a> Decoder<'a> {
             self.ir.emit_member_decorate(block, 0, deco::OFFSET, &[0]);
         }
         let var = self.ir.emit_variable(self.type_ptr_ssbo, STORAGE_BUFFER);
-        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[0]);
+        self.ir.emit_decorate(var, deco::DESCRIPTOR_SET, &[self.descriptor_set()]);
         if kind != ResourceKind::Hints {
             self.ir.emit_decorate(var, deco::BINDING, &[binding]);
         }
@@ -653,6 +660,11 @@ impl<'a> Decoder<'a> {
         let uniform = matches!(op, 0x80..=0xbf | S2UR) && op != VOTEU;
         let bit = self.pred_bit(uniform, pg, pg_not);
         Some(self.ir.emit_inot_equal(self.type_bool[1], bit, self.const_u32_0))
+    }
+
+    // A pixel program binds its constant buffers and textures apart from the vertex program's, in descriptor set 1.
+    fn descriptor_set(&self) -> u32 {
+        u32::from(matches!(self.stage, Stage::Fragment { .. }))
     }
 
     fn resource(&self, kind: ResourceKind) -> Option<u32> {

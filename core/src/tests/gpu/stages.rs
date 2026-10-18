@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::gpu::sm86::{ResourceKind, Stage, emit_module};
+    use crate::gpu::sm86::{Hints, ResourceKind, Stage, emit_module};
     use crate::tests::gpu::harness::spirv_val;
     use crate::tests::gpu_test::inst::{ald, ast, exit, fmul, ipa, mov_cbuf};
 
@@ -17,7 +17,7 @@ mod tests {
 
     fn stage_interface(stage: Stage, program: &[u128]) -> Vec<ResourceKind> {
         let mut interface = Vec::new();
-        let module = emit_module(None, stage, |decoder| {
+        let module = emit_module(None, stage, Hints::default(), |decoder| {
             decoder.translate_program(program);
             interface = decoder.resources.iter().map(|r| r.kind).filter(|kind| !matches!(kind, ResourceKind::Cbuf(_))).collect();
         });
@@ -30,12 +30,12 @@ mod tests {
         use ResourceKind::*;
         let position = BuiltIn(crate::gpu::spirv::BuiltIn::Position as u32);
         let expected = [VertexInput { location: 0 }, VertexInput { location: 1 }, position, Varying { location: 0, flat: false }];
-        assert_eq!(stage_interface(Stage::Vertex, &vertex_program()), expected);
+        assert_eq!(stage_interface(Stage::Vertex { uint: 0, sint: 0 }, &vertex_program()), expected);
     }
 
     #[test]
     fn fragment_program_reads_varying_and_writes_colour() {
         let expected = [ResourceKind::Varying { location: 0, flat: false }, ResourceKind::FragmentOutput { location: 0 }];
-        assert_eq!(stage_interface(Stage::Fragment, &fragment_program()), expected);
+        assert_eq!(stage_interface(Stage::Fragment { flat: 0, screen_linear: 0, depth: false }, &fragment_program()), expected);
     }
 }

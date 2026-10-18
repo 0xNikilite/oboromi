@@ -1,4 +1,5 @@
-use super::threed::{DrawSnapshot, ThreeD, ThreeDEvent, CLASS_ID};
+use super::compute_class::{CLASS_ID as COMPUTE_CLASS_ID, ComputeClass, DispatchSnapshot};
+use super::threed::{CLASS_ID as THREED_CLASS_ID, Clear, DrawSnapshot, ThreeD, ThreeDEvent};
 
 const SET_OBJECT: usize = 0x00;
 const SEMAPHORE_A: usize = 0x10;
@@ -30,10 +31,13 @@ impl GpFifoEntry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Draw(DrawSnapshot),
-    Report { addr: u64, payload: u32 },
-    SemaphoreAcquire { addr: u64, payload: u32 },
+    Dispatch(DispatchSnapshot),
+    Report { addr: u64, payload: u32, one_word: bool },
+    /// Satisfied once the word at `addr` equals `payload`, or with `at_least` reaches it.
+    SemaphoreAcquire { addr: u64, payload: u32, at_least: bool },
     SemaphoreRelease { addr: u64, payload: u32 },
-    Clear { value: u32 },
+    Clear(Clear),
+    LoadConstantBuffer { addr: u64, value: u32 },
 }
 
 #[derive(Clone, Copy)]
@@ -57,6 +61,7 @@ pub struct Pusher {
     packet: Option<Packet>,
     classes: [Option<u16>; 8],
     semaphore: [u32; 3],
+    compute: ComputeClass,
     threed: ThreeD,
 }
 
@@ -69,16 +74,10 @@ impl Pusher {
         &mut self.threed
     }
 
-    pub fn submit<'a, I, F, W>(
-        &mut self,
-        entries: I,
-        mut fetch: F,
-        mut write_memory: W,
-    ) -> Result<Vec<Event>, String>
+    pub fn submit<'a, I, F>(&mut self, entries: I, mut fetch: F) -> Result<Vec<Event>, String>
     where
         I: IntoIterator<Item = [u8; 8]>,
         F: FnMut(u64, usize) -> Result<&'a [u8], String>,
-        W: FnMut(u64, &[u8]) -> Result<(), String>,
     {
         let mut events = Vec::new();
         for encoded in entries {
@@ -95,8 +94,8 @@ impl Pusher {
             while let Some(bytes) = words.next() {
                 let word = u32::from_le_bytes(bytes.try_into().unwrap());
                 if self.packet.is_some() {
-                    self.data(word, &mut write_memory, &mut events)?;
-                } else if !self.header(word, &mut write_memory, &mut events)? {
+                    self.data(word, &mut fetch, &mut events)?;
+                } else if !self.header(word, &mut fetch, &mut events)? {
                     break;
                 }
             }
@@ -104,10 +103,10 @@ impl Pusher {
         Ok(events)
     }
 
-    fn header(
+    fn header<'a>(
         &mut self,
         word: u32,
-        write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
+        fetch: &mut impl FnMut(u64, usize) -> Result<&'a [u8], String>,
         events: &mut Vec<Event>,
     ) -> Result<bool, String> {
         let sec = word >> 29;
@@ -131,13 +130,7 @@ impl Pusher {
             }
             3 => Mode::NonIncrement,
             4 => {
-                self.dispatch(
-                    method,
-                    subchannel,
-                    (word >> 16) & 0x1fff,
-                    write_memory,
-                    events,
-                )?;
+                self.dispatch(method, subchannel, (word >> 16) & 0x1fff, fetch, events)?;
                 return Ok(true);
             }
             5 => Mode::OneIncrement,
@@ -162,10 +155,10 @@ impl Pusher {
         Ok(true)
     }
 
-    fn data(
+    fn data<'a>(
         &mut self,
         value: u32,
-        write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
+        fetch: &mut impl FnMut(u64, usize) -> Result<&'a [u8], String>,
         events: &mut Vec<Event>,
     ) -> Result<(), String> {
         let mut packet = self.packet.unwrap();
@@ -174,19 +167,19 @@ impl Pusher {
             Mode::NonIncrement => packet.method,
             Mode::OneIncrement => packet.method + u16::from(packet.consumed != 0),
         };
-        self.dispatch(method, packet.subchannel, value, write_memory, events)?;
+        self.dispatch(method, packet.subchannel, value, fetch, events)?;
         packet.remaining -= 1;
         packet.consumed += 1;
         self.packet = (packet.remaining != 0).then_some(packet);
         Ok(())
     }
 
-    fn dispatch(
+    fn dispatch<'a>(
         &mut self,
         method: u16,
         subchannel: usize,
         value: u32,
-        write_memory: &mut impl FnMut(u64, &[u8]) -> Result<(), String>,
+        fetch: &mut impl FnMut(u64, usize) -> Result<&'a [u8], String>,
         events: &mut Vec<Event>,
     ) -> Result<(), String> {
         if method < 0x40 {
@@ -198,18 +191,27 @@ impl Pusher {
                 method as usize * 4
             )
         })?;
-        if class != CLASS_ID {
+        if class == COMPUTE_CLASS_ID {
+            if let Some(dispatch) = self.compute.write(method, value, fetch)? {
+                events.push(Event::Dispatch(dispatch));
+            }
+        } else if class == THREED_CLASS_ID {
+            match (self.threed.write(method, value)?, events.last_mut()) {
+                (None, _) => {}
+                (Some(ThreeDEvent::Draw(draw)), Some(Event::Draw(last))) if last.continued_by(&draw) => last.instance_count += 1,
+                (Some(event), _) => events.push(match event {
+                    ThreeDEvent::Draw(draw) => Event::Draw(draw),
+                    ThreeDEvent::Report { addr, payload, one_word } => Event::Report { addr, payload, one_word },
+                    ThreeDEvent::SemaphoreAcquire { addr, payload, at_least } => Event::SemaphoreAcquire { addr, payload, at_least },
+                    ThreeDEvent::Clear(clear) => Event::Clear(clear),
+                    ThreeDEvent::LoadConstantBuffer { addr, value } => Event::LoadConstantBuffer { addr, value },
+                }),
+            }
+        } else {
             return Err(format!(
                 "unsupported class method: class {class:#06x}, method {:#06x}",
                 method as usize * 4
             ));
-        }
-        if let Some(event) = self.threed.write(method, value, write_memory)? {
-            events.push(match event {
-                ThreeDEvent::Draw(draw) => Event::Draw(draw),
-                ThreeDEvent::Report { addr, payload } => Event::Report { addr, payload },
-                ThreeDEvent::Clear { value } => Event::Clear { value },
-            });
         }
         Ok(())
     }
@@ -231,8 +233,9 @@ impl Pusher {
                     ((self.semaphore[0] & 0xff) as u64) << 32 | (self.semaphore[1] & !3) as u64;
                 let payload = self.semaphore[2];
                 match value & 0x1f {
-                    1 => events.push(Event::SemaphoreAcquire { addr, payload }),
+                    1 => events.push(Event::SemaphoreAcquire { addr, payload, at_least: false }),
                     2 => events.push(Event::SemaphoreRelease { addr, payload }),
+                    4 => events.push(Event::SemaphoreAcquire { addr, payload, at_least: true }),
                     operation => {
                         return Err(format!(
                             "unsupported channel semaphore operation {operation:#x}"

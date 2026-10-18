@@ -5,6 +5,8 @@ pub mod compute;
 pub mod cubin;
 #[cfg(feature = "cuda")]
 pub mod cuda;
+pub mod compute_class;
+pub mod engine;
 pub mod fifo;
 pub mod frame;
 pub mod graphics;
@@ -53,6 +55,7 @@ pub struct VkState {
     pub timestamp_period: f32,
     pub surface: Option<ash::khr::surface::Instance>,
     pub swapchain: Option<ash::khr::swapchain::Device>,
+    pub index_type_uint8: bool,
 }
 
 static SURFACES: AtomicBool = AtomicBool::new(false);
@@ -106,7 +109,7 @@ impl VkState {
                 vk::Result::ERROR_INCOMPATIBLE_DRIVER => VkError::NoDevice,
                 e => VkError::Vk(e),
             })?;
-        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, shader_device_clock, cooperative_matrix) =
+        let (physical_device, queue_family, device, command_pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, shader_device_clock, cooperative_matrix, index_type_uint8) =
             Self::open_device(&instance, surfaces)
                 .inspect_err(|_| unsafe { instance.destroy_instance(None) })?;
         let mut float_controls = vk::PhysicalDeviceFloatControlsProperties::default();
@@ -164,6 +167,7 @@ impl VkState {
             exact_cooperative_hmma: Default::default(),
             shader_device_clock,
             timestamp_period,
+            index_type_uint8,
         };
         let alloc = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
@@ -179,7 +183,7 @@ impl VkState {
     fn open_device(
         instance: &ash::Instance,
         surfaces: bool,
-    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, bool, bool, bool), VkError> {
+    ) -> Result<(vk::PhysicalDevice, u32, ash::Device, vk::CommandPool, bool, bool, bool, bool, bool, bool, bool, bool, bool), VkError> {
         // Blits into swapchain images need a graphics queue.
         let queue_flags = vk::QueueFlags::COMPUTE | vk::QueueFlags::GRAPHICS;
         let (physical_device, queue_family) = unsafe { instance.enumerate_physical_devices()? }
@@ -206,6 +210,7 @@ impl VkState {
         let mut cooperative = vk::PhysicalDeviceCooperativeMatrixFeaturesKHR::default();
         let mut memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default();
         let mut shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default();
+        let mut uint8_indices = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default();
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut cooperative)
             .push_next(&mut memory_model)
@@ -213,7 +218,8 @@ impl VkState {
             .push_next(&mut atomic_int64)
             .push_next(&mut atomic_float)
             .push_next(&mut derivatives)
-            .push_next(&mut shader_clock);
+            .push_next(&mut shader_clock)
+            .push_next(&mut uint8_indices);
         unsafe { instance.get_physical_device_features2(physical_device, &mut features) };
         let shader_float64 = features.features.shader_float64 == vk::TRUE;
         let shader_int64 = features.features.shader_int64 == vk::TRUE;
@@ -233,11 +239,14 @@ impl VkState {
             && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::KHR_COOPERATIVE_MATRIX_NAME));
         let shader_device_clock = shader_clock.shader_device_clock == vk::TRUE
             && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::KHR_SHADER_CLOCK_NAME));
+        let index_type_uint8 = uint8_indices.index_type_uint8 == vk::TRUE
+            && extensions.iter().any(|e| e.extension_name_as_c_str() == Ok(vk::KHR_INDEX_TYPE_UINT8_NAME));
         let enabled_extensions: Vec<_> = [
             linear_derivatives.then_some(derivatives_extension.as_ptr()),
             atomic_float_extension.then_some(vk::EXT_SHADER_ATOMIC_FLOAT_NAME.as_ptr()),
             shader_device_clock.then_some(vk::KHR_SHADER_CLOCK_NAME.as_ptr()),
             cooperative_matrix.then_some(vk::KHR_COOPERATIVE_MATRIX_NAME.as_ptr()),
+            index_type_uint8.then_some(vk::KHR_INDEX_TYPE_UINT8_NAME.as_ptr()),
             surfaces.then_some(ash::khr::swapchain::NAME.as_ptr()),
         ].into_iter().flatten().collect();
         let device_features = vk::PhysicalDeviceFeatures::default()
@@ -257,8 +266,9 @@ impl VkState {
         let mut enabled_memory_model = vk::PhysicalDeviceVulkanMemoryModelFeatures::default().vulkan_memory_model(cooperative_matrix);
         let mut enabled_shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default()
             .shader_device_clock(shader_device_clock);
+        let mut enabled_uint8_indices = vk::PhysicalDeviceIndexTypeUint8FeaturesKHR::default().index_type_uint8(index_type_uint8);
         let mut enabled_vulkan13 = vk::PhysicalDeviceVulkan13Features::default().dynamic_rendering(true);
-        let device_info = vk::DeviceCreateInfo::default()
+        let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_info)
             .enabled_extension_names(&enabled_extensions)
             .enabled_features(&device_features)
@@ -270,12 +280,15 @@ impl VkState {
             .push_next(&mut enabled_cooperative)
             .push_next(&mut enabled_memory_model)
             .push_next(&mut enabled_vulkan13);
+        if index_type_uint8 {
+            device_info = device_info.push_next(&mut enabled_uint8_indices);
+        }
         let device = unsafe { instance.create_device(physical_device, &device_info, None)? };
         let pool_info = vk::CommandPoolCreateInfo::default()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family);
         match unsafe { device.create_command_pool(&pool_info, None) } {
-            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, shader_device_clock, cooperative_matrix)),
+            Ok(pool) => Ok((physical_device, queue_family, device, pool, shader_float16, shader_float64, shader_buffer_int64_atomics, shader_shared_int64_atomics, shader_buffer_float32_atomic_add, shader_shared_float32_atomic_add, shader_device_clock, cooperative_matrix, index_type_uint8)),
             Err(e) => {
                 unsafe { device.destroy_device(None) };
                 Err(e.into())

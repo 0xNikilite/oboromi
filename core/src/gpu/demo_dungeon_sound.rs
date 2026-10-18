@@ -282,7 +282,7 @@ impl Engine {
             for (frame, samples) in mix.finish().iter().enumerate() {
                 for channel in 0..2 {
                     let at = channel * 0x400 + frame * 2;
-                    self.memory.bytes[at..at + 2].copy_from_slice(&(limit(samples[channel] * 45.0 * self.mix_gain).mul_add(32767.0, 0.0) as i16).to_le_bytes());
+                    self.memory.bytes[at..at + 2].copy_from_slice(&(limit(samples[channel] * 36.0 * self.mix_gain).mul_add(32767.0, 0.0) as i16).to_le_bytes());
                 }
             }
             output.extend(self.renderer.step(&mut self.memory));

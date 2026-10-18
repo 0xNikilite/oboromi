@@ -86,7 +86,7 @@ impl<'a> Decoder<'a> {
         let attr = (((inst >> 64) & 0xff) << 2) as u32;
         let constant = (((inst >> 78) & 0x3) << 0) == 1;
         assert!(opcode(inst) == 0x326 && inst >> 76 & 3 == 0 && inst >> 78 & 3 < 2 && inst >> 81 & 7 == PT as u128, "only IPA.PASS and IPA.CONSTANT at the pixel centre are implemented");
-        assert!(self.stage == Stage::Fragment, "IPA in a {:?} module is not implemented", self.stage);
+        assert!(matches!(self.stage, Stage::Fragment { .. }), "IPA in a {:?} module is not implemented", self.stage);
         let val = match attr {
             0x70..0x80 => {
                 let coord = self.builtin(BuiltIn::FragCoord);

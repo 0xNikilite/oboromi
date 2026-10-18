@@ -1,7 +1,8 @@
 //! ffi bridge for the qt/c++ gui. panics are caught and forwarded to the
 //! log callback to avoid unwinding across the c boundary.
 
-use crate::display::{CALLBACK, DISPLAY, FrameCallback};
+use crate::display::{CALLBACK, DISPLAY, FrameCallback, attach_surface};
+use ash::vk;
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -94,6 +95,79 @@ pub extern "C" fn oboromi_render_triangle_demo(seconds: f32) -> bool {
     )
 }
 
+/// saves the pipeline cache of the demos that ran, call it when a demo stops.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_flush_demo_caches() -> bool {
+    matches!(catch_unwind(crate::gpu::frame::flush_demo_caches), Ok(Ok(())))
+}
+
+/// draws the pbr BoomBox demo at `seconds` and presents it, false if vulkan is
+/// missing or the draw fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_boombox_demo(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo::render_boombox_frame(seconds)), Ok(Ok(())))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_raytraced_demo(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo::render_raytraced_frame(seconds)), Ok(Ok(())))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_raytracing_enabled(enabled: bool) {
+    crate::gpu::demo::set_raytracing_enabled(enabled);
+}
+
+/// draws the pbr FlightHelmet demo like the BoomBox one, false too when
+/// demos/assets/fetch.sh has not fetched the asset.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_helmet_demo(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo::render_helmet_frame(seconds)), Ok(Ok(())))
+}
+
+/// draws the post-effect demo at `seconds` and presents it, false if vulkan
+/// is missing or a draw fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_post_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::demo_post::render_post_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
+/// draws the sprites demo at `seconds` and presents it, false if vulkan is
+/// missing or the draw fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_sprites_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::demo_sprites::render_sprites_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
+/// plays the music demo up to `seconds` through the audio renderer, false if it panicked.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_music_demo(seconds: f32) -> bool {
+    catch_unwind(|| crate::audio::demo_music::play_music(seconds)).is_ok()
+}
+
+/// steps the bounce demo to `seconds`, plays its knocks and presents the frame, false if vulkan
+/// is missing or a draw fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_bounce_demo(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo_bounce::render_bounce_frame(seconds)), Ok(Ok(())))
+}
+
+/// draws a frame of the particles demo at `seconds` and presents it, false if
+/// vulkan is missing or the frame fails. blocks, so call it from a worker thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_particles_frame(seconds: f32) -> bool {
+    matches!(
+        catch_unwind(|| crate::gpu::demo_particles::render_particles_frame(seconds)),
+        Ok(Ok(()))
+    )
+}
+
 /// generation of the last presented frame, 0 until the guest presents one.
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_generation() -> u64 {
@@ -114,14 +188,15 @@ pub unsafe extern "C" fn oboromi_frame_read(
     width: *mut u32,
     height: *mut u32,
 ) -> usize {
-    let frame = DISPLAY.lock().unwrap();
-    let len = frame.pixels.len();
+    let mut frame = DISPLAY.lock().unwrap();
     unsafe {
-        if !dst.is_null() && len <= cap {
-            std::ptr::copy_nonoverlapping(frame.pixels.as_ptr(), dst, len);
-        }
         *width = frame.width;
         *height = frame.height;
+    }
+    let pixels = frame.pixels();
+    let len = pixels.len();
+    if !dst.is_null() && len <= cap {
+        unsafe { std::ptr::copy_nonoverlapping(pixels.as_ptr(), dst, len) };
     }
     len
 }
@@ -130,4 +205,136 @@ pub unsafe extern "C" fn oboromi_frame_read(
 #[unsafe(no_mangle)]
 pub extern "C" fn oboromi_frame_set_callback(callback: FrameCallback, user: *mut c_void) {
     *CALLBACK.lock().unwrap() = (callback, user as usize);
+}
+
+/// creates the vulkan device with window surface support and returns its VkInstance for the gui to
+/// create surfaces with, null if vulkan or its surface extensions are missing.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_vk_instance() -> vk::Instance {
+    match crate::gpu::surface_device() {
+        Ok(state) if state.surface.is_some() => state.instance.handle(),
+        _ => vk::Instance::null(),
+    }
+}
+
+/// presents every frame into `surface`, a VkSurfaceKHR of that instance, sized `width` x `height`
+/// pixels. call it again on resize and expose, and with a null surface before destroying it.
+/// false if the device cannot present to it.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_display_surface(surface: vk::SurfaceKHR, width: u32, height: u32) -> bool {
+    matches!(
+        catch_unwind(|| attach_surface(surface, width, height)),
+        Ok(Ok(()))
+    )
+}
+
+/// `fast` trades exact HMMA accumulation for speed in every translation from now on. pipelines
+/// already compiled keep the mode they were translated with.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_tensor_mode(fast: bool) {
+    crate::gpu::SPEED_HACKS.lock().unwrap().fast_tensor = fast;
+}
+
+/// skips draws while their pipelines compile in engines created from now on.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_skip_draw_while_compiling(skip: bool) {
+    crate::gpu::SPEED_HACKS.lock().unwrap().skip_draw_while_compiling = skip;
+}
+
+/// a qt key code pressed or released in the gui.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_input_key(code: i32, down: bool) {
+    crate::input::key(code, down);
+}
+
+#[repr(C)]
+pub struct OboromiInput {
+    pub state: crate::input::InputState,
+    /// nul terminated, empty without a gamepad.
+    pub gamepad: [c_char; 64],
+}
+
+/// the merged host input the guest sees.
+///
+/// # Safety
+/// `out` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_input_state(out: *mut OboromiInput) {
+    let (state, name) = crate::input::state();
+    let mut gamepad = [0; 64];
+    gamepad.iter_mut().zip(name.bytes().take(63)).for_each(|(d, s)| *d = s as c_char);
+    unsafe { out.write(OboromiInput { state, gamepad }) };
+}
+
+/// copies up to `frames` queued stereo frames into `dst` and zero-fills the
+/// rest, returns the frames copied.
+///
+/// # Safety
+/// `dst` must be null or valid for `frames * 2` writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_pull(dst: *mut i16, frames: usize) -> usize {
+    if dst.is_null() {
+        return 0;
+    }
+    crate::audio::pull(unsafe { std::slice::from_raw_parts_mut(dst, frames * 2) })
+}
+
+/// writes the output format, interleaved i16 samples produced `period` frames at a time.
+///
+/// # Safety
+/// `rate`, `channels` and `period` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_format(rate: *mut u32, channels: *mut u32, period: *mut u32) {
+    unsafe {
+        *rate = crate::audio::RATE;
+        *channels = crate::audio::CHANNELS;
+        *period = crate::audio::PERIOD;
+    }
+}
+
+/// writes the frames waiting in the ring and the pulls that ran dry.
+///
+/// # Safety
+/// `queued` and `underruns` must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_audio_stats(queued: *mut usize, underruns: *mut u64) {
+    unsafe {
+        *queued = crate::audio::queued();
+        *underruns = crate::audio::underruns();
+    }
+}
+
+/// frames ever queued, changes whenever something is produced.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_audio_generation() -> u64 {
+    crate::audio::generation()
+}
+
+/// queues `seconds` more of a 440 hz test tone, returns the frames that fit.
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_audio_test_tone(seconds: f32) -> usize {
+    crate::audio::test_tone(seconds)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_render_dungeon_frame(seconds: f32) -> bool {
+    matches!(catch_unwind(|| crate::gpu::demo_dungeon::render_dungeon_frame(seconds)), Ok(Ok(())))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_dungeon_ray_queries() -> bool {
+    matches!(catch_unwind(|| crate::gpu::device().is_ok_and(|d| d.acceleration_structure.is_some())), Ok(true))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_dungeon_settings(showcase: bool, raytracing: bool) {
+    use crate::gpu::demo_dungeon::render::{SHOWCASE, RAYS};
+    use std::sync::atomic::Ordering::Relaxed;
+    SHOWCASE.store(showcase, Relaxed);
+    RAYS.store(raytracing, Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn oboromi_set_dungeon_speakers(speakers: bool) {
+    crate::gpu::demo_dungeon_sound::set_mode(if speakers { crate::audio::spatial::Mode::Speakers } else { crate::audio::spatial::Mode::Headphones });
 }

@@ -191,8 +191,8 @@ pub struct DrawSnapshot {
     pub blend: Option<Blend>,
     pub blend_constant: [f32; 4],
     pub index_buffer: IndexBuffer,
-    /// Per binding group, the buffer bound to each constant buffer slot.
-    pub constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
+    /// Per binding group, the buffer bound to each slot BIND_GROUP_CONSTANT_BUFFER's 5-bit SHADER_SLOT names (clc797.h).
+    pub constant_buffers: [[Option<ConstantBuffer>; 32]; 5],
     pub texture_pool: DescriptorPool,
     pub sampler_pool: DescriptorPool,
     /// A texture's sampler is the TSC entry at its TIC index rather than the one its handle names.
@@ -213,6 +213,8 @@ pub(crate) enum ThreeDEvent {
     SemaphoreAcquire { addr: u64, payload: u32, at_least: bool },
     Clear(Clear),
     LoadConstantBuffer { addr: u64, value: u32 },
+    /// A SUBSEQUENT draw with the same value as the draw before it and no method written in between.
+    NextInstance(u32),
 }
 
 pub struct ThreeD {
@@ -220,7 +222,8 @@ pub struct ThreeD {
     dirty: DirtyFlags,
     topology: PrimitiveTopology,
     instance: u32,
-    constant_buffers: [[Option<ConstantBuffer>; 18]; 5],
+    repeatable_draw: Option<u32>,
+    constant_buffers: [[Option<ConstantBuffer>; 32]; 5],
 }
 
 impl Default for ThreeD {
@@ -230,6 +233,7 @@ impl Default for ThreeD {
             dirty: DirtyFlags::default(),
             topology: PrimitiveTopology::Points,
             instance: 0,
+            repeatable_draw: None,
             constant_buffers: Default::default(),
         }
     }
@@ -255,6 +259,7 @@ impl ThreeD {
         }
         self.words[method as usize] = value;
         self.mark_dirty(byte);
+        let repeatable_draw = self.repeatable_draw.take();
         match byte {
             DRAW_VERTEX_ARRAY => Ok(Some(ThreeDEvent::Draw(self.snapshot(
                 self.topology,
@@ -273,11 +278,16 @@ impl ThreeD {
             }
             DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST => {
                 self.instance = 0;
+                self.repeatable_draw = Some(value);
                 Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, false)?)))
             }
             DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT => {
                 self.instance += 1;
-                Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, false)?)))
+                self.repeatable_draw = Some(value);
+                match repeatable_draw == Some(value) {
+                    true => Ok(Some(ThreeDEvent::NextInstance(value))),
+                    false => Ok(Some(ThreeDEvent::Draw(self.encoded_draw(value, false)?))),
+                }
             }
             DRAW_INDEX_BUFFER => Ok(Some(ThreeDEvent::Draw(self.snapshot(
                 self.topology,
@@ -341,7 +351,19 @@ impl ThreeD {
         }
     }
 
-    fn encoded_draw(&mut self, value: u32, indexed: bool) -> Result<DrawSnapshot, String> {
+    pub(crate) fn repeat_subsequent(&mut self, method: u16, value: u32, count: u32, draw: &mut DrawSnapshot) -> bool {
+        let byte = method as usize * 4;
+        if byte != DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT || self.repeatable_draw != Some(value) {
+            return false;
+        }
+        self.words[method as usize] = value;
+        self.mark_dirty(byte);
+        self.instance += count;
+        draw.instance_count += count;
+        true
+    }
+
+    pub(crate) fn encoded_draw(&mut self, value: u32, indexed: bool) -> Result<DrawSnapshot, String> {
         self.topology = ((value >> 28) as u8).try_into()?;
         self.snapshot(
             self.topology,

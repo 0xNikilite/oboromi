@@ -44,7 +44,7 @@ mod tests {
         let core = cpu.get_core(0).unwrap();
         let mut kernel = Kernel::default();
         kernel.hid.borrow_mut().input = || InputState { buttons: 1, left: [0.5, -0.5], right: [0.0; 2], connected: true };
-        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::new(Box::leak(Box::new(state)), cpu.ram.clone()))));
+        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::with_ram(Box::leak(Box::new(state)), cpu.ram.clone(), None, Default::default()).unwrap())));
         kernel.sm.borrow_mut().0.insert("nvdrv".into(), nvdrv.clone() as Rc<RefCell<dyn Service>>);
         kernel.sm.borrow_mut().0.extend(vi::services(nvdrv));
         kernel.start(core, entry, image.len() as u64);
@@ -54,9 +54,9 @@ mod tests {
         assert!((time - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).abs() < 5);
         println!("{}", kernel.debug_output[1]);
         assert_eq!(&kernel.debug_output[2..], ["buttons 0x1 left 16383 -16383", "pixel ff8000ff", "slots 0 1 0"]);
-        let frame = crate::display::DISPLAY.lock().unwrap();
+        let mut frame = crate::display::DISPLAY.lock().unwrap();
         assert_eq!((frame.width, frame.height), (128, 64));
-        assert_eq!(&frame.pixels[(20 * 128 + 20) * 4..][..4], &[40, 80, 192, 255]);
+        assert_eq!(&frame.pixels()[(20 * 128 + 20) * 4..][..4], &[40, 80, 192, 255]);
     }
 
     #[test]
@@ -65,9 +65,9 @@ mod tests {
         let state = crate::gpu::device().expect("guest triangle requires Vulkan");
         crate::gpu::frame::render_triangle_demo(0.0).unwrap();
         let (generation, expected) = {
-            let frame = crate::display::DISPLAY.lock().unwrap();
+            let mut frame = crate::display::DISPLAY.lock().unwrap();
             assert_eq!((frame.width, frame.height), (1920, 1080));
-            (frame.generation, frame.pixels.clone())
+            (frame.generation, frame.pixels().to_vec())
         };
         let dir = std::env::temp_dir().join(format!("oboromi-triangle-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -76,19 +76,19 @@ mod tests {
         let cpus = CpuManager::new();
         let cpu = cpus.get_core(0).unwrap();
         let mut kernel = Kernel::default();
-        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::new(state, cpus.ram.clone()))));
+        let nvdrv = Rc::new(RefCell::new(Nvdrv::new(Gpu::with_ram(state, cpus.ram.clone(), None, Default::default()).unwrap())));
         kernel.sm.borrow_mut().0.insert("nvdrv".into(), nvdrv.clone() as Rc<RefCell<dyn Service>>);
         kernel.sm.borrow_mut().0.extend(vi::services(nvdrv));
         crate::loader::nro::load(&cpus.ram, cpu, &mut kernel, &path).unwrap();
         assert!(!kernel.run_until(cpu, || crate::display::DISPLAY.lock().unwrap().generation > generation), "{:?}", kernel.debug_output);
         {
-            let frame = crate::display::DISPLAY.lock().unwrap();
+            let mut frame = crate::display::DISPLAY.lock().unwrap();
             assert_eq!(frame.generation, generation + 1);
             assert_eq!((frame.width, frame.height), (1920, 1080));
             let digest = |bytes: &[u8]| bytes.iter().fold(0xcbf29ce484222325u64, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3));
-            assert_eq!(digest(&frame.pixels), digest(&expected));
-            assert!(frame.pixels == expected);
-            println!("guest and host triangle FNV-1a: {:016x}", digest(&frame.pixels));
+            assert_eq!(digest(frame.pixels()), digest(&expected));
+            assert!(frame.pixels() == expected);
+            println!("guest and host triangle FNV-1a: {:016x}", digest(frame.pixels()));
         }
         assert!(kernel.run(cpu));
         assert!(kernel.debug_output.is_empty(), "{:?}", kernel.debug_output);

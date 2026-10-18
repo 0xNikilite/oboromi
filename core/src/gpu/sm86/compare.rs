@@ -22,7 +22,7 @@ impl<'a> Decoder<'a> {
     }
 
     // Pu (83:81) takes the result and Pv (86:84) its inverse, each combined with Pp by the op at 75:74.
-    fn store_setp(&mut self, inst: u128, result: u32) {
+    pub(super) fn store_setp(&mut self, inst: u128, result: u32) {
         let p = self.pp_bit(inst);
         let inverse = self.ir.emit_bitwise_xor(self.type_u32[1], result, self.const_u32_1);
         for (value, lsb) in [(result, 81), (inverse, 84)] {
@@ -74,8 +74,8 @@ impl<'a> Decoder<'a> {
         // NMin and NMax return the other operand when one is NaN, like the hardware.
         let [min, max] = [spirv::glsl::N_MIN, spirv::glsl::N_MAX].map(|op| self.glsl(op, self.type_f32[1], &[a, b]));
         let val = self.ir.emit_select(self.type_f32[1], take_min, min, max);
-        let bits = self.canonical_nan_bits(val);
-        self.store_register((inst >> 16 & 0xff) as u32, bits);
+        let bits = self.bitcast_u32(val);
+        self.store_fp_register((inst >> 16 & 0xff) as u32, bits);
     }
     pub fn fsel(&mut self, inst: u128) {
         let rd = (inst >> 16 & 0xff) as u32;

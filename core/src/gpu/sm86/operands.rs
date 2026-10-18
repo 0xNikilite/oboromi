@@ -1,7 +1,7 @@
 use super::*;
 
 impl<'a> Decoder<'a> {
-    // Bits 11:9 say what bits 32..64 hold: Rb (1), imm32 (2, 4), c[bank][off] (3, 5), URb with bit 91 set (6, 7).
+    // Bits 11:9 say what bits 32..64 hold: Rb (1), imm32 (2, 4), c[bank][off] (3, 5), with bit 91 set cx[URa][off] (3, 5) or URb (6, 7).
     // Forms 2, 3 and 7 feed that operand to C and move B to Rc at 64..72.
     pub(super) fn alu_src(&mut self, inst: u128) -> u32 {
         let field = (inst >> 32) as u32;
@@ -12,6 +12,7 @@ impl<'a> Decoder<'a> {
                 let offset = self.cached_const_u32((field >> 8 & 0x3fff) << 2);
                 self.load_cbuf(ResourceKind::Cbuf(field >> 22 & 0x1f), offset)
             }
+            (3 | 5, 1) => self.load_bindless_cbuf(field & 0x3f, (field >> 8 & 0x3fff) << 2),
             (6 | 7, 1) => self.load_ureg(field & 0x3f),
             form => todo!("ALU source form {form:?}"),
         }
@@ -213,6 +214,7 @@ impl<'a> Decoder<'a> {
         for i in 0..2 {
             let offset = self.cached_const_u32(16 * i as u32);
             if rtz {
+                self.ir.emit_decorate(halves[i], spirv::decoration::NO_CONTRACTION, &[]);
                 let back = self.ir.emit_f_convert(self.type_f32[1], halves[i]);
                 let source = self.fp_src(self.type_f32[1], lanes[i], true, false);
                 let back = self.fp_src(self.type_f32[1], back, true, false);
@@ -232,6 +234,8 @@ impl<'a> Decoder<'a> {
     pub(super) fn pack_f16_round(&mut self, val: u32, src_f64: bool, rnd: u32, ftz: bool) -> u32 {
         let half = self.type_f16();
         let nearest = self.ir.emit_f_convert(half, val);
+        // Without it ANV and the NVIDIA driver fold the f16 round trip below back to the source, so directed rounding never fires.
+        self.ir.emit_decorate(nearest, spirv::decoration::NO_CONTRACTION, &[]);
         let zero_half = self.ir.emit_constant_typed(half, 0.0f32);
         let half2_ty = self.type_f16x2();
         let half2 = self.ir.emit_composite_construct(half2_ty, &[nearest, zero_half]);
@@ -260,9 +264,12 @@ impl<'a> Decoder<'a> {
             if let Some(cond) = use_up { bits = self.ir.emit_select(self.type_u32[1], cond, up, bits); }
             if let Some(cond) = use_down { bits = self.ir.emit_select(self.type_u32[1], cond, down, bits); }
         }
-        let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
-        let canonical = self.cached_const_u32(0x7fff);
-        bits = self.ir.emit_select(self.type_u32[1], nan, canonical, bits);
+        // Session 6: F2F to and from f64 quiets a NaN and keeps its sign and payload, only f32 sources canonicalise.
+        if !src_f64 {
+            let nan = self.ir.emit_f_is_nan(self.type_bool[1], val);
+            let canonical = self.cached_const_u32(0x7fff);
+            bits = self.ir.emit_select(self.type_u32[1], nan, canonical, bits);
+        }
         if ftz {
             let [exponent, sign] = [0x7c00, 0x8000].map(|c| self.cached_const_u32(c));
             let exp = self.ir.emit_bitwise_and(self.type_u32[1], bits, exponent);
@@ -339,10 +346,14 @@ impl<'a> Decoder<'a> {
     pub(super) fn builtin(&mut self, builtin: spirv::BuiltIn) -> u32 {
         use spirv::{BuiltIn, decoration, storage_class::INPUT};
         let compute_only = matches!(builtin, BuiltIn::LocalInvocationIndex | BuiltIn::LocalInvocationId | BuiltIn::WorkgroupId);
-        assert!(compute_only == matches!(self.stage, Stage::Compute { .. }), "{builtin:?} is not an input of a {:?} module", self.stage);
+        let subgroup = matches!(builtin, BuiltIn::SubgroupLocalInvocationId);
+        assert!(subgroup || compute_only == matches!(self.stage, Stage::Compute { .. }), "{builtin:?} is not an input of a {:?} module", self.stage);
         let ty = match builtin {
             BuiltIn::LocalInvocationIndex | BuiltIn::VertexIndex | BuiltIn::InstanceIndex => self.type_u32[1],
+            BuiltIn::SubgroupLocalInvocationId => self.type_u32[1],
+            BuiltIn::InvocationId | BuiltIn::PrimitiveId | BuiltIn::PatchVertices | BuiltIn::SampleId => self.type_u32[1],
             BuiltIn::FragCoord => self.type_f32[4],
+            BuiltIn::TessCoord => self.type_f32[3],
             BuiltIn::FrontFacing => self.type_bool[1],
             _ => self.type_u32[3],
         };
@@ -353,6 +364,9 @@ impl<'a> Decoder<'a> {
                 let ptr = self.ir.emit_type_pointer(INPUT, ty);
                 let var = self.ir.emit_variable(ptr, INPUT);
                 self.ir.emit_decorate(var, decoration::BUILTIN, &[builtin]);
+                if ty == self.type_u32[1] && matches!(self.stage, Stage::Fragment { .. }) {
+                    self.ir.emit_decorate(var, decoration::FLAT, &[]);
+                }
                 self.resources.push(Resource { kind: ResourceKind::BuiltIn(builtin), var });
                 var
             }
@@ -369,16 +383,41 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    pub(super) fn interface_vec4(&mut self, kind: ResourceKind, storage: u32) -> u32 {
-        use spirv::decoration::{BUILTIN, FLAT, LOCATION, NO_PERSPECTIVE};
+    pub(super) fn interface_var(&mut self, kind: ResourceKind, storage: u32) -> u32 {
+        use spirv::{BuiltIn, decoration::{BUILTIN, FLAT, LOCATION, NO_PERSPECTIVE, PATCH}};
         if let Some(var) = self.resource(kind) {
             return var;
         }
-        let ptr = self.ir.emit_type_pointer(storage, self.interface_type(kind, 4));
+        let tess_level = |builtin| builtin == BuiltIn::TessLevelOuter as u32 || builtin == BuiltIn::TessLevelInner as u32;
+        let (ty, len) = match kind {
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::TessLevelOuter as u32 => (self.type_f32[1], 4),
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::TessLevelInner as u32 => (self.type_f32[1], 2),
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::SampleMask as u32 => (self.type_u32[1], 1),
+            ResourceKind::BuiltIn(builtin) if builtin == BuiltIn::Layer as u32 || builtin == BuiltIn::ViewportIndex as u32 => (self.type_u32[1], 0),
+            ResourceKind::PerVertex { output, .. } => {
+                let vertices = match self.stage {
+                    Stage::Geometry { input, .. } => geometry_input(input).1,
+                    Stage::TessControl { vertices } if output => vertices,
+                    // maxTessellationPatchSize, which every Vulkan device supports at least as 32.
+                    _ => 32,
+                };
+                (self.type_f32[4], vertices)
+            }
+            _ => (self.interface_type(kind, 4), 0),
+        };
+        let ty = if len == 0 { ty } else {
+            let len = self.cached_const_u32(len);
+            self.ir.emit_type_array(ty, len)
+        };
+        let ptr = self.ir.emit_type_pointer(storage, ty);
         let var = self.ir.emit_variable(ptr, storage);
         match kind {
             ResourceKind::BuiltIn(builtin) => self.ir.emit_decorate(var, BUILTIN, &[builtin]),
-            ResourceKind::VertexInput { location } | ResourceKind::Varying { location, .. } | ResourceKind::FragmentOutput { location } => self.ir.emit_decorate(var, LOCATION, &[location]),
+            ResourceKind::PerVertex { attr: 0x70, .. } => self.ir.emit_decorate(var, BUILTIN, &[BuiltIn::Position as u32]),
+            ResourceKind::PerVertex { attr, .. } => self.ir.emit_decorate(var, LOCATION, &[(attr - 0x80) / 16]),
+            ResourceKind::VertexInput { location } | ResourceKind::Varying { location, .. } | ResourceKind::FragmentOutput { location } | ResourceKind::Patch { location } => {
+                self.ir.emit_decorate(var, LOCATION, &[location])
+            }
             _ => unreachable!("{kind:?} is not a stage interface"),
         }
         match (kind, self.stage) {
@@ -386,6 +425,9 @@ impl<'a> Decoder<'a> {
             (ResourceKind::Varying { location, .. }, Stage::Fragment { screen_linear, .. }) if screen_linear >> location & 1 != 0 => {
                 self.ir.emit_decorate(var, NO_PERSPECTIVE, &[])
             }
+            (ResourceKind::Patch { .. }, _) => self.ir.emit_decorate(var, PATCH, &[]),
+            (ResourceKind::BuiltIn(builtin), _) if tess_level(builtin) => self.ir.emit_decorate(var, PATCH, &[]),
+            (ResourceKind::BuiltIn(builtin), Stage::Fragment { .. }) if builtin == BuiltIn::SampleMask as u32 => self.ir.emit_decorate(var, FLAT, &[]),
             _ => {}
         }
         self.resources.push(Resource { kind, var });
@@ -406,16 +448,34 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn interface_component(&mut self, kind: ResourceKind, storage: u32, attr: u32) -> u32 {
-        let var = self.interface_vec4(kind, storage);
+        self.vertex_component(kind, storage, &[], attr)
+    }
+
+    pub(super) fn vertex_component(&mut self, kind: ResourceKind, storage: u32, vertex: &[u32], attr: u32) -> u32 {
+        let var = self.interface_var(kind, storage);
         let ptr = self.ir.emit_type_pointer(storage, self.interface_type(kind, 1));
         let component = self.cached_const_u32(attr / 4 % 4);
-        self.ir.emit_access_chain(ptr, var, &[component])
+        self.ir.emit_access_chain(ptr, var, &[vertex, &[component]].concat())
     }
 
     pub(super) fn special_register(&mut self, index: u32) -> u32 {
         use spirv::BuiltIn;
-        // SR_VIRTID holds the warp id at bit 8, SR_TID packs x, y and z at bits 0, 16 and 26.
+        // SR_VIRTID holds the warp id at bit 8, SR_TID packs x, y and z at bits 0, 16 and 26. TCS SASS indexes per-vertex outputs by
+        // lane and TES SASS reads TessCoord at a[SR_LANEID] (NAK nak_nir_lower_vtg_io.c, from_nir.rs), so a patch's invocations take
+        // lanes from 0; SR_PRIM_TYPE holds the patch size at bit 8 (NAK nak_nir.c). ISBERD takes vertex v of primitive i in the warp at
+        // i * n + v from SR_INVOCATION_INFO, n at bit 16 and i at bit 0 (driver GS, TCS and TES SASS), and here i is 0.
         match index {
+            0 | 17 if matches!(self.stage, Stage::TessControl { .. }) => self.builtin(BuiltIn::InvocationId),
+            17 if matches!(self.stage, Stage::Geometry { .. }) => self.builtin(BuiltIn::InvocationId),
+            0 if matches!(self.stage, Stage::TessEval { .. }) => self.const_u32_0,
+            16 | 29 if matches!(self.stage, Stage::TessControl { .. } | Stage::TessEval { .. }) || index == 29 && matches!(self.stage, Stage::Geometry { .. }) => {
+                let vertices = match self.stage {
+                    Stage::Geometry { input, .. } => self.cached_const_u32(geometry_input(input).1),
+                    _ => self.builtin(BuiltIn::PatchVertices),
+                };
+                let shift = self.cached_const_u32(if index == 16 { 8 } else { 16 });
+                self.ir.emit_shift_left_logical(self.type_u32[1], vertices, shift)
+            }
             0 => {
                 let invocation = self.builtin(BuiltIn::LocalInvocationIndex);
                 let mask = self.cached_const_u32(31);
@@ -458,7 +518,10 @@ impl<'a> Decoder<'a> {
                     _ => self.ir.emit_not(ty, lt),
                 }
             }
-            1 | 2 | 4..=31 | 36 | 40..=55 | 61..=133 | SRZ => self.const_u32_0,
+            // SR_WSCALEFACTOR_XY and _Z are f32 scales of W that a driver VS compares x, y and z against for the
+            // CSMTEST clip masks only; 1.0 tests against the view volume.
+            30 | 31 => self.cached_const_u32(1.0f32.to_bits()),
+            1 | 2 | 4..=29 | 36 | 40..=55 | 61..=133 | SRZ => self.const_u32_0,
             _ => panic!("unknown special register {index}"),
         }
     }
@@ -519,13 +582,18 @@ impl<'a> Decoder<'a> {
     }
 
     pub(super) fn fp_reg(&mut self, inst: u128, reg_lsb: u32, abs_bit: u32, neg_bit: u32, ftz: bool) -> u32 {
-        let bits = self.load_register((inst >> reg_lsb & 0xff) as u32);
+        let reg = (inst >> reg_lsb & 0xff) as u32;
+        let bits = if ignores_nan_payload(inst) { self.load_float_register(reg) } else { self.load_register(reg) };
         self.fp_operand(bits, inst >> abs_bit & 1 != 0, inst >> neg_bit & 1 != 0, ftz)
     }
 
     // An immediate fills all of bits 32..64, so it has no |x| (62) or -x (63) bit.
     pub(super) fn fp_alu_src(&mut self, inst: u128, ftz: bool) -> u32 {
-        let bits = self.alu_src(inst);
+        let bits = if inst >> 9 & 7 == 1 && inst >> 91 & 1 == 0 && ignores_nan_payload(inst) {
+            self.load_float_register((inst >> 32 & 0xff) as u32)
+        } else {
+            self.alu_src(inst)
+        };
         let imm = matches!(inst >> 9 & 7, 2 | 4);
         self.fp_operand(bits, !imm && inst >> 62 & 1 != 0, !imm && inst >> 63 & 1 != 0, ftz)
     }

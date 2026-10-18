@@ -34,7 +34,7 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self { input: input::state, shared: Rc::default(), style_set: 0, ids: vec![], sampling: 0 }
+        Self { input: || input::state().0, shared: Rc::default(), style_set: 0, ids: vec![], sampling: 0 }
     }
 }
 

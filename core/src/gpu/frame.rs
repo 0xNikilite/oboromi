@@ -1,11 +1,15 @@
 //! Frames drawn by translated SASS programs that write RGBA8 pixels into global memory, presented as is.
 use super::compute::{ComputePipeline, HostBuffer};
 use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, SUPPORT_BINDING, Stage, emit_module};
+use super::demo::SCENE;
+use super::demo_post::POST;
+use super::demo_sprites::SPRITES;
 use super::engine::Gpu;
 use super::{VkError, device};
 use crate::tests::gpu::engine::{TARGET, triangle_frame, triangle_guest};
 use crate::tests::gpu_test::inst::{cvt, *};
 use ash::vk::DescriptorType;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 const WIDTH: u32 = 1920;
@@ -117,7 +121,6 @@ struct Frame {
     pixels_buffer: HostBuffer<'static>,
     cbuf0: HostBuffer<'static>,
     _support: HostBuffer<'static>,
-    pixels: Vec<u8>,
 }
 
 impl Frame {
@@ -133,15 +136,13 @@ impl Frame {
         let bindings = [(SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo), (GLOBAL_BINDING, DescriptorType::STORAGE_BUFFER)];
         let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings)?;
         pipeline.descriptors.bind(&[(SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf0), (GLOBAL_BINDING, &pixels_buffer)]);
-        Ok(Self { pipeline, pixels_buffer, cbuf0, _support: support, pixels: vec![0; size as usize] })
+        Ok(Self { pipeline, pixels_buffer, cbuf0, _support: support })
     }
 
     fn render(&mut self) -> Result<(), VkError> {
         // Round up so 1080 rows get a partial last group; the program's guard drops the overhang.
         device()?.dispatch(&self.pipeline, [WIDTH.div_ceil(GROUP), HEIGHT.div_ceil(GROUP), 1])?;
-        self.pixels_buffer.read(&mut self.pixels)?;
-        crate::display::present(WIDTH, HEIGHT, &self.pixels);
-        Ok(())
+        crate::display::present_buffer(&self.pixels_buffer, WIDTH, HEIGHT)
     }
 }
 
@@ -160,19 +161,35 @@ pub fn render_demo_frame(seconds: f32) -> Result<(), VkError> {
     demo.render()
 }
 
+static TRIANGLE_DEMO: Mutex<Option<Gpu<'static>>> = Mutex::new(None);
+
+/// `$XDG_CACHE_HOME/oboromi`, or `~/.cache/oboromi`, or the temp dir's when there is no home.
+pub(super) fn cache_root() -> PathBuf {
+    let home = || std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"));
+    std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(home).unwrap_or_else(std::env::temp_dir).join("oboromi")
+}
+
 /// Draws a triangle from a pushbuffer in guest memory, turning once per `SECONDS_PER_TURN`, and presents it.
 pub fn render_triangle_demo(seconds: f32) -> Result<(), String> {
-    static DEMO: Mutex<Option<Gpu<'static>>> = Mutex::new(None);
-    let mut slot = DEMO.lock().unwrap();
+    let mut slot = TRIANGLE_DEMO.lock().unwrap();
     let gpu = match &mut *slot {
         Some(gpu) => gpu,
         empty => {
             let vertices = scene::TRIANGLE_VERTICES;
-            empty.insert(triangle_guest(device().map_err(|e| format!("{e:?}"))?, WIDTH, HEIGHT, &vertices).map_err(|e| format!("{e:?}"))?)
+            let state = device().map_err(|e| format!("{e:?}"))?;
+            empty.insert(triangle_guest(state, Some((&cache_root(), "demos")), WIDTH, HEIGHT, &vertices).map_err(|e| format!("{e:?}"))?)
         }
     };
     let (sin, cos) = (seconds / SECONDS_PER_TURN * std::f32::consts::TAU).sin_cos();
     let aspect = HEIGHT as f32 / WIDTH as f32;
     triangle_frame(gpu, WIDTH, HEIGHT, [cos * aspect, -sin * aspect, sin, cos], 0)?;
-    gpu.present(TARGET, WIDTH, HEIGHT).map_err(|e| format!("{e:?}"))
+    gpu.present(TARGET, WIDTH, HEIGHT)
+}
+
+/// Saves the running demos' pipeline cache, so the next run starts warm.
+pub fn flush_demo_caches() -> std::io::Result<()> {
+    TRIANGLE_DEMO.lock().unwrap().as_ref().map_or(Ok(()), Gpu::flush_caches)?;
+    POST.lock().unwrap().as_ref().map_or(Ok(()), |post| post.gpu.flush_caches())?;
+    SCENE.lock().unwrap().as_ref().map_or(Ok(()), |(_, scene)| scene.gpu.flush_caches())?;
+    SPRITES.lock().unwrap().as_ref().map_or(Ok(()), Gpu::flush_caches)
 }

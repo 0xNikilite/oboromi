@@ -153,6 +153,23 @@ mod tests {
         assert_d(IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT, 32, &INT8, matrices, |x| x as i32 as u32);
     }
 
+    #[test]
+    fn imma_sat_clamps_after_each_half_of_the_products() {
+        let seeds: Vec<Vec<u32>> = (0..32).map(|_| {
+            let mut regs = vec![0; RC + 4];
+            regs[RA..RA + 4].fill(u32::from_le_bytes([100; 4]));
+            regs[RB] = u32::from_le_bytes([1; 4]);
+            regs[RB + 1] = u32::from_le_bytes([u8::MAX; 4]);
+            regs[RC..RC + 4].fill((i32::MAX - 100) as u32);
+            regs
+        }).collect();
+        let word = IMMA | IMMA_16832 | IMMA_S8_A | IMMA_S8_B | IMMA_SAT;
+        let Some(lanes) = run(&[alu3(word, RD as u32, RA as u32, RB as u32, RC as u32)], &seeds) else { return };
+        for (lane, regs) in lanes.iter().enumerate() {
+            assert_eq!(regs[RD..RD + 4], [(i32::MAX - 1600) as u32; 4], "lane {lane}");
+        }
+    }
+
     // Lane L stores row L of the four 8x8 tiles at row slot 5L mod 32 and hands that address to LDSM, so a lane reading
     // the wrong lane's address reads the wrong row; half (row, col) holds 8 * row + col.
     #[test]
@@ -260,6 +277,40 @@ mod tests {
         for (lane, regs) in (0..32).zip(lanes) {
             let (g, t) = quad(lane);
             assert_eq!(regs[RD], half(2 * t + 1, g) << 16 | half(2 * t, g), "lane {lane}");
+        }
+    }
+
+    // Small integers sum exactly in any order, so both paths agree exactly when the fragment-to-tile mapping is right.
+    #[test]
+    fn cooperative_hmma_matches_loops_on_exact_sums() {
+        use crate::tests::gpu::silicon::{replay_tensor, tensor_fixtures, tensor_program};
+        let Some(state) = crate::gpu::device().ok().filter(|d| !d.cooperative_f16_tiles.is_empty()) else {
+            return eprintln!("skipping: no VK_KHR_cooperative_matrix f16 tiles");
+        };
+        let fixtures = tensor_fixtures().into_iter().filter(|f| f.id.contains("/small-integers/") && crate::gpu::sm86::f16_hmma_shape(*tensor_program(f).last().unwrap()).is_some());
+        for fixture in fixtures {
+            let [cooperative, loops] = [true, false].map(|force| replay_tensor(state, &fixture, Some(force), crate::gpu::sm86::TensorMode::Exact));
+            assert_eq!(cooperative, loops, "{}", fixture.id);
+        }
+    }
+
+    #[test]
+    fn fast_hmma_is_exact_on_small_integers_and_within_64_ulp_on_mixed_exponents() {
+        use crate::gpu::sm86::TensorMode;
+        use crate::tests::gpu::silicon::{replay_tensor, tensor_d_words, tensor_fixtures};
+        let Ok(state) = crate::gpu::device() else { return eprintln!("skipping: no Vulkan device") };
+        let fixtures = tensor_fixtures().into_iter().filter(|f| f.observed && (f.case.ends_with("f32") || f.case.ends_with("f16")));
+        for fixture in fixtures.filter(|f| f.id.contains("/small-integers/") || f.id.contains("/mixed-exponents/")) {
+            let lanes = replay_tensor(state, &fixture, None, TensorMode::Fast).unwrap();
+            let (words, rd) = (tensor_d_words(&fixture), (fixture.words[0] >> 16 & 0xff) as usize);
+            let (width, infinity) = if words == 4 { (32, 0x7f80_0000) } else { (16, 0x7c00) };
+            let magnitude = |bits: u32| bits & (infinity | infinity - 1);
+            let ordered = |bits: u32| if bits & (1 << (width - 1)) != 0 { -i64::from(magnitude(bits)) } else { i64::from(magnitude(bits)) };
+            let elements = lanes.iter().enumerate().flat_map(|(lane, regs)| regs[rd..rd + words].iter().zip(&fixture.after[lane * 4..][..words]));
+            let elements = elements.flat_map(|(&got, &want)| (0..32 / width).map(move |i| [got, want].map(|bits| bits >> (width * i) & (u32::MAX >> (32 - width)))));
+            let ulps = elements.filter(|&[_, want]| magnitude(want) < infinity).map(|[got, want]| (ordered(got) - ordered(want)).abs());
+            let max = ulps.max().unwrap();
+            assert!(max <= if fixture.id.contains("/small-integers/") { 0 } else { 64 }, "{}: {max} ulp", fixture.id);
         }
     }
 }

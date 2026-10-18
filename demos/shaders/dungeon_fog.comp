@@ -1,0 +1,43 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0,std430) readonly buffer HDR { uvec2 hdr[]; };
+layout(binding=1,std430) writeonly buffer Output { vec4 fog_pixels[]; };
+layout(binding=2,std140) uniform Frame {
+    mat4 vp; mat4 reflected_vp; vec4 eye_time; vec4 right_quality; vec4 up_rt;
+    vec4 river; vec4 moon; vec4 settings; vec4 fog_lights;
+};
+struct Light { vec4 position; vec4 colour; };
+layout(binding=3,std430) readonly buffer Lights { Light lights[]; };
+layout(binding=4,std430) writeonly buffer Bloom { vec4 bloom_pixels[]; };
+void main(){
+    ivec2 id=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(id,ivec2(settings.xy)/4)))return;
+    vec3 bloom=vec3(0);
+    for(int y=0;y<4;y++)for(int x=0;x<4;x++){
+        ivec2 q=id*4+ivec2(x,y);uvec2 h=hdr[q.y*int(settings.x)+q.x];
+        bloom+=max(vec3(unpackHalf2x16(h.x),unpackHalf2x16(h.y).x)-1.,0.);
+    }
+    bloom_pixels[id.y*int(settings.x/4.)+id.x]=vec4(bloom/16.,0);
+    if((uint(moon.w)&8u)!=0u){fog_pixels[id.y*int(settings.x/4.)+id.x]=vec4(0,0,0,1);return;}
+    ivec2 p=id*4+2;
+    uvec2 h=hdr[p.y*int(settings.x)+p.x];float depth=unpackHalf2x16(h.y).y;
+    vec2 ndc=(vec2(p)+.5)/settings.xy*2.-1.;
+    vec3 forward=normalize(cross(up_rt.xyz,right_quality.xyz));
+    vec3 ray=normalize(forward+right_quality.xyz*ndc.x*settings.x/settings.y*.57735-up_rt.xyz*ndc.y*.57735);
+    vec3 scattering=vec3(0);float transmittance=1.;int steps=right_quality.w>.5?24:4;
+    float step_length=min(depth,35.)/float(steps);
+    for(int j=0;j<steps;j++) {
+        vec3 at=eye_time.xyz+ray*(float(j)+.5)*step_length;
+        float density=(settings.w<-.1?.012:.028)*exp(-max(at.y,0.)*.42);
+        if(at.x>river.x && at.x<river.z && at.z>river.y && at.z<river.w)
+            density+=.22*exp(-pow((at.y+.46)*4.,2.))*(.65+.35*sin(at.x*1.4+at.z*2.+eye_time.w*.25));
+        vec3 incident=vec3(.016,.027,.045);
+        for(int k=0;k<4;k++) {int i=int(fog_lights[k]);vec3 to=lights[i].position.xyz-at;float d2=dot(to,to);if(d2<36.)incident+=lights[i].colour.rgb*(settings.w<-.1?.08:.2)/max(.5,d2);}
+        vec2 shaft=at.xz-moon.xz-vec2(.2,-.15)*(moon.y-at.y);
+        float beam=(1.-smoothstep(.3,.9,length(shaft)))*step(0.,moon.y-at.y);
+        vec2 grate=shaft+vec2(.8);
+        float bars=(.85+.15*cos(grate.x*23.56))*(.85+.15*cos(grate.y*23.56));
+        incident+=vec3(.25,.38,.6)*beam*bars*4.5;
+        float extinction=exp(-density*step_length);scattering+=incident*transmittance*(1.-extinction);transmittance*=extinction;
+    }
+    fog_pixels[id.y*int(settings.x/4.)+id.x]=vec4(scattering,transmittance);
+}

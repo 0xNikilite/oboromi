@@ -1,27 +1,36 @@
 use crate::gpu::compute::{ComputePipeline, HostBuffer, HostImage};
-use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, ResourceKind, STATE_WORDS, SUPPORT_BINDING, Stage, TEXTURE_BINDING};
+use crate::gpu::cubin::{Arg, Kernel};
+use crate::gpu::sm86::{self, CBUF_BINDING, Decoder, GLOBAL_BINDING, Hints, PMTRIG_WORDS, ResourceKind, STATE_WORDS, SUPPORT_BINDING, Stage, TEXTURE_BINDING, Translation};
 use crate::gpu::spirv::Emitter;
 use crate::gpu::texture::TexturePool;
 use crate::gpu::{VkError, VkState};
 use ash::vk::{self, DescriptorType};
+use std::cell::Cell;
+use std::ops::Range;
+
+thread_local! {
+    pub static TRANSLATION: Cell<Translation> = Cell::default();
+}
 
 pub fn translate_module(
     instructions: &[u128],
     register_io: bool,
     device: Option<&VkState>,
+    timing_hints: bool,
 ) -> Emitter {
-    emit_module(register_io, device, 1, |decoder| decoder.translate_program(instructions))
+    emit_module(register_io, device, 1, Hints { timing: timing_hints, ..Default::default() }, |decoder| decoder.translate_program(instructions))
 }
 
 pub fn emit_module(
     register_io: bool,
     device: Option<&VkState>,
     lanes: u32,
+    hints: Hints,
     body: impl FnOnce(&mut Decoder),
 ) -> Emitter {
-    sm86::emit_module(device, Stage::Compute { local_size: [lanes, 1, 1] }, |decoder| {
+    sm86::emit_module_hinted(device, Stage::Compute { local_size: [lanes, 1, 1] }, Hints { translation: TRANSLATION.get(), ..hints }, |decoder| {
         if register_io {
-            decoder.emit_register_io(10, 11);
+            decoder.emit_register_io(GLOBAL_BINDING + 1, GLOBAL_BINDING + 2);
         }
         body(decoder);
         if register_io {
@@ -48,6 +57,24 @@ pub fn spirv_val(module: &Emitter) {
     assert!(out.status.success(), "{out:?}");
 }
 
+pub fn shared_device() -> Option<&'static VkState> {
+    match crate::gpu::device() {
+        Err(e @ (VkError::Loader | VkError::NoDevice)) => {
+            eprintln!("skipping: {e:?}");
+            None
+        }
+        state => Some(state.unwrap()),
+    }
+}
+
+pub fn sha256(bytes: &[u8]) -> String {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut sha256sum = Command::new("sha256sum").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    sha256sum.stdin.take().unwrap().write_all(bytes).unwrap();
+    String::from_utf8(sha256sum.wait_with_output().unwrap().stdout).unwrap()[..64].into()
+}
+
 pub fn vk_state() -> Option<VkState> {
     match VkState::new() {
         Ok(s) => Some(s),
@@ -57,6 +84,16 @@ pub fn vk_state() -> Option<VkState> {
         }
         Err(e) => panic!("vulkan device creation failed: {e:?}"),
     }
+}
+
+/// Runs `run` once through the dispatcher and once through the structured plan.
+pub fn both_ways<T>(run: impl Fn() -> T) -> [T; 2] {
+    [Translation::ForceDispatcher, Translation::ForceStructured].map(|translation| {
+        TRANSLATION.set(translation);
+        let out = run();
+        TRANSLATION.set(Translation::default());
+        out
+    })
 }
 
 pub const GLOBAL_BASE: u64 = 0x2_0000_1000;
@@ -92,6 +129,41 @@ pub fn run_lanes(
     run_body(|decoder| decoder.translate_program(instructions), seeds, cbuf0, global)
 }
 
+pub fn run_hints(
+    instructions: &[u128],
+    seed: &[u32],
+    cbuf0: &[u32],
+    global: &[u32],
+) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>)> {
+    let (mut lanes, global, counts) = run_on(
+        &vk_state()?,
+        |decoder| decoder.translate_program(instructions),
+        &[seed.to_vec()],
+        cbuf0,
+        global,
+        &Textures::default(),
+        Hints { timing: true, ..Default::default() },
+    )?;
+    Some((lanes.remove(0), global, counts))
+}
+
+pub fn run_timed(
+    state: &VkState,
+    instructions: &[u128],
+    timing_hints: bool,
+) -> Option<u64> {
+    run_on(
+        state,
+        |decoder| decoder.translate_program(instructions),
+        &[Vec::new()],
+        &[],
+        &[],
+        &Textures::default(),
+        Hints { timing: timing_hints, ..Default::default() },
+    )?;
+    Some(state.last_gpu_time_ns())
+}
+
 fn pad_to_warps(seeds: &[Vec<u32>]) -> Vec<u32> {
     let idle = vec![0; STATE_WORDS];
     let mut words = Vec::new();
@@ -125,7 +197,7 @@ pub struct Textures<'a> {
 }
 
 /// Runs `body` as one workgroup of whole warps with an invocation per seed, the state words of invocation i seeded
-/// from `seeds[i]`, cbuf slot 0 holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
+/// from `seeds[i]`, every cbuf slot holding `cbuf0`, global memory at `GLOBAL_BASE` holding `global` and every texture or
 /// surface the body declares resolved through `textures`, returning every seeded invocation's state words and the
 /// global words, or `None` when there is no Vulkan device.
 pub fn run_textured(
@@ -135,10 +207,21 @@ pub fn run_textured(
     global: &[u32],
     textures: &Textures,
 ) -> Option<(Vec<Vec<u32>>, Vec<u32>)> {
-    let state = vk_state()?;
+    run_on(&vk_state()?, body, seeds, cbuf0, global, textures, Hints::default()).map(|(lanes, global, _)| (lanes, global))
+}
+
+pub fn run_on(
+    state: &VkState,
+    body: impl FnOnce(&mut Decoder),
+    seeds: &[Vec<u32>],
+    cbuf0: &[u32],
+    global: &[u32],
+    textures: &Textures,
+    hints: Hints,
+) -> Option<(Vec<Vec<u32>>, Vec<u32>, Vec<u32>)> {
     let words = pad_to_warps(seeds);
     let mut resources = Vec::new();
-    let module = emit_module(true, Some(&state), (words.len() / STATE_WORDS) as u32, |decoder| {
+    let module = emit_module(true, Some(state), (words.len() / STATE_WORDS) as u32, hints, |decoder| {
         body(decoder);
         resources = decoder.resources.clone();
     });
@@ -155,21 +238,21 @@ pub fn run_textured(
             .collect::<Vec<_>>()
     };
     let size = 4 * words.len() as u64;
-    let mut input = HostBuffer::new(&state, size).unwrap();
+    let mut input = HostBuffer::new(state, size).unwrap();
     input.write(&bytes(&words)).unwrap();
-    let output = HostBuffer::new(&state, size).unwrap();
-    let mut cbuf = HostBuffer::new(&state, 16 + 4 * cbuf0.len() as u64).unwrap();
+    let output = HostBuffer::new(state, size).unwrap();
+    let mut cbuf = HostBuffer::new(state, 16 + 4 * cbuf0.len() as u64).unwrap();
     cbuf.write(&bytes(cbuf0)).unwrap();
-    let mut memory = HostBuffer::new(&state, 4 * global.len().max(1) as u64).unwrap();
+    let mut memory = HostBuffer::new(state, 4 * global.len().max(1) as u64).unwrap();
     memory.write(&bytes(global)).unwrap();
-    let mut support = HostBuffer::new(&state, 16).unwrap();
+    let mut support = HostBuffer::new(state, 16).unwrap();
     support.write(&GLOBAL_BASE.to_le_bytes()).unwrap();
     let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
     let image = |format: Option<vk::Format>| {
         let header = textures.pool.texture(textures.handle).unwrap();
         assert!(format.is_none_or(|f| f == header.format), "a {:?} header cannot back a {format:?} surface", header.format);
         let texels = textures.memory.iter().find(|(address, _)| *address == header.address).expect("no texels at the header address").1;
-        HostImage::new(&state, &header, texels, &textures.pool.sampler(textures.handle).unwrap()).unwrap()
+        HostImage::new(state, &header, texels, &textures.pool.sampler(textures.handle).unwrap()).unwrap()
     };
     let image_types = resources.iter().filter_map(|r| match r.kind {
         ResourceKind::Texture2D { .. } => Some((DescriptorType::COMBINED_IMAGE_SAMPLER, None)),
@@ -177,10 +260,17 @@ pub fn run_textured(
         _ => None,
     });
     let images: Vec<(u32, DescriptorType, HostImage)> = (TEXTURE_BINDING..).zip(image_types).map(|(b, (ty, format))| (b, ty, image(format))).collect();
-    let buffers = [(10, ssbo), (11, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
-    let bindings: Vec<_> = buffers.into_iter().chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).collect();
+    let cbufs: Vec<u32> = resources.iter().filter_map(|r| match r.kind { ResourceKind::Cbuf(slot) if slot > 0 => Some(CBUF_BINDING + slot), _ => None }).collect();
+    let buffers = [(GLOBAL_BINDING + 1, ssbo), (GLOBAL_BINDING + 2, ssbo), (GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)];
+    let hint_binding = TEXTURE_BINDING + images.len() as u32;
+    let mut hint_buffer = resources.iter().any(|r| r.kind == ResourceKind::Hints).then(|| HostBuffer::new(state, 4 * (PMTRIG_WORDS + 1) as u64).unwrap());
+    if let Some(hints) = &mut hint_buffer { hints.write(&vec![0; 4 * (PMTRIG_WORDS + 1)]).unwrap(); }
+    let bindings: Vec<_> = buffers.into_iter().chain(cbufs.iter().map(|&binding| (binding, ubo))).chain(images.iter().map(|&(binding, ty, _)| (binding, ty))).chain(hint_buffer.as_ref().map(|_| (hint_binding, ssbo))).collect();
     let mut pipeline = ComputePipeline::new(&state, &module.words(), &bindings).unwrap();
-    pipeline.descriptors.bind(&[(10, &input), (11, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
+    let mut bound = vec![(GLOBAL_BINDING + 1, &input), (GLOBAL_BINDING + 2, &output), (GLOBAL_BINDING, &memory), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)];
+    bound.extend(cbufs.iter().map(|&binding| (binding, &cbuf)));
+    bound.extend(hint_buffer.as_ref().map(|buffer| (hint_binding, buffer)));
+    pipeline.descriptors.bind(&bound);
     pipeline.descriptors.bind_images(&images.iter().map(|(binding, _, image)| (*binding, image)).collect::<Vec<_>>());
     state.dispatch(&pipeline, [1, 1, 1]).unwrap();
     let read = |buf: &HostBuffer, len: usize| -> Vec<u32> {
@@ -192,33 +282,67 @@ pub fn run_textured(
     };
     let lanes: Vec<Vec<u32>> = read(&output, words.len()).chunks(STATE_WORDS).take(seeds.len()).map(<[u32]>::to_vec).collect();
     assert!(lanes.iter().all(|lane| lane[LIVE] < 2), "a lane was left waiting on a barrier");
-    Some((lanes, read(&memory, global.len())))
+    let counts = hint_buffer.as_ref().map(|buffer| read(buffer, PMTRIG_WORDS)).unwrap_or_default();
+    Some((lanes, read(&memory, global.len()), counts))
 }
 
-/// Launches `instructions` the way a driver does: `grid` workgroups of `block` invocations without register io, cbuf
-/// slot 0 holding `cbuf0` and global memory holding each region's bytes at its guest address, returning every region's
-/// bytes after the launch, or `None` when there is no Vulkan device.
+/// A translated program launched the way a driver does, without register io: each of `banks` as the (bank, bytes) of a
+/// constant bank and global memory holding each region's bytes at its guest address.
+pub struct Grid<'a> {
+    state: &'a VkState,
+    pipeline: ComputePipeline<'a>,
+    global: HostBuffer<'a>,
+    _support: HostBuffer<'a>,
+    _cbufs: Vec<(u32, HostBuffer<'a>)>,
+    memory: Vec<u8>,
+    spans: Vec<Range<usize>>,
+}
+
+impl<'a> Grid<'a> {
+    pub fn new(state: &'a VkState, instructions: &[u128], block: [u32; 3], banks: &[(u32, Vec<u8>)], regions: &[(u64, &[u8])]) -> Self {
+        let module = sm86::emit_module_hinted(Some(state), Stage::Compute { local_size: block }, Hints { translation: TRANSLATION.get(), ..Hints::default() }, |decoder| decoder.translate_program(instructions));
+        spirv_val(&module);
+        let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
+        let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();
+        let spans: Vec<_> = regions.iter().map(|&(address, bytes)| (address - base) as usize..(address - base) as usize + bytes.len()).collect();
+        let mut memory = vec![0; (end - base) as usize];
+        for (span, region) in spans.iter().zip(regions) {
+            memory[span.clone()].copy_from_slice(region.1);
+        }
+        let mut global = HostBuffer::new(state, memory.len() as u64).unwrap();
+        global.write(&memory).unwrap();
+        let buffer = |bytes: &[u8]| {
+            let mut buffer = HostBuffer::new(state, 16 + bytes.len() as u64).unwrap();
+            buffer.write(bytes).unwrap();
+            buffer
+        };
+        let support = buffer(&base.to_le_bytes());
+        let cbufs: Vec<_> = banks.iter().map(|(bank, bytes)| (CBUF_BINDING + bank, buffer(bytes))).collect();
+        let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
+        let bindings: Vec<_> = [(GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo)].into_iter().chain(cbufs.iter().map(|&(binding, _)| (binding, ubo))).collect();
+        let mut pipeline = ComputePipeline::new(state, &module.words(), &bindings).unwrap();
+        pipeline.descriptors.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support)].into_iter().chain(cbufs.iter().map(|(binding, buffer)| (*binding, buffer))).collect::<Vec<_>>());
+        Self { state, pipeline, global, _support: support, _cbufs: cbufs, memory, spans }
+    }
+
+    /// Dispatches `groups` workgroups and returns every region's bytes after them.
+    pub fn run(&mut self, groups: [u32; 3]) -> Vec<Vec<u8>> {
+        self.state.dispatch(&self.pipeline, groups).unwrap();
+        self.global.read(&mut self.memory).unwrap();
+        self.spans.iter().map(|span| self.memory[span.clone()].to_vec()).collect()
+    }
+}
+
+/// Launches `instructions` as `grid` workgroups of `block` invocations with cbuf slot 0 holding `cbuf0`, returning every
+/// region's bytes after the launch, or `None` when there is no Vulkan device.
 pub fn run_grid(instructions: &[u128], block: [u32; 3], grid: [u32; 3], cbuf0: &[u8], regions: &[(u64, &[u8])]) -> Option<Vec<Vec<u8>>> {
     let state = vk_state()?;
-    let module = sm86::emit_module(Some(&state), Stage::Compute { local_size: block }, |decoder| decoder.translate_program(instructions));
-    spirv_val(&module);
-    let base = regions.iter().map(|&(address, _)| address).min().unwrap() & !0xf;
-    let end = regions.iter().map(|&(address, bytes)| address + bytes.len() as u64).max().unwrap();
-    let span = |&(address, bytes): &(u64, &[u8])| (address - base) as usize..(address - base) as usize + bytes.len();
-    let mut memory = vec![0; (end - base) as usize];
-    for region in regions {
-        memory[span(region)].copy_from_slice(region.1);
-    }
-    let mut global = HostBuffer::new(&state, memory.len() as u64).unwrap();
-    global.write(&memory).unwrap();
-    let mut cbuf = HostBuffer::new(&state, 16 + cbuf0.len() as u64).unwrap();
-    cbuf.write(cbuf0).unwrap();
-    let mut support = HostBuffer::new(&state, 16).unwrap();
-    support.write(&base.to_le_bytes()).unwrap();
-    let (ssbo, ubo) = (DescriptorType::STORAGE_BUFFER, DescriptorType::UNIFORM_BUFFER);
-    let mut pipeline = ComputePipeline::new(&state, &module.words(), &[(GLOBAL_BINDING, ssbo), (SUPPORT_BINDING, ubo), (CBUF_BINDING, ubo)]).unwrap();
-    pipeline.descriptors.bind(&[(GLOBAL_BINDING, &global), (SUPPORT_BINDING, &support), (CBUF_BINDING, &cbuf)]);
-    state.dispatch(&pipeline, grid).unwrap();
-    global.read(&mut memory).unwrap();
-    Some(regions.iter().map(|region| memory[span(region)].to_vec()).collect())
+    Some(Grid::new(&state, instructions, block, &[(0, cbuf0.to_vec())], regions).run(grid))
+}
+
+pub fn run_kernel(cubin: &[u8], name: &str, grid: [u32; 3], block: [u32; 3], args: &[Arg]) -> Option<Vec<Vec<u8>>> {
+    let kernel = Kernel::load(cubin, name).unwrap();
+    let (banks, regions) = kernel.launch(grid, block, args, GLOBAL_BASE);
+    let state = vk_state()?;
+    Some(Grid::new(&state, &kernel.words, block, &banks, &regions).run(grid))
 }

@@ -1,6 +1,8 @@
 pub mod run;
 pub mod multicore_test;
 pub mod gpu;
+#[cfg(test)]
+mod audio;
 pub mod gpu_test;
 #[cfg(test)]
 mod kernel;

@@ -1,0 +1,36 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer Previous { vec2 previous[]; };
+layout(std430, binding = 1) writeonly buffer Next { vec2 next_state[]; };
+layout(std430, binding = 2) writeonly buffer Surface { vec4 surface[]; };
+layout(std140, binding = 3) uniform Step {
+    vec4 grid; // width, height, dt, downstream flow
+    vec4 extent; // world width, depth, impact count, unused
+    vec4 impacts[32]; // grid x, grid y, strength, radius
+};
+vec2 cell(ivec2 p) {
+    return previous[clamp(p.y, 0, int(grid.y) - 1) * int(grid.x) + clamp(p.x, 0, int(grid.x) - 1)];
+}
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(grid.xy)))) return;
+    uint i = uint(p.y) * uint(grid.x) + uint(p.x);
+    vec2 current = cell(p);
+    vec2 upstream = cell(p - ivec2(1, 0));
+    current = mix(current, upstream, grid.w * grid.z);
+    float laplacian = cell(p + ivec2(1, 0)).x + cell(p - ivec2(1, 0)).x
+                    + cell(p + ivec2(0, 1)).x + cell(p - ivec2(0, 1)).x - 4.0 * current.x;
+    float velocity = (current.y + 95.0 * laplacian * grid.z) * exp(-1.4 * grid.z);
+    for (int j = 0; j < int(extent.z); j++) {
+        vec2 offset = vec2(p) - impacts[j].xy;
+        velocity += impacts[j].z * exp(-dot(offset, offset) / impacts[j].w);
+    }
+    velocity += (sin(float(p.x)*.17-extent.w*2.)*cos(float(p.y)*.31+extent.w)*.7
+        + sin(float(p.x)*.37+float(p.y)*.23-extent.w*3.)*.3)*grid.z;
+    float bank = smoothstep(0.0, 3.0, float(min(p.y, int(grid.y) - 1 - p.y)));
+    float h = (current.x + velocity * grid.z) * mix(0.75, 1.0, bank);
+    next_state[i] = vec2(h, velocity);
+    vec2 slope = vec2(cell(p + ivec2(1, 0)).x - cell(p - ivec2(1, 0)).x,
+                      cell(p + ivec2(0, 1)).x - cell(p - ivec2(0, 1)).x) * grid.xy / (2.0 * extent.xy);
+    surface[i] = vec4(h, slope, smoothstep(0.08, 0.3, length(slope)*.2+abs(velocity)*.1));
+}

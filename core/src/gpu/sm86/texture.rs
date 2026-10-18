@@ -3,6 +3,8 @@ use super::*;
 const DIM_2D: u32 = 1;
 const LOD_OPERAND: u32 = 2;
 const GRAD_OPERAND: u32 = 4;
+const BIAS_OPERAND: u32 = 1;
+const MIN_LOD_OPERAND: u32 = 0x80;
 
 #[repr(u32)]
 pub enum TextureType {
@@ -244,7 +246,7 @@ fn bound_handle(inst: u128) -> (u32, u32) {
 
 impl<'a> Decoder<'a> {
     pub fn footprint(&mut self, inst: u128) {
-        todo!("FOOTPRINT reports the sparse tiles a sample would touch in NVIDIA's tile layout; only VK_NV_shader_image_footprint can express it, and neither Intel nor lavapipe has it: {inst:#034x}");
+        todo!("FOOTPRINT (class footprint_: Rd and Rd2, 64 bits each, and Pu) packs anchor, offset, mask, lod and granularity in a layout no PTX instruction, NAK or table documents, so OpImageSampleFootprintNV has nothing to map to; neither Intel nor lavapipe has VK_NV_shader_image_footprint either: {inst:#034x}");
     }
     pub fn suatom(&mut self, inst: u128) {
         let op = (opcode(inst) != 0x595).then_some((inst >> 87 & 0xf) as u32);
@@ -312,8 +314,11 @@ impl<'a> Decoder<'a> {
         }
         (var, ty, self.ir.emit_composite_construct(self.type_u32[2], &coords))
     }
+    // COMP_STATUS (bit 87 = 0, the only SUQUERY query in the table) asks whether the texel's memory is compressed; Vulkan
+    // never exposes compressed memory, so every texel reads as uncompressed: Rd zero, Pu clear.
     pub fn suquery(&mut self, inst: u128) {
-        todo!("SUQUERY on SM86 only has COMP_STATUS, the memory compression state of the texel at [Ra], which Vulkan does not expose; surface sizes come from TXQ: {inst:#034x}");
+        self.store_register((inst >> 16 & 0xff) as u32, self.const_u32_0);
+        self.store_pred_bit(false, (inst >> 81 & 7) as u32, self.const_u32_0);
     }
     pub fn sured(&mut self, inst: u128) {
         self.surface_atomic(inst, Some((inst >> 87 & 7) as u32));
@@ -375,24 +380,53 @@ impl<'a> Decoder<'a> {
     }
     pub fn tex(&mut self, inst: u128) {
         assert!(opcode(inst) == 0xb60 && inst >> 59 & 1 == 0, "TEX only in the bound cbuf form: {inst:#034x}");
-        for (bit, modifier) in [(76, "AOFFI"), (77, "NDV"), (78, "DC"), (79, "F16.RN"), (80, "F16.RZ")] {
+        for (bit, modifier) in [(76, "AOFFI"), (77, "NDV"), (79, "F16.RN"), (80, "F16.RZ")] {
             assert!(inst >> bit & 1 == 0, "TEX.{modifier}");
         }
         let dimension = (inst >> 61 & 7) as usize;
         assert!(dimension == 1, "TEX.{}", ["1D", "2D", "3D", "CUBE", "ARRAY_1D", "ARRAY_2D", "INVALID6", "ARRAY_CUBE"][dimension]);
         assert!(inst >> 81 & 7 == PT as u128, "TEX sparse residency predicate");
         let [ra, rb] = [24, 32].map(|bit| (inst >> bit & 0xff) as u32);
-        let lod = match inst >> 87 & 7 {
-            1 => self.const_u32_0,
-            3 => self.load_register(rb),
-            mode => todo!("TEX.{}", ["implicit lod", "LZ", "LB", "LL", "LC", "LB.LC", "LC.FDV", "INVALID7"][mode as usize]),
+        let rb_value = self.load_register(rb);
+        let rb_f32 = self.bitcast_f32(rb_value);
+        let clamp_value = self.load_register(ra + 2);
+        let clamp = self.bitcast_f32(clamp_value);
+        let mode = inst >> 87 & 7;
+        assert!(rb != RZ || !matches!(mode, 0 | 4 | 6), "TEX with Rb=RZ is illegal instruction on silicon");
+        let (image_ops, operands) = match mode {
+            0 if matches!(self.stage, Stage::Fragment { .. }) => (0, Vec::new()),
+            0 => todo!("TEX implicit LOD waits for compute derivatives"),
+            1 => (LOD_OPERAND, vec![self.bitcast_f32(self.const_u32_0)]),
+            2 => (BIAS_OPERAND, vec![rb_f32]),
+            3 => (LOD_OPERAND, vec![rb_f32]),
+            4 => (MIN_LOD_OPERAND, vec![clamp]),
+            5 => (BIAS_OPERAND | MIN_LOD_OPERAND, vec![rb_f32, clamp]),
+            6 => todo!("TEX.LC.FDV requires per-instruction divergent derivatives, which SPIR-V derivative groups cannot select"),
+            _ => panic!("TEX lod mode {mode}"),
         };
-        let lod = self.bitcast_f32(lod);
         // .SCR splits the operands between Ra and Rb, so without a lod operand y is in Rb (RTX 3090 fixtures).
-        let y = if inst >> 60 & 1 != 0 && inst >> 87 & 7 == 1 { rb } else { ra + 1 };
+        let y = if inst >> 60 & 1 != 0 && mode < 2 { rb } else { ra + 1 };
         let coord = self.float_vec2([ra, y]);
         let sampled = self.texture_2d(inst);
-        let texel = self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, LOD_OPERAND, &[lod]);
+        if matches!(mode, 0 | 2 | 4 | 5) { self.derivatives = true; }
+        if matches!(mode, 4 | 5) { self.ir.emit_capability(spirv::capability::MIN_LOD); }
+        let implicit_operands: Vec<_> = (image_ops != 0).then_some(image_ops).into_iter().chain(operands.iter().copied()).collect();
+        let texel = if inst >> 78 & 1 != 0 {
+            let dref_reg = rb + matches!(mode, 2 | 3 | 5) as u32;
+            let dref = self.load_register(dref_reg);
+            let dref = self.bitcast_f32(dref);
+            let sample = if matches!(mode, 1 | 3) {
+                self.ir.emit_image_sample_dref_explicit_lod(self.type_f32[1], sampled, coord, dref, image_ops, &operands)
+            } else {
+                self.ir.emit_image_sample_dref_implicit_lod(self.type_f32[1], sampled, coord, dref, &implicit_operands)
+            };
+            let one = self.ir.emit_constant_typed(self.type_f32[1], 1.0f32);
+            self.ir.emit_composite_construct(self.type_f32[4], &[sample, sample, sample, one])
+        } else if matches!(mode, 1 | 3) {
+            self.ir.emit_image_sample_explicit_lod(self.type_f32[4], sampled, coord, image_ops, &operands)
+        } else {
+            self.ir.emit_image_sample_implicit_lod(self.type_f32[4], sampled, coord, &implicit_operands)
+        };
         let bits = self.ir.emit_bitcast(self.type_u32[4], texel);
         self.store_texel(inst, bits);
     }
@@ -407,7 +441,7 @@ impl<'a> Decoder<'a> {
         let lod = match inst >> 87 & 7 {
             1 => self.const_u32_0,
             3 => self.load_register(rb),
-            mode => todo!("TLD lod mode {mode}"),
+            mode => panic!("TLD only defines LZ and LL, not lod mode {mode}"),
         };
         let coords = [ra, ra + 1].map(|r| self.load_register(r));
         let coord = self.ir.emit_composite_construct(self.type_u32[2], &coords);
@@ -418,9 +452,11 @@ impl<'a> Decoder<'a> {
         self.store_texel(inst, bits);
     }
 
-    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1.
+    // Written components pack in RGBA order into Rd, Rd+1, then Rd2, Rd2+1; with Rd = RZ they start at Rd2, as the
+    // NVIDIA driver's `TEX RZ, R0, ..., 0x2` that goes on to read the green texel from R0 shows.
     fn store_texel(&mut self, inst: u128, texel: u32) {
         let [rd, rd2] = [16, 64].map(|bit| (inst >> bit & 0xff) as u32);
+        let [rd, rd2] = if rd == RZ { [rd2, RZ] } else { [rd, rd2] };
         let written = (0..4).filter(|c| inst >> (72 + c) & 1 != 0);
         for (i, component) in written.enumerate() {
             let value = self.ir.emit_composite_extract(self.type_u32[1], texel, &[component]);
@@ -444,7 +480,7 @@ impl<'a> Decoder<'a> {
     fn texture_2d(&mut self, inst: u128) -> u32 {
         if self.type_sampled_texture_2d == 0 {
             self.ir.emit_capability(spirv::capability::IMAGE_QUERY);
-            self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 0, 0, 0, 1, 0);
+            self.type_texture_2d = self.ir.emit_type_image(self.type_f32[1], DIM_2D, 2, 0, 0, 1, 0);
             self.type_sampled_texture_2d = self.ir.emit_type_sampled_image(self.type_texture_2d);
         }
         let (cbuf_bank, byte_offset) = bound_handle(inst);

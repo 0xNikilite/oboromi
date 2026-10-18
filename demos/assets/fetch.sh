@@ -1,9 +1,23 @@
 #!/bin/sh
-# Fetches the converted FlightHelmet (512 px, block-linear, full mips) from the fork's assets branch.
+# Fetches the converted BoomBox (2048 px) and FlightHelmet (1024 px), block-linear with full mips, from the fork's assets branch.
 set -e
-dir=$(dirname "$0")/flighthelmet
-[ -f "$dir/manifest.json" ] && exit 0
-mkdir -p "$dir"
-curl -fL https://raw.githubusercontent.com/jopdorp/oboromi/f6a01e5cb5efbb4603ebc62afeb5eebecc77fae4/flighthelmet.tar.gz -o "$dir/flighthelmet.tar.gz"
-echo "4b37e3b926a246c6d8ad8ce449b4f8c9470b953d4533865c6deb8ca0815c2dd7  $dir/flighthelmet.tar.gz" | sha256sum -c -
-tar -xzf "$dir/flighthelmet.tar.gz" -C "$dir" && rm "$dir/flighthelmet.tar.gz"
+fetch() {
+    dir=$(dirname "$0")/$1
+    [ -f "$dir/manifest.json" ] && return
+    mkdir -p "$dir"
+    curl -fL https://raw.githubusercontent.com/jopdorp/oboromi/f00cf49e1e03cc2f3728f73ea0c09a81a27ddb1f/$1.tar.gz -o "$dir/$1.tar.gz"
+    echo "$2  $dir/$1.tar.gz" | sha256sum -c -
+    tar -xzf "$dir/$1.tar.gz" -C "$dir" && rm "$dir/$1.tar.gz"
+}
+fetch boombox 8256f5d473da5d0df8a7f36c9d85f6a1eeaeaa43b8e6ae99bc0aa4e9579c55c7
+fetch flighthelmet 9c409e8ceeb8e5f8500f4d901f4dbb4abb5026ca464f589dbc584f2965dfa1b4
+
+fetch_dungeon() {
+    dir=$(dirname "$0")/dungeon
+    [ -f "$dir/manifest.json" ] && return
+    mkdir -p "$dir"
+    curl -fL https://raw.githubusercontent.com/jopdorp/oboromi/e6cb14cfdd2fe60ca233fd5e1eb9d99f42e6b846/dungeon-materials.tar.xz -o "$dir/materials.tar.xz"
+    echo "de139bb5257dc508b5f05308511ece3d14717529b101dbe36fc30d9db34bef4e  $dir/materials.tar.xz" | sha256sum -c -
+    tar -xJf "$dir/materials.tar.xz" -C "$dir" && rm "$dir/materials.tar.xz"
+}
+fetch_dungeon

@@ -1,0 +1,40 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0,std430) readonly buffer HDR { uvec2 hdr[]; };
+layout(binding=1,std430) writeonly buffer Output { uint pixels[]; };
+layout(binding=2,std140) uniform Frame {
+    mat4 vp; mat4 reflected_vp; vec4 eye_time; vec4 right_quality; vec4 up_rt;
+    vec4 river; vec4 moon; vec4 settings; vec4 fog_lights;
+};
+struct Light { vec4 position; vec4 colour; };
+layout(binding=3,std430) readonly buffer Lights { Light lights[]; };
+layout(binding=4,std430) readonly buffer Fog { vec4 fog_pixels[]; };
+layout(binding=5,std430) readonly buffer Bloom { vec4 bloom_pixels[]; };
+vec3 sampleAt(ivec2 p){p=clamp(p,ivec2(0),ivec2(settings.xy)-1);uvec2 h=hdr[p.y*int(settings.x)+p.x];return vec3(unpackHalf2x16(h.x),unpackHalf2x16(h.y).x);}
+vec4 fogAt(ivec2 p){p=clamp(p,ivec2(0),ivec2(settings.xy)/4-1);return fog_pixels[p.y*int(settings.x/4.)+p.x];}
+vec3 bloomAt(ivec2 p){p=clamp(p,ivec2(0),ivec2(settings.xy)/4-1);return bloom_pixels[p.y*int(settings.x/4.)+p.x].rgb;}
+vec3 bloomSample(vec2 p){ivec2 i=ivec2(floor(p));vec2 f=fract(p);return mix(mix(bloomAt(i),bloomAt(i+ivec2(1,0)),f.x),mix(bloomAt(i+ivec2(0,1)),bloomAt(i+1),f.x),f.y);}
+void main(){
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy); if(any(greaterThanEqual(p,ivec2(settings.xy))))return;
+    vec2 distortion=vec2(0);
+    for(int k=0;k<4;k++) {
+        Light l=lights[int(fog_lights[k])];
+        vec4 clip=vp*vec4(l.position.xyz+vec3(0,l.position.w*1.4,0),1);
+        if(clip.w<=0.)continue;
+        vec2 centre=(clip.xy/clip.w*.5+.5)*settings.xy;
+        vec2 delta=(vec2(p)-centre)/vec2(30.,100.);
+        float mask=exp(-dot(delta,delta))*min(l.position.w,1.);
+        distortion+=vec2(sin(float(p.y)*.09-eye_time.w*7.),cos(float(p.x)*.08+eye_time.w*5.))*mask*1.8;
+    }
+    vec3 c=sampleAt(p+ivec2(distortion)),bloom=vec3(0);float weight=0.;
+    if((uint(moon.w)&4u)==0u)for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){
+        float w=exp(-float(i*i+j*j)*.6);bloom+=bloomSample((vec2(p)+.5)/4.-.5+vec2(i,j))*w;weight+=w;
+    }
+    if((uint(moon.w)&4u)==0u)c+=bloom/weight*.22;
+    vec2 fp=(vec2(p)+.5)/4.-.5;ivec2 fi=ivec2(floor(fp));vec2 f=fract(fp);
+    vec4 fog=mix(mix(fogAt(fi),fogAt(fi+ivec2(1,0)),f.x),mix(fogAt(fi+ivec2(0,1)),fogAt(fi+1),f.x),f.y);
+    c=(c*fog.a+fog.rgb)*1.15;
+    c=clamp(c*(2.51*c+.03)/(c*(2.43*c+.59)+.14),0.,1.);
+    vec2 uv=(vec2(p)+.5)/settings.xy; c*=1.-.18*pow(length(uv-.5),2.);
+    c=pow(c,vec3(1./2.2));pixels[p.y*int(settings.x)+p.x]=packUnorm4x8(vec4(c,1));
+}

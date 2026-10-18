@@ -49,7 +49,7 @@ fn qmd() -> [u32; 64] {
 fn submit(qmd: [u32; 64]) -> Result<Vec<Event>, String> {
     let mut words = Vec::new();
     inc(SET_OBJECT, &[0xc7c0], &mut words);
-    inc(SEND_PCAS_A, &[0x20], &mut words);
+    inc(SEND_PCAS_A as usize, &[0x20], &mut words);
     inc(SEND_SIGNALING_PCAS_B, &[2], &mut words);
     let pushbuffer = bytes(&words);
     let qmd = bytes(&qmd);

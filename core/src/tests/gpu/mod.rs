@@ -1,9 +1,14 @@
 pub mod harness;
 
 mod atomics;
+mod bnsh;
 mod compare;
 mod control;
+pub mod demos;
 mod convert;
+mod demos_particles;
+mod demos_post;
+mod demos_sprites;
 mod fifo;
 mod fixtures;
 pub mod fp;
@@ -15,7 +20,9 @@ mod memory_map;
 mod pipeline_cache;
 mod program;
 mod qmd;
+mod ray;
 mod shared;
+pub mod silicon;
 mod special;
 mod stages;
 mod tensor;

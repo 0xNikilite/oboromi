@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use crate::cpu::GuestRam;
     use crate::gpu::memory::{MemoryError, MemoryTracker, PAGE, PageMap, Writer};
     use crate::gpu::{VkError, device};
 
@@ -29,11 +28,10 @@ mod tests {
             Err(e @ (VkError::Loader | VkError::NoDevice)) => return eprintln!("skipping: {e:?}"),
             state => state.unwrap(),
         };
-        let ram = GuestRam::new(2 * PAGE as usize);
-        ram.write(0, &[0xaa; PAGE as usize]);
-        ram.write(PAGE, &[0xbb; PAGE as usize]);
-        let (mut space, tracker) = (PageMap::default(), MemoryTracker::default());
-        let window_bytes = |space: &PageMap| {
+        let mut ram = vec![0xaa; 2 * PAGE as usize];
+        ram[PAGE as usize..].fill(0xbb);
+        let (mut space, mut tracker) = (PageMap::default(), MemoryTracker::default());
+        let mut window_bytes = |space: &PageMap| {
             let (mapping, base) = tracker.window(state, &ram, space, VA + 4, 8).unwrap();
             let mut bytes = [0; 12];
             mapping.buffer.read(&mut bytes).unwrap();

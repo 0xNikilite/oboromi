@@ -20,20 +20,20 @@ impl<'a> Decoder<'a> {
     pub fn ubrev(&mut self, inst: u128) {
         self.brev(inst)
     }
+    // nvdisasm prints UCLEA URd, UPu, URa, Sb, shift in LEA's operand order, so it is read as a 64-bit LEA: URd = (URa << shift)
+    // + Sb (16-bit immediate, or URb when bit 10 is set), UPu the carry out. Unconfirmed on silicon: session 7 rig word.
     pub fn uclea(&mut self, inst: u128) {
-        let _pg = (((inst >> 12) & 0x7) << 0);
-        let _pg_not = (((inst >> 15) & 0x1) << 0);
-        let _urd = (((inst >> 16) & 0x3f) << 0);
-        let _cbu_state = (((inst >> 24) & 0x3f) << 0);
-        let _sb = (((inst >> 32) & 0xffff) << 0);
-        let _sz = (((inst >> 73) & 0xf) << 0);
-        let _pu = (((inst >> 81) & 0x7) << 0);
-        let _pm_pred = (((inst >> 102) & 0x3) << 0);
-        let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
-        let _src_rel_sb = (((inst >> 113) & 0x7) << 0);
-        let _req_bit_set = (((inst >> 116) & 0x3f) << 0);
-        let _opex = (((inst >> 122) & 0x7) << 5) | (((inst >> 105) & 0x1f) << 0);
-        todo!("UCLEA operand fields are public, but NAK and Eden provide no operation semantics");
+        let ty = self.type_u64();
+        let a = self.load_ureg_pair((inst >> 24 & 0x3f) as u32);
+        let shift = self.ir.emit_constant_typed(ty, (inst >> 73 & 0xf) as u64);
+        let a = self.ir.emit_shift_left_logical(ty, a, shift);
+        let b = if inst >> 10 & 1 != 0 { self.load_ureg((inst >> 32 & 0x3f) as u32) } else { self.cached_const_u32((inst >> 32 & 0xffff) as u32) };
+        let b = self.ir.emit_u_convert(ty, b);
+        let sum = self.ir.emit_iadd(ty, a, b);
+        self.store_alu_pair(inst, sum);
+        let carry = self.ir.emit_uless_than(self.type_bool[1], sum, a);
+        let carry = self.bool_bit(carry);
+        self.store_pred_bit(true, (inst >> 81 & 7) as u32, carry);
     }
     pub fn uf2fp(&mut self, inst: u128) {
         let fmt = (inst >> 84 & 3) << 2 | (inst >> 75 & 3);

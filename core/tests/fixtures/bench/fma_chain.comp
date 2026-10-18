@@ -1,0 +1,12 @@
+#version 450
+layout(local_size_x = 256) in;
+layout(binding = 1) uniform Params { int iterations; float m; float c; };
+layout(binding = 9) buffer Out { float data[]; };
+void main() {
+    float a[8];
+    for (int k = 0; k < 8; k++) a[k] = float(gl_LocalInvocationID.x + k);
+    for (int i = 0; i < iterations; i++)
+        for (int j = 0; j < 32; j++)
+            for (int k = 0; k < 8; k++) a[k] = fma(a[k], m, c);
+    data[gl_GlobalInvocationID.x] = a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6] + a[7];
+}

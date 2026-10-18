@@ -21,10 +21,10 @@ Vulkan calls a slot a binding and a group of slots a descriptor set. Compute and
 | Binding | Vulkan kind | Holds |
 |---|---|---|
 | 0 | Uniform buffer: small, read-only | Our helper values, today the start address of the memory window; never game data |
-| 1 to 8 | Uniform buffers | The game's constant buffers 0 to 7 |
-| 9 | Storage buffer: large, read-write | The window onto the game's main memory, see [ADR-0002](0002-one-ssbo-window-for-global-memory.md) |
-| 10, 11 | Storage buffers | Register values in and out, for tests only |
-| 12 and up | Image slots | Textures and writable images, numbered in the order the shader first uses them |
+| 1 to 32 | Uniform buffers | The game's constant buffers 0 to 31, all the banks a stage has |
+| 33 | Storage buffer: large, read-write | The window onto the game's main memory, see [ADR-0002](0002-one-ssbo-window-for-global-memory.md) |
+| 34, 35 | Storage buffers | Register values in and out, for tests only |
+| 36 and up | Image slots | Textures and writable images, numbered in the order the shader first uses them |
 
 A constant buffer, or cbuf, is a small read-only table of numbers the game hands the shader, such as the camera matrix. Vulkan's layout rule for uniform buffers, std140, pads each array element to a fixed width. A `uvec4` is exactly that width, so each cbuf is declared as a `uvec4` array and no space is wasted.
 

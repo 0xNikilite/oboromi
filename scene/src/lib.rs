@@ -22,7 +22,7 @@ pub type Vertex = ([f32; 2], [u8; 4]);
 
 pub const TRIANGLE_VERTICES: [Vertex; 3] = [([0.0, -0.8], [255, 0, 0, 255]), ([0.7, 0.4], [0, 255, 0, 255]), ([-0.7, 0.4], [0, 0, 255, 255])];
 
-const fn header(op: u32, method: usize, count: u32) -> u32 {
+pub const fn header(op: u32, method: usize, count: u32) -> u32 {
     op << 29 | count << 16 | (method / 4) as u32
 }
 

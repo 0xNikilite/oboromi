@@ -4,3 +4,6 @@ observed:true means the outputs were captured on silicon, false marks a case tha
 The ids are what the known-failure lists in core/src/tests/gpu/fixtures.rs refer to.
 mul-add and gradient are whole nvcc-compiled programs with their silicon outputs.
 guest/guest.bin is the flat AArch64 image scripts/build-guest.sh builds from guest/ for core/src/guest.rs, sha256 86dcbf2e50a3a4d80fdddd0c855c2e874376975caade469d57bc0830f190b33c.
+driver-shaders holds NVIDIA driver 580 SM86 output (RTX A6000, Vulkan pipeline cache) for demos/shaders and a minimal pass-through triangle pair: each graphics file is the 0x80-byte program header followed by the code, the compute file is code only.
+query-{candidates,hit,address,flags}.comp.bin are the rig's GL_EXT_ray_query compute shaders, compiled by NVIDIA driver 580 for an RTX 3090; they cover candidate confirmation, opaque hits, a push-constant TLAS address and ray flags.
+rt.vert.bin and rt.frag.bin are pbr.vert and rt.frag (including four-ray AO), compiled by NVIDIA driver 580.126.20 on an RTX 3090. Bank 0x1d holds texture handles at +0, the TLAS at +0x18 and the uniform-buffer handle at +0x28.

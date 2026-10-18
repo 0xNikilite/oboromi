@@ -20,4 +20,27 @@ bool renderDemoFrame(float seconds);
 // Draws the pushbuffer triangle demo at the given time into the display
 bool renderTriangleDemo(float seconds);
 
+// Saves the demos' pipeline cache so their next run starts warm
+bool flushDemoCaches();
+
+// Draws the pbr BoomBox and FlightHelmet demos at the given time into the display
+bool renderBoomBoxDemo(float seconds);
+bool renderRaytracedDemo(float seconds);
+void setRaytracingEnabled(bool enabled);
+bool renderHelmetDemo(float seconds);
+
+// Draws the post-effect demo at the given time into the display
+bool renderPostFrame(float seconds);
+
+// Draws the sprites demo at the given time into the display
+bool renderSpritesFrame(float seconds);
+bool renderDungeonFrame(float seconds);
+
+// Plays the music demo and steps the bounce demo up to the given time
+bool renderMusicDemo(float seconds);
+bool renderBounceDemo(float seconds);
+
+// Draws the particles demo at the given time into the display
+bool renderParticlesFrame(float seconds);
+
 }

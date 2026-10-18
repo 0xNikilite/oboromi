@@ -34,12 +34,14 @@ impl<'a> Decoder<'a> {
         let sz = (((inst >> 73) & 0x3) << 0) as u32;
         let op = (((inst >> 87) & 0xf) << 0) as u32;
         let cas = opcode(inst) == 0x38d;
-        match opcode(inst) {
-            0x1f8c => todo!("ATOMS.ARRIVE and ATOMS.POPC.INC expose encodings but not state-transition semantics"),
-            0x38d if op & 1 == 1 => todo!("ATOMS.CAST exposes operands but not cast semantics"),
-            _ => {}
-        }
+        // Session 6: ATOMS.CAST writes 1 to Rd when the swap happened and 0 when it did not, never the old value.
+        let cast = cas && inst >> 87 & 1 != 0;
+        assert!(sz != 3, "ATOMS.ADD.INVALID3 is illegal instruction on silicon");
         let address = self.shared_address(inst, 64);
+        if opcode(inst) == 0x1f8c {
+            let [scope, sem] = [spirv::scope::WORKGROUP, spirv::memory_semantics::ACQUIRE_RELEASE | spirv::memory_semantics::WORKGROUP_MEMORY].map(|c| self.cached_const_u32(c));
+            return self.mbarrier(inst, address, Self::shared_word_at, scope, sem);
+        }
         if matches!(sz, 2 | 5) {
             assert!(crate::gpu::device().is_ok_and(|d| d.shader_shared_int64_atomics), "64-bit shared atomics require shaderSharedInt64Atomics");
             let ptr = self.shared_u64_at(address);
@@ -71,11 +73,15 @@ impl<'a> Decoder<'a> {
                 self.ir.emit_store(dst, word);
             }
             self.ir.emit_control_barrier(scope, scope, sem);
+            let old = if cast {
+                let hit = self.ir.emit_iequal(self.type_bool[1], old, b);
+                let [one, zero] = [1u64, 0].map(|c| self.ir.emit_constant_typed(ty, c));
+                self.ir.emit_select(ty, hit, one, zero)
+            } else {
+                old
+            };
             self.store_pair(rd, old);
             return;
-        }
-        if sz >= 2 {
-            todo!("floating-point shared atomics require VK_EXT_shader_atomic_float");
         }
         let ptr = self.shared_word_at(address);
         let b = self.load_register(rb);
@@ -87,6 +93,12 @@ impl<'a> Decoder<'a> {
             self.ir.emit_atomic_compare_exchange(ty, ptr, scope, relaxed, relaxed, c, b)
         } else {
             self.atomic_op(false, ptr, scope, relaxed, op, signed, b)
+        };
+        let old = if cast {
+            let hit = self.ir.emit_iequal(self.type_bool[1], old, b);
+            self.ir.emit_select(ty, hit, self.const_u32_1, self.const_u32_0)
+        } else {
+            old
         };
         self.store_register(rd, old);
     }

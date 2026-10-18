@@ -73,6 +73,9 @@ void main() {
     vec3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * albedo / PI;
     vec3 specular = fresnel * distribution * visibility;
     vec3 direct = (diffuse + specular) * light_colour.rgb * n_l;
+    vec3 fill = normalize(vec3(-l.x, 0.35, l.z));
+    direct += diffuse * vec3(0.18, 0.28, 0.5) * max(dot(n, fill), 0.0);
+    direct += vec3(0.32, 0.38, 0.5) * pow(1.0 - n_v, 4.0) * (0.15 + 0.35 * max(dot(n, -l), 0.0));
     vec3 indirect = ambient.rgb * albedo * occlusion;
     vec3 hdr = direct + indirect + emissive;
     out_colour = vec4(pow(aces(hdr), vec3(1.0 / 2.2)), 1.0);

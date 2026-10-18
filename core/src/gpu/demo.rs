@@ -14,7 +14,7 @@ const BASE: u64 = 0x1000_0000;
 const PUSHBUFFER: u64 = BASE;
 const FRAME_SEGMENT: u64 = BASE + 0x8000;
 const VERTEX_PROGRAM: u64 = BASE + 0x1_0000;
-const PIXEL_PROGRAM: u64 = BASE + 0x1_8000;
+const PIXEL_PROGRAM: u64 = BASE + 0x4_0000;
 const VERTEX_TABLE: u64 = BASE + 0x2_0000;
 const VERTEX_UNIFORMS: u64 = VERTEX_TABLE + 0x100;
 const MATERIALS: u64 = BASE + 0x2_1000;
@@ -23,7 +23,7 @@ const MATERIAL_UNIFORMS: u64 = 0x80;
 const TIC: u64 = BASE + 0x3_0000;
 const TSC: u64 = BASE + 0x3_8000;
 const REPORT: u64 = BASE + 0x3_f000;
-const VERTICES: u64 = BASE + 0x4_0000;
+const VERTICES: u64 = BASE + 0x6_0000;
 // The depth target lives on the host only, so its VA needs no pages.
 const DEPTH: u64 = 0x2000_0000;
 const ALIGN: u64 = 0x1_0000;
@@ -163,7 +163,8 @@ fn floats(values: &[f32]) -> Vec<u8> {
 }
 
 fn vertex(out: &mut Vec<u8>, position: [f32; 3], normal: [f32; 3]) {
-    out.extend(floats(&[position[0], position[1], position[2], normal[0], normal[1], normal[2], 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    let tangent = if normal[0].abs() > 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+    out.extend(floats(&[position[0], position[1], position[2], normal[0], normal[1], normal[2], tangent[0], tangent[1], tangent[2], 1.0, 0.0, 0.0]));
 }
 
 fn quad(vertices: &mut Vec<u8>, indices: &mut Vec<u32>, corners: [[f32; 3]; 4], normal: [f32; 3]) -> [u32; 2] {
@@ -431,7 +432,7 @@ impl<'a> Scene<'a> {
         gpu.submit(&[entry(PUSHBUFFER, words.len())])?;
         let geometry = if traced {
             vec![Geometry { vertices: VERTICES, stride: 48, vertex_count: model_vertices as u32, indices: indices_va, index_count: model_indices as u32, transform: [[0.0; 4]; 3], opaque: true },
-                Geometry { vertices: VERTICES, stride: 48, vertex_count: (vertices.len() / 48) as u32, indices: indices_va + (model_indices as u64 + 30) * 4, index_count: (indices.len() / 4 - model_indices - 30) as u32 - light_count, transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], opaque: true }]
+                Geometry { vertices: VERTICES, stride: 48, vertex_count: (vertices.len() / 48) as u32, indices: indices_va + model_indices as u64 * 4, index_count: (indices.len() / 4 - model_indices) as u32 - light_count, transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], opaque: true }]
         } else { Vec::new() };
         Ok(Self { gpu, target, width, height, draws, blends, textures: texture_va, fit, geometry, traced, room, material_count: materials.len() + if room { ROOM_MATERIALS.len() } else { 0 }, model_indices: model_indices as u32, light_first, light_y: 0.7, frame: 0 })
     }
@@ -459,10 +460,12 @@ impl<'a> Scene<'a> {
         view[3] = [-right.iter().zip(eye).map(|(a, b)| a * b).sum::<f32>(), -up.iter().zip(eye).map(|(a, b)| a * b).sum::<f32>(), -length, 1.0];
         if self.room {
             let (orbit, bob) = ((seconds * 0.45).sin(), (seconds * 1.4).sin());
-            let mut light = [orbit * 0.65, 0.7 + bob * 0.08, 0.55 * (seconds * 0.45).cos()];
-            let length = light.iter().map(|v| v * v).sum::<f32>().sqrt();
-            light.iter_mut().for_each(|v| *v /= length);
-            let head = [&light[..], &[3.6 + bob * 0.25, 2.55 + bob * 0.15, 1.75 + (1.0 - bob) * 0.2, 0.0], &[0.13 + 0.08 * (orbit + 1.0), 0.13 + 0.08 * (1.0 - orbit), 0.2 + 0.04 * bob, 0.0], &eye, &[1.0]].concat();
+            let key = [orbit * 1.8, 2.15 + bob * 0.12, 0.4 + 1.25 * (seconds * 0.45).cos()];
+            let length = key.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let direction = key.map(|v| v / length);
+            let light = if self.traced { [key[0], key[1], key[2], 0.32] } else { [direction[0], direction[1], direction[2], 0.0] };
+            let cool = [-1.65, 0.7 + 0.25 * bob, -0.55, 0.12];
+            let head = [&light[..], &[4.1, 3.5, 3.0, 0.0], if self.traced { &cool[..] } else { &[0.17, 0.18, 0.22, 0.0] }, &eye, &[1.0]].concat();
             for material in 0..self.material_count { self.gpu.write(MATERIALS + MATERIAL_STRIDE * material as u64 + MATERIAL_UNIFORMS, &floats(&head)).map_err(|e| format!("{e:?}"))?; }
             self.light_y = 0.7 + 0.25 * bob;
         }

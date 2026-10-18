@@ -95,8 +95,10 @@ impl<'a> Decoder<'a> {
         let comparison = self.fp_compare((inst >> 76 & 0xf) as u32, a, b);
         let p = self.pp_bit(inst);
         let result = self.bool_op(inst >> 74 & 3, comparison, p);
-        let mask = self.ir.emit_isub(self.type_u32[1], self.const_u32_0, result);
-        self.store_register(rd, mask);
+        // SM86 FSET only encodes .BF, which writes 1.0 or 0.0, never a mask (checked on an RTX 3090).
+        let one = self.ir.emit_convert_u_to_f(self.type_f32[1], result);
+        let one = self.bitcast_u32(one);
+        self.store_register(rd, one);
     }
     pub fn fsetp(&mut self, inst: u128) {
         let ftz = inst >> 80 & 1 != 0;

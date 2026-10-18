@@ -32,11 +32,11 @@ mod tests {
 
     #[test]
     fn boombox_frame_draws_the_lit_model_over_the_clear_colour() {
-        check_first_frame("boombox", "c4d728df362c7f4b36ab96931671ca3fdab751d2434620750b1a80040595ae26");
+        check_first_frame("boombox", "947c937b3355befd0315966bd99e778e9fb2690b488d0446216e31d484aea570");
     }
 
     #[test]
     fn helmet_frame_draws_its_six_materials_over_the_clear_colour() {
-        check_first_frame("flighthelmet", "10b30b11b93b26a46ca5f97f3f3c1a04ac136a848f2d9c26ffdc2395bef1ae89");
+        check_first_frame("flighthelmet", "86b4284268d42ed1a9b234877200c307d4e44e3095bce6f1925c9fcd4e37a686");
     }
 }

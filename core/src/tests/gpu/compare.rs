@@ -151,14 +151,14 @@ mod tests {
     }
 
     #[test]
-    fn fset_writes_boolean_mask() {
+    fn fset_writes_one_or_zero() {
         let mut seed = vec![0; 255];
         seed[2] = 1.0_f32.to_bits();
         seed[3] = 1.0_f32.to_bits();
         let Some((regs, _)) = run_regs(&[FSET_BF], &seed, &[], &[]) else {
             return;
         };
-        assert_eq!(regs[1], u32::MAX);
+        assert_eq!(regs[1], 1.0_f32.to_bits());
         seed[3] = 2.0_f32.to_bits();
         let Some((regs, _)) = run_regs(&[FSET_BF], &seed, &[], &[]) else {
             return;

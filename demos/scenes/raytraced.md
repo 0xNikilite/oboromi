@@ -1,10 +1,8 @@
 # Ray-traced BoomBox
 
 `demo::render_raytraced_frame` draws BoomBox on a ground plane through the guest command list. The NVIDIA-compiled
-`rt.vert.bin` and `rt.frag.bin` come from `pbr.vert` and `rt.frag`. The fragment shader casts a shadow ray towards the
-light, a reflection ray for metallic surfaces and four hemisphere rays for ambient occlusion. Reflections select the
-sky or ambient colour according to the hit; they do not shade a second material. AO modulates indirect light in the
-same pass, so this scene does not use `rt_ao.comp` or sample the depth target.
+`rt.vert.bin` and `rt.frag.bin` come from `pbr.vert` and `rt.frag`. The fragment shader casts area-light shadows,
+glossy reflections, glass reflection and refraction, ambient occlusion and one-bounce diffuse light in one pass.
 
 Run `demos/assets/fetch.sh`, then:
 

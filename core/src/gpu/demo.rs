@@ -569,6 +569,10 @@ pub fn set_raytracing_enabled(enabled: bool) {
     RAY_TRACING.store(enabled, Ordering::Relaxed);
 }
 
+pub fn reset_scene() {
+    *SCENE.lock().unwrap() = None;
+}
+
 /// Needs demos/assets/fetch.sh run first.
 pub fn render_helmet_frame(seconds: f32) -> Result<(), String> {
     render("flighthelmet", seconds)

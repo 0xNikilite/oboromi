@@ -7,7 +7,7 @@ use super::fifo::{Event, Pusher};
 use super::graphics::{DrawState, GraphicsPipeline, RasterState, RenderTarget, TargetState, VertexLayout};
 use super::memory::{Mapping, MemoryError, MemoryTracker, PaRange, PageMap, Ram, Writer, ZeroCopy, within};
 use super::pipeline_cache::{Disk, Lookup, PipelineBuilder, PipelinePolicy, hash};
-use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, acceleration_structure_binding, branch_target, emit_module};
+use super::sm86::{CBUF_BINDING, GLOBAL_BINDING, Hints, ResourceKind, SUPPORT_BINDING, Stage, TEXTURE_BINDING, Translation, acceleration_structure_binding, branch_target, emit_module_hinted};
 use super::texture::TexturePool;
 use super::threed::{Blend, ColourTarget, ConstantBuffer, DepthTarget, DrawSnapshot, MemoryLayout, PrimitiveTopology, ShaderProgram, VertexAttribute};
 use super::{SpeedHacks, VkError, VkState};
@@ -145,6 +145,7 @@ pub struct Gpu<'a> {
     kernels: HashMap<u64, (Vec<(u32, vk::DescriptorType)>, Option<(u32, u32, u32)>)>,
     /// Guest programs translated rather than read back from the disk cache.
     pub translated: usize,
+    pub(crate) ray_budget: u32,
     traversables: HashMap<u64, Traversable<'a>>,
     support: Option<HostBuffer<'a>>,
     targets: HashMap<TargetKey, Target<'a>>,
@@ -391,6 +392,7 @@ impl<'a> Gpu<'a> {
             kernels: HashMap::new(),
             traversables: HashMap::new(),
             translated: 0,
+            ray_budget: hacks.ray_budget,
             support: None,
             targets: HashMap::new(),
             mirrors: HashMap::new(),
@@ -582,6 +584,7 @@ impl<'a> Gpu<'a> {
         let header = ProgramHeader::new(&sph);
         let [uint, sint] = integer.map(|mask| mask & header.inputs);
         let key = hash((sph, &code, uint, sint));
+        let key = if self.ray_budget == u32::MAX { key } else { hash((key, self.ray_budget)) };
         if self.modules.contains_key(&key) {
             return Ok(key);
         }
@@ -608,7 +611,8 @@ impl<'a> Gpu<'a> {
         }
         self.translated += 1;
         let (mut resources, mut stores_global) = (Vec::new(), false);
-        let module = emit_module(Some(self.state), stage, |decoder| {
+        let translation = if matches!(stage, Stage::Compute { .. }) { Translation::default() } else { Translation::ForceDispatcher };
+        let module = emit_module_hinted(Some(self.state), stage, Hints { translation, ray_budget: self.ray_budget, ..Default::default() }, |decoder| {
             decoder.translate_program(code);
             resources = decoder.resources.iter().map(|r| r.kind).collect();
             stores_global = decoder.stores_global;
@@ -993,7 +997,21 @@ impl<'a> Gpu<'a> {
             load,
             raster: raster_state(draw, extent, topology, blend),
         };
-        self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
+        if self.ray_budget == u32::MAX {
+            self.state.draw(pipeline, &target.render_target, &draw_state).map_err(named)?;
+        } else {
+            let mut tile = draw_state;
+            let top = tile.raster.scissor.offset.y.max(0) as u32;
+            let bottom = (tile.raster.scissor.offset.y + tile.raster.scissor.extent.height as i32).max(0) as u32;
+            for y in (top..bottom.min(extent.height)).step_by(32) {
+                tile.raster.scissor.offset.y = y as i32;
+                tile.raster.scissor.extent.height = (bottom - y).min(32);
+                self.state.draw(pipeline, &target.render_target, &tile).map_err(named)?;
+                tile.clear = None;
+                tile.clear_depth = None;
+                tile.load = false;
+            }
+        }
         let rows = draw_state.rows(extent.height);
         let drawn = u64::from(rows.start * extent.width * 4)..u64::from(rows.end * extent.width * 4);
         if !drawn.is_empty() {

@@ -1,8 +1,8 @@
 //! Renders a demo offline at fixed time steps, frame i at i / fps seconds, as `frame_%04d.ppm` in a directory:
-//! `cargo run --release -p oboromi-core --example capture -- <demo> [--seconds 8] [--fps 60] --out <dir>`, then
+//! `cargo run --release -p oboromi-core --example capture -- <demo> [--seconds 8] [--fps 60] [--ray-budget] --out <dir>`, then
 //! `ffmpeg -framerate 60 -i <dir>/frame_%04d.ppm -c:v libx264 -crf 20 -pix_fmt yuv420p -movflags +faststart demo.mp4`.
 use oboromi_core::audio::{CHANNELS, PERIOD, RATE, demo_music, pull, queued};
-use oboromi_core::ffi::oboromi_frame_read;
+use oboromi_core::ffi::{oboromi_frame_read, oboromi_set_ray_budget};
 use oboromi_core::gpu::{demo, demo_bounce, demo_dungeon, demo_particles, demo_post, demo_sprites, frame};
 use std::io::{Seek, Write};
 
@@ -70,6 +70,7 @@ impl Wav {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--ray-budget") { oboromi_set_ray_budget(1); }
     let flag = |name: &str| {
         args.iter()
             .position(|arg| arg == name)

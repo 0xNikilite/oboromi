@@ -281,6 +281,12 @@ void *oboromi_vk_instance();
 /// false if the device cannot present to it.
 bool oboromi_display_surface(uint64_t surface, uint32_t width, uint32_t height);
 
+/// `fast` trades exact HMMA accumulation for speed in every translation from now on.
+void oboromi_set_tensor_mode(bool fast);
+
+/// keeps at most `sites` ray-query sites per shader in engines created from now on.
+void oboromi_set_ray_budget(uint32_t sites);
+
 /// skips draws while their pipelines compile in engines created from now on.
 void oboromi_set_skip_draw_while_compiling(bool skip);
 

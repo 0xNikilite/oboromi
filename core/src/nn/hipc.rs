@@ -473,7 +473,7 @@ mod tests {
             message.pointer_descriptors,
             [HipcPointerDescriptor {
                 index: 7,
-                address: 0x5_3_89ab_cdef,
+                address: 0x0053_89ab_cdef,
                 size: 0x1234,
             }]
         );

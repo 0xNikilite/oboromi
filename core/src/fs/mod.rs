@@ -19,16 +19,28 @@ impl File {
         let map = unsafe { Mmap::map(&file)? };
         Ok(Self { map: Some(map) })
     }
+
+    pub fn as_slice(&self) -> &[u8] {
+        match &self.map {
+            Some(map) => map,
+            None => &[],
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
 }
 
 impl Deref for File {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        match &self.map {
-            Some(map) => map,
-            None => &[],
-        }
+        self.as_slice()
     }
 }
 
@@ -67,11 +79,14 @@ mod tests {
 
     #[test]
     fn maps_file_contents() {
-        let expected = b"oboromi filesystem test";
-        let test_file = TestFile::new(expected);
+        let expected = [0x00, 0xff, 0x80, 0x42, 0x0a];
+        let test_file = TestFile::new(&expected);
         let mapped_file = File::open(&test_file.0).expect("open mapped file");
 
         assert_eq!(&*mapped_file, expected);
+        assert_eq!(mapped_file.as_slice(), expected);
+        assert_eq!(mapped_file.len(), expected.len());
+        assert!(!mapped_file.is_empty());
     }
 
     #[test]
@@ -80,6 +95,8 @@ mod tests {
         let mapped_file = File::open(&test_file.0).expect("open empty file");
 
         assert!(mapped_file.is_empty());
+        assert_eq!(mapped_file.len(), 0);
+        assert!(mapped_file.as_slice().is_empty());
     }
 
     #[test]

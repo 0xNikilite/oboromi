@@ -491,6 +491,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_message_without_optional_sections() {
+        let data = encode_header(0x1234, 0).to_vec();
+        let message = parse_message(&data).expect("valid empty message");
+
+        assert_eq!(message.header.tag, 0x1234);
+        assert_eq!(message.special_header, None);
+        assert!(message.pointer_descriptors.is_empty());
+        assert!(message.send_descriptors.is_empty());
+        assert!(message.receive_descriptors.is_empty());
+        assert!(message.exchange_descriptors.is_empty());
+        assert!(message.raw_data.is_empty());
+        assert!(message.trailing_data.is_empty());
+    }
+
+    #[test]
     fn reports_truncated_special_header_and_descriptors() {
         let mut data = encode_header(0, 1 << 31).to_vec();
         assert!(matches!(

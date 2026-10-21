@@ -124,12 +124,12 @@ fn checked_end(
         .ok_or(HipcParseError::LengthOverflow { section })
 }
 
-fn require_range<'a>(
-    data: &'a [u8],
+fn require_range(
+    data: &[u8],
     offset: usize,
     length: usize,
     section: HipcSection,
-) -> std::result::Result<&'a [u8], HipcParseError> {
+) -> std::result::Result<&[u8], HipcParseError> {
     let end = checked_end(offset, length, section)?;
     data.get(offset..end).ok_or(HipcParseError::Truncated {
         section,

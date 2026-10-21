@@ -172,4 +172,19 @@ mod tests {
 
         assert_eq!(parse_header(&request), parse_header(&request_header()));
     }
+
+    #[test]
+    fn parses_header_from_unaligned_slice() {
+        let mut data = [0; 9];
+        data[1..].copy_from_slice(&request_header());
+
+        assert_eq!(parse_header(&data[1..]), parse_header(&request_header()));
+    }
+
+    #[test]
+    fn propagates_handler_failure() {
+        let result = invoke_method(&request_header(), |_| Result::Failure);
+
+        assert!(matches!(result, Result::Failure));
+    }
 }

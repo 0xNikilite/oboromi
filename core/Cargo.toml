@@ -11,11 +11,12 @@ path = "src/lib.rs"
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-unicorn-engine = "2.1.1"
 libc = "0.2.177"
 memmap2 = "0.9.9"
 log = { workspace = true }
 ash = "0.38.0"
+thiserror = "2.0"
+byteorder = "1.5"
 
 [features]
 default = []

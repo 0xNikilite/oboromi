@@ -3,6 +3,9 @@ use std::fs;
 use std::path::Path;
 use std::ops::Deref;
 
+pub mod romfs;
+pub use romfs::VirtualFileSystem;
+
 pub struct File {
     map: Mmap,
 }

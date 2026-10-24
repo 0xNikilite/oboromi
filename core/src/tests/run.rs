@@ -200,7 +200,7 @@ pub fn run_tests() -> Vec<String> {
         println!("  macOS test timeout: {:?}", get_test_timeout());
     }
     
-    let test_results = [
+    let mut test_results = vec![
         run_test(
             "NOP",
             &[arm64::nop()],
@@ -285,6 +285,23 @@ pub fn run_tests() -> Vec<String> {
         ),
     ];
 
+    // Real Switch 2 Hardware Binary Verification (`pepsipu/ns2jb` on Firmware 23.0.1)
+    let t_fs = Instant::now();
+    let fs_ok = crate::kernel::svc::verification::verify_ns2jb_fs_payload();
+    test_results.push(if fs_ok {
+        TestResult::pass("Switch 2 ns2jb FS Payload (FW 23.0.1, BTI/PAC/SVC)", t_fs.elapsed())
+    } else {
+        TestResult::fail("Switch 2 ns2jb FS Payload (FW 23.0.1, BTI/PAC/SVC)", "Verification failed", t_fs.elapsed())
+    });
+
+    let t_ro = Instant::now();
+    let ro_ok = crate::kernel::svc::verification::verify_ns2jb_ro_nso_module();
+    test_results.push(if ro_ok {
+        TestResult::pass("Switch 2 ns2jb 4,757B RO NSO0 Module (\"NS2ROEXE\")", t_ro.elapsed())
+    } else {
+        TestResult::fail("Switch 2 ns2jb 4,757B RO NSO0 Module (\"NS2ROEXE\")", "Verification failed", t_ro.elapsed())
+    });
+
     let mut passed = 0;
     for result in &test_results {
         let icon = ["N", "Y"][result.passed as usize];
@@ -303,3 +320,18 @@ pub fn run_tests() -> Vec<String> {
     }
     results
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_oboromi_arm64_suite() {
+        let out = run_tests();
+        for line in &out {
+            println!("{line}");
+        }
+        assert!(out.iter().any(|l| l.starts_with("Total: 11 (11 / 0)")));
+    }
+}
+

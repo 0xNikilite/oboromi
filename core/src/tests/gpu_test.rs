@@ -134,7 +134,7 @@ pub fn run_gpu_tests() -> Vec<String> {
     results.push("Starting GPU/SM86 Decoder Tests...".to_string());
     println!("Starting GPU/SM86 Decoder Tests...");
 
-    let tests = vec![
+    let mut tests = vec![
         run_translation_test("IADD Immediate", &[inst::iadd_imm(1, 2, 42)]),
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
         run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 4)]),
@@ -142,6 +142,20 @@ pub fn run_gpu_tests() -> Vec<String> {
         run_translation_test("MOV immediate", &[inst::mov_imm(1, 0xCAFEBABE)]),
         run_translation_test("KILL PT", &[inst::kill(7, false)]),
     ];
+
+    let dlss_start = Instant::now();
+    let mut dlss = crate::gpu::dlss::DlssEngine::new();
+    let mut mmu = crate::mmu::Memory::new();
+    mmu.map_range(0x9000_0000, 0x4000, crate::mmu::Permission::READ_WRITE);
+    let _ = mmu.write_u32(0x9000_0000, 0xFF40_80FF);
+    dlss.upscale_2x(&mut mmu, 0x9000_0000, 4, 4, 0x9000_1000);
+    let dlss_ok = mmu.read_u32(0x9000_1000).unwrap_or(0) != 0 && dlss.frames_upscaled == 1;
+    tests.push(TestResult {
+        name: "T239 Ampere Tensor Core 2x DLSS Upscaler".to_string(),
+        passed: dlss_ok,
+        message: if dlss_ok { "PASS".to_string() } else { "FAIL".to_string() },
+        duration: dlss_start.elapsed(),
+    });
 
     let mut passed = 0;
     for t in &tests {

@@ -1,7 +1,13 @@
+pub mod audio;
 pub mod cpu;
+pub mod crypto;
 pub mod ffi;
 pub mod fs;
 pub mod gpu;
-pub mod tests;
+pub mod hid;
+pub mod kernel;
+pub mod loader;
+pub mod mmu;
 pub mod nn;
 pub mod sys;
+pub mod tests;

@@ -3,6 +3,12 @@ use crate::sys;
 
 pub mod hipc;
 
+// Re-export Horizon OS HLE Services, SVCs, Multi-Core Scheduler & Futex Sync
+pub use crate::kernel::ipc;
+pub use crate::kernel::scheduler;
+pub use crate::kernel::svc;
+pub use crate::kernel::sync;
+
 macro_rules! define_service {
     ($($name:ident),* $(,)?) => {
         $(

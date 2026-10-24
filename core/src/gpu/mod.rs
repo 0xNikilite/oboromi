@@ -1,5 +1,9 @@
 use ash::vk;
 
+pub mod display;
+pub mod dlss;
+pub mod nvgpu;
+pub mod shader;
 pub mod sm86;
 pub mod spirv;
 

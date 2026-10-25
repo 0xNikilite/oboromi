@@ -91,7 +91,10 @@ jobs:
 
       - name: Install GPU test tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y spirv-tools mesa-vulkan-drivers libvulkan1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y spirv-tools mesa-vulkan-drivers libvulkan1
+          echo "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
 
       - name: Build project
         shell: bash
@@ -155,4 +158,3 @@ jobs:
           files: ./target/coverage/cobertura.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-          

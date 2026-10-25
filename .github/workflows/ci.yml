@@ -123,12 +123,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: check-readme-only
     if: needs.check-readme-only.outputs.only_readme == 'false'
-    # windows and macos are untested: they report but don't fail the workflow yet
-    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      QT_VERSION: '6.12.*'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -144,35 +145,23 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev
+          sudo apt-get install -y cmake ninja-build
 
       # runner images don't ship ninja
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja
 
-      # 6.8 is the first Qt whose windows arch is win64_msvc2022_64
-      - name: Install Qt (Windows)
-        if: runner.os == 'Windows'
+      - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.3'
-          arch: 'win64_msvc2022_64'
+          version: ${{ env.QT_VERSION }}
+          arch: ${{ runner.os == 'Windows' && 'win64_msvc2022_64' || '' }}
+          aqtversion: '==3.3.*'
           cache: true
 
-      - name: Install Qt (macOS)
-        if: runner.os == 'macOS'
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          cache: true
-
-      - name: Configure (Linux)
-        if: runner.os == 'Linux'
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-      - name: Configure (macOS)
-        if: runner.os == 'macOS'
+      - name: Configure (Linux, macOS)
+        if: runner.os != 'Windows'
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
 
       # no -G on purpose

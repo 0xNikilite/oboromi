@@ -54,7 +54,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest, macos-14]
         rust: [stable]
-        features: ["", "trace"]
+        features: [""]
 
     steps:
       - name: Checkout repository

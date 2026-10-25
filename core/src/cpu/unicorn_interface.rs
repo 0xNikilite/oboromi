@@ -1,6 +1,27 @@
 use std::sync::{Arc, Mutex};
 use unicorn_engine::{Arch, Mode, Prot, RegisterARM64, Unicorn};
 
+/// 1MB of stack per core, carved from the top of the shared memory range.
+pub const STACK_SIZE_PER_CORE: u64 = 0x0010_0000;
+
+/// Returns the initial stack pointer for `core_id` over `memory_size` bytes of
+/// shared memory.
+///
+/// Each core gets its own 1MB stack window at the top of the mapping, so the
+/// per-core stacks do not collide. The returned SP is kept below `memory_size`
+/// (the first address past the end of the mapping) and 16-byte aligned, as
+/// required by the AArch64 ABI, so guest code can address `[SP]` directly.
+///
+/// Returns `None` when `memory_size` is too small to reserve a stack for this
+/// core, instead of panicking in debug builds or wrapping around in release
+/// builds.
+fn initial_stack_pointer(core_id: u32, memory_size: u64) -> Option<u64> {
+    memory_size
+        .checked_sub(core_id as u64 * STACK_SIZE_PER_CORE)?
+        .checked_sub(0x10)
+        .map(|sp| sp & !0xF)
+}
+
 /// Safe wrapper for Unicorn CPU emulator
 pub struct UnicornCPU {
     emu: Arc<Mutex<Unicorn<'static, ()>>>,
@@ -59,9 +80,9 @@ impl UnicornCPU {
                 .ok()?;
         }
 
-        // Initialize stack pointer to end of memory, offset by core ID to avoid collision
-        // Give each core 1MB of stack space at the top of memory
-        let stack_top = memory_size - (core_id as u64 * 0x100000);
+        // Each core gets a 1MB stack window at the top of memory. The SP must
+        // stay inside the mapping and 16-byte aligned (see initial_stack_pointer).
+        let stack_top = initial_stack_pointer(core_id, memory_size)?;
         let _ = emu.reg_write(RegisterARM64::SP, stack_top);
 
         Some(Self {
@@ -263,3 +284,54 @@ impl UnicornCPU {
 
 unsafe impl Send for UnicornCPU {}
 unsafe impl Sync for UnicornCPU {}
+
+#[cfg(test)]
+mod tests {
+    use super::initial_stack_pointer;
+
+    #[test]
+    fn stack_pointer_stays_inside_the_mapped_region() {
+        let memory_size = 32 * 1024 * 1024u64;
+
+        for core_id in 0..8u32 {
+            let sp = initial_stack_pointer(core_id, memory_size).expect("SP for valid core");
+            assert!(sp < memory_size, "SP must be mapped: {sp:#x}");
+            assert_eq!(sp & 0xF, 0, "SP must be 16-byte aligned: {sp:#x}");
+            // Leave room for a 16-byte write that uses SP itself as the base.
+            assert!(sp + 16 <= memory_size, "SP window too small: {sp:#x}");
+        }
+    }
+
+    #[test]
+    fn stack_pointers_do_not_collide_between_cores() {
+        let memory_size = 32 * 1024 * 1024u64;
+
+        for core_id in 0..7u32 {
+            let sp = initial_stack_pointer(core_id, memory_size).expect("SP for valid core");
+            let next = initial_stack_pointer(core_id + 1, memory_size).expect("SP for next core");
+            assert!(
+                next + 16 < sp,
+                "core {core_id} and core {} share the top of their stacks",
+                core_id + 1
+            );
+        }
+    }
+
+    #[test]
+    fn stack_pointer_rejects_too_small_memory() {
+        // Not even one stack pointer fits.
+        assert_eq!(initial_stack_pointer(0, 0xF), None);
+
+        // Core 1 only has 15 bytes left after its 1MB window: no room for SP.
+        assert_eq!(initial_stack_pointer(1, 0x0010_0000 + 0xF), None);
+
+        // Exactly 16 bytes left for core 1: barely enough.
+        assert!(initial_stack_pointer(1, 0x0010_0000 + 0x10).is_some());
+
+        // Core 0 fits on a 16-byte mapping.
+        assert!(initial_stack_pointer(0, 0x10).is_some());
+
+        // Core 2 is denied when only one core's stack window fits.
+        assert_eq!(initial_stack_pointer(2, 0x0010_0000 + 0x10), None);
+    }
+}

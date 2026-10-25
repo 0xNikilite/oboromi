@@ -89,7 +89,6 @@ jobs:
           echo "RUSTFLAGS=-C link-arg=-Wl,-no_pie" >> $GITHUB_ENV
           echo "Limiting parallelism to reduce memory usage"
 
-      # lavapipe is the software vulkan driver, ubuntu 24.04 ships it as lvp_icd.json
       - name: Install GPU test tools
         if: runner.os == 'Linux'
         run: |
@@ -106,7 +105,6 @@ jobs:
             cargo build --locked --jobs ${CARGO_BUILD_JOBS:-4} --features "${{ matrix.features }}"
           fi
 
-      # also runs core/tests/suites.rs, the same cpu/gpu suites the gui buttons run
       - name: Run test suite
         shell: bash
         env:
@@ -136,6 +134,12 @@ jobs:
         with:
           submodules: 'recursive'
 
+      - name: Setup Xcode on macOS
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -152,12 +156,21 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja
 
-      - name: Install Qt
+      - name: Install Qt (Windows)
+        if: runner.os == 'Windows'
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
-          arch: ${{ runner.os == 'Windows' && 'win64_msvc2022_64' || '' }}
+          arch: win64_msvc2022_64
           aqtsource: 'git+https://github.com/miurahr/aqtinstall.git'
+          cache: true
+
+      - name: Install Qt (Linux and macOS)
+        if: runner.os != 'Windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          aqtversion: '==3.3.*'
           cache: true
 
       - name: Configure (Linux, macOS)

@@ -157,7 +157,7 @@ jobs:
         with:
           version: ${{ env.QT_VERSION }}
           arch: ${{ runner.os == 'Windows' && 'win64_msvc2022_64' || '' }}
-          aqtversion: '==3.3.*'
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git'
           cache: true
 
       - name: Configure (Linux, macOS)

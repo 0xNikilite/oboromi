@@ -89,12 +89,13 @@ jobs:
           echo "RUSTFLAGS=-C link-arg=-Wl,-no_pie" >> $GITHUB_ENV
           echo "Limiting parallelism to reduce memory usage"
 
+      # lavapipe is the software vulkan driver, ubuntu 24.04 ships it as lvp_icd.json
       - name: Install GPU test tools
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y spirv-tools mesa-vulkan-drivers libvulkan1
-          echo "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
 
       - name: Build project
         shell: bash
@@ -105,16 +106,111 @@ jobs:
             cargo build --locked --jobs ${CARGO_BUILD_JOBS:-4} --features "${{ matrix.features }}"
           fi
 
+      # also runs core/tests/suites.rs, the same cpu/gpu suites the gui buttons run
       - name: Run test suite
         shell: bash
         env:
           RUST_BACKTRACE: full
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json:/usr/share/vulkan/icd.d/lvp_icd.json
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
             cargo test --locked --verbose
           else
             cargo test --locked --verbose --features "${{ matrix.features }}"
+          fi
+
+  gui:
+    name: Build GUI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: check-readme-only
+    if: needs.check-readme-only.outputs.only_readme == 'false'
+    # windows and macos are untested: they report but don't fail the workflow yet
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev
+
+      # runner images don't ship ninja
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # 6.8 is the first Qt whose windows arch is win64_msvc2022_64
+      - name: Install Qt (Windows)
+        if: runner.os == 'Windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Install Qt (macOS)
+        if: runner.os == 'macOS'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          cache: true
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
+      # no -G on purpose
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -B build "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Smoke test, headless (Linux)
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          code=0
+          timeout 10 ./build/oboromi || code=$?
+          if [ "$code" -ne 124 ]; then
+            echo "GUI exited early with code $code"
+            exit 1
+          fi
+
+      - name: Smoke test, headless (macOS)
+        if: runner.os == 'macOS'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./build/oboromi &
+          pid=$!
+          sleep 10
+          if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+          else
+            code=0
+            wait "$pid" || code=$?
+            echo "GUI exited early with code $code"
+            exit 1
           fi
 
   coverage:

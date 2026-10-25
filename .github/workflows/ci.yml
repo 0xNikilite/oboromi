@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       only_readme: ${{ steps.check.outputs.only_readme }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,6 +29,7 @@ jobs:
         with:
           filters: |
             has_code_changes:
+              - '**'
               - '!README.md'
               - '!LICENSE'
               - '!docs/**'
@@ -35,8 +37,9 @@ jobs:
 
       - name: Set output flag
         id: check
+        shell: bash
         run: |
-          if [ "${{ steps.filter.outputs.has_code_changes }}" == "true" ]; then
+          if [ "${{ steps.filter.outputs.has_code_changes }}" = "true" ]; then
             echo "only_readme=false" >> "$GITHUB_OUTPUT"
             echo "Code changes detected. Build required."
           else
@@ -49,6 +52,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: check-readme-only
     if: needs.check-readme-only.outputs.only_readme == 'false'
+
     strategy:
       fail-fast: false
       matrix:
@@ -60,7 +64,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
 
       - name: Setup Xcode on macOS
         if: startsWith(matrix.os, 'macos')
@@ -85,8 +89,8 @@ jobs:
       - name: Limit parallel jobs on macOS
         if: startsWith(matrix.os, 'macos')
         run: |
-          echo "CARGO_BUILD_JOBS=2" >> $GITHUB_ENV
-          echo "RUSTFLAGS=-C link-arg=-Wl,-no_pie" >> $GITHUB_ENV
+          echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C link-arg=-Wl,-no_pie" >> "$GITHUB_ENV"
           echo "Limiting parallelism to reduce memory usage"
 
       - name: Install GPU test tools
@@ -100,11 +104,12 @@ jobs:
         shell: bash
         run: |
           if [[ -z "${{ matrix.features }}" ]]; then
-            cargo build --locked --jobs ${CARGO_BUILD_JOBS:-4}
+            cargo build --locked --jobs "${CARGO_BUILD_JOBS:-4}"
           else
-            cargo build --locked --jobs ${CARGO_BUILD_JOBS:-4} --features "${{ matrix.features }}"
+            cargo build --locked --jobs "${CARGO_BUILD_JOBS:-4}" --features "${{ matrix.features }}"
           fi
 
+      # Also runs core/tests/suites.rs.
       - name: Run test suite
         shell: bash
         env:
@@ -121,7 +126,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: check-readme-only
     if: needs.check-readme-only.outputs.only_readme == 'false'
-    continue-on-error: true
+
     strategy:
       fail-fast: false
       matrix:
@@ -132,13 +137,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
 
-      - name: Setup Xcode on macOS
+      - name: Select Command Line Tools linker (macOS)
         if: runner.os == 'macOS'
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
+        shell: bash
+        run: |
+          sudo xcode-select --switch /Library/Developer/CommandLineTools
+          xcode-select -p
+          xcrun --find ld
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -151,7 +158,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build
 
-      # runner images don't ship ninja
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja
@@ -177,7 +183,6 @@ jobs:
         if: runner.os != 'Windows'
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
 
-      # no -G on purpose
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -193,6 +198,7 @@ jobs:
         run: |
           code=0
           timeout 10 ./build/oboromi || code=$?
+
           if [ "$code" -ne 124 ]; then
             echo "GUI exited early with code $code"
             exit 1
@@ -206,8 +212,10 @@ jobs:
           ./build/oboromi &
           pid=$!
           sleep 10
+
           if kill -0 "$pid" 2>/dev/null; then
             kill "$pid"
+            wait "$pid" || true
           else
             code=0
             wait "$pid" || code=$?
@@ -220,11 +228,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check-readme-only, build]
     if: needs.check-readme-only.outputs.only_readme == 'false'
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
 
       - name: Install nightly Rust
         uses: dtolnay/rust-toolchain@v1

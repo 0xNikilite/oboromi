@@ -16,17 +16,21 @@ jobs:
   check-readme-only:
     name: Detect README-only commits
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       only_readme: ${{ steps.check.outputs.only_readme }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check for code changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         id: filter
         with:
+          predicate-quantifier: 'some-with-excludes'
           filters: |
             has_code_changes:
               - '**'
@@ -38,10 +42,13 @@ jobs:
       - name: Set output flag
         id: check
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HAS_CODE_CHANGES: ${{ steps.filter.outputs.has_code_changes }}
         run: |
-          if [ "${{ steps.filter.outputs.has_code_changes }}" = "true" ]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$HAS_CODE_CHANGES" == "true" ]]; then
             echo "only_readme=false" >> "$GITHUB_OUTPUT"
-            echo "Code changes detected. Build required."
+            echo "Build required."
           else
             echo "only_readme=true" >> "$GITHUB_OUTPUT"
             echo "Only documentation changed. Skipping build."
@@ -62,7 +69,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -78,13 +85,13 @@ jobs:
           toolchain: ${{ matrix.rust }}
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Limit parallel jobs on macOS
         if: startsWith(matrix.os, 'macos')
@@ -131,11 +138,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+
     env:
       QT_VERSION: '6.12.*'
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -146,6 +155,11 @@ jobs:
           sudo xcode-select --switch /Library/Developer/CommandLineTools
           xcode-select -p
           xcrun --find ld
+
+      - name: Set macOS deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        run: echo "MACOSX_DEPLOYMENT_TARGET=14.4" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -181,7 +195,24 @@ jobs:
 
       - name: Configure (Linux, macOS)
         if: runner.os != 'Windows'
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            cmake -B build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=14.4
+          else
+            cmake -B build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          fi
+
+      - name: Setup MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
@@ -231,7 +262,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -241,7 +272,7 @@ jobs:
           toolchain: nightly
 
       - name: Cache cargo binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin
@@ -260,7 +291,7 @@ jobs:
         run: cargo tarpaulin --out Xml --output-dir target/coverage --release
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           files: ./target/coverage/cobertura.xml
           fail_ci_if_error: false

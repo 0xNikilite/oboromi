@@ -60,3 +60,103 @@ where
 
     f()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{HeaderData, Result, invoke_method};
+    use std::cell::Cell;
+
+    const HEADER_BYTES: [u8; 8] = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0];
+    const HEADER_WORDS: [u32; 2] = [0x7856_3412, 0xf0de_bc9a];
+
+    #[repr(align(4))]
+    struct AlignedBytes([u8; 12]);
+
+    #[test]
+    fn header_decodes_little_endian_words() {
+        let header = HeaderData::from_bytes(&HEADER_BYTES).expect("complete header");
+        assert_eq!(header.header, HEADER_WORDS);
+    }
+
+    #[test]
+    fn header_rejects_every_truncated_length() {
+        for length in 0..HEADER_BYTES.len() {
+            assert!(HeaderData::from_bytes(&HEADER_BYTES[..length]).is_none());
+        }
+    }
+
+    #[test]
+    fn header_ignores_following_payload() {
+        let mut message = HEADER_BYTES.to_vec();
+        message.extend_from_slice(&[0xff, 0x00, 0x81]);
+
+        let header = HeaderData::from_bytes(&message).expect("header with payload");
+        assert_eq!(header.header, HEADER_WORDS);
+    }
+
+    #[test]
+    fn header_accepts_unaligned_input() {
+        let mut storage = AlignedBytes([0; 12]);
+        storage.0[1..9].copy_from_slice(&HEADER_BYTES);
+        let bytes = &storage.0[1..9];
+        assert_ne!((bytes.as_ptr() as usize) % std::mem::align_of::<u32>(), 0);
+
+        let header = HeaderData::from_bytes(bytes).expect("unaligned header");
+        assert_eq!(header.header, HEADER_WORDS);
+    }
+
+    #[test]
+    fn invoke_rejects_truncated_headers_without_calling_method() {
+        for length in 0..HEADER_BYTES.len() {
+            let called = Cell::new(false);
+            let result = invoke_method(&HEADER_BYTES[..length], || {
+                called.set(true);
+                Result::Success
+            });
+
+            assert!(matches!(result, Result::Failure));
+            assert!(!called.get(), "method called for a {length}-byte header");
+        }
+    }
+
+    #[test]
+    fn invoke_calls_method_once_for_complete_header() {
+        let calls = Cell::new(0);
+        let result = invoke_method(&[0; 8], || {
+            calls.set(calls.get() + 1);
+            Result::Success
+        });
+
+        assert!(matches!(result, Result::Success));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn invoke_preserves_method_failure() {
+        let calls = Cell::new(0);
+        let result = invoke_method(&[0; 8], || {
+            calls.set(calls.get() + 1);
+            Result::Failure
+        });
+
+        assert!(matches!(result, Result::Failure));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn invoke_accepts_unaligned_header_with_payload() {
+        let mut storage = AlignedBytes([0; 12]);
+        storage.0[9..].copy_from_slice(&[0xff, 0x00, 0x81]);
+        let bytes = &storage.0[1..];
+        assert_ne!((bytes.as_ptr() as usize) % std::mem::align_of::<u32>(), 0);
+        let called = Cell::new(false);
+
+        let result = invoke_method(bytes, || {
+            called.set(true);
+            Result::Success
+        });
+
+        assert!(matches!(result, Result::Success));
+        assert!(called.get());
+    }
+}

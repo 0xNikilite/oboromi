@@ -1,6 +1,6 @@
 //! runs the same suites the gui buttons run, so ci fails when one regresses.
 
-use oboromi_core::tests::{run_gpu_tests, run_tests};
+use super::{run_gpu_tests, run_tests};
 
 fn assert_suite_passes(name: &str, lines: &[String]) {
     let failed: Vec<&str> = lines

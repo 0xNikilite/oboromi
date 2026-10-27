@@ -197,7 +197,9 @@ fn write_rust<W: std::fmt::Write>(w: &mut W, list: &Vec<ParserInst>) -> Result<(
             write!(w, "\t\t}} ")?;
         }
     }
-    writeln!(w, "")?;
+    writeln!(w, "else {{")?;
+    writeln!(w, "\t\t\tpanic!(\"unknown sm86 instruction {{inst:#034x}}\");")?;
+    writeln!(w, "\t\t}}")?;
     writeln!(w, "\t}}")?;
     writeln!(w, "}}")?;
 

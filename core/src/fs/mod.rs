@@ -11,7 +11,7 @@ impl File {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error>
     where
     {
-        let file = fs::File::open(path)?;      
+        let file = fs::File::open(path)?;
         let map = unsafe { Mmap::map(&file)? };
         Ok(Self { map })
     }

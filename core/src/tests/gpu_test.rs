@@ -53,10 +53,9 @@ mod inst {
         inst
     }
 
-    // mov rd, imm32 (immediate form, CLASS "mov__RI", key=0x1a02: bit91=1, low12=0xa02)
+    // mov rd, imm32 (immediate form, CLASS "mov__RI", key=0x802)
     pub fn mov_imm(rd: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0xa02;
-        inst |= 1u128 << 91;
+        let mut inst: u128 = 0x802;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
         inst

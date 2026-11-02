@@ -2547,6 +2547,8 @@ impl<'a> Decoder<'a> {
 			self.warpsync(inst);
 		} else if /*YIELD*/ ((((inst >> 91) & 0x1) << 12) | ((inst & 0xfff) << 0)) == 0x946 {
 			self.yield_(inst);
-		} 
+		} else {
+			panic!("unknown sm86 instruction {inst:#034x}");
+		}
 	}
 }

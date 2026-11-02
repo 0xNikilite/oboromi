@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use crate::gpu::spirv;
+use crate::gpu::spirv::{self, storage_class};
 
 static MAX_REG_COUNT: usize = 254;
 static MAX_UNIFORM_REG_COUNT: usize = 63;
@@ -332,11 +332,11 @@ impl<'a> Decoder<'a> {
         self.const_cache.insert(1, self.const_u32_1);
         for i in 2..=4 {
             for type_sxx in [
-                self.type_u8, self.type_u16, self.type_u32, self.type_u64,
-                self.type_s8, self.type_s16, self.type_s32, self.type_s64,
-                self.type_f16, self.type_f32, self.type_f64, self.type_bool
+                &mut self.type_u8, &mut self.type_u16, &mut self.type_u32, &mut self.type_u64,
+                &mut self.type_s8, &mut self.type_s16, &mut self.type_s32, &mut self.type_s64,
+                &mut self.type_f16, &mut self.type_f32, &mut self.type_f64, &mut self.type_bool
             ] {
-                self.ir.emit_type_vector(type_sxx[i], i as u32);
+                type_sxx[i] = self.ir.emit_type_vector(type_sxx[1], i as u32);
             }
         }
 
@@ -348,17 +348,16 @@ impl<'a> Decoder<'a> {
                 ("pred", self.type_u8[1]),
             ];
             self.type_abstract_state = self.ir.emit_type_struct_typed(members);
-            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(7, type_regs_array);
+            self.type_ptr_abstract_state_regs = self.ir.emit_type_pointer(storage_class::PRIVATE, type_regs_array);
         }
 
         // Define generic pointers
-        // Storage class 7 = Function
         for i in 1..=4 {
-            self.type_ptr_u8[i] = self.ir.emit_type_pointer(7, self.type_u8[i]);
-            self.type_ptr_u32[i] = self.ir.emit_type_pointer(7, self.type_u32[i]);
+            self.type_ptr_u8[i] = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_u8[i]);
+            self.type_ptr_u32[i] = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_u32[i]);
         }
-        let type_ptr_abstract_state = self.ir.emit_type_pointer(7, self.type_abstract_state);
-        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, 7);
+        let type_ptr_abstract_state = self.ir.emit_type_pointer(storage_class::PRIVATE, self.type_abstract_state);
+        self.var_abstract_state = self.ir.emit_variable(type_ptr_abstract_state, storage_class::PRIVATE);
 
 
     }
@@ -2702,18 +2701,25 @@ impl<'a> Decoder<'a> {
         let pg = (((inst >> 12) & 0x7) << 0) as u32;
         let pg_not = (((inst >> 15) & 0x1) << 0) as u32;
         let rd = (((inst >> 16) & 0xff) << 0) as u32;
+        const MOV_RR: u32 = 0x202;
+        const MOV_RI: u32 = 0x802;
 
         // MOV shares one primary opcode across several addressing-mode
         // variants (register, constant-bank, indexed constant-bank, immediate)
         // that real hardware disambiguates using bits inside the operand
         // field itself, not the opcode. Re-derive the same 13-bit selector
-        // the dispatcher used to route here; only the immediate form
-        // (key 0x1a02 / CLASS "mov__RI") is implemented so far.
+        // the dispatcher used to route here.
         let variant_key = ((((inst >> 91) & 0x1) << 12) | (inst & 0xfff)) as u32;
-        if variant_key == 0x1a02 {
+        if variant_key == MOV_RI {
             // Rd = imm32
             let imm32 = (((inst >> 32) & 0xffffffff) << 0) as u32;
             let val = self.cached_const_u32(imm32);
+            self.store_register_predicated(rd, pg, pg_not != 0, val);
+            return;
+        }
+        if variant_key == MOV_RR {
+            let rb = ((inst >> 32) & 0xff) as u32;
+            let val = self.load_register(rb);
             self.store_register_predicated(rd, pg, pg_not != 0, val);
             return;
         }

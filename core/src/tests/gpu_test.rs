@@ -43,12 +43,18 @@ mod inst {
         inst
     }
 
-    // mov rd, imm32 (immediate form, CLASS "mov__RI", key=0x1a02: bit91=1, low12=0xa02)
+    // mov rd, imm32 (immediate form, CLASS "mov__RI", key=0x802)
     pub fn mov_imm(rd: u32, imm32: u32) -> u128 {
-        let mut inst: u128 = 0xa02;
-        inst |= 1u128 << 91;
+        let mut inst: u128 = 0x802;
         inst |= ((rd as u128) & 0xff) << 16;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
+        inst
+    }
+
+    pub fn mov_reg(rd: u32, rb: u32) -> u128 {
+        let mut inst: u128 = 0x202;
+        inst |= ((rd as u128) & 0xff) << 16;
+        inst |= ((rb as u128) & 0xff) << 32;
         inst
     }
 
@@ -129,6 +135,7 @@ pub fn run_gpu_tests() -> Vec<String> {
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
         run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 0xFF)]),
         run_translation_test("MOV immediate", &[inst::mov_imm(1, 0xCAFEBABE)]),
+        run_translation_test("MOV register", &[inst::mov_reg(1, 2)]),
         run_translation_test("KILL PT", &[inst::kill(7, false)]),
     ];
 

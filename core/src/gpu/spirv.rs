@@ -229,9 +229,16 @@ impl Emitter {
         let mut data = vec![r];
         data.extend(members.iter().map(|e| e.1));
         self.inst(30, &data);
+        // Debug names must precede annotations and types, so splice them in after the debug section.
+        let mut pos = 5;
+        while pos < self.words.len() && matches!(self.words[pos] & 0xFFFF, 2..=17 | 330 | 331) {
+            pos += (self.words[pos] >> 16) as usize;
+        }
+        let rest = self.words.split_off(pos);
         for i in 0..members.len() {
             self.emit_member_name(r, i as u32, members[i].0);
         }
+        self.words.extend(rest);
         r
     }
     pub fn emit_constant_typed<T: Literal>(&mut self, ty: u32, value: T) -> u32 {

@@ -13,6 +13,9 @@ pub struct TestResult {
 
 // helpers to build sm86 instructions
 mod inst {
+    // Pu = PT (bits 83:81), Pv = PT (bits 86:84): compiler default when no carry-out is used
+    const NO_CARRY: u128 = (7u128 << 81) | (7u128 << 84);
+
     // iadd rd, ra, imm32 (src_type=4, opcode=0x810)
     pub fn iadd_imm(rd: u32, ra: u32, imm32: u32) -> u128 {
         let mut inst: u128 = 0x810;
@@ -20,6 +23,7 @@ mod inst {
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((imm32 as u128) & 0xffffffff) << 32;
         inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
+        inst |= NO_CARRY;
         inst
     }
 
@@ -30,6 +34,7 @@ mod inst {
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
         inst |= 0xFFu128 << 64; // rc=0xFF to bypass assert
+        inst |= NO_CARRY;
         inst
     }
 
@@ -40,6 +45,7 @@ mod inst {
         inst |= ((ra as u128) & 0xff) << 24;
         inst |= ((rb as u128) & 0xff) << 32;
         inst |= ((rc as u128) & 0xff) << 64;
+        inst |= NO_CARRY;
         inst
     }
 

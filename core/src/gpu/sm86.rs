@@ -1910,7 +1910,7 @@ impl<'a> Decoder<'a> {
         let _ftz = (((inst >> 80) & 0x1) << 0);
         let pu = (((inst >> 81) & 0x7) << 0) as u32;
         let cop = (((inst >> 84) & 0x7) << 0) as u32;
-        let pp = (((inst >> 87) & 0x7) << 0) as u32;
+        let _pp = (((inst >> 87) & 0x7) << 0) as u32;
         let _input_reg_sz_32_dist = (((inst >> 90) & 0x1) << 0);
         let _pm_pred = (((inst >> 102) & 0x3) << 0) as u32;
         let _dst_wr_sb = (((inst >> 110) & 0x7) << 0);
@@ -1920,6 +1920,7 @@ impl<'a> Decoder<'a> {
 
         // guards for unimplemented features
         assert!(x == 0, "IADD3.X not implemented");
+        assert!(pu == 7 && cop == 7, "IADD3: carry-out predicates not implemented");
         // ftz is a no-op for integer operations
 
         let mut a = self.load_register(ra);
@@ -1965,12 +1966,6 @@ impl<'a> Decoder<'a> {
 
         let ab = self.ir.emit_iadd(self.type_u32[1], a, b);
         let res = self.ir.emit_iadd(self.type_u32[1], ab, c);
-
-        // handle comparison op
-        if cop != 0 {
-            let cmp_result = self.emit_cmp_against_zero(cop, res);
-            self.combine_and_set_predicate_bit(pu, pp, cmp_result);
-        }
 
         self.store_register_predicated(rd, pg, pg_not != 0, res);
     }

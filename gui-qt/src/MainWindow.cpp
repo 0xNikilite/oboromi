@@ -115,7 +115,7 @@ void MainWindow::onRunCpuTestsClicked() {
 void MainWindow::onRunGpuTestsClicked() {
     setTestsRunning(true);
     m_logList->clear();
-    m_logList->addItem("Initializing GPU decoder environment...");
+    m_logList->addItem("Running GPU command and shader decoder tests...");
     m_logList->addItem("Running SM86 instruction translations...");
     m_gpuWatcher.setFuture(QtConcurrent::run(RustBridge::runGpuTests));
 }

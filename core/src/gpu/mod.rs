@@ -1,5 +1,6 @@
 use ash::vk;
 
+pub mod ampere;
 pub mod sm86;
 pub mod spirv;
 
@@ -105,18 +106,17 @@ pub struct State {
     pub global_memory: *mut u8,
     pub pc: u64,
     pub vk: Option<VkState>,
+    pub channel: ampere::Channel,
+    pub address_space: ampere::AddressSpace,
 }
 
 impl State {
     pub fn new() -> Self {
-        Self {
-            // registers: [0; 256],
-            // predicates: 0,
-            shared_memory: core::ptr::null_mut(),
-            global_memory: core::ptr::null_mut(),
-            pc: 0,
-            vk: None,
-        }
+        Self::default()
+    }
+
+    pub fn submit_gpfifo(&mut self, entries: &[u64]) -> Result<(), ampere::SubmitError> {
+        self.channel.submit(&mut self.address_space, entries)
     }
     pub fn init(&mut self) -> Result<(), VkError> {
         self.vk = Some(VkState::new()?);

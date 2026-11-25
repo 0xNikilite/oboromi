@@ -19,7 +19,7 @@ oboromi is an experimental emulator written primarily in Rust, with a Qt 6 debug
 
 we are developing a new [ARMv9 CPU emulator](https://codeberg.org/vrtgs/rapid-arm-emu) (credit: vrtgs), targeting the ARM extensions required by the ns2's T239.
 
-the GPU implementation targets NVIDIA SM86.
+the shader decoder targets NVIDIA SM86. The [Ampere GPU notes](docs/ampere-gpu.md) cover the native command channel, the C7B5 copy engine and headless submission replay.
 
 oboromi cannot currently run commercial games or firmware.
 

@@ -1,3 +1,4 @@
+mod ampere_dma;
 pub mod run;
 pub mod multicore_test;
 pub mod gpu_test;

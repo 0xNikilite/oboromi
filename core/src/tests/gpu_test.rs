@@ -133,10 +133,11 @@ pub fn run_gpu_tests() -> Vec<String> {
     let mut results = Vec::new();
     let start_time = Instant::now();
 
-    results.push("Starting GPU/SM86 Decoder Tests...".to_string());
-    println!("Starting GPU/SM86 Decoder Tests...");
+    results.push("Starting GPU command and SM86 decoder tests...".to_string());
+    println!("Starting GPU command and SM86 decoder tests...");
 
     let tests = vec![
+        super::ampere_dma::diagnostic(),
         run_translation_test("IADD Immediate", &[inst::iadd_imm(1, 2, 42)]),
         run_translation_test("IADD Register", &[inst::iadd_reg(1, 2, 3)]),
         run_translation_test("IADD3 Register", &[inst::iadd3_reg(1, 2, 3, 0xFF)]),
@@ -162,7 +163,7 @@ pub fn run_gpu_tests() -> Vec<String> {
     let failed = tests.len() - passed;
     let total_time = start_time.elapsed();
     let summary = format!(
-        "Total: {} ({}/{} passed) time {:?}",
+        "Total: {} ({} passed, {} failed) time {:?}",
         tests.len(),
         passed,
         failed,

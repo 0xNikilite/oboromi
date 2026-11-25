@@ -270,3 +270,104 @@ fn pitched_rectangles_can_share_padding_in_one_mapping() {
     submit(&mut channel, &mut ram, &[0x8381_00c0]).unwrap();
     assert_eq!(ram.read(0x2000, 12).unwrap(), b"ababcdcdefef");
 }
+
+#[test]
+fn native_readback_matches_published_orin_vector() {
+    // Eden-NS2 native_swizzle.cpp, first mip of the 32 x 64, 8-byte-block fixture.
+    // Its decompressed byte surface is 64 bytes x 16 rows, two GOBs high.
+    let mut state = 0x12345678u32;
+    let tiled: Vec<_> = (0..1024)
+        .map(|_| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 24) as u8
+        })
+        .collect();
+    let mut ram = AddressSpace::default();
+    ram.map(0x2000, tiled).unwrap();
+    ram.map(0x3000, vec![0; 1024]).unwrap();
+    submit(
+        &mut Channel::default(),
+        &mut ram,
+        &[
+            0x2001_0000,
+            0xc7b5,
+            0x2006_01ca,
+            0x1010,
+            64,
+            16,
+            1,
+            0,
+            0,
+            0x2008_0100,
+            0,
+            0x2000,
+            0,
+            0x3000,
+            0,
+            64,
+            64,
+            16,
+            0x8302_00c0,
+        ],
+    )
+    .unwrap();
+    let hash = ram
+        .read(0x3000, 1024)
+        .unwrap()
+        .iter()
+        .fold(0xcbf29ce484222325u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    assert_eq!(hash, 0x9fcd630e81008de4);
+}
+
+#[test]
+fn tiled_upload_crosses_gobs_and_preserves_unwritten_bytes() {
+    let mut ram = AddressSpace::default();
+    ram.map(0x2000, vec![1, 2, 3, 99, 4, 5, 6]).unwrap();
+    ram.map(0x3000, vec![0xaa; 2048]).unwrap();
+    let mut channel = Channel::default();
+    // Start at byte 63 of row 7 in a surface two GOBs wide.
+    let words = [
+        0x2001_0000,
+        0xc7b5,
+        0x2006_01c3,
+        0x1000,
+        128,
+        16,
+        1,
+        0,
+        (7 << 16) | 63,
+        0x2008_0100,
+        0,
+        0x2000,
+        0,
+        0x3000,
+        4,
+        0,
+        3,
+        2,
+        0x8282_00c0,
+    ];
+    submit(&mut channel, &mut ram, &words).unwrap();
+    let mut expected = vec![0xaa; 2048];
+    for (offset, byte) in [
+        (511, 1),
+        (688, 2),
+        (689, 3),
+        (1359, 4),
+        (1536, 5),
+        (1537, 6),
+    ] {
+        expected[offset] = byte;
+    }
+    assert_eq!(ram.read(0x3000, 2048).unwrap(), expected);
+    // Shorten the surface so the last row falls outside it.
+    assert_eq!(
+        submit(&mut channel, &mut ram, &[0x8008_01c5, 0x8282_00c0])
+            .unwrap_err()
+            .fault,
+        Fault::UnsupportedSurface
+    );
+    assert_eq!(ram.read(0x3000, 2048).unwrap(), expected);
+}

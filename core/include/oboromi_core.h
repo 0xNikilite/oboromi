@@ -189,4 +189,6 @@ void oboromi_run_cpu_tests(LineCallback cb);
 /// as "oboromi_run_cpu_tests"
 void oboromi_run_gpu_tests(LineCallback cb);
 
+bool oboromi_texture_transfer(const uint8_t* input, uint8_t* output, size_t len, uint32_t width, uint32_t height, bool upload);
+
 }  // extern "C"

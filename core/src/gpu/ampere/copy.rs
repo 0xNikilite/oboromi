@@ -1,4 +1,5 @@
-//! Synchronous pitch-linear subset of NVIDIA class C7B5 (AMPERE_DMA_COPY_B).
+//! Synchronous 2D copy subset of NVIDIA class C7B5 (AMPERE_DMA_COPY_B).
+use super::block_linear::Surface;
 use super::{AddressSpace, Fault};
 
 pub(super) const CLASS: u32 = 0xc7b5;
@@ -23,6 +24,8 @@ impl Address {
 
 #[derive(Default)]
 pub(super) struct CopyEngine {
+    src_surface: Surface,
+    dst_surface: Surface,
     src: Address,
     dst: Address,
     semaphore: Address,
@@ -45,6 +48,8 @@ impl CopyEngine {
             0x240 => self.semaphore.upper = value & 0x1ffff,
             0x244 => self.semaphore.lower = value,
             0x248 => self.payload = value,
+            0x70c..=0x720 => self.dst_surface.set(offset - 0x70c, value),
+            0x728..=0x73c => self.src_surface.set(offset - 0x728, value),
             LAUNCH_DMA => return self.launch(value, memory),
             0x400 => self.src.upper = value & 0x1ffff,
             0x404 => self.src.lower = value,
@@ -63,7 +68,11 @@ impl CopyEngine {
         let transfer = flags & 3;
         let layouts = SRC_PITCH | DST_PITCH;
         let supported = 3 | FLUSH | RELEASE_WORD | layouts | MULTI_LINE;
-        if flags & !supported != 0 || transfer == 3 || (transfer != 0 && flags & layouts != layouts)
+        if flags & !supported != 0
+            || transfer == 3
+            || (transfer != 0
+                && flags & layouts != layouts
+                && (flags & MULTI_LINE == 0 || flags & layouts == 0))
         {
             return Err(Fault::UnsupportedLaunch(flags));
         }
@@ -80,7 +89,27 @@ impl CopyEngine {
             1
         };
         if transfer != 0 && rows > 0 && self.width > 0 {
-            self.copy_rows(rows, memory)?;
+            match flags & layouts {
+                SRC_PITCH => self.dst_surface.transfer(
+                    memory,
+                    true,
+                    self.dst.va(),
+                    self.src.va(),
+                    self.src_pitch,
+                    self.width,
+                    rows,
+                )?,
+                DST_PITCH => self.src_surface.transfer(
+                    memory,
+                    false,
+                    self.src.va(),
+                    self.dst.va(),
+                    self.dst_pitch,
+                    self.width,
+                    rows,
+                )?,
+                _ => self.copy_rows(rows, memory)?,
+            }
         }
         if signal {
             memory.write(self.semaphore.va(), &self.payload.to_le_bytes())?;

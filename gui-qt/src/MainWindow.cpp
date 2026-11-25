@@ -14,6 +14,7 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include "RustBridge.h"
+#include "TextureDemo.h"
 
 namespace {
 
@@ -37,7 +38,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(&m_gpuWatcher, &QFutureWatcher<std::vector<std::string>>::finished,
             this, &MainWindow::onGpuTestsFinished);
 
-    m_logList->addItem("click 'Run CPU Tests' to begin");
+    m_logList->addItem("Open the texture demo or run a test suite to begin.");
 }
 
 void MainWindow::buildMenuBar() {
@@ -74,6 +75,9 @@ void MainWindow::buildUi() {
     m_gpuButton = new QPushButton("Run GPU Tests", central);
     connect(m_cpuButton, &QPushButton::clicked, this, &MainWindow::onRunCpuTestsClicked);
     connect(m_gpuButton, &QPushButton::clicked, this, &MainWindow::onRunGpuTestsClicked);
+    auto *textureButton = new QPushButton("Texture demo", central);
+    connect(textureButton, &QPushButton::clicked, this, [this] { showTextureDemo(this); });
+    buttons->addWidget(textureButton);
     buttons->addWidget(m_cpuButton);
     buttons->addWidget(m_gpuButton);
     buttons->addStretch();

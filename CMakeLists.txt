@@ -28,6 +28,7 @@ set(CMAKE_AUTORCC ON)
 qt_add_executable(oboromi-gui
     gui-qt/src/main.cpp
     gui-qt/src/MainWindow.h
+    gui-qt/src/TextureDemo.cpp
     gui-qt/src/MainWindow.cpp
     gui-qt/src/RustBridge.h
     gui-qt/src/RustBridge.cpp

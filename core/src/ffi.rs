@@ -38,7 +38,10 @@ pub extern "C" fn oboromi_run_cpu_tests(cb: LineCallback) {
         Err(payload) => {
             emit(
                 cb,
-                &format!("fatal: cpu test runner panicked: {}", panic_message(&payload)),
+                &format!(
+                    "fatal: cpu test runner panicked: {}",
+                    panic_message(&payload)
+                ),
             );
         }
     }
@@ -57,8 +60,40 @@ pub extern "C" fn oboromi_run_gpu_tests(cb: LineCallback) {
         Err(payload) => {
             emit(
                 cb,
-                &format!("fatal: gpu test runner panicked: {}", panic_message(&payload)),
+                &format!(
+                    "fatal: gpu test runner panicked: {}",
+                    panic_message(&payload)
+                ),
             );
         }
     }
+}
+
+/// Runs one texture demo upload or readback.
+/// # Safety
+/// Input and output must each address len bytes for the duration of the call.
+/// Output must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oboromi_texture_transfer(
+    input: *const u8,
+    output: *mut u8,
+    len: usize,
+    width: u32,
+    height: u32,
+    upload: bool,
+) -> bool {
+    if input.is_null() || output.is_null() || len > 512 * 512 * 4 {
+        return false;
+    }
+    catch_unwind(|| {
+        let bytes = unsafe { std::slice::from_raw_parts(input, len) };
+        let Some(result) = crate::gpu::texture_demo::transfer(bytes, width, height, upload) else {
+            return false;
+        };
+        unsafe {
+            std::ptr::copy_nonoverlapping(result.as_ptr(), output, len);
+        }
+        true
+    })
+    .unwrap_or(false)
 }

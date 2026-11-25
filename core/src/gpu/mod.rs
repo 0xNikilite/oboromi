@@ -3,6 +3,7 @@ use ash::vk;
 pub mod ampere;
 pub mod sm86;
 pub mod spirv;
+pub(crate) mod texture_demo;
 
 #[derive(Debug)]
 pub enum VkError {

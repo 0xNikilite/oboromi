@@ -1,6 +1,7 @@
 //! Ampere GPFIFO submissions. Register offsets in errors are byte offsets.
 //! Packet and register layouts follow NVIDIA's `open-gpu-doc` headers
 //! `classes/host/clc76f.h` and `classes/dma-copy/clc7b5.h`.
+mod block_linear;
 mod copy;
 mod memory;
 pub use memory::AddressSpace;
@@ -19,6 +20,7 @@ pub enum Fault {
     UnsupportedLaunch(u32),
     UnalignedSemaphore(u64),
     UnsupportedPitch,
+    UnsupportedSurface,
     OverlappingRows,
 }
 

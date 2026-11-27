@@ -106,7 +106,7 @@ jobs:
           lipo -create build-arm64/oboromi.app/Contents/MacOS/oboromi \
             build-x86_64/oboromi.app/Contents/MacOS/oboromi \
             -output oboromi.app/Contents/MacOS/oboromi
-          lipo -verify_arch arm64 x86_64 oboromi.app/Contents/MacOS/oboromi
+          lipo oboromi.app/Contents/MacOS/oboromi -verify_arch arm64 x86_64
           mkdir -p oboromi.app/Contents/Resources
           cp README.md license.txt oboromi.app/Contents/Resources/
           macdeployqt oboromi.app -dmg

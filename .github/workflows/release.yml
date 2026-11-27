@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Existing tag to build, e.g. v0.0.1
+        description: Tag to create, e.g. v0.0.1
         required: true
         type: string
       prerelease:
@@ -39,7 +39,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.version }}
           persist-credentials: false
 
       - name: Set up Rust
@@ -137,7 +136,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          args=(--verify-tag --title "$VERSION" --generate-notes)
+          args=(--target "$GITHUB_SHA" --title "$VERSION" --generate-notes)
           if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
           gh release create "${args[@]}" -- "$VERSION" \
             artifacts/oboromi-linux-x64.tar.gz \

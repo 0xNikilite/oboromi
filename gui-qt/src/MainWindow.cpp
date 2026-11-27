@@ -111,8 +111,7 @@ void MainWindow::appendLines(const std::vector<std::string> &lines) {
 void MainWindow::onRunCpuTestsClicked() {
     setTestsRunning(true);
     m_logList->clear();
-    m_logList->addItem("Warming up JIT compiler...");
-    m_logList->addItem("Running ARM64 tests...");
+    m_logList->addItem("Running ARM64 tests with rapid...");
     m_cpuWatcher.setFuture(QtConcurrent::run(RustBridge::runCpuTests));
 }
 

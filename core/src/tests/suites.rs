@@ -19,9 +19,7 @@ fn assert_suite_passes(name: &str, lines: &[String]) {
     );
 }
 
-// the cpu suite reports a possible first-test timeout on macOS jit cold start
 #[test]
-#[cfg_attr(target_os = "macos", ignore = "jit cold start can time out")]
 fn cpu_suite() {
     assert_suite_passes("cpu", &run_tests());
 }

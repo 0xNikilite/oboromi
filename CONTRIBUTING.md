@@ -76,13 +76,12 @@ The executable is placed directly in `build/`:
 ./build/oboromi
 ```
 
-## project state (read before opening a PR)
-
-Do not touch Unicorn-related stuff plz, we are working on using a [custom arm emulator](https://github.com/vrtgs/rapid-arm-emu).
-
 ## tests
 
-Nothing to mention, but we like tests. If you implement a new feature, make sure to provide a simple way to test it (not required, but would be cool).
+Run the core tests with `cargo test --locked -p oboromi-core`. The CPU suite
+uses [rapid-arm-emu](https://codeberg.org/vrtgs/rapid-arm-emu), including when
+run from the GUI. Integration tests exercise multiple cores, shared guest RAM
+and task control.
 
 ## code style
 
